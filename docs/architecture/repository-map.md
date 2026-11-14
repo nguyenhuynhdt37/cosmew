@@ -37,6 +37,7 @@ ADR bắt buộc cho: public schema/semantics/version, dependency edge mới, sh
 | [`src/screens/sessions.tsx](../../apps/tui/src/screens/sessions.tsx) | Session query/select/resume UX |
 | [`src/screens/settings.tsx](../../apps/tui/src/screens/settings.tsx) | Preferences và capabilities, không secret bytes |
 | [`src/components/editor.tsx](../../apps/tui/src/components/editor.tsx) | Draft input, submit/cancel actions |
+| [`src/components/mascot.ts](../../apps/tui/src/components/mascot.ts) | TUI1 Fyn presentation state/clock and terminal sprite; private UI module, no domain commands |
 | [`src/components/messages.tsx](../../apps/tui/src/components/messages.tsx) | Message parts/provenance/render |
 | [`src/components/tool-output.tsx](../../apps/tui/src/components/tool-output.tsx) | Bounded sanitized tool output/artifact links |
 | [`src/components/diff-view.tsx](../../apps/tui/src/components/diff-view.tsx) | Expected/actual workspace diff và conflicts |
@@ -298,3 +299,15 @@ The Phase 0 file table above is retained as the original roadmap. Actual nonempt
 | tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
 
 New package-internal files are private; all cross-package imports use `@hannes/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
+
+
+## PA1/TUI1 Provider Connect rebuild (ADR 0007)
+
+- `packages/models/src/registry.ts`: IntegrationRegistry/AuthMethodRegistry metadata; ModelRouter is also exported as ModelSelector through the public models entry.
+- `packages/security/src/provider-oauth.ts`: official OpenRouter headless PKCE lifecycle, bounded/pinned exchange, cancellation/redaction; no vault handle or plugin host.
+- `packages/sdk/src/client.ts`: integration/challenge ports, rollback, explicit account/model session boundaries and session-scoped permission grants.
+- `apps/tui/src/screens/connect.ts`: bounded searchable registry-driven provider/auth/account dialog, custom endpoints and secret masking.
+- `apps/cli/src/bootstrap/startup.ts`: composition-owned auth services and shared validation, including OpenRouter authenticated key probe.
+- `tests/security/provider-oauth.test.ts`, `tests/end-to-end/provider-connect.test.ts`: OAuth security, full connection/account/model lifecycle and actual PTY acceptance fixtures.
+
+No package ownership/dependency edge changed. See [ADR 0007](../adr/0007-provider-connect-and-commands.md) and [evidence](../delivery/provider-connect-acceptance.md).

@@ -21,3 +21,8 @@ Foundation schemas/storage/security were typechecked and tested before adapter w
 ## Interactive authentication follow-up
 
 User requested `/login` and `/logout` to avoid long setup commands. CLI now starts signed out, presents a guided provider/gateway/account/model wizard, reuses existing auth/vault/validation ports and keeps the prompt open after logout. No domain contracts, dependencies, package boundaries or provider support claims change. Chat and wizard use one bounded input reader with history disabled and secret echo suppression. Verify actual subprocess login/logout/relogin, cancellation/failure/context isolation, and a real terminal/keyring roundtrip before delivery.
+
+
+## Provider Connect rebuild
+
+User-requested 2026-11-14. Audited the current dirty PA1/TUI1 implementation and current OpenCode/Claude references before editing. Reused existing adapters, core, stores, theme renderer and CLI; added registry-driven search/auth/account flow, official OpenRouter headless PKCE, custom endpoint setup, command migration/diagnostics, rollback and pinned model/session behavior. Tests include actual HTTP/PTY and disposable native-keyring flows. See [ADR 0007](../adr/0007-provider-connect-and-commands.md) and [current evidence](provider-connect-acceptance.md). No dependencies installed, external agents delegated or unrelated placeholders implemented. Live authenticated provider testing remains pending the user's local credential configuration.

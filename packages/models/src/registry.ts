@@ -24,3 +24,36 @@ export class ProviderRegistry {
     });
   }
 }
+
+
+/** Composition-owned method registration. Future plugin hosts may receive only a
+ * provider-scoped registrar, never SettingsStore or CredentialVault. No plugin
+ * loading or delegated authentication is enabled by this metadata registry. */
+export class AuthMethodRegistry {
+  methods(provider: Provider): import('@hannes/contracts').AuthMethod[] {
+    const methods: import('@hannes/contracts').AuthMethod[] = provider.auth === 'none'
+      ? [{ id: 'none', name: 'No authentication', description: 'For explicitly configured local or public endpoints.' }]
+      : [
+          { id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.' },
+          { id: 'env', name: 'Environment variable', description: 'Store only a variable name; resolve it at runtime.' },
+        ];
+    if (provider.id === 'openrouter' && provider.baseURL === 'https://openrouter.ai/api/v1' && provider.protocol === 'chat' && provider.auth === 'api-key') {
+      methods.push({ id: 'openrouter-oauth', name: 'OpenRouter OAuth (PKCE)', description: 'Authorize in your browser, then paste the one-time code. Uses your OpenRouter API credits.' });
+    }
+    return methods;
+  }
+}
+
+export class IntegrationRegistry {
+  constructor(private readonly providers: ProviderRegistry, private readonly auth = new AuthMethodRegistry()) {}
+  list(): import('@hannes/contracts').Integration[] {
+    const merged = new Map(providerPresets.map(p => [p.id, p]));
+    for (const p of this.providers.list()) merged.set(p.id, p);
+    return [...merged.values()].map(provider => ({
+      provider, methods: this.auth.methods(provider),
+      notice: 'Use provider API credentials. Consumer subscriptions do not automatically grant third-party API access. Only registered official methods are offered. Device code and delegated CLI drivers are not implemented.',
+    }));
+  }
+}
+
+export { ModelRouter as ModelSelector } from './router';

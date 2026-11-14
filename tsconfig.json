@@ -3,6 +3,7 @@
     "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
+    "jsx": "preserve",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
@@ -18,7 +19,10 @@
     "packages/models/src/**/*.ts",
     "packages/security/src/**/*.ts",
     "packages/persistence/src/**/*.ts",
+    "packages/sdk/src/**/*.ts",
     "apps/cli/src/**/*.ts",
+    "apps/tui/src/**/*.ts",
+    "apps/tui/src/**/*.tsx",
     "tests/**/*.ts",
     "scripts/**/*.ts"
   ]

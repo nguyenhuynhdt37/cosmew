@@ -4,13 +4,16 @@
   "private": true,
   "type": "module",
   "bin": {
-    "hannes": "./src/index.ts"
+    "hannes": "./src/index.ts",
+    "futryn": "./src/index.ts"
   },
   "dependencies": {
     "@hannes/contracts": "workspace:*",
     "@hannes/core": "workspace:*",
     "@hannes/models": "workspace:*",
     "@hannes/security": "workspace:*",
-    "@hannes/persistence": "workspace:*"
+    "@hannes/persistence": "workspace:*",
+    "@hannes/sdk": "workspace:*",
+    "@hannes/tui": "workspace:*"
   }
 }

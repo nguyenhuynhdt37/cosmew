@@ -9,7 +9,9 @@
         "@hannes/core": "workspace:*",
         "@hannes/models": "workspace:*",
         "@hannes/persistence": "workspace:*",
+        "@hannes/sdk": "workspace:*",
         "@hannes/security": "workspace:*",
+        "@hannes/tui": "workspace:*",
         "@types/bun": "1.4.4",
         "typescript": "7.0.2",
       },
@@ -19,13 +21,24 @@
       "version": "0.1.0",
       "bin": {
         "hannes": "./src/index.ts",
+        "futryn": "./src/index.ts",
       },
       "dependencies": {
         "@hannes/contracts": "workspace:*",
         "@hannes/core": "workspace:*",
         "@hannes/models": "workspace:*",
         "@hannes/persistence": "workspace:*",
+        "@hannes/sdk": "workspace:*",
         "@hannes/security": "workspace:*",
+        "@hannes/tui": "workspace:*",
+      },
+    },
+    "apps/tui": {
+      "name": "@hannes/tui",
+      "version": "0.1.0",
+      "dependencies": {
+        "@hannes/contracts": "workspace:*",
+        "@hannes/sdk": "workspace:*",
       },
     },
     "packages/contracts": {
@@ -57,6 +70,13 @@
     },
     "packages/persistence": {
       "name": "@hannes/persistence",
+      "version": "0.1.0",
+      "dependencies": {
+        "@hannes/contracts": "workspace:*",
+      },
+    },
+    "packages/sdk": {
+      "name": "@hannes/sdk",
       "version": "0.1.0",
       "dependencies": {
         "@hannes/contracts": "workspace:*",
@@ -96,7 +116,11 @@
 
     "@hannes/persistence": ["@hannes/persistence@workspace:packages/persistence"],
 
+    "@hannes/sdk": ["@hannes/sdk@workspace:packages/sdk"],
+
     "@hannes/security": ["@hannes/security@workspace:packages/security"],
+
+    "@hannes/tui": ["@hannes/tui@workspace:apps/tui"],
 
     "@napi-rs/keyring": ["@napi-rs/keyring@2.1.2", "", { "optionalDependencies": { "@napi-rs/keyring-darwin-arm64": "2.1.2", "@napi-rs/keyring-darwin-x64": "2.1.2", "@napi-rs/keyring-freebsd-x64": "2.1.2", "@napi-rs/keyring-linux-arm-gnueabihf": "2.1.2", "@napi-rs/keyring-linux-arm64-gnu": "2.1.2", "@napi-rs/keyring-linux-arm64-musl": "2.1.2", "@napi-rs/keyring-linux-riscv64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-musl": "2.1.2", "@napi-rs/keyring-win32-arm64-msvc": "2.1.2", "@napi-rs/keyring-win32-ia32-msvc": "2.1.2", "@napi-rs/keyring-win32-x64-msvc": "2.1.2" } }, "sha512-9i1SR6tYeQ3o1beLeVMxhN6Fq513m9TZlTs+46+4JgvSNkaFoW9S4WrpV5MjzE+0CzVoC+dZ4RfZDIgW6+afnQ=="],
 

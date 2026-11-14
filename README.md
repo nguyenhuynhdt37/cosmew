@@ -9,6 +9,12 @@ bun install --frozen-lockfile --ignore-scripts
 bun run hannes
 ```
 
+Start the full-screen FUTRYN interface with `bun run futryn`. Enter **`/login`** for searchable providers and supported authentication methods, then choose a model and chat. OpenRouter additionally supports its official browser/headless **OAuth PKCE** flow. `/logout` opens account management with Add, Switch, Rename, Reconnect, Remove and sign-out. `/config`, `/theme`, `/model`, `/resume`, `/status`, `/doctor` and `/help` open the corresponding real flows; unsupported backend commands explain their limits. Existing command names remain aliases.
+
+The account/model selection and custom endpoints persist across restart. API keys use the OS keyring or explicit environment references. Failed/cancelled new connections remove their stored credentials. Live authenticated provider acceptance is pending the user's local configuration; fixture, actual PTY and native-keyring evidence is in [Provider Connect acceptance](docs/delivery/provider-connect-acceptance.md), with the [contract/migration decision](docs/adr/0007-provider-connect-and-commands.md).
+
+`bun run hannes chat` retains the line-oriented wizard described below. Bare interactive `hannes` now also opens the TUI.
+
 Trong Hannes, gõ **`/login`** rồi chọn provider hoặc gateway 9Router. Wizard hỏi URL/protocol nếu cần, nhập key ẩn, kiểm tra kết nối và chọn model ngay tại chỗ. Gõ **`/logout`** để đăng xuất và tiếp tục ở trong CLI; **`/login <account>`** để đăng nhập lại tài khoản đã lưu. Chưa có tài khoản vẫn mở được Hannes và dùng `/login`. Các menu nhận số thứ tự, ID hoặc từ khóa lọc models. `/cancel` hủy wizard; Ctrl-C thoát.
 
 ```text
@@ -45,6 +51,7 @@ Never put key values in command arguments or repository settings. Default state 
 
 ```sh
 bun run typecheck
+bun run lint
 bun test tests
 # Optional OS keyring probes (create and remove disposable test entries):
 HANNES_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts
@@ -55,4 +62,4 @@ HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts
 
 See [CLI/auth setup and troubleshooting](docs/subsystems/providers-and-auth.md), [provider/auth matrix](docs/compatibility/providers-auth-matrix.md), [architecture audit and plan](docs/delivery/provider-auth-plan.md), [upstream comparison](docs/delivery/provider-auth-research.md), [ADR 0005](docs/adr/0005-provider-auth-product.md), [security review](docs/delivery/provider-auth-security-review.md), and [acceptance evidence](docs/delivery/provider-auth-acceptance.md).
 
-The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, general tool execution, MCP/plugins, TUI/server, recovery and GUI compatibility are **Not implemented**. Empty source placeholders are not feature evidence.
+The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, general tool execution, MCP/plugins, remote server, full recovery and GUI compatibility are **Not implemented**. Empty source placeholders are not feature evidence.

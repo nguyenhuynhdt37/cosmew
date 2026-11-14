@@ -1,6 +1,6 @@
 import { afterEach, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { HannesError, type Account, type ModelEvent, type ModelRequest } from '@hannes/contracts';
+import { HannesError, type Account, type ModelRequest } from '@hannes/contracts';
 import { ConfiguredNetworkPolicy } from '@hannes/security';
 import { SqliteSettings } from '@hannes/persistence';
 import { AccountManager, ModelCatalog, ModelRouter, ProviderAdapter, ProviderRegistry, ProviderTransport, normalizeModel, retryAfter, retryDelay } from '@hannes/models';

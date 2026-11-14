@@ -26,7 +26,7 @@
 - Cancellation prevents further local processing but cannot undo accepted provider processing/billing. Already buffered provider bytes or side effects cannot be recalled. No exactly-once remote guarantee is claimed.
 - Metadata and estimated cost can be stale; unknown usage/prices stay null. An explicitly configured estimated-cost guard refuses unknown/unaffordable estimates before network, but is not a hard dollar guarantee. Exact provider token counts, hard dollar ceilings and model-specific option validation are not implemented. No hard billing guarantee is advertised.
 - Tool schema compilation accepts trusted bounded descriptors only in this slice; hostile regexp/schema resource exhaustion needs isolated validation before future untrusted plugin/tool registration. Ajv code generation is evaluated third-party functionality; no raw execute callbacks are supplied.
-- Provider/SDK compatibility outside tested wire fixtures and public catalogs is unverified. A matching protocol name is not support evidence. No OAuth clients, refresh tokens or delegated-agent credentials were implemented; future work needs issuer/state/PKCE, refresh/revoke, provider terms and enforceable permission mediation.
+- Provider/SDK compatibility outside tested wire fixtures and public catalogs is unverified. A matching protocol name is not support evidence. The original PA1 delivered no OAuth clients, refresh tokens or delegated-agent credentials; future work needs issuer/state/PKCE, refresh/revoke, provider terms and enforceable permission mediation.
 - Dependency registry audit initially returned `{}` (no reported advisories); final audit result is recorded with acceptance. Registry integrity/advertised provenance does not independently establish artifact safety. Install hooks remain disabled.
 
 These limitations are release-readiness findings. The Product MVP is not marked complete until applicable acceptance gates have real evidence.
@@ -34,3 +34,14 @@ These limitations are release-readiness findings. The Product MVP is not marked 
 ## Interactive login/logout follow-up
 
 The signed-out prompt and `/login` wizard reuse existing policy/vault/account services. One input owner consumes both chat and wizard answers; terminal history is disabled and key echo suppressed. Piped wizard input may use environment references, but cannot pretend to provide hidden terminal input. Extra queued lines after a secret are discarded/rejected. Current-account logout clears in-memory context before deletion, including failed deletion paths. Tests cover fresh setup, saved credentials, failed auth, cancellation and cross-login context isolation; an opt-in real PTY/native keyring test checks that key bytes do not appear in terminal output/history/database or chat messages. Commercial provider live status remains unchanged.
+
+
+## Provider Connect review, 2026-11-14
+
+[ADR 0007](../adr/0007-provider-connect-and-commands.md) adds only the official OpenRouter headless PKCE driver: cryptographic random verifier, S256, ten-minute/single-use challenges, bounded pinned HTTPS exchange with redirect refusal, no code/verifier/key diagnostics, and no management-key requirement inferred from inconsistent generated API-reference docs. The guide explicitly permits this flow. Live browser authorization remains unverified.
+
+Authentication completion is mediated by composition/SDK; the TUI never receives the issued API key or vault. Custom endpoints cannot acquire OAuth through a provider-ID collision. OpenRouter uses authenticated `/key` before treating public catalog discovery as successful login. SDK, CLI administrative login and guided wizard remove newly entered credentials on validation failure. Failed key deletion fences routing and remains retryable. Model/account changes fence context transfer; permission grants hash the entire target and clear at conversation boundaries. Production permission demo-request generation was removed.
+
+TUI shutdown cancels and drains active auth/chat work before closing SQLite, so termination cannot strand credential rollback.
+
+No dependencies were added. Built-in Web Crypto, fetch, Node SHA-256 and the already evaluated native keyring are used. No external auth plugins, remote execution or delegated-CLI processes are launched. Device-code/refresh-token drivers and external plugin loading remain Not implemented. Local deletion cannot revoke a remote OAuth-issued API key; revocation is through the OpenRouter console. See [current tests/limits](provider-connect-acceptance.md).

@@ -1,6 +1,11 @@
 # Điều hướng đặc tả Hannes
 
-> PA1 implementation is authorized: [plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
+Current provider-connect rebuild: [usage, command audit and acceptance](delivery/provider-connect-acceptance.md), [ADR 0007 and contract 1.1 migration](adr/0007-provider-connect-and-commands.md). These updates supersede older blanket OAuth/TUI/command limitations only for their stated scope.
+
+
+Fyn companion: [usage, lifecycle and verification](delivery/fyn-companion.md).
+
+> PA1 & TUI1 implementations are authorized: [PA1 plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md), [ADR 0006 (FUTRYN TUI & Theme Engine)](adr/0006-futryn-tui-and-theme-engine.md), [TUI1 Research](delivery/futryn-tui-upstream-research.md), [TUI1 Acceptance](delivery/futryn-tui-acceptance.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
 
 **Historical Phase 0 baseline follows.** The PA1 implementation and evidence are linked below; unrelated subsystems remain Not implemented. Đọc [quy tắc agents](../AGENTS.md) trước khi thay đổi repository. Nghiên cứu thực hiện 2026-11-13; tổng hợp/quality gate 2026-11-14. Không install/build/lint/test/start application trong Phase 0.
 

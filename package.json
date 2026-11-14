@@ -5,16 +5,23 @@
   "packageManager": "bun@1.4.4",
   "workspaces": [
     "apps/cli",
+    "apps/tui",
     "packages/contracts",
     "packages/core",
     "packages/models",
     "packages/security",
-    "packages/persistence"
+    "packages/persistence",
+    "packages/sdk"
   ],
   "scripts": {
     "hannes": "bun apps/cli/src/index.ts",
+    "futryn": "bun apps/cli/src/index.ts tui",
+    "tui": "bun apps/cli/src/index.ts tui",
     "test": "bun test tests",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && git diff --check",
+    "test:integration": "bun test tests/contracts/provider-adapters.test.ts tests/security",
+    "test:e2e": "bun test tests/end-to-end"
   },
   "devDependencies": {
     "typescript": "7.0.2",
@@ -23,6 +30,8 @@
     "@hannes/security": "workspace:*",
     "@hannes/persistence": "workspace:*",
     "@hannes/models": "workspace:*",
-    "@hannes/core": "workspace:*"
+    "@hannes/core": "workspace:*",
+    "@hannes/sdk": "workspace:*",
+    "@hannes/tui": "workspace:*"
   }
 }

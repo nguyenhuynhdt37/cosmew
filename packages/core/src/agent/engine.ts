@@ -5,8 +5,18 @@ export class Conversation {
   readonly id: string;
   private messages: Message[] = [];
   private running = false;
-  constructor(private readonly selection: Selection, private readonly model: ModelPort, private readonly store: ConversationStore) {
-    this.id = store.create(selection);
+  constructor(
+    private readonly selection: Selection,
+    private readonly model: ModelPort,
+    private readonly store: ConversationStore,
+    existing?: { id: string; messages: Message[] },
+  ) {
+    if (existing) {
+      this.id = existing.id;
+      this.messages = existing.messages.map(m => messageSchema.parse(m));
+    } else {
+      this.id = store.create(selection);
+    }
   }
   history(): readonly Message[] { return this.messages.map(m => ({ ...m })); }
   async *send(content: string, signal?: AbortSignal, maxOutputTokens = 4096, maxEstimatedCostUSD?: number): AsyncIterable<ModelEvent> {

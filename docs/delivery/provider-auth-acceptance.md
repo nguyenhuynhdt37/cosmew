@@ -71,3 +71,8 @@ The code can make actual provider requests once configured with valid credential
 ## Interactive authentication follow-up
 
 The user requested `/login` and `/logout` to replace long setup commands. Delivered guided provider/gateway URL/protocol/account/model selection inside chat, signed-out startup, saved-credential reuse, stable-ID reauthentication, logout without exiting, account-targeted logout and `/cancel`. No new dependencies or public domain/schema versions were introduced. A shared bounded reader disables history and suppresses secret echo; wizard answers are consumed outside the chat transcript. Subprocess/PTY tests cover failure, cancellation, masked input, logout/relogin and context isolation. Ctrl-C at the hidden prompt explicitly closes the reader and exits 130 instead of leaving an unresolved input promise. The overall Product MVP decision and vendor live-verification limitations above remain unchanged.
+
+
+## Provider Connect rebuild follow-up
+
+The current [Provider Connect acceptance](provider-connect-acceptance.md) and [ADR 0007](../adr/0007-provider-connect-and-commands.md) supersede older blanket statements about TUI availability, missing session resume UI and absent OAuth drivers: the real TUI/session picker and official OpenRouter headless PKCE are implemented and fixture/PTY-tested. All live authenticated-provider gates remain pending. The user explicitly chose to configure credentials locally later. This historical report's original checks and broader Product MVP limitations are not rewritten as new evidence.

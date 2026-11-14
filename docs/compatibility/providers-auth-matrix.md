@@ -7,7 +7,7 @@
 | OpenAI API | Native Responses; optional custom Chat; keyring/env accounts, models, selection, chat, logout | Responses/Chat discovery, generation, tools-as-data, stream, errors, CLI switching | Pending API credentials and actual model smoke test |
 | Anthropic API | Native Messages + models; keyring/env; full CLI account lifecycle | Messages generation/stream/tool data; discovery; multi-provider CLI | Pending API credentials |
 | Google Gemini API | Native Gemini; paginated generation-model discovery; keyring/env | Native request/stream, tool data, filtering embedding-only models, CLI | Pending API credentials |
-| OpenRouter | Chat adapter, public models, keyring/env accounts, metadata | Chat adapter/account tests; shared gateway path | Public catalog + Models.dev enrichment live passed; authenticated generation pending |
+| OpenRouter | Chat adapter, public models, authenticated key probe, keyring/env and official headless OAuth PKCE | Chat/account tests; S256, exchange/expiry/cancel; full OAuth TUI→vault→HTTP chat fixture | Public catalog + Models.dev enrichment previously live passed; browser OAuth authorization and authenticated generation pending |
 | Custom compatible endpoints | Explicit URL + Chat/Responses/Messages/Gemini + discovery/manual model | All four protocols exercised; manual Responses gateway CLI | Experimental for each new endpoint until its own live verification; no universal compatibility claim |
 | Ollama | `/api/tags` discovery, `/v1` Chat, explicit no-auth | Native route/no-auth CLI fixtures | Local daemon connection refused at `127.0.0.1:11434`; live generation blocked until started/model installed |
 | User's 9Router configuration | URL + chosen protocol + manual model or provider listing, as user clarified | Manual gateway login does real generation against fixture HTTP service | No service URL/model/credentials supplied; identity-specific protocol/live compatibility unverified |
@@ -48,3 +48,6 @@ The selection boundary does not expose SDK types, so adding a native adapter doe
 | Claude subscription / Agent SDK | SDK is available under Anthropic commercial terms; Hannes delegated integration Not implemented | Review allowed third-party auth/terms and mediate tool execution first; use Anthropic API key here. |
 
 The delegated-agent blocker is precise: this repository has no implemented general permission dispatcher/sandbox/agent-tool mediation. Launching a provider SDK that can read files or run commands would bypass the required Hannes security gate. No such process is launched and no other application's auth files/cookies are read. These integrations are future work, not working OAuth buttons.
+
+
+Provider Connect follow-up: [ADR 0007](../adr/0007-provider-connect-and-commands.md), [command/acceptance evidence](../delivery/provider-connect-acceptance.md). Device-code/delegated-CLI authentication and external auth plugins remain Not implemented. OpenRouter OAuth uses its own API credits and does not grant access through another consumer subscription.

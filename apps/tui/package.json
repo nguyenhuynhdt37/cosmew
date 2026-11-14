@@ -1,0 +1,14 @@
+{
+  "name": "@hannes/tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/app.tsx",
+    "./theme": "./src/theme/theme.ts"
+  },
+  "dependencies": {
+    "@hannes/contracts": "workspace:*",
+    "@hannes/sdk": "workspace:*"
+  }
+}

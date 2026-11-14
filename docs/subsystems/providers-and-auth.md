@@ -30,7 +30,7 @@ Use `bun run hannes` as the local command prefix below; `hannes` is also the wor
 - `auth login --account <existing-id-or-alias> --env VARIABLE_NAME` or hidden key input reauthenticates the stable identity. It fences old authorization and deletes old keyring credentials first. If rotation fails, the identity stays safely logged out/unvalidated and can be retried.
 - `providers test --account <alias>` verifies current discovery. `--generate` verifies a small generation and may incur provider costs. Manual-only gateways require a model and validate generation during login.
 
-A new identity is first `unvalidated`. Missing/rejected credentials become `invalid`; a network outage does not claim successful authentication. Model-discovery validation and generation validation are reported separately. Public `/models` endpoints may not validate authentication at all, so `auth status` reports historical checks, credential availability and does not promise paid entitlement. `auth methods` gives the actual supported methods. Unsupported OAuth/subscription methods fail with `UNSUPPORTED` and the API-key/official-CLI alternative.
+A new identity is first `unvalidated`. Missing/rejected credentials become `invalid`; a network outage does not claim successful authentication. Model-discovery validation and generation validation are reported separately. Public `/models` endpoints may not validate authentication at all, so `auth status` reports historical checks, credential availability and does not promise paid entitlement. `auth methods` gives the actual supported methods. Unsupported subscription/delegated methods fail with `UNSUPPORTED` and the API-key/official-CLI alternative.
 
 ## Gateway URL + model
 
@@ -102,3 +102,8 @@ The state root is `~/.hannes` or an explicitly set `HANNES_HOME`. It must be own
 | UNSUPPORTED | API credentials or official CLI separately; delegated agents require a separate security integration. |
 
 Logout deletes the local keyring entry and clears selections, project references and catalog; API keys have no standard remote revoke endpoint, so revoke them in the provider console. Environment refs are fenced locally; Hannes cannot unset your parent shell variables. Authentication generations prevent late validations from reviving a logged-out/rotated account. The same root policy is rechecked for new HTTP operations and streamed wire chunks, but cancellation cannot undo provider processing already accepted.
+
+
+## Provider Connect TUI and canonical commands
+
+[Current usage and complete command audit](../delivery/provider-connect-acceptance.md) supersede the older line-wizard-only instructions above. Use `bun run futryn`, `/login`, `/model`, then chat. The TUI includes all account lifecycle actions, custom endpoint discovery/manual configuration, explicit cancellation/rollback and OS-keyring/environment/no-auth flows. OpenRouter's official headless OAuth PKCE is available in the TUI and guided line wizard; no third-party subscription entitlement is implied. Shared validation probes OpenRouter `/key` before discovery. `/status` reports historical validation; `/doctor` checks live. Unsupported MCP/plugin/compaction/policy-editing/shell capabilities are diagnosed. No auth plugin host is enabled.

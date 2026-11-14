@@ -1,7 +1,9 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.0' as const;
+export const CONTRACT_VERSION = '1.1' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
+export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
+export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
 export const modelIdSchema = z.string().min(1).max(200).regex(/^[\w~./:@+-]+$/);
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
 export const providerSchema = z.strictObject({
@@ -12,6 +14,24 @@ export const providerSchema = z.strictObject({
   streamUsage: z.boolean().optional(),
 });
 export type Provider = z.infer<typeof providerSchema>;
+
+/** Registry metadata is introduced in contract 1.1; no credential bytes cross this boundary. */
+export interface AuthMethod {
+  id: 'api-key' | 'env' | 'none' | 'openrouter-oauth';
+  name: string;
+  description: string;
+}
+export interface ProviderAuthChallenge {
+  id: string;
+  authorizationURL: string;
+  expiresAt: string;
+}
+export interface Integration {
+  provider: Provider;
+  methods: AuthMethod[];
+  notice: string;
+}
+
 export const credentialRefSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('keyring'), key: z.string().uuid() }),
   z.strictObject({ kind: z.literal('env'), name: z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/) }),
@@ -73,10 +93,182 @@ export const cacheSchema = z.strictObject({
   accountId: z.string().uuid(), providerFingerprint: z.string(), fetchedAt: z.string().datetime(),
   models: z.array(modelSchema).max(10000),
 });
+
+export const THEME_TOKEN_KEYS = [
+  'background',
+  'backgroundPanel',
+  'backgroundElevated',
+  'foreground',
+  'foregroundMuted',
+  'foregroundSubtle',
+  'accent',
+  'accentForeground',
+  'border',
+  'borderFocused',
+  'selection',
+  'selectionForeground',
+  'cursor',
+  'error',
+  'warning',
+  'success',
+  'info',
+  'diffAdded',
+  'diffRemoved',
+  'diffContext',
+  'syntaxKeyword',
+  'syntaxString',
+  'syntaxComment',
+  'syntaxFunction',
+  'markdownHeading',
+  'markdownCode',
+  'scrollbar',
+  'composerBackground',
+  'sidebarBackground',
+  'overlayBackground',
+] as const;
+export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number];
+
+export const themeTokensSchema = z.strictObject({
+  background: hexColorSchema,
+  backgroundPanel: hexColorSchema,
+  backgroundElevated: hexColorSchema,
+  foreground: hexColorSchema,
+  foregroundMuted: hexColorSchema,
+  foregroundSubtle: hexColorSchema,
+  accent: hexColorSchema,
+  accentForeground: hexColorSchema,
+  border: hexColorSchema,
+  borderFocused: hexColorSchema,
+  selection: hexColorSchema,
+  selectionForeground: hexColorSchema,
+  cursor: hexColorSchema,
+  error: hexColorSchema,
+  warning: hexColorSchema,
+  success: hexColorSchema,
+  info: hexColorSchema,
+  diffAdded: hexColorSchema,
+  diffRemoved: hexColorSchema,
+  diffContext: hexColorSchema,
+  syntaxKeyword: hexColorSchema,
+  syntaxString: hexColorSchema,
+  syntaxComment: hexColorSchema,
+  syntaxFunction: hexColorSchema,
+  markdownHeading: hexColorSchema,
+  markdownCode: hexColorSchema,
+  scrollbar: hexColorSchema,
+  composerBackground: hexColorSchema,
+  sidebarBackground: hexColorSchema,
+  overlayBackground: hexColorSchema,
+});
+export type ThemeTokens = z.infer<typeof themeTokensSchema>;
+
+export const WALLPAPER_PRESET_IDS = [
+  'moonlit',
+  'futryn-spark',
+  'cloud-drift',
+  'honu-lagoon',
+  'koi-pond',
+  'jellyfish',
+  'lantern-night',
+  'fireflies',
+  'neon-rain',
+  'sakura-dusk',
+  'snow-cabin',
+  'star-voyage',
+] as const;
+export type WallpaperPresetId = (typeof WALLPAPER_PRESET_IDS)[number];
+
+export const themeCategorySchema = z.enum(['featured', 'colors', 'live', 'custom']);
+export type ThemeCategory = z.infer<typeof themeCategorySchema>;
+
+export const borderStyleSchema = z.enum(['soft', 'rounded', 'sharp', 'double', 'heavy']);
+export type BorderStyle = z.infer<typeof borderStyleSchema>;
+
+export const themeModeSchema = z.enum(['dark', 'light', 'system']);
+export type ThemeMode = z.infer<typeof themeModeSchema>;
+
+export const themeManifestSchema = z.strictObject({
+  schemaVersion: z.literal(1).default(1),
+  id: themeIdSchema,
+  name: z.string().min(1).max(80).regex(/^[^\x00-\x1f\x7f]+$/),
+  category: themeCategorySchema.default('custom'),
+  description: z.string().max(240).default(''),
+  author: z.string().max(120).optional(),
+  license: z.string().max(120).optional(),
+  attribution: z.string().max(240).optional(),
+  sourceFormat: z.enum(['futryn', 'opencode', 'claude-desktop']).default('futryn'),
+  builtIn: z.boolean().default(false),
+  defaultMode: z.enum(['dark', 'light']).default('dark'),
+  borderStyle: borderStyleSchema.default('soft'),
+  wallpaper: themeIdSchema.nullable().default(null),
+  greeting: z.string().max(120).optional(),
+  dark: themeTokensSchema,
+  light: themeTokensSchema,
+});
+export type ThemeManifest = z.infer<typeof themeManifestSchema>;
+
+export const compatibilityReportSchema = z.strictObject({
+  sourceFormat: z.enum(['futryn', 'opencode', 'claude-desktop', 'unknown']),
+  compatible: z.boolean(),
+  themeId: themeIdSchema.optional(),
+  convertedProperties: z.array(z.string().max(120)).max(100),
+  unsupportedProperties: z.array(z.string().max(200)).max(100),
+  warnings: z.array(z.string().max(300)).max(50),
+  refusedExecutableContent: z.boolean().default(false),
+  attribution: z.string().max(240).optional(),
+});
+export type CompatibilityReport = z.infer<typeof compatibilityReportSchema>;
+
+export const animationConfigSchema = z.strictObject({
+  enabled: z.boolean().default(true),
+  motion: z.enum(['smooth', 'grid']).default('smooth'),
+  speed: z.number().min(0.1).max(16).default(1),
+  cellSize: z.number().int().min(1).max(4).default(1),
+  veil: z.number().min(0).max(0.95).default(0.65),
+  reducedMotion: z.boolean().default(false),
+  pauseUnfocused: z.boolean().default(true),
+  reactiveEffects: z.boolean().default(true),
+});
+export type AnimationConfig = z.infer<typeof animationConfigSchema>;
+
+export const appearanceSchema = z.strictObject({
+  theme: themeIdSchema.default('futryn-default'),
+  mode: z.enum(['dark', 'light', 'system']).default('system'),
+  wallpaper: themeIdSchema.nullable().default(null),
+  animations: animationConfigSchema.default(() => ({
+    enabled: true,
+    motion: 'smooth' as const,
+    speed: 1,
+    cellSize: 1,
+    veil: 0.65,
+    reducedMotion: false,
+    pauseUnfocused: true,
+    reactiveEffects: true,
+  })),
+  syntaxHighlighting: z.boolean().default(true),
+  sidebar: z.boolean().default(false),
+});
+export type AppearanceConfig = z.infer<typeof appearanceSchema>;
+
+export const partialAppearanceSchema = z.strictObject({
+  theme: themeIdSchema.optional(),
+  mode: z.enum(['dark', 'light', 'system']).optional(),
+  wallpaper: themeIdSchema.nullable().optional(),
+  animations: animationConfigSchema.partial().optional(),
+  syntaxHighlighting: z.boolean().optional(),
+  sidebar: z.boolean().optional(),
+});
+export type PartialAppearanceConfig = z.infer<typeof partialAppearanceSchema>;
+
+export const defaultAnimationConfig = (): AnimationConfig => animationConfigSchema.parse({});
+export const defaultAppearance = (): AppearanceConfig => appearanceSchema.parse({});
+
 export const settingsSchema = z.strictObject({
   schemaVersion: z.literal(1), providers: z.array(providerSchema).max(100), accounts: z.array(accountSchema).max(200),
   activeAccountId: z.string().uuid().nullable(), selection: selectionSchema.nullable(),
   projects: z.record(z.string(), selectionSchema), catalogs: z.array(cacheSchema).max(200),
+  appearance: appearanceSchema.optional(),
+  projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
 }).superRefine((settings, ctx) => {
   const unique = (values: string[]) => new Set(values).size === values.length;
   const validAccount = (id: string) => settings.accounts.some(a => a.id === id && a.status !== 'logged-out');
