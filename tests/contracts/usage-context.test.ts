@@ -82,7 +82,7 @@ test('usage receipts survive resume and restart, retain price provenance, and ne
     expect(c.tui.computeFrameSnapshot().plainText).not.toBe(initial.plainText);
     await c.tui.handleKey('Escape'); c.tui.resize(80, 24);
   }
-  expect(reportRows(c.client, 'usage').join(' ')).toContain('subset of output');
+  expect(reportRows(c.client, 'usage', '', true).join(' ')).toContain('subset of output');
   const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
   const report = renderReportOverlay({ title: 'report', rows: reportRows(c.client, 'status'), width: 20, height: 8, offset: 99999, tokens });
   expect(report.lines.length).toBeLessThanOrEqual(8); expect(report.offset).toBeLessThan(99999);
@@ -106,7 +106,7 @@ test('/switch confirms context transfer, creates a separate bound session, prese
   const old = c.client.activeSession()!.id;
   const second = await c.app.accounts.add('usage', 'second', { kind: 'none' });
   await c.tui.executeSlashCommand('/switch 2');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('Committed chat history');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Your chat history');
   await c.tui.handleKey('Enter'); // Cancel by default.
   expect(c.client.activeSession()!.id).toBe(old);
   await c.tui.executeSlashCommand('/switch second'); await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter');
@@ -178,7 +178,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
   try {
     await wait('FUTRYN'); terminal.write('Hello terminal usage\r'); await wait('Hello fixture');
     for (const command of ['usage', 'context', 'status']) {
-      const mark = output.length; terminal.write(`/${command}\r`); await wait(`FUTRYN /${command}`, mark);
+      const mark = output.length; terminal.write(`/${command}\r`); await wait(({usage:'Session usage', context:'Context window', status:'Session status'} as Record<string,string>)[command]!, mark);
       terminal.write('\x1b[6~'); await Bun.sleep(30); terminal.write('\x1b'); await Bun.sleep(30);
     }
     let mark = output.length; terminal.write('/switch 2\r'); await wait('Continue with second?', mark);
@@ -188,7 +188,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
     expect(JSON.stringify(requests.at(-1)!.body)).toContain('Hello terminal usage');
     mark = output.length; terminal.write('/logout second\r'); await wait('Sign out of second?', mark);
     expect(c.app.accounts.get('second').status).not.toBe('logged-out');
-    terminal.write('\x1b[B\r'); await wait('Local credential removed', mark);
+    terminal.write('\x1b[B\r'); await wait('Signed out of', mark);
     expect(c.app.accounts.get('second').status).toBe('logged-out');
     expect(c.app.accounts.get('first').status).not.toBe('logged-out');
     terminal.write('\x03'); expect(await child.exited).toBe(0);
@@ -275,5 +275,28 @@ test('Esc and Ctrl+C abort an in-flight account discovery without transferring h
     expect(c.client.activeSession()!.id).toBe(source);
     expect(c.client.status().activeAccount?.id).toBe(c.account.id);
     expect(c.app.conversations.list()).toHaveLength(1);
+  }
+});
+
+test('reports start as short summaries and D reveals technical detail without changing session data', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Readable report');
+  const session = c.client.activeSession()!.id;
+  for (const command of ['usage', 'context', 'status'] as const) {
+    const summary = reportRows(c.client, command);
+    expect(summary.length).toBeLessThanOrEqual(12);
+    expect(summary.join(' ')).not.toContain('BACKEND CAPABILITIES');
+    expect(summary.join(' ')).not.toContain('UTF-8');
+    c.tui.resize(100, 36);
+    await c.tui.executeSlashCommand('/' + command);
+    const initial = c.tui.computeFrameSnapshot().plainText;
+    expect(initial).toContain('D Details');
+    expect(initial).not.toContain('Completed turn'); // No stale banner behind the modal.
+    await c.tui.handleKey('d');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('D Summary');
+    expect(c.tui.computeFrameSnapshot().plainText).not.toBe(initial);
+    await c.tui.handleKey('D');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('D Details');
+    expect(c.client.activeSession()!.id).toBe(session);
+    await c.tui.handleKey('Escape');
   }
 });

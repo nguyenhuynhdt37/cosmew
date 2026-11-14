@@ -58,3 +58,15 @@ Accessed 2026-11-15 via Context7 current indexes, with installed-source/schema i
 | Authenticated live provider inference | Not repeated; no vendor acceptance claim |
 
 The account switch has a loading state and AbortSignal propagation. Esc/Ctrl+C cancels in-flight target discovery without changing the account or creating a transferred session; shutdown aborts and drains the switch task before storage closes. Cancel remains the initial choice on logout/context-transfer confirmations.
+
+## Readability follow-up (2026-11-15)
+
+The reports now open as compact summaries in a bounded 58-column card, with muted labels and aligned values. Usage shows input/output, estimated cost or subscription billing, last-turn counts and reporting coverage. Context shows the local estimate, model window, output reserve and an explicitly approximate meter when applicable. Status shows the current account/model and essential request/session state. Unknown values are a dash or a short unavailable state rather than repeated paragraphs.
+
+**D** toggles full detail and resets scrolling. Pricing provenance, token subsets, estimator method, historical runtime measurements and backend capabilities remain available there. Arrow/PgUp/PgDn navigation remains available for small terminals; read-only views preserve session/selection and do not issue provider requests. The underlying usage ledger, accounting rules and API/subscription distinction are unchanged. The line CLI retains complete diagnostic reports.
+
+Report modals hide stale background banners. Account pickers show readable registry provider names; logout and context-transfer confirmation copy uses plain language while preserving the named target, Cancel default and explicit history-transfer warning. No public contract, storage schema or dependency change.
+
+Visual QA inspected actual framebuffer renderings at 100×30 for usage, context, status and logout with deterministic fixture data. Regression coverage checks concise defaults, D/d detail toggling, small-terminal paging and session preservation, alongside the real PTY flows.
+
+Follow-up checks: `bun run typecheck` and `bun run lint` pass; `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests` reports **145 pass, 0 fail**, including actual PTY and native-vault checks. No authenticated vendor inference was repeated for these presentation changes.

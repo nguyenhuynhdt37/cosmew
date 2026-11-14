@@ -300,6 +300,7 @@ export class FutrynTuiApp {
   private settingsSelectedIndex = 0;
   private helpOffset = 0;
   private reportOffset = 0;
+  private reportDetails = false;
   private showReasoning = false;
   private pendingSwitchAccountId: string | null = null;
   private switchAbort: AbortController | null = null;
@@ -397,7 +398,7 @@ export class FutrynTuiApp {
     }
     this.overlay = target;
     this.pendingSwitchAccountId = null;
-    if (['status', 'usage', 'context'].includes(target)) this.reportOffset = 0;
+    if (['status', 'usage', 'context'].includes(target)) { this.reportOffset = 0; this.reportDetails = false; }
     if (target === 'themes') {
       const currentTheme = this.themeEngine.getCommittedAppearance().theme;
       const list = this.themeEngine.listThemes(this.themePickerState.tab, this.themePickerState.query);
@@ -625,7 +626,7 @@ export class FutrynTuiApp {
     await this.client.logoutAccount(id);
     this.syncTranscriptFromActiveSession();
     this.openOverlay('none');
-    this.statusBanner = `Signed out of ${alias}. Local credential removed.`;
+    this.statusBanner = `Signed out of ${alias}.`;
   }
 
   public async shutdown(): Promise<void> {
@@ -1016,6 +1017,7 @@ export class FutrynTuiApp {
       case 'usage':
       case 'context':
       case 'status':
+        if (key.toLowerCase() === 'd') { this.reportDetails = !this.reportDetails; this.reportOffset = 0; return; }
         if (['ArrowDown', 'PageDown'].includes(key)) this.reportOffset = Math.min(Number.MAX_SAFE_INTEGER, this.reportOffset + (key === 'PageDown' ? Math.max(1, Math.floor(this.rows * 0.6)) : 1));
         else if (['ArrowUp', 'PageUp'].includes(key)) this.reportOffset = Math.max(0, this.reportOffset - (key === 'PageUp' ? Math.max(1, Math.floor(this.rows * 0.6)) : 1));
         if (key === 'Escape' || key === 'Enter') {
@@ -2125,7 +2127,8 @@ export class FutrynTuiApp {
         // A modal backdrop must cover the wider composer and sidebar too.
         for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
       }
-      const overlayWidth = this.overlay === 'connect' ? Math.min(cols - 2, 68) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
+      const reportSummary = ['status', 'usage', 'context'].includes(this.overlay) && !this.reportDetails;
+      const overlayWidth = this.overlay === 'connect' ? Math.min(cols - 2, 68) : reportSummary ? Math.min(cols - 2, 58) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
       const overlayHeight = Math.min(rows - 2, Math.max(12, Math.floor(rows * 0.82)));
       let overlayLines: RenderedBoxLine[] = [];
 
@@ -2228,8 +2231,8 @@ export class FutrynTuiApp {
         case 'usage':
         case 'context':
         case 'status':
-          { const report = renderReportOverlay({ title: `FUTRYN /${this.overlay}`, rows: reportRows(this.client, this.overlay, this.composer.value), width: overlayWidth,
-            height: overlayHeight, offset: this.reportOffset, tokens });
+          { const report = renderReportOverlay({ title: ({ usage: 'Session usage', context: 'Context window', status: 'Session status' })[this.overlay], rows: reportRows(this.client, this.overlay, this.composer.value, this.reportDetails), width: overlayWidth,
+            height: overlayHeight, offset: this.reportOffset, details: this.reportDetails, tokens });
             overlayLines = report.lines; this.reportOffset = report.offset; }
           break;
         case 'help':
@@ -2251,10 +2254,11 @@ export class FutrynTuiApp {
     // 8. Dòng trạng thái mờ, không nền (thông báo tạm thời hoặc đường dẫn + model).
     const shortWs = status.workspace.split('/').slice(-2).join('/');
     const thinking = this.isStreaming ? '● ' : '';
-    const leftText = this.statusBanner
+    const focusedDialog = ['connect', 'status', 'usage', 'context'].includes(this.overlay);
+    const leftText = focusedDialog ? '' : this.statusBanner
       ? ` ${this.statusBanner}`
       : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
-    const rightText = this.statusBanner || this.overlay === 'connect' ? '' : 'Ctrl+P';
+    const rightText = this.statusBanner || focusedDialog ? '' : 'Ctrl+P';
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     drawSpansAt(
       rows - 1,

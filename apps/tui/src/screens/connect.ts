@@ -32,6 +32,7 @@ export function filterIntegrations(integrations: Integration[], query: string): 
 }
 export function connectionChoices(state: ConnectProviderState, integrations: Integration[], accounts: Account[]): { id: string; label: string }[] {
   const integration = integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(state.providerId!));
+  const nameOf = (id: string) => integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(id))?.provider.name ?? id;
   switch (state.step) {
     case 'provider': return [...filterIntegrations(integrations, state.query).map(i => ({ id: i.provider.id, label: `${i.provider.name}${accounts.some(a => (i.providerIds ?? [i.provider.id]).includes(a.providerId) && a.status === 'valid') ? ' · Connected' : ''}` })), { id: '__custom', label: 'Advanced · Custom endpoint…' }];
     case 'method': return [
@@ -41,7 +42,7 @@ export function connectionChoices(state: ConnectProviderState, integrations: Int
     case 'protocol': return ['chat', 'responses', 'anthropic', 'gemini'].map(id => ({ id, label: id }));
     case 'auth': return [{ id: 'api-key', label: 'API key' }, { id: 'none', label: 'No authentication — public/local endpoint' }];
     case 'catalog': return [{ id: 'openai', label: 'Discover models · OpenAI /models' }, { id: 'anthropic', label: 'Discover models · Anthropic /models' }, { id: 'gemini', label: 'Discover models · Gemini' }, { id: 'ollama', label: 'Discover models · Ollama /api/tags' }, { id: 'manual', label: 'Manual model ID · validate with a real generation' }];
-    case 'accounts': return accounts.filter(a => !state.switchOnly || a.status !== 'logged-out').filter(a => !state.providerId || a.providerId === state.providerId).filter(a => `${a.alias} ${a.providerId}`.toLowerCase().includes(state.query.toLowerCase())).map(a => ({ id: a.id, label: `${state.switchOnly ? (accounts.filter(item => item.status !== 'logged-out').findIndex(item => item.id === a.id) + 1) + '. ' : ''}${a.alias}  ·  ${a.providerId}  ·  ${a.status}` }));
+    case 'accounts': return accounts.filter(a => !state.switchOnly || a.status !== 'logged-out').filter(a => !state.providerId || a.providerId === state.providerId).filter(a => `${a.alias} ${a.providerId} ${nameOf(a.providerId)}`.toLowerCase().includes(state.query.toLowerCase())).map(a => ({ id: a.id, label: `${state.switchOnly ? (accounts.filter(item => item.status !== 'logged-out').findIndex(item => item.id === a.id) + 1) + '. ' : ''}${a.alias}  ·  ${state.switchOnly || state.logoutOnly ? nameOf(a.providerId) + (a.status === 'logged-out' ? ' · Signed out' : '') : a.providerId + ' · ' + a.status}` }));
     case 'actions': return ['switch', 'add', 'rename', 'reconnect', 'logout', 'remove'].map(id => ({ id, label: ({ switch: 'Switch account and choose model', add: 'Add another account', rename: 'Rename account', reconnect: 'Reconnect / replace credential', logout: 'Logout · delete local credential', remove: 'Remove account and local credential' })[id]! }));
     case 'confirm': return [{ id: 'cancel', label: 'Cancel' }, { id: 'confirm', label: state.pendingAction === 'switch' ? 'Continue with this account' : state.pendingAction === 'remove' ? 'Remove account' : 'Sign out' }];
     default: return [];
@@ -81,7 +82,7 @@ export function renderConnectProviderOverlay(options: {
     row(s.statusMessage ?? (s.step === 'secret' ? 'API key: •••' : s.draft || s.query || '↑↓ Enter · Esc'));
     return lines.slice(0, height);
   }
-  row(s.step === 'confirm' ? (s.pendingAction === 'switch' ? 'Committed chat history will be sent using the new account.' : 'Deletes the local credential. Sign in again to reconnect.') : s.switchOnly ? 'Choose an account to continue this conversation.' : s.logoutOnly ? 'Choose an account to sign out. Others stay connected.' : s.step === 'provider' ? 'Choose your provider' : s.step === 'method' ? '' : s.providerLabel ?? '', t.foregroundMuted);
+  row(s.step === 'confirm' ? (s.pendingAction === 'switch' ? 'Your chat history will be sent with this account.' : 'You will need to sign in again.') : s.switchOnly ? 'Choose an account.' : s.logoutOnly ? 'Other accounts stay connected.' : s.step === 'provider' ? 'Choose your provider' : s.step === 'method' ? '' : s.providerLabel ?? '', t.foregroundMuted);
   row('');
   if (s.step === 'provider' || s.step === 'accounts') row(`Search: ${s.query}▏`, t.foreground, t.backgroundElevated);
   else if (!choices.length && s.step !== 'busy') row(`${(s.step === 'secret' || s.step === 'oauth') ? '•'.repeat(Math.min(24, s.secretDraft.length)) : s.draft}▏`, t.foreground, t.backgroundElevated);

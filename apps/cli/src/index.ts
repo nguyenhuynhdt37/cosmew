@@ -444,7 +444,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       try {
         if (parsedCommand?.definition?.unavailable) { output(app, parsedCommand.definition.unavailable);
         } else if (text === '/usage' || text === '/context') {
-          output(app, reportRows(telemetryClient(), text.slice(1) as 'usage' | 'context').join('\n'));
+          output(app, reportRows(telemetryClient(), text.slice(1) as 'usage' | 'context', '', true).join('\n'));
         } else if (text === '/model effort' || text.startsWith('/model effort ')) {
           const client = telemetryClient(); if (parsedCommand?.args) client.setReasoningEffort(parsedCommand.args);
           output(app, { effort: client.status().reasoningEffort, available: client.status().activeModel?.reasoningEfforts ?? [] });
@@ -494,7 +494,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           } catch (e) {
             if (!(e instanceof HannesError) || !['AUTH', 'POLICY'].includes(e.code)) throw e;
           }
-          output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null, details: reportRows(telemetryClient(), 'status') });
+          output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null, details: reportRows(telemetryClient(), 'status', '', true) });
         } else if (line.trim() === '/models') {
           output(app, await app.discoverModels(app.resolveAccount(), signal));
         } else if (text === '/accounts' || text.startsWith('/accounts ')) {
@@ -614,7 +614,7 @@ async function main() {
     if (group === 'usage' || group === 'cost' || group === 'context') {
       const client = app.createFutrynClient(resolve('.'));
       if (action) client.resumeSession(action);
-      output(app, reportRows(client, group === 'context' ? 'context' : 'usage').join('\n'), !!options.json);
+      output(app, reportRows(client, group === 'context' ? 'context' : 'usage', '', true).join('\n'), !!options.json);
     } else if (group === 'status') {
       const client = app.createFutrynClient(resolve('.')); if (action) client.resumeSession(action);
       const status = client.status();

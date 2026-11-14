@@ -234,9 +234,9 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
   try {
     await waitFor(() => second.output().includes('fixture'));
     second.terminal.write('/logout\r');
-    await waitFor(() => second.output().includes('Deletes the local credential'));
+    await waitFor(() => second.output().includes('You will need to sign in again.'));
     second.terminal.write('\x1b[B\r');
-    await waitFor(() => second.output().includes('Local credential removed'));
+    await waitFor(() => second.output().includes('Signed out of'));
     second.terminal.write('\x1b\x03');
     expect(await second.child.exited).toBe(0);
   } finally { second.child.kill(); await second.child.exited; second.terminal.close(); }
@@ -350,7 +350,7 @@ test('/logout names the account, defaults to Cancel, and confirms the selected s
   await tui.executeSlashCommand('/logout');
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
-  expect(tui.getStatusBanner()).toContain('Local credential removed');
+  expect(tui.getStatusBanner()).toContain('Signed out of');
   expect(app.accounts.list()[0]!.status).toBe('logged-out');
   // Add another identity and check that Esc never signs out either account.
   await app.accounts.add('fixture', 'second', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_KEY' });
@@ -375,10 +375,10 @@ test('/logout keeps failed credential deletion visible and retryable without ext
   await tui.executeSlashCommand('/logout');
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('connect');
-  expect(tui.computeFrameSnapshot().plainText).not.toContain('Local credential removed');
+  expect(tui.computeFrameSnapshot().plainText).not.toContain('Signed out of');
   expect(app.accounts.list()[0]!.status).toBe('logged-out');
   app.vault.delete = originalDelete;
   await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
-  expect(tui.getStatusBanner()).toContain('Local credential removed');
+  expect(tui.getStatusBanner()).toContain('Signed out of');
 });

@@ -3,8 +3,48 @@ import type { FutrynClient } from '@hannes/sdk';
 import type { RenderedBoxLine } from '../components/editor';
 export const count = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : value.toLocaleString('en-US');
 const money = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : `$${value.toFixed(6)}`;
-export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'context', draft = ''): string[] {
+export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'context', draft = '', details = false): string[] {
   const status = client.status(); const usage = client.usage(); const context = client.context(draft);
+  if (!details) {
+    const short = (value: number | null | undefined) => value == null ? '—' : value >= 10000 ? `${(value / 1000).toLocaleString('en-US', {maximumFractionDigits: 1})}k` : value.toLocaleString('en-US');
+    const field = (label: string, value: string) => label.padEnd(16) + value;
+    const tokens = (input: number | null | undefined, output: number | null | undefined) => input == null && output == null ? 'Not reported' : `${short(input)} in · ${short(output)} out`;
+    if (kind === 'usage') {
+      if (!usage.turns && !usage.historicalTurns) return ['No usage yet.', 'Send a message or resume a conversation.'];
+      const quota = usage.last?.usage?.quota?.[0];
+      return [
+        field('Input', short(usage.inputTokens)), field('Output', short(usage.outputTokens)),
+        ...(usage.costUSD != null ? [field('Est. cost', money(usage.costUSD))] : [field(status.activeProvider?.runtime ? 'Billing' : 'Est. cost', status.activeProvider?.runtime ? 'Subscription' : '—')]),
+        ...(usage.premiumRequests != null ? [field('Premium units', short(usage.premiumRequests))] : []),
+        '', field('Last turn', tokens(usage.last?.usage?.inputTokens, usage.last?.usage?.outputTokens)),
+        field('Reported', `${usage.reportedTurns} / ${usage.turns + usage.historicalTurns} turns`),
+        ...(quota ? [field('Plan usage', quota.unlimited ? 'Unlimited' : quota.usedPercent == null ? '—' : `${short(quota.usedPercent)}% used`)] : []),
+        ...(usage.unknownTurns ? ['', 'Some turns have no usage data.'] : []),
+      ];
+    }
+    if (kind === 'context') {
+      const ratio = context.estimatedPercent;
+      const filled = ratio == null ? 0 : Math.round(Math.min(100, ratio) / 100 * 16);
+      return [
+        field('Local estimate', `~${short(context.estimateTokens)} tokens`),
+        field('Window', context.limitTokens == null ? '—' : `${short(context.limitTokens)} tokens`),
+        field('Output reserve', context.outputReserve == null ? 'Runtime default' : `${short(context.outputReserve)} tokens`),
+        ...(ratio == null ? [] : ['', `${'━'.repeat(filled)}${'─'.repeat(16 - filled)}  ~${ratio}%`]),
+        '', context.runtimeHiddenContext ? 'Local history only; runtime adds context.' : 'Estimate includes chat history and draft.',
+      ];
+    }
+    const phase = ({ idle: 'Ready', thinking: 'Preparing request', waiting: 'Waiting for provider', reasoning: 'Reasoning summary', streaming: 'Replying', done: 'Finished', error: 'Failed', tool: 'Tool request', permission: 'Awaiting approval' } as Record<string, string>)[status.phase] ?? status.phase;
+    return [
+      field('Account', status.activeAccount?.alias ?? 'Not connected'),
+      field('Provider', status.activeProvider?.name ?? '—'),
+      field('Model', status.selection?.modelId ?? 'Not selected'),
+      '', field('Request', phase), field('Reasoning', status.reasoningEffort ?? 'Provider default'),
+      field('Context', `~${short(context.estimateTokens)} / ${short(context.limitTokens)} local`),
+      field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),
+      ...(usage.costUSD != null ? [field('Est. cost', money(usage.costUSD))] : []),
+      '', status.activeAccount?.validatedAt ? 'Previously validated · /doctor checks now' : 'Connection not checked · /doctor',
+    ];
+  }
   const usageRows = [
     'SESSION USAGE · local observations, not account billing',
     `Coverage: ${usage.reportedTurns}/${usage.turns + usage.historicalTurns} turns with input/output counts`,
@@ -71,7 +111,7 @@ export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'con
     ...Object.entries(status.capabilities).map(([name, value]) => `${name}: ${value}`),
   ];
 }
-export function renderReportOverlay(options: { title: string; rows: string[]; width: number; height: number; offset: number; tokens: ThemeTokens }): { lines: RenderedBoxLine[]; offset: number } {
+export function renderReportOverlay(options: { title: string; rows: string[]; width: number; height: number; offset: number; details?: boolean; tokens: ThemeTokens }): { lines: RenderedBoxLine[]; offset: number } {
   const { title, rows, width, height, tokens } = options;
   const w = Math.max(1, width - 4); const wrapped: string[] = [];
   for (const row of rows) {
@@ -82,9 +122,18 @@ export function renderReportOverlay(options: { title: string; rows: string[]; wi
     }
     wrapped.push(rest);
   }
-  const room = Math.max(1, height - 3); const offset = Math.min(Math.max(0, options.offset), Math.max(0, wrapped.length - room));
+  const room = Math.max(1, height - 4); const offset = Math.min(Math.max(0, options.offset), Math.max(0, wrapped.length - room));
   const line = (text: string, fg = tokens.foreground, bold = false): RenderedBoxLine => ({ spans: [{ text: ('  ' + text).slice(0, width).padEnd(width), fg, bg: tokens.overlayBackground, bold }] });
-  const lines = [line(title, tokens.accent, true), ...wrapped.slice(offset, offset + room).map(text => line(text, /^[A-Z][A-Z &/·-]+$/.test(text) ? tokens.accent : tokens.foreground, /^[A-Z][A-Z &/·-]+$/.test(text))),
-    line(`↑↓ PgUp/PgDn ${offset + 1}–${Math.min(wrapped.length, offset + room)}/${wrapped.length} · Esc Close`, tokens.foregroundSubtle)].slice(0, height);
+  const body = wrapped.slice(offset, offset + room).map(text => {
+    const pair = /^(.{1,16}?) {2,}(.+)$/.exec(text);
+    if (pair) return { spans: [
+      { text: '  ' + pair[1]!.padEnd(16), fg: tokens.foregroundMuted, bg: tokens.overlayBackground },
+      { text: pair[2]!.padEnd(Math.max(0, width - 18)), fg: tokens.foreground, bg: tokens.overlayBackground },
+    ] };
+    return line(text, /^[A-Z][A-Z &/·-]+$/.test(text) ? tokens.accent : tokens.foreground, /^[A-Z][A-Z &/·-]+$/.test(text));
+  });
+  const scroll = wrapped.length > room ? (width < 40 ? '↑↓ · ' : '↑↓ Scroll · ') : '';
+  const footer = `${scroll}D ${options.details ? 'Summary' : 'Details'} · Esc${width >= 40 ? ' Close' : ''}`;
+  const lines = [line(title, tokens.accent, true), line(''), ...body, line(footer, tokens.foregroundSubtle)].slice(0, height);
   return { lines, offset };
 }
