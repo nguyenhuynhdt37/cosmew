@@ -13,6 +13,7 @@ export interface TranscriptItem {
   toolCalls?: ToolCall[];
   streaming?: boolean;
   errorText?: string;
+  durationMs?: number;
 }
 
 const CODE_KEYWORDS = new Set([
@@ -210,58 +211,55 @@ export function renderTranscriptMessages(options: {
   const { items, width, tokens, syntaxHighlighting = true } = options;
   const innerWidth = Math.max(12, width - 2);
   const lines: RenderedBoxLine[] = [];
-  const bar = '┃';
+  const bg = tokens.background;
 
-  for (const item of items) {
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx]!;
     const isUser = item.role === 'user';
 
+    if (idx > 0) lines.push({ spans: [] });
+
     if (isUser) {
-      // Tin nhắn người dùng: thanh dọc accent + nền panel, không viền.
-      const bg = tokens.backgroundPanel;
-      const body = renderMarkdownBody({
-        content: item.content,
-        width: innerWidth - 2,
-        tokens,
-        bg,
-        syntaxHighlighting,
-      });
-      const blank: RenderedBoxLine = {
-        spans: [
-          { text: bar, fg: tokens.accent, bg },
-          { text: ' '.repeat(innerWidth - 1), fg: tokens.foreground, bg },
-        ],
-      };
-      lines.push(blank);
-      for (const bLine of body) {
+      const maxText = Math.max(8, innerWidth - 2);
+      const wrapped = wrapTextToWidth(item.content || '', maxText);
+      const textWidth = Math.min(maxText, Math.max(1, ...wrapped.map(line => line.length)));
+      const left = Math.max(0, innerWidth - (textWidth + 2));
+      for (const line of wrapped) {
         lines.push({
           spans: [
-            { text: bar, fg: tokens.accent, bg },
-            { text: ' ', fg: tokens.foreground, bg },
-            ...bLine.spans,
-            { text: ' ', fg: tokens.foreground, bg },
+            { text: ' '.repeat(left), fg: tokens.foregroundSubtle, bg },
+            {
+              text: ` ${line.slice(0, textWidth).padEnd(textWidth, ' ')} `,
+              fg: tokens.accentForeground,
+              bg: tokens.accent,
+            },
           ],
         });
       }
-      lines.push(blank);
-      lines.push({ spans: [] });
       continue;
     }
 
-    // Tin nhắn trợ lý: văn bản thuần trên nền chính, không khung.
-    const bg = tokens.background;
+    lines.push({
+      spans: [
+        { text: 'Fyn', fg: tokens.accent, bg, bold: true },
+        { text: item.streaming ? '  ···' : '', fg: tokens.foregroundMuted, bg },
+      ],
+    });
+
     const body = renderMarkdownBody({
       content: item.content || (item.streaming ? '▍' : ''),
-      width: innerWidth - 2,
+      width: Math.max(8, innerWidth - 2),
       tokens,
       bg,
       syntaxHighlighting,
     });
     for (const bLine of body) {
       lines.push({
-        spans: [{ text: '  ', fg: tokens.foreground, bg }, ...bLine.spans],
+        spans: [{ text: '│ ', fg: tokens.border, bg }, ...bLine.spans],
       });
     }
 
+    // 3. Thông báo lỗi (nếu có)
     if (item.errorText) {
       lines.push({
         spans: [
@@ -270,6 +268,7 @@ export function renderTranscriptMessages(options: {
       });
     }
 
+    // 4. Danh sách thực thi công cụ kiểu Codex Action Steps
     if (item.toolCalls && item.toolCalls.length > 0) {
       for (const call of item.toolCalls) {
         lines.push(
@@ -283,21 +282,29 @@ export function renderTranscriptMessages(options: {
       }
     }
 
-    // Dòng meta mờ: ▣ model · tokens · cost
-    const meta: string[] = [];
-    if (item.modelId) meta.push(item.modelId);
-    if (item.accountAlias) meta.push(`@${item.accountAlias}`);
-    if (item.usage) {
-      meta.push(`${(item.usage.inputTokens ?? 0) + (item.usage.outputTokens ?? 0)} tok`);
-      if (item.usage.costUSD !== null && item.usage.costUSD !== undefined) meta.push(`$${item.usage.costUSD.toFixed(4)}`);
+    // 5. Dòng tổng kết lượt thực thi (Turn Footer) chuẩn OpenAI Codex + Fyn Companion
+    const metaParts: string[] = [];
+    if (item.durationMs !== undefined && item.durationMs > 0) {
+      metaParts.push(`Worked for ${(item.durationMs / 1000).toFixed(1)}s`);
     }
-    if (item.streaming) meta.push('● đang trả lời');
-    if (meta.length > 0) {
+    if (item.usage) {
+      const totalTok = (item.usage.inputTokens ?? 0) + (item.usage.outputTokens ?? 0);
+      if (totalTok > 0) metaParts.push(`${totalTok} tok`);
+      if (item.usage.costUSD !== null && item.usage.costUSD !== undefined) {
+        metaParts.push(`$${item.usage.costUSD.toFixed(4)}`);
+      }
+    }
+    if (item.modelId) {
+      metaParts.push(item.modelId);
+    }
+    if (item.accountAlias) {
+      metaParts.push(`@${item.accountAlias}`);
+    }
+
+    if (!item.streaming && metaParts.length > 0) {
       lines.push({
         spans: [
-          { text: '  ', fg: tokens.foreground, bg },
-          { text: '▣ ', fg: item.streaming ? tokens.accent : tokens.foregroundSubtle, bg },
-          { text: meta.join(' · ').slice(0, innerWidth - 4), fg: tokens.foregroundSubtle, bg },
+          { text: `  ${metaParts.join(' · ')}`.slice(0, innerWidth), fg: tokens.foregroundSubtle, bg },
         ],
       });
     }

@@ -4,7 +4,7 @@ import type { RenderedBoxLine } from './editor';
 // UI-only presentation state. Never dispatches commands or resolves approvals.
 export type FynState = 'idle' | 'thinking' | 'streaming' | 'waiting' | 'done' | 'error' | 'cancelled' | 'sleep';
 
-const LABELS: Record<FynState, string> = {
+export const FYN_LABELS: Record<FynState, string> = {
   idle: 'ready', thinking: 'processing', streaming: 'replying', waiting: 'awaiting approval',
   done: 'complete', error: 'error', cancelled: 'cancelled', sleep: 'sleeping',
 };
@@ -59,7 +59,7 @@ export function renderFyn(options: {
   const { state, time, tokens, width, compact } = options;
   if (width < 20) return [];
   const bg = tokens.background;
-  const label = `Fyn · ${LABELS[state]}`;
+  const label = `Fyn · ${FYN_LABELS[state]}`;
   const ink = state === 'error' ? tokens.error : state === 'waiting' ? tokens.warning : tokens.accent;
   const eyes = state === 'sleep' || state === 'done' || time % 4.6 > 4.35 ? '-' : 'o';
   const textLine = (text: string, fg = ink): RenderedBoxLine => ({

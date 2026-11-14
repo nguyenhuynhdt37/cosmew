@@ -34,6 +34,7 @@ import {
 } from './components/permission-dialog';
 import {
   renderSidebarPanel,
+  renderTopHeaderBar,
   renderTranscriptViewport,
   renderWelcomeScreen,
 } from './screens/chat';
@@ -124,6 +125,31 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
   while (i < str.length) {
     if (str.startsWith('\x1b[200~', i) || str.startsWith('\x1b[201~', i)) { i += 6; continue; }
     if (str.startsWith('\x1b\r', i)) { keys.push('Alt+Enter'); i += 2; continue; }
+    if (str.startsWith('\x1b[<', i)) {
+      const endM = str.indexOf('M', i + 3);
+      const endLowerM = str.indexOf('m', i + 3);
+      let termIdx = -1;
+      if (endM !== -1 && endLowerM !== -1) {
+        termIdx = Math.min(endM, endLowerM);
+      } else if (endM !== -1) {
+        termIdx = endM;
+      } else {
+        termIdx = endLowerM;
+      }
+
+      if (termIdx !== -1) {
+        const mouseData = str.slice(i + 3, termIdx);
+        const parts = mouseData.split(';');
+        const button = parseInt(parts[0] || '0', 10);
+        if (button === 64) {
+          keys.push('PageUp');
+        } else if (button === 65) {
+          keys.push('PageDown');
+        }
+        i = termIdx + 1;
+        continue;
+      }
+    }
     if (str.startsWith('\x1b[I', i)) {
       keys.push('FocusIn');
       i += 3;
@@ -559,6 +585,7 @@ export class FutrynTuiApp {
     const abortController = new AbortController();
     this.activeAbortController = abortController;
     let completed = false;
+    const startTime = Date.now();
 
     try {
       for await (const event of this.client.sendMessage(trimmed, {
@@ -575,6 +602,7 @@ export class FutrynTuiApp {
           completed = true;
           assistantItem.usage = event.usage;
           assistantItem.streaming = false;
+          assistantItem.durationMs = Date.now() - startTime;
         }
       }
       if (abortController.signal.aborted) throw new HannesError('CANCELLED');
@@ -1739,9 +1767,9 @@ export class FutrynTuiApp {
     const sidebarWidth = showSidebar ? 30 : 0;
     const mainWidth = Math.max(20, cols - sidebarWidth);
 
-    // Responsive content area width (tỉ lệ cân đối, không dính sát viền)
-    const colWidth = Math.min(Math.max(36, mainWidth - 4), cols < 100 ? mainWidth - 2 : 88);
-    const colLeft = Math.max(0, Math.floor((mainWidth - colWidth) / 2));
+    // Full-screen tràn màn: tận dụng tối đa mainWidth, padding 1 ký tự mỗi bên nếu đủ rộng để viền không dính sát mép terminal
+    const colWidth = mainWidth >= 40 ? mainWidth - 2 : mainWidth;
+    const colLeft = mainWidth >= 40 ? 1 : 0;
 
     // 2. Render Live ASCII Wallpaper into side gutters only (Clear Reserved Content Area)
     if (wallpaperId && appearance.animations.enabled) {
@@ -1860,20 +1888,42 @@ export class FutrynTuiApp {
       );
       drawBoxBlock(startRow + welcomeLines.length + 1, colLeft, composerLines, colWidth);
     } else {
-      const composerStartRow = Math.max(1, rows - 1 - composerLines.length);
-      const mascotLines = rows >= 24 ? renderFyn({ ...companionView, tokens, width: colWidth, compact: true }) : [];
-      const mascotStartRow = composerStartRow - mascotLines.length;
+      // Giao diện khi Chat phong cách OpenAI Codex kết hợp Fyn Companion
+      const showHeader = rows >= 16 && mainWidth >= 40;
+      let transcriptStartRow = 0;
+
+      if (showHeader) {
+        // 1. Top Header Bar thanh lịch ở mép trên cùng
+        const headerSpans = renderTopHeaderBar({
+          width: mainWidth,
+          status,
+          manifest,
+          reactiveEvent,
+          reactiveEffectsEnabled: appearance.animations.reactiveEffects,
+          isPreviewing: this.themeEngine.isPreviewing(),
+          tokens,
+          companionState: companionView.state,
+        });
+        drawSpansAt(0, 0, headerSpans, mainWidth);
+        drawSpansAt(1, 0, [{ text: '─'.repeat(mainWidth), fg: tokens.border, bg: tokens.background }], mainWidth);
+        transcriptStartRow = 2;
+      }
+
+      // 2. Prompt Composer cố định ở đáy màn hình
+      const composerStartRow = Math.max(transcriptStartRow + 1, rows - 1 - composerLines.length);
+
+      // 3. Transcript Viewport chiếm trọn toàn bộ chiều cao giữa header và composer
+      const transcriptHeight = Math.max(1, composerStartRow - transcriptStartRow);
       const vp = renderTranscriptViewport({
         items: this.transcript,
         width: colWidth,
-        height: Math.max(1, mascotStartRow - 1),
+        height: transcriptHeight,
         scrollOffset: this.transcriptScrollOffset,
         tokens,
         borderStyle: manifest.borderStyle,
         syntaxHighlighting: appearance.syntaxHighlighting,
       });
-      drawBoxBlock(0, colLeft, vp.lines, colWidth);
-      drawBoxBlock(mascotStartRow, colLeft, mascotLines, colWidth);
+      drawBoxBlock(transcriptStartRow, colLeft, vp.lines, colWidth);
       drawBoxBlock(composerStartRow, colLeft, composerLines, colWidth);
     }
     void reactiveEvent;
@@ -2149,14 +2199,16 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
     } catch {
       // Ignore cleanup error
     }
-    stdout.write('\x1b[0m\x1b[?1004l\x1b[?25h\x1b[?1049l');
+    stdout.write('\x1b[0m\x1b[?7h\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1007l\x1b[?1004l\x1b[?25h\x1b[?1049l');
   };
 
-  stdout.write('\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[2J');
+  stdout.write('\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[?1004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1007h\x1b[2J\x1b[3J\x1b[H');
   if (typeof stdin.setRawMode === 'function') {
     stdin.setRawMode(true);
   }
   stdin.resume();
+
+  app.resize(stdout.columns || 110, stdout.rows || 32);
 
   const renderNow = (force = false) => {
     if (cleanedUp) return;

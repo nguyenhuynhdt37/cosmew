@@ -286,3 +286,18 @@ test.skipIf(process.platform === 'win32')('Fyn: actual PTY renders and exits cle
     terminal.close();
   }
 }, 10000);
+
+test('TUI: responsive full-screen width utilizes full terminal cols without 88-char clamp', async () => {
+  const x = context();
+  const a = await x.launch(160, 40);
+  try {
+    const snap = a.tui.computeFrameSnapshot();
+    expect(snap.cols).toBe(160);
+    expect(snap.rows).toBe(40);
+    // Viền ngang của composer phải trải rộng gần hết 160 cột (>= 100 ký tự '─')
+    const wideBorderLine = snap.plainLines.find(line => line.includes('─'.repeat(100)));
+    expect(wideBorderLine).toBeDefined();
+  } finally {
+    a.close();
+  }
+});

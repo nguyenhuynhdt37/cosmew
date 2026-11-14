@@ -1,13 +1,9 @@
 import type { BorderStyle, SessionSummary, ThemeManifest, ThemeTokens } from '@hannes/contracts';
 import type { FutrynClient, ReactiveAgentEvent } from '@hannes/sdk';
 import type { RenderedBoxLine, StyledSpan } from '../components/editor';
+import { FYN_LABELS, type FynState } from '../components/mascot';
 import { renderTranscriptMessages, type TranscriptItem } from '../components/messages';
 import { getBorderGlyphs } from '../theme/theme';
-
-const FUTRYN_COMPACT_LOGO = [
-  '█▀▀ █░█ ▀█▀ █▀█ █░█ █▄░█',
-  '█▀░ █▄█ ░█░ █▀▄ ░█░ █░▀█',
-];
 
 export function renderWelcomeScreen(options: {
   width: number;
@@ -19,7 +15,7 @@ export function renderWelcomeScreen(options: {
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
   const { width, manifest, status, tokens } = options;
-  const w = Math.min(Math.max(28, width - 4), 60);
+  const w = Math.min(Math.max(28, width - 4), 56);
   const bg = tokens.background;
   const lines: RenderedBoxLine[] = [];
 
@@ -35,20 +31,31 @@ export function renderWelcomeScreen(options: {
     };
   };
 
-  // Compact 2-line modern CLI typography
-  for (const row of FUTRYN_COMPACT_LOGO) {
-    lines.push(center(row, tokens.accent, true));
-  }
+  const pills = (labels: string[]): RenderedBoxLine => {
+    const parts: StyledSpan[] = [];
+    for (const label of labels) {
+      if (parts.length > 0) parts.push({ text: ' ', fg: tokens.foregroundSubtle, bg });
+      parts.push({ text: ` ${label} `, fg: tokens.info, bg: tokens.backgroundElevated });
+    }
+    const len = parts.reduce((sum, span) => sum + span.text.length, 0);
+    const left = Math.max(0, Math.floor((w - len) / 2));
+    return {
+      spans: [
+        { text: ' '.repeat(left), fg: tokens.foregroundSubtle, bg },
+        ...parts,
+        { text: ' '.repeat(Math.max(0, w - left - len)), fg: tokens.foregroundSubtle, bg },
+      ],
+    };
+  };
 
-  // Tagline
-  const greeting = manifest.greeting ?? 'high-craft terminal intelligence';
-  lines.push(center(greeting, tokens.foregroundMuted));
-
-  // Single subtle status/hint line
+  lines.push(center('FUTRYN', tokens.accent, true));
+  lines.push(center(manifest.greeting ?? 'Quiet desk. Clear answers.', tokens.foregroundMuted));
   if (!status.activeAccount) {
-    lines.push(center('/connect to add a provider', tokens.foregroundSubtle));
+    lines.push(pills(['/connect', '/models', '/themes']));
   } else if (!status.selection) {
-    lines.push(center('/models to select a model', tokens.foregroundSubtle));
+    lines.push(pills(['/models', '/themes']));
+  } else {
+    lines.push(center(status.selection.modelId, tokens.foregroundSubtle));
   }
 
   return lines;
@@ -70,7 +77,7 @@ export function renderSidebarPanel(options: {
   const bg = tokens.sidebarBackground;
   const lines: RenderedBoxLine[] = [];
 
-  const title = ' SESSIONS ';
+  const title = ' Sessions ';
   const fill = Math.max(0, innerWidth - title.length);
   lines.push({
     spans: [
@@ -81,33 +88,26 @@ export function renderSidebarPanel(options: {
     ],
   });
 
-  const pushSideRow = (text: string, fg = tokens.foreground, bold = false) => {
+  const pushSideRow = (text: string, fg = tokens.foreground, bold = false, rowBg = bg) => {
     lines.push({
       spans: [
         { text: glyphs.vertical, fg: tokens.border, bg },
-        { text: text.slice(0, innerWidth).padEnd(innerWidth, ' '), fg, bg, bold },
+        { text: text.slice(0, innerWidth).padEnd(innerWidth, ' '), fg, bg: rowBg, bold },
         { text: glyphs.vertical, fg: tokens.border, bg },
       ],
     });
   };
 
-  pushSideRow(` Mode    : ${status.mode.toUpperCase()}`, tokens.info, true);
-  pushSideRow(
-    ` Account : ${status.activeAccount?.alias ?? 'none'}`,
-    status.activeAccount ? tokens.success : tokens.warning,
-  );
-  pushSideRow(
-    ` Model   : ${status.selection?.modelId ?? 'none'}`,
-    status.selection ? tokens.foreground : tokens.warning,
-  );
-  pushSideRow(` Theme   : ${manifest.name}`, tokens.accent);
-  if (wallpaperPresetId) {
-    pushSideRow(` Scene   : ${wallpaperPresetId}`, tokens.foregroundMuted);
-  }
-  pushSideRow('─'.repeat(innerWidth), tokens.border);
+  const account = status.activeAccount?.alias ?? 'not connected';
+  const model = status.selection?.modelId ?? 'no model';
+  pushSideRow(` ${status.mode}`, tokens.info, true, tokens.backgroundElevated);
+  pushSideRow(` ${account}`, status.activeAccount ? tokens.foreground : tokens.warning);
+  pushSideRow(` ${model}`, status.selection ? tokens.foregroundMuted : tokens.warning);
+  pushSideRow(` ${manifest.name}${wallpaperPresetId ? ` · ${wallpaperPresetId}` : ''}`, tokens.foregroundSubtle);
+  pushSideRow('');
 
   if (sessions.length === 0) {
-    pushSideRow('  (no saved sessions)', tokens.foregroundSubtle);
+    pushSideRow('  No sessions yet', tokens.foregroundSubtle);
   } else {
     for (const s of sessions.slice(0, Math.max(2, height - 12))) {
       const active = s.id === status.activeSessionId;
@@ -115,6 +115,7 @@ export function renderSidebarPanel(options: {
         ` ${active ? '●' : '·'} ${s.title || s.id.slice(0, 8)}`,
         active ? tokens.accent : tokens.foregroundMuted,
         active,
+        active ? tokens.selection : bg,
       );
     }
   }
@@ -123,7 +124,7 @@ export function renderSidebarPanel(options: {
     pushSideRow('');
   }
 
-  const footer = ' Ctrl+B Hide ';
+  const footer = ' hide · Ctrl+B ';
   const footerFill = Math.max(0, innerWidth - footer.length);
   lines.push({
     spans: [
@@ -145,61 +146,64 @@ export function renderTopHeaderBar(options: {
   reactiveEffectsEnabled: boolean;
   isPreviewing: boolean;
   tokens: ThemeTokens;
+  companionState?: FynState;
 }): StyledSpan[] {
-  const { width, status, manifest, reactiveEvent, reactiveEffectsEnabled, isPreviewing, tokens } = options;
-  const bg = tokens.background;
+  const { width, status, manifest, reactiveEvent, reactiveEffectsEnabled, isPreviewing, tokens, companionState } = options;
+  const bg = tokens.backgroundPanel;
 
-  let stateLabel = 'ready';
-  let stateColor = tokens.foregroundSubtle;
-  if (reactiveEffectsEnabled) {
-    switch (reactiveEvent.kind) {
-      case 'thinking':
-        stateLabel = 'thinking';
-        stateColor = tokens.warning;
-        break;
-      case 'streaming':
-        stateLabel = 'streaming';
-        stateColor = tokens.accent;
-        break;
-      case 'tool':
-        stateLabel = 'tool';
-        stateColor = tokens.info;
-        break;
-      case 'permission':
-        stateLabel = 'permission';
-        stateColor = tokens.warning;
-        break;
-      case 'error':
-        stateLabel = 'error';
-        stateColor = tokens.error;
-        break;
-      case 'done':
-        stateLabel = 'ready';
-        stateColor = tokens.success;
-        break;
-      default:
-        stateLabel = 'ready';
-        stateColor = tokens.success;
-        break;
-    }
+  const stateKey: FynState = companionState ?? (reactiveEffectsEnabled && reactiveEvent.kind !== 'idle' ? (
+    reactiveEvent.kind === 'thinking' ? 'thinking' :
+    reactiveEvent.kind === 'streaming' ? 'streaming' :
+    reactiveEvent.kind === 'error' ? 'error' :
+    reactiveEvent.kind === 'permission' ? 'waiting' :
+    reactiveEvent.kind === 'done' ? 'done' : 'idle'
+  ) : 'idle');
+
+  const label = FYN_LABELS[stateKey] ?? 'ready';
+  let stateColor = tokens.success;
+  switch (stateKey) {
+    case 'thinking':
+    case 'waiting':
+      stateColor = tokens.warning;
+      break;
+    case 'streaming':
+      stateColor = tokens.accent;
+      break;
+    case 'error':
+      stateColor = tokens.error;
+      break;
+    case 'cancelled':
+    case 'sleep':
+      stateColor = tokens.foregroundSubtle;
+      break;
+    default:
+      stateColor = tokens.success;
+      break;
   }
 
-  const left = ` FUTRYN `;
-  const dot = '● ';
-  const session = status.activeSessionId
-    ? ` ${status.activeSessionId.slice(0, 8)} · ${status.messageCount} msgs`
-    : '';
-  const right = `${isPreviewing ? '[Preview] ' : ''}${manifest.name} · ${status.selection?.modelId ?? 'no model'} `;
-  const used = left.length + dot.length + stateLabel.length + session.length + right.length;
-  const pad = ' '.repeat(Math.max(0, width - used));
+  const fyn = `Fyn · ${label}`;
+  const leftParts: StyledSpan[] = [
+    { text: ' FUTRYN', fg: tokens.accent, bg, bold: true },
+    { text: '   ', fg: tokens.foregroundSubtle, bg },
+    { text: '● ', fg: stateColor, bg },
+    { text: fyn, fg: stateColor, bg },
+  ];
+  const leftLen = leftParts.reduce((sum, span) => sum + span.text.length, 0);
+  const bits = [
+    isPreviewing ? 'preview' : '',
+    status.selection?.modelId ?? '',
+    status.activeAccount?.alias ? `@${status.activeAccount.alias}` : '',
+    status.mode,
+    manifest.name,
+  ].filter(Boolean);
+  const room = Math.max(0, width - leftLen);
+  const rightText = room > 0 ? ` ${bits.join(' · ')} `.slice(0, room) : '';
+  const padLen = Math.max(0, room - rightText.length);
 
   return [
-    { text: left, fg: tokens.accent, bg, bold: true },
-    { text: dot, fg: stateColor, bg },
-    { text: stateLabel, fg: stateColor, bg },
-    { text: session, fg: tokens.foregroundMuted, bg },
-    { text: pad, fg: tokens.foreground, bg },
-    { text: right.slice(0, Math.max(0, width - left.length - dot.length - stateLabel.length)), fg: tokens.foregroundSubtle, bg },
+    ...leftParts,
+    { text: ' '.repeat(padLen), fg: tokens.foregroundMuted, bg },
+    { text: rightText, fg: tokens.foregroundMuted, bg },
   ];
 }
 
