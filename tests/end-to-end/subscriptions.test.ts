@@ -229,3 +229,16 @@ for (const runtime of ['codex', 'copilot'] as const) test(`${runtime}: official 
   expect(c.app.conversations.get(session)?.messages.some(m => m.content.includes('Provider supplied summary'))).toBe(false);
   expect(() => another.setReasoningEffort('invented')).toThrow();
 });
+
+for (const runtime of ['gemini-cli', 'qwen-code'] as const) test(`${runtime}: ACP thought chunks stream separately before the answer`, async () => {
+  const c = await context('thought-stream'); await connect(c, runtime);
+  let reasoning = ''; let answer = ''; let thoughtBeforeAnswer = false;
+  for await (const event of c.client.sendMessage('Show available provider thinking')) {
+    if (event.type === 'reasoningDelta') { reasoning += event.text; if (!answer) thoughtBeforeAnswer = true; }
+    if (event.type === 'textDelta') answer += event.text;
+  }
+  expect(thoughtBeforeAnswer).toBe(true);
+  expect(reasoning).toBe('Provider thought continued');
+  expect(answer).toBe('Subscription fixture response');
+  expect(c.client.activeSession()!.messages.some(message => message.content.includes('Provider thought'))).toBe(false);
+});

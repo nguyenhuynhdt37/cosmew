@@ -58,7 +58,8 @@ export function fixtureServer() {
         ...(reasoning ? [
           { type: 'response.output_item.added', output_index: 1, item: { type: 'reasoning', id: 'rs_fixture', summary: [] } },
           { type: 'response.reasoning_summary_part.added', item_id: 'rs_fixture', output_index: 1, summary_index: 0 },
-          { type: 'response.reasoning_summary_text.delta', item_id: 'rs_fixture', output_index: 1, summary_index: 0, delta: 'Provider HTTP summary' },
+          { type: 'response.reasoning_summary_text.delta', item_id: 'rs_fixture', output_index: 1, summary_index: 0, delta: 'Provider HTTP ' },
+          { type: 'response.reasoning_summary_text.delta', item_id: 'rs_fixture', output_index: 1, summary_index: 0, delta: 'summary' },
           { type: 'response.reasoning_summary_part.done', item_id: 'rs_fixture', output_index: 1, summary_index: 0 },
           { type: 'response.output_item.done', output_index: 1, item: { type: 'reasoning', id: 'rs_fixture', summary: [{ type: 'summary_text', text: 'Provider HTTP summary' }] } },
         ] : []),

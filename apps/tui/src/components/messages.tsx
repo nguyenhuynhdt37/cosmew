@@ -231,7 +231,7 @@ export function renderTranscriptMessages(options: {
     }
 
     if (item.reasoning) {
-      lines.push({ spans: [{ text: `  ${item.reasoningExpanded ? '▾' : '▸'} Provider reasoning summary · Ctrl+R`, fg: tokens.foregroundSubtle, bg }] });
+      lines.push({ spans: [{ text: `  ${item.reasoningExpanded ? '▾' : '▸'} Thinking · from provider · Ctrl+R`, fg: tokens.foregroundSubtle, bg }] });
       if (item.reasoningExpanded) {
         for (const line of renderMarkdownBody({ content: item.reasoning, width: innerWidth - 4, tokens, bg, syntaxHighlighting })) {
           lines.push({ spans: [{ text: '  ', fg: tokens.foregroundSubtle, bg }, ...line.spans.map(span => ({ ...span, fg: tokens.foregroundMuted }))] });

@@ -79,7 +79,7 @@ if (copilot && process.argv.includes('login')) {
           result = { stopReason: 'end_turn' }; break;
         }
         if (scenario === 'telemetry') {
-          if (runtime === 'codex' && p.effort !== 'high') process.exit(41);
+          if (runtime === 'codex' && (p.effort !== 'high' || p.summary !== 'auto')) process.exit(41);
           const data = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 10, reasoningTokens: 8, cost: 1.5, apiCallId: 'fixture-call', quotaSnapshots: { premium_interactions: { remainingPercentage: 75, resetDate: '2026-12-01T00:00:00Z', entitlementRequests: 100 } } };
           if (copilot) {
             notifyCopilot('assistant.reasoning_delta', { deltaContent: 'Provider supplied summary' });
@@ -90,6 +90,12 @@ if (copilot && process.argv.includes('login')) {
             event('item/reasoning/summaryTextDelta', { delta: 'Provider supplied summary' });
             event('thread/tokenUsage/updated', { tokenUsage: { last: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30, cacheWriteInputTokens: 10, reasoningOutputTokens: 8, totalTokens: 120 }, modelContextWindow: 32000 } });
           }
+        }
+        if (scenario === 'thought-stream' && !copilot && runtime !== 'codex') {
+          event('session/update', { update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Provider thought ' } } });
+          await Bun.sleep(60);
+          event('session/update', { update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'continued' } } });
+          await Bun.sleep(60);
         }
         const text = 'Subscription fixture response';
         if (copilot) notifyCopilot('assistant.message_delta', { deltaContent: text });

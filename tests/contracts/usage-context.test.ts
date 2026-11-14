@@ -235,6 +235,8 @@ test('Responses HTTP transport forwards an advertised effort and streams the pro
     expect(c.tui.getTranscript().at(-1)!.reasoning).toBe('Provider HTTP summary');
     expect(c.tui.getTranscript().at(-1)!.content).toBe('Hello fixture');
     expect(phases).toEqual(expect.arrayContaining(['thinking', 'waiting', 'reasoning', 'streaming', 'done']));
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
+    await c.tui.handleKey('Ctrl+R'); expect(c.tui.computeFrameSnapshot().plainText).not.toContain('Provider HTTP summary');
     await c.tui.handleKey('Ctrl+R'); expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
   } finally { off(); }
 });
@@ -425,3 +427,74 @@ test('/effort follows Claude command naming with staged keyboard selection, auto
   await c.tui.executeSlashCommand('/effort ultracode'); expect(c.client.status().reasoningEffort).toBe('high');
   expect(c.tui.getStatusBanner()).toContain('not supported');
 });
+
+test('context estimates include streamed answer text and state changes invalidate model/session telemetry', async () => {
+  const c = await setup(); c.server.set({streamDelay: 80});
+  c.app.settings.update(settings => { const model = settings.catalogs[0]!.models[0]!; model.contextLimit = 32000; });
+  const observations: {phase: string; estimate: number; model: string | undefined; input: number | null}[] = [];
+  const off = c.client.onReactiveEvent(event => observations.push({phase: event.kind, estimate: c.client.context().estimateTokens, model: c.client.status().selection?.modelId, input: c.client.status().lastUsage?.inputTokens ?? null}));
+  try {
+    const turn = c.tui.submitPrompt('Keep context current');
+    const deadline = Date.now() + 2000;
+    while (!c.tui.getTranscript().at(-1)?.content && Date.now() < deadline) await Bun.sleep(5);
+    expect(c.tui.getTranscript().at(-1)?.streaming).toBe(true);
+    expect(observations.find(item => item.phase === 'streaming')!.estimate).toBeGreaterThan(observations.find(item => item.phase === 'waiting')!.estimate);
+    expect(() => c.client.selectModel('fixture-model')).toThrow();
+    expect(() => c.client.setReasoningEffort('high')).toThrow();
+    await turn;
+    expect(c.client.status().lastUsage?.inputTokens).toBe(4);
+    c.client.addManualModel('new-model');
+    c.app.settings.update(settings => { settings.catalogs[0]!.models.find(model => model.id === 'new-model')!.contextLimit = 128000; });
+    c.client.selectModel('new-model');
+    expect(observations.at(-1)?.model).toBe('new-model'); expect(observations.at(-1)?.input).toBeNull();
+    expect(c.client.status().phase).toBe('idle'); expect(c.client.context().limitTokens).toBe(128000);
+    expect(c.client.context().estimateTokens).toBe(0);
+    await c.tui.executeSlashCommand('/model new-model');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('128k tokens');
+    c.client.createSession(); c.client.clearSessionView();
+    expect(observations.at(-1)?.estimate).toBe(0);
+  } finally { off(); }
+});
+
+test('thinking arrives incrementally before the answer and an explicit collapse survives subsequent deltas', async () => {
+  const c = await setup();
+  c.app.registry.add(c.server.provider('responses', {id:'thinking-stream', auth:'none'}));
+  const account = await c.app.accounts.add('thinking-stream', 'thinking-stream', {kind:'none'});
+  await c.client.discoverModels({accountId:account.id}); c.client.selectModel('fixture-model', {accountId:account.id});
+  c.server.set({reasoning:true, streamDelay: 60});
+  const task = c.tui.submitPrompt('Stream thinking');
+  const deadline = Date.now() + 2500;
+  while (!c.tui.getTranscript().at(-1)?.reasoning && Date.now() < deadline) await Bun.sleep(5);
+  expect(c.tui.getTranscript().at(-1)?.reasoning).toBe('Provider HTTP ');
+  expect(c.tui.getTranscript().at(-1)?.content).toBe('');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP');
+  await c.tui.handleKey('Ctrl+R');
+  await task;
+  expect(c.tui.getTranscript().at(-1)?.reasoning).toBe('Provider HTTP summary');
+  expect(c.tui.getTranscript().at(-1)?.reasoningExpanded).toBe(false);
+  expect(c.tui.getTranscript().at(-1)?.content).toBe('Hello fixture');
+  await c.tui.handleKey('Ctrl+R');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
+});
+
+test.skipIf(process.platform === 'win32')('actual PTY streams thinking before the answer and refreshes context on a model change', async () => {
+  const c = await setup();
+  c.app.registry.add(c.server.provider('responses', {id:'terminal-thinking', auth:'none'}));
+  const account = await c.app.accounts.add('terminal-thinking', 'terminal-thinking', {kind:'none'});
+  await c.client.discoverModels({accountId:account.id}); c.client.selectModel('fixture-model', {accountId:account.id});
+  c.client.addManualModel('alternate-model');
+  c.app.settings.update(settings => { const catalog = settings.catalogs.find(cache => cache.accountId === account.id)!; catalog.models[0]!.contextLimit = 128000; catalog.models.find(model => model.id === 'alternate-model')!.contextLimit = 64000; });
+  c.server.set({reasoning:true, streamDelay: 80});
+  let output = '';
+  const terminal = new Bun.Terminal({cols:100, rows:30, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
+  const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], {terminal, env:{...process.env, HANNES_HOME:c.dir, NO_COLOR:'1'}});
+  const wait = async (text: string, from = 0) => { const deadline = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5); expect(output.slice(from)).toContain(text); };
+  try {
+    await wait('/ 128k tokens'); terminal.write('Stream reasoning and answer\r');
+    await wait('Provider HTTP'); expect(output).not.toContain('Hello fixture');
+    await wait('Hello fixture'); await wait('Completed turn');
+    const mark = output.length; terminal.write('/model alternate-model\r');
+    await wait('/ 64k tokens', mark); await wait('Context  ~0', mark);
+    terminal.write('\x03'); expect(await child.exited).toBe(0);
+  } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
+}, 15000);

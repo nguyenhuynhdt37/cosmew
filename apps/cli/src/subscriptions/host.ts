@@ -340,6 +340,7 @@ export class SubscriptionHost {
           if (event?.type === 'tool.execution_start') fail(new HannesError('POLICY'));
         } else if (message.method === 'session/update') {
           const update = message.params?.update;
+          if (update?.sessionUpdate === 'agent_thought_chunk' && update.content?.type === 'text') pushText(update.content.text, 'reasoningDelta');
           if (update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text') pushText(update.content.text);
           if (update?.sessionUpdate === 'tool_call') fail(new HannesError('POLICY'));
         }
@@ -356,7 +357,7 @@ export class SubscriptionHost {
       yield { type: 'started', requestId: request.requestId };
       if (recipe.runtime === 'codex') {
         const result = await rpc.request('thread/start', { model: request.modelId, cwd: profile.workspace, approvalPolicy: 'never', sandbox: 'read-only', ephemeral: true });
-        await rpc.request('turn/start', { threadId: result.thread.id, model: request.modelId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}), approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
+        await rpc.request('turn/start', { threadId: result.thread.id, model: request.modelId, summary: 'auto', input: [{ type: 'text', text: prompt, text_elements: [] }], ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}), approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
       } else if (recipe.runtime === 'copilot') {
         const result = await rpc.request('session.create', { model: request.modelId, sessionId: crypto.randomUUID(), streaming: true, workingDirectory: profile.workspace,
           ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}), availableTools: [], excludedTools: ['builtin:*', 'mcp:*', 'custom:*'], tools: [], mcpServers: {}, installedPlugins: [], includedBuiltinSkills: [], includedBuiltinAgents: [], enableSkills: false, enableConfigDiscovery: false, requestPermission: true, hooks: false, clientName: 'FUTRYN' });

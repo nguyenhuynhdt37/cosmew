@@ -120,6 +120,7 @@ export class FutrynClient {
   private currentMode: AgentMode = 'chat';
   private lastUsage: Usage | null = null;
   private sending = false;
+  private streamingText = '';
   private eventSeq = 0;
   private latestEvent: ReactiveAgentEvent = { seq: 0, kind: 'idle', timestamp: Date.now() };
   private readonly eventListeners = new Set<(event: ReactiveAgentEvent) => void>();
@@ -146,14 +147,14 @@ export class FutrynClient {
 
   setMode(mode: AgentMode): AgentMode {
     this.currentMode = mode;
+    this.notifyStateChange();
     return this.currentMode;
   }
 
   cycleMode(): AgentMode {
     const order: AgentMode[] = ['chat', 'plan', 'review'];
     const idx = order.indexOf(this.currentMode);
-    this.currentMode = order[(idx + 1) % order.length]!;
-    return this.currentMode;
+    return this.setMode(order[(idx + 1) % order.length]!);
   }
 
   capabilities(): BackendCapabilitiesReport {
@@ -187,6 +188,10 @@ export class FutrynClient {
       }
     }
     return event;
+  }
+
+  private notifyStateChange(): void {
+    this.emitReactiveEvent(this.sending ? this.latestEvent.kind : 'idle');
   }
 
   currentReactiveEvent(): ReactiveAgentEvent {
@@ -263,11 +268,11 @@ export class FutrynClient {
   }
 
   addProvider(provider: Provider): Provider {
-    return this.ports.addProvider(provider);
+    const added = this.ports.addProvider(provider); this.notifyStateChange(); return added;
   }
 
   removeProvider(id: string): void {
-    this.ports.removeProvider(id);
+    this.ports.removeProvider(id); this.notifyStateChange();
   }
 
   listAccounts(): Account[] {
@@ -308,7 +313,8 @@ export class FutrynClient {
       const chosen = models.find(m => m.id === (input.manualModelId ?? refreshed.defaultModel)) ?? models[0];
       if (chosen) this.ports.selectModel(refreshed, chosen);
       this.clearSessionAuthorization();
-      this.currentSession = null;
+      this.currentSession = null; this.lastUsage = null;
+      this.notifyStateChange();
       return this.ports.getAccount(refreshed.id);
     } catch (error) {
       // A failed or cancelled login cannot leave a usable credential behind.
@@ -323,6 +329,7 @@ export class FutrynClient {
     const account = this.status().activeAccount;
     if (!account) return 'No active account. Use /login. Runtime and private settings loaded.';
     const result = await this.ports.validateAccount(account, signal);
+    this.notifyStateChange();
     return `Connected: ${account.alias}; ${result.models} models; validated via ${result.validation}. Runtime and private settings loaded.`;
   }
 
@@ -330,14 +337,16 @@ export class FutrynClient {
     const target = this.ports.getAccount(idOrAlias);
     if (target.status === 'logged-out') throw new HannesError('AUTH');
     if (this.status().activeAccount?.id === target.id) return target;
+    if (this.sending) throw new HannesError('POLICY');
     const account = this.ports.useAccount(idOrAlias);
     this.clearSessionAuthorization();
-    this.currentSession = null;
+    this.currentSession = null; this.lastUsage = null;
+    this.notifyStateChange();
     return account;
   }
 
   renameAccount(idOrAlias: string, newAlias: string): Account {
-    return this.ports.renameAccount(idOrAlias, newAlias);
+    const renamed = this.ports.renameAccount(idOrAlias, newAlias); this.notifyStateChange(); return renamed;
   }
 
   async logoutAccount(idOrAlias: string, remove = true): Promise<void> {
@@ -346,7 +355,7 @@ export class FutrynClient {
       this.clearSessionAuthorization();
       this.currentSession = null; this.lastUsage = null;
     }
-    await this.ports.logoutAccount(target.id, remove);
+    try { await this.ports.logoutAccount(target.id, remove); } finally { this.notifyStateChange(); }
   }
 
   async discoverModels(options?: { accountId?: string; offline?: boolean; query?: string; capability?: keyof ModelInfo['capabilities']; signal?: AbortSignal }) {
@@ -366,6 +375,7 @@ export class FutrynClient {
       const cap = options.capability;
       models = models.filter(m => m.capabilities[cap] === 'supported');
     }
+    this.notifyStateChange();
     return { ...base, models, account };
   }
 
@@ -386,7 +396,7 @@ export class FutrynClient {
     const targetId = accountId ?? state.activeAccountId;
     if (!targetId) throw new HannesError('AUTH');
     const account = this.ports.getAccount(targetId);
-    return this.ports.addManualModel(account, modelId);
+    const model = this.ports.addManualModel(account, modelId); this.notifyStateChange(); return model;
   }
 
   selectModel(modelId: string, options?: { accountId?: string; projectScoped?: boolean }): Selection {
@@ -398,13 +408,15 @@ export class FutrynClient {
     const model = models.find(m => m.id === modelId);
     if (!model) throw new HannesError('NOT_FOUND');
     const previousSelection = this.currentSession?.selection;
+    if (this.sending) throw new HannesError('POLICY');
     const selection = this.ports.selectModel(account, model, options?.projectScoped ? this.ports.workspace : undefined);
     // Conversation adapters and durable selections are pinned. Starting fresh
     // avoids advertising one model while the backend still invokes another.
     if (previousSelection && (previousSelection.accountId !== selection.accountId || previousSelection.modelId !== selection.modelId)) {
       this.clearSessionAuthorization();
-      this.currentSession = null;
+      this.currentSession = null; this.lastUsage = null;
     }
+    this.notifyStateChange();
     return selection;
   }
 
@@ -418,9 +430,11 @@ export class FutrynClient {
   }
 
   createSession(projectScoped = false): { id: string; selection: Selection; messages: Message[] } {
+    if (this.sending) throw new HannesError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = this.ports.startSession(projectScoped ? this.ports.workspace : undefined);
     this.lastUsage = null;
+    this.notifyStateChange();
     return {
       id: this.currentSession.id,
       selection: { ...this.currentSession.selection },
@@ -429,9 +443,11 @@ export class FutrynClient {
   }
 
   resumeSession(id: string): { id: string; selection: Selection; messages: Message[] } {
+    if (this.sending) throw new HannesError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = this.ports.resumeSession(id);
     this.lastUsage = this.ports.getSession(id)?.turns?.at(-1)?.usage ?? null;
+    this.notifyStateChange();
     return {
       id: this.currentSession.id,
       selection: { ...this.currentSession.selection },
@@ -440,16 +456,19 @@ export class FutrynClient {
   }
 
   deleteSession(id: string): boolean {
+    if (this.currentSession?.id === id && this.sending) throw new HannesError('POLICY');
     if (this.currentSession?.id === id) {
-      this.currentSession = null;
+      this.currentSession = null; this.lastUsage = null;
     }
-    return this.ports.deleteSession(id);
+    const deleted = this.ports.deleteSession(id); this.notifyStateChange(); return deleted;
   }
 
   clearSessionView(): void {
+    if (this.sending) throw new HannesError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = null;
     this.lastUsage = null;
+    this.notifyStateChange();
   }
 
   activeSession(): { id: string; selection: Selection; messages: Message[] } | null {
@@ -472,7 +491,7 @@ export class FutrynClient {
       this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
     }
     const session = this.currentSession;
-    this.sending = true;
+    this.sending = true; this.streamingText = ''; this.lastUsage = null;
     this.emitReactiveEvent('thinking', 'Preparing request');
     let assistantText = '';
     try {
@@ -487,21 +506,26 @@ export class FutrynClient {
         if (event.type === 'started') {
           this.emitReactiveEvent('waiting', 'Waiting for provider');
         } else if (event.type === 'textDelta') {
-          assistantText += event.text;
+          assistantText += event.text; this.streamingText = assistantText;
           this.emitReactiveEvent('streaming');
         } else if (event.type === 'reasoningDelta') {
-          this.emitReactiveEvent('reasoning', 'Provider reasoning summary');
-        } else if (event.type === 'context' && event.context.source !== 'estimate' && event.context.limitTokens != null) {
-          // Remember only an observed runtime limit for this exact model/account.
-          this.ports.settings.update(settings => {
-            if (!settings.accounts.some(account => account.id === session.selection.accountId && account.status !== 'logged-out')) return;
-            const model = settings.catalogs.find(cache => cache.accountId === session.selection.accountId)?.models.find(model => model.id === session.selection.modelId);
-            if (model && (model.contextLimit == null || model.metadataSource?.endsWith(':observed-context'))) { model.contextLimit = event.context.limitTokens; model.metadataSource = `${event.context.source}:observed-context`; model.metadataFetchedAt = event.context.measuredAt; }
-          });
+          this.emitReactiveEvent('reasoning', 'Provider thinking');
+        } else if (event.type === 'context') {
+          if (event.context.source !== 'estimate' && event.context.limitTokens != null) {
+            // Remember only an observed runtime limit for this exact model/account.
+            this.ports.settings.update(settings => {
+              if (!settings.accounts.some(account => account.id === session.selection.accountId && account.status !== 'logged-out')) return;
+              const model = settings.catalogs.find(cache => cache.accountId === session.selection.accountId)?.models.find(model => model.id === session.selection.modelId);
+              if (model && (model.contextLimit == null || model.metadataSource?.endsWith(':observed-context'))) { model.contextLimit = event.context.limitTokens; model.metadataSource = `${event.context.source}:observed-context`; model.metadataFetchedAt = event.context.measuredAt; }
+            });
+          }
+          this.notifyStateChange();
+        } else if (event.type === 'usage') {
+          this.lastUsage = event.usage; this.notifyStateChange();
         } else if (event.type === 'toolCallComplete') {
           this.emitReactiveEvent('tool', event.call.name);
         } else if (event.type === 'completed') {
-          this.lastUsage = event.usage;
+          this.lastUsage = event.usage; this.streamingText = '';
           session.messages.push(
             { role: 'user', content: trimmed },
             { role: 'assistant', content: assistantText },
@@ -513,7 +537,7 @@ export class FutrynClient {
     } catch (err) {
       this.emitReactiveEvent('error', err instanceof HannesError ? err.code : 'ERROR');
       throw err;
-    } finally { this.sending = false; }
+    } finally { this.sending = false; this.streamingText = ''; }
   }
 
   usage() {
@@ -526,9 +550,9 @@ export class FutrynClient {
   context(draft = '') {
     const status = this.status();
     const history = this.currentSession?.messages ?? [];
-    const pending = this.currentSession && ['thinking', 'waiting', 'reasoning', 'streaming'].includes(this.latestEvent.kind)
+    const pending = this.currentSession && this.sending
       ? this.ports.getSession(this.currentSession.id)?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
-    const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(draft ? [{ role: 'user', content: draft }] : [])];
+    const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(pending && this.streamingText ? [{ role: 'assistant', content: this.streamingText }] : []), ...(draft ? [{ role: 'user', content: draft }] : [])];
     const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
     const estimate = components.length ? Math.ceil(bytes / 4) + components.length * 16 + 64 : 0;
     const runtime = !!status.activeProvider?.runtime;
@@ -549,6 +573,7 @@ export class FutrynClient {
     return stored && model.reasoningEfforts?.includes(stored) ? stored : model.defaultReasoningEffort ?? null;
   }
   setReasoningEffort(value: string): void {
+    if (this.sending) throw new HannesError('POLICY');
     const status = this.status(); const model = status.activeModel; const account = status.activeAccount;
     if (!model || !account || !model.reasoningEfforts?.length) throw new HannesError('UNSUPPORTED');
     if (value !== 'default' && !model.reasoningEfforts.includes(value)) throw new HannesError('INVALID_INPUT');
@@ -557,6 +582,7 @@ export class FutrynClient {
       const key = account.id + ':' + model.id;
       if (value === 'default') delete settings.reasoningPreferences[key]; else settings.reasoningPreferences[key] = value;
     });
+    this.notifyStateChange();
   }
 
   async switchAccount(reference: string, continueHistory = false, modelId?: string, signal?: AbortSignal): Promise<Account> {
@@ -643,6 +669,7 @@ export class FutrynClient {
         });
       }
     });
+    this.notifyStateChange();
     return this.getAppearance(true);
   }
 

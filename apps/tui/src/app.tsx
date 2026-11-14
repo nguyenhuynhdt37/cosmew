@@ -337,7 +337,7 @@ export class FutrynTuiApp {
   private helpOffset = 0;
   private reportOffset = 0;
   private reportDetails = false;
-  private showReasoning = false;
+  private showReasoning = true;
   private pendingSwitchAccountId: string | null = null;
   private switchAbort: AbortController | null = null;
   private switchTask: Promise<boolean> | null = null;
@@ -732,6 +732,7 @@ export class FutrynTuiApp {
     this.transcript = [...this.transcript, userItem, assistantItem];
     this.transcriptScrollOffset = -1;
     this.isStreaming = true;
+    this.statusBanner = '';
     this.companion.transition('thinking');
     const abortController = new AbortController();
     this.activeAbortController = abortController;
@@ -747,8 +748,10 @@ export class FutrynTuiApp {
           assistantItem.content += event.text;
         } else if (event.type === 'reasoningDelta') {
           assistantItem.reasoning = (assistantItem.reasoning ?? '') + event.text;
-          assistantItem.reasoningExpanded = true;
+          assistantItem.reasoningExpanded = this.showReasoning;
           this.companion.transition('thinking');
+        } else if (event.type === 'usage') {
+          assistantItem.usage = event.usage;
         } else if (event.type === 'toolCallComplete') {
           const calls: ToolCall[] = assistantItem.toolCalls ?? [];
           calls.push(event.call);
@@ -2095,7 +2098,7 @@ export class FutrynTuiApp {
       width: contentWidth,
       state: this.composer,
       mode: status.mode,
-      activeModelLabel: status.selection?.modelId ?? 'chưa chọn model',
+      activeModelLabel: `${status.selection?.modelId ?? 'chưa chọn model'}${status.reasoningEffort ? ` · effort: ${status.reasoningEffort}` : ''}`,
       activeAccountLabel: status.activeAccount?.alias ?? 'chưa kết nối',
       isStreaming: this.isStreaming,
       focused: this.overlay === 'none',
@@ -2190,7 +2193,7 @@ export class FutrynTuiApp {
           const pulse = phases[Math.floor(companionView.time * 5) % phases.length]!;
           drawSpansAt(mascotRow + 2, contentLeft + 28, [
             { text: pulse, fg: tokens.accent },
-            { text: status.phase === 'reasoning' ? ' Reasoning summary' : status.phase === 'waiting' ? ' Waiting for provider' : companionView.state === 'streaming' ? ' Replying' : ' Preparing request', fg: tokens.foregroundMuted },
+            { text: status.phase === 'reasoning' ? ' Thinking from provider' : status.phase === 'waiting' ? ' Waiting for provider' : companionView.state === 'streaming' ? ' Replying' : ' Preparing request', fg: tokens.foregroundMuted },
           ], contentWidth - 28);
           drawSpansAt(mascotRow + 3, contentLeft + 28, [
             { text: 'Esc to interrupt', fg: tokens.foregroundSubtle },
@@ -2469,11 +2472,15 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
   let cleanedUp = false;
   let timer: ReturnType<typeof setInterval> | null = null;
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopUpdates: (() => void) | null = null;
   const inputDecoder = new TerminalInputDecoder();
 
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    stopUpdates?.(); stopUpdates = null;
+    if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; }
     if (inputTimer) { clearTimeout(inputTimer); inputTimer = null; }
     if (timer) {
       clearInterval(timer);
@@ -2517,6 +2524,15 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
         cleanup();
         if (error) reject(error); else resolve();
       };
+      stopUpdates = options.client.onReactiveEvent(() => {
+        if (cleanedUp || refreshTimer) return;
+        // Render after the TUI consumes the deltas, coalescing provider bursts.
+        refreshTimer = setTimeout(() => {
+          refreshTimer = null;
+          try { renderNow(false); }
+          catch { finish(new HannesError('INVALID_INPUT')); }
+        }, 16);
+      });
       const onSignal = () => finish(new HannesError('CANCELLED'));
       const onResize = () => {
         app.resize(stdout.columns || 110, stdout.rows || 32);
