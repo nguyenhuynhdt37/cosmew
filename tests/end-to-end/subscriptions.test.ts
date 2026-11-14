@@ -148,9 +148,7 @@ for (const vendor of ['OpenAI', 'GitHub Copilot']) test.skipIf(process.platform 
     terminal.write('\r'); await wait('runtime-model');
     expect(output).not.toContain('Name this account'); expect(output).not.toContain('Enter API key');
     terminal.write('\rHello from terminal\r'); await wait('Subscription fixture response');
-    terminal.write('/logout\r'); await wait('Manage accounts'); terminal.write('\r'); await wait('Account actions');
-    terminal.write('\x1b[B\x1b[B\x1b[B\x1b[B\r'); await wait('Confirm account action');
-    terminal.write('\x1b[B\r'); await wait('Local credential removed');
+    terminal.write('/logout\r'); await wait('Local credential removed');
     terminal.write('\x1b\x03');
     expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
     expect(output).not.toContain('fixture-runtime-secret');

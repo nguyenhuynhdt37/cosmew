@@ -98,3 +98,9 @@ Authenticated live model generation and real browser OpenRouter authorization re
 
 
 SUB1 and login UX follow-up: [current behavior and evidence](subscription-auth.md), [ADR 0008](../adr/0008-subscription-runtime-auth.md). This supersedes the alias-entry step and separate subscription-provider rows: vendors are grouped, ordinary login does not ask for account names, and advanced environment/custom settings are secondary.
+
+## Simplified logout (2026-11-15)
+
+`/logout` no longer opens general account management. With one saved account it signs out immediately; with several, a focused searchable sign-out picker selects the active account initially and Enter signs out the selected account. Esc cancels without changing credentials. Other accounts stay connected. `/accounts` retains Switch/Add/Rename/Reconnect/Logout/Remove and its existing removal confirmation. Failed credential deletion is never reported as success and stays retryable from the sign-out picker, including identities fenced as logged-out. Environment references are detached locally; shell environment values and remote provider credentials are not revoked.
+
+Verification: typecheck/lint pass; `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests`: 130 pass, 0 fail. Coverage includes single-account direct logout, multi-account selection/cancellation, failed deletion/retry, and updated actual PTY API/custom-endpoint/subscription logout flows. No public contract or storage schema change.

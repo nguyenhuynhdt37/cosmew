@@ -44,7 +44,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/logout', aliases: [], title: 'Sign Out',
-    description: 'Manage accounts and delete local credentials', category: 'Providers & Models',
+    description: 'Sign out directly; choose an account when several are saved', category: 'Providers & Models',
   },
   {
     command: '/doctor', aliases: [], title: 'Diagnose Connection',

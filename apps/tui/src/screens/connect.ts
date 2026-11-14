@@ -19,6 +19,7 @@ export interface ConnectProviderState {
   customModelId?: string;
   authChallenge?: ProviderAuthChallenge;
   pendingAction?: 'logout' | 'remove';
+  logoutOnly?: boolean;
   statusMessage?: string;
 }
 export function createInitialConnectProviderState(): ConnectProviderState {
@@ -73,13 +74,13 @@ export function renderConnectProviderOverlay(options: {
     const clean = text.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
     lines.push({ spans: [{ text: ('  ' + clean).slice(0, width).padEnd(width), fg, bg, bold }] });
   };
-  const title = s.step === 'method' && s.providerLabel ? `Sign in to ${s.providerLabel}` : labels[s.step] ?? 'Connect';
+  const title = s.logoutOnly ? 'Sign out' : s.step === 'method' && s.providerLabel ? `Sign in to ${s.providerLabel}` : labels[s.step] ?? 'Connect';
   row(title, t.accent, t.overlayBackground, true);
   if (height < 7) {
     row(s.statusMessage ?? (s.step === 'secret' ? 'API key: •••' : s.draft || s.query || '↑↓ Enter · Esc'));
     return lines.slice(0, height);
   }
-  row(s.step === 'provider' ? 'Choose your provider' : s.step === 'method' ? '' : s.providerLabel ?? '', t.foregroundMuted);
+  row(s.logoutOnly ? 'Choose an account to sign out. Others stay connected.' : s.step === 'provider' ? 'Choose your provider' : s.step === 'method' ? '' : s.providerLabel ?? '', t.foregroundMuted);
   row('');
   if (s.step === 'provider' || s.step === 'accounts') row(`Search: ${s.query}▏`, t.foreground, t.backgroundElevated);
   else if (!choices.length && s.step !== 'busy') row(`${(s.step === 'secret' || s.step === 'oauth') ? '•'.repeat(Math.min(24, s.secretDraft.length)) : s.draft}▏`, t.foreground, t.backgroundElevated);
@@ -104,7 +105,7 @@ export function renderConnectProviderOverlay(options: {
   const hint = s.step === 'method' && group?.notice ? group.notice : s.step === 'secret' ? 'Paste your API key. Input is hidden.' : s.step === 'env' ? 'Enter the variable name, not the key.' : '';
   if (statusLines.length) for (const line of statusLines.slice(0, 3)) row(line, t.warning);
   else row(hint, t.foregroundMuted);
-  row(s.step === 'provider' ? '↑↓ Select   Enter Continue   Ctrl+A Accounts' : s.step === 'accounts' ? '↑↓ Select   Enter Manage   Ctrl+A Add provider' : s.step === 'busy' && s.authChallenge ? 'PgUp/PgDn Scroll link   Esc Cancel' : 'Enter Continue   Esc Back', t.foregroundSubtle);
+  row(s.logoutOnly ? '↑↓ Select   Enter Sign out   Esc Cancel' : s.step === 'provider' ? '↑↓ Select   Enter Continue   Ctrl+A Accounts' : s.step === 'accounts' ? '↑↓ Select   Enter Manage   Ctrl+A Add provider' : s.step === 'busy' && s.authChallenge ? 'PgUp/PgDn Scroll link   Esc Cancel' : 'Enter Continue   Esc Back', t.foregroundSubtle);
   row('');
   if (lines.length <= height) return lines;
   const content = lines.slice(4, -3);

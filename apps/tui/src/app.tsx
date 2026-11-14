@@ -475,7 +475,19 @@ export class FutrynTuiApp {
       this.openOverlay('connect');
       return;
     }
-    if (lower === '/accounts' || lower === '/account' || lower === '/logout') {
+    if (lower === '/logout') {
+      const accounts = this.client.listAccounts();
+      if (!accounts.length) { this.statusBanner = 'No accounts to sign out.'; return; }
+      this.openOverlay('connect');
+      this.connectState = { ...createInitialConnectProviderState(), step: 'accounts', logoutOnly: true,
+        selectedIndex: Math.max(0, accounts.findIndex(a => a.id === this.client.status().activeAccount?.id)) };
+      if (accounts.length === 1) {
+        try { await this.signOutAccount(accounts[0]!.id); }
+        catch (error) { this.connectState.statusMessage = this.connectionError(error); }
+      }
+      return;
+    }
+    if (lower === '/accounts' || lower === '/account') {
       this.openOverlay('connect');
       this.connectState.step = 'accounts';
       return;
@@ -531,6 +543,14 @@ export class FutrynTuiApp {
     }
 
     this.statusBanner = `Unknown slash command "${trimmed}". Type /help or press Ctrl+P for commands.`;
+  }
+
+  private async signOutAccount(id: string): Promise<void> {
+    const alias = this.client.listAccounts().find(account => account.id === id)?.alias ?? 'account';
+    await this.client.logoutAccount(id);
+    this.syncTranscriptFromActiveSession();
+    this.openOverlay('none');
+    this.statusBanner = `Signed out of ${alias}. Local credential removed.`;
   }
 
   public async shutdown(): Promise<void> {
@@ -1306,7 +1326,7 @@ export class FutrynTuiApp {
       else this.connectState = createInitialConnectProviderState();
       return;
     }
-    if (key === 'Ctrl+A' && (st.step === 'provider' || st.step === 'accounts')) {
+    if (key === 'Ctrl+A' && !st.logoutOnly && (st.step === 'provider' || st.step === 'accounts')) {
       this.connectState = { ...createInitialConnectProviderState(), step: st.step === 'provider' ? 'accounts' : 'provider' };
       return;
     }
@@ -1365,6 +1385,7 @@ export class FutrynTuiApp {
         } else if (st.step === 'manual') {
           modelIdSchema.parse(st.draft); st.customModelId = st.draft; this.saveCustomProvider(st);
         } else if (st.step === 'accounts' && chosen) {
+          if (st.logoutOnly) { await this.signOutAccount(chosen.id); return; }
           st.accountId = chosen.id;
           st.providerId = this.client.listAccounts().find(a => a.id === chosen.id)!.providerId;
           next('actions');
