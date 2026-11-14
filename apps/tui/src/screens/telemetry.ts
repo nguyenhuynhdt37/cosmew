@@ -3,6 +3,12 @@ import type { FutrynClient } from '@hannes/sdk';
 import type { RenderedBoxLine } from '../components/editor';
 export const count = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : value.toLocaleString('en-US');
 const money = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : `$${value.toFixed(6)}`;
+export function contextDisplay(context: ReturnType<FutrynClient['context']>) {
+  const measured = context.measuredCurrentHistory;
+  const used = measured ? context.lastMeasured!.usedTokens! : context.estimateTokens;
+  const total = measured ? context.lastMeasured!.limitTokens! : context.limitTokens;
+  return { used, total, measured, ratio: measured && total ? Math.round(used / total * 1000) / 10 : context.estimatedPercent };
+}
 export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'context', draft = '', details = false): string[] {
   const status = client.status(); const usage = client.usage(); const context = client.context(draft);
   if (!details) {
@@ -23,23 +29,24 @@ export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'con
       ];
     }
     if (kind === 'context') {
-      const ratio = context.estimatedPercent;
+      const display = contextDisplay(context); const ratio = display.ratio;
       const filled = ratio == null ? 0 : Math.round(Math.min(100, ratio) / 100 * 16);
       return [
-        field('Local estimate', `~${short(context.estimateTokens)} tokens`),
+        field(display.measured ? 'Last measured' : 'Local estimate', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} tokens`),
         field('Window', context.limitTokens == null ? '—' : `${short(context.limitTokens)} tokens`),
         field('Output reserve', context.outputReserve == null ? 'Runtime default' : `${short(context.outputReserve)} tokens`),
-        ...(ratio == null ? [] : ['', `${'━'.repeat(filled)}${'─'.repeat(16 - filled)}  ~${ratio}%`]),
-        '', context.runtimeHiddenContext ? 'Local history only; runtime adds context.' : 'Estimate includes chat history and draft.',
+        ...(ratio == null ? [] : ['', `${'━'.repeat(filled)}${'─'.repeat(16 - filled)}  ${display.measured ? '' : '~'}${ratio}%`]),
+        '', display.measured ? 'Reported by runtime.' : context.runtimeHiddenContext ? 'Local history only; runtime adds context.' : 'Estimate includes chat history and draft.',
       ];
     }
+    const display = contextDisplay(context);
     const phase = ({ idle: 'Ready', thinking: 'Preparing request', waiting: 'Waiting for provider', reasoning: 'Reasoning summary', streaming: 'Replying', done: 'Finished', error: 'Failed', tool: 'Tool request', permission: 'Awaiting approval' } as Record<string, string>)[status.phase] ?? status.phase;
     return [
       field('Account', status.activeAccount?.alias ?? 'Not connected'),
       field('Provider', status.activeProvider?.name ?? '—'),
       field('Model', status.selection?.modelId ?? 'Not selected'),
       '', field('Request', phase), field('Reasoning', status.reasoningEffort ?? 'Provider default'),
-      field('Context', `~${short(context.estimateTokens)} / ${short(context.limitTokens)} local`),
+      field('Context', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} ${display.measured ? 'measured' : 'local'}`),
       field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),
       ...(usage.costUSD != null ? [field('Est. cost', money(usage.costUSD))] : []),
       '', status.activeAccount?.validatedAt ? 'Previously validated · /doctor checks now' : 'Connection not checked · /doctor',

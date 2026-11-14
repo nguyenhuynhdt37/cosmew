@@ -94,16 +94,15 @@ test('registry-driven /login → env auth → model → HTTP chat → account li
     expect(restarted.createFutrynClient(dir).status().activeAccount?.alias).toBe('office');
     expect(restarted.createFutrynClient(dir).status().selection?.modelId).toBe('fixture-model');
   } finally { restarted.db.close(); }
+  const officeId = app.accounts.get('office').id;
   await action(tui, 'office', 4); // Logout is safe by default
   await tui.handleKey('Enter'); // default Cancel
   expect(app.accounts.get('office').status).toBe('valid');
   await action(tui, 'office', 4);
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
-  expect(app.accounts.get('office').status).toBe('logged-out');
-  expect(tui.client.cachedModels(app.accounts.get('office').id)).toHaveLength(0);
+  expect(() => app.accounts.get('office')).toThrow();
+  expect(tui.client.cachedModels(officeId)).toHaveLength(0);
   expect(tui.client.status().activeAccount).toBeNull();
-  await action(tui, 'office', 5); // Remove
-  await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(app.accounts.list().map(a => a.alias)).toEqual(['personal']);
 });
 
@@ -202,7 +201,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('TUI API key login uses rea
     await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
     expect(await app.vault.get(rotated)).toBeUndefined();
     expect(tui.computeFrameSnapshot().plainText).not.toContain('synthetic-');
-  } finally { await app.accounts.logout(account.id, true); }
+  } finally { if (app.accounts.list().some(a => a.id === account.id)) await app.accounts.logout(account.id, true); }
 });
 
 test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoint → model → streaming chat → restart → logout', async () => {
@@ -312,7 +311,7 @@ test('permission approvals bind the full target, expire, reject forged scopes an
 test('terminal keyboard decoding and multiline composer preserve navigation and cancellation conventions', async () => {
   expect(parseRawTerminalKey('\x1b[A\x1b[B\x1b[Z\x03\x1b\r\n')).toEqual(['ArrowUp', 'ArrowDown', 'Shift+Tab', 'Ctrl+C', 'Alt+Enter', 'Ctrl+J']);
   expect(parseRawTerminalKey('\x1b[200~text\x1b[201~')).toEqual(['t', 'e', 'x', 't']);
-  expect(parseRawTerminalKey('\x1b[<64;20;10M\x1b[<65;20;10M\x1b[<0;20;10M\x1b[<35;20;10m')).toEqual(['PageUp', 'PageDown']);
+  expect(parseRawTerminalKey('\x1b[<64;20;10M\x1b[<65;20;10M\x1b[<0;20;10M\x1b[<35;20;10m')).toEqual(['PageUp', 'PageDown', 'MouseDown:9:19', 'MouseUp:9:19']);
   const { tui } = await setup();
   await type(tui, 'First'); await tui.handleKey('Alt+Enter'); await type(tui, 'Second');
   expect(tui.getComposerState().value).toBe('First\nSecond');
@@ -351,9 +350,10 @@ test('/logout names the account, defaults to Cancel, and confirms the selected s
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
   expect(tui.getStatusBanner()).toContain('Signed out of');
-  expect(app.accounts.list()[0]!.status).toBe('logged-out');
+  expect(app.accounts.list()).toHaveLength(0);
   // Add another identity and check that Esc never signs out either account.
   await app.accounts.add('fixture', 'second', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_KEY' });
+  await app.accounts.add('fixture', 'third', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_KEY' });
   const second = app.accounts.get('second'); app.accounts.use(second.id);
   await tui.executeSlashCommand('/logout');
   const view = tui.computeFrameSnapshot().plainText;
@@ -364,7 +364,7 @@ test('/logout names the account, defaults to Cancel, and confirms the selected s
   await tui.executeSlashCommand('/logout'); await tui.handleKey('Enter');
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
-  expect(app.accounts.get(second.id).status).toBe('logged-out');
+  expect(app.accounts.list().map(account => account.alias)).toEqual(['third']);
 });
 
 test('/logout keeps failed credential deletion visible and retryable without extra menus', async () => {
@@ -381,4 +381,16 @@ test('/logout keeps failed credential deletion visible and retryable without ext
   await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
   expect(tui.getStatusBanner()).toContain('Signed out of');
+});
+
+test('selecting a hidden key copies only the visible mask, never the secret draft', async () => {
+  const { tui } = await setup(); await tui.executeSlashCommand('/login'); await type(tui,'fixture');
+  await tui.handleKey('Enter'); await tui.handleKey('Enter'); await type(tui,'synthetic-never-copy-this-secret');
+  const frame = tui.computeFrameSnapshot(); const row = frame.plainLines.findIndex(line => line.includes('••••')); const col = frame.plainLines[row]!.indexOf('••••');
+  expect(row).toBeGreaterThanOrEqual(0);
+  await tui.handleKey(`MouseDown:${row}:${col}`); await tui.handleKey(`MouseDrag:${row}:${col+3}`); await tui.handleKey(`MouseUp:${row}:${col+3}`);
+  expect(tui.selectedText()).toBe('••••'); await tui.handleKey('Ctrl+Y');
+  expect(Buffer.from(tui.takeClipboardSequence().slice(7,-1),'base64').toString()).toBe('••••');
+  expect(tui.computeFrameSnapshot().plainText).not.toContain('synthetic-never');
+  await tui.handleKey('Escape'); await tui.handleKey('Escape');
 });

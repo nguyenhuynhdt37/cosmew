@@ -345,7 +345,7 @@ export function renderPromptComposerLines(options: {
   const modeName = mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
   const modeColor = mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
   const modeChip = ` ${modeName} `;
-  const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}${options.telemetryLabel ? ` · ${options.telemetryLabel}` : ''}`;
+  const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
   const shortHints: StyledSpan[] = [
     { text: '@', fg: tokens.accent, bg },
     { text: '  ', fg: tokens.foregroundSubtle, bg },
@@ -359,7 +359,9 @@ export function renderPromptComposerLines(options: {
   ];
   const hintLenOf = (parts: StyledSpan[]) => parts.reduce((sum, span) => sum + span.text.length, 0);
   const roomFor = (hintLen: number) => Math.max(0, innerWidth - modeChip.length - 1 - hintLen);
-  const hintParts = isStreaming
+  const hintParts = options.telemetryLabel
+    ? [{ text: options.telemetryLabel + (isStreaming ? ' · Esc' : ''), fg: tokens.foregroundMuted, bg }]
+    : isStreaming
     ? [{ text: 'Esc', fg: tokens.foregroundSubtle, bg }]
     : meta.length + 2 <= roomFor(hintLenOf(longHints))
       ? longHints

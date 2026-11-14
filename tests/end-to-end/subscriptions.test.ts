@@ -216,6 +216,11 @@ for (const runtime of ['codex', 'copilot'] as const) test(`${runtime}: official 
   expect(c.client.usage().last?.usage?.quota?.[0]?.usedPercent).toBe(25);
   expect(c.client.usage().premiumRequests).toBe(runtime === 'copilot' ? 1.5 : null);
   expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+  expect(c.client.context().measuredCurrentHistory).toBe(true);
+  expect(c.client.context('new draft').measuredCurrentHistory).toBe(false);
+  expect(c.client.status().activeModel?.contextLimit).toBe(32000);
+  await c.client.discoverModels();
+  expect(c.client.status().activeModel?.contextLimit).toBe(32000);
   expect(c.client.context().estimatedPercent).toBeNull(); // Runtime-added context is not locally measurable.
   const session = c.client.activeSession()!.id;
   const another = c.app.createFutrynClient(c.dir); another.resumeSession(session);

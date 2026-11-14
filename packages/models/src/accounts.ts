@@ -21,6 +21,7 @@ export class AccountManager {
   }
   use(id: string): Account {
     const a = this.get(id); if (a.status === 'logged-out') throw new HannesError('AUTH');
+    if (this.store.read().activeAccountId === a.id) return a;
     this.store.update(s => { s.activeAccountId = a.id; s.selection = a.defaultModel ? { accountId: a.id, modelId: a.defaultModel } : null; }); return a;
   }
   async reauthenticate(id: string, credential: CredentialRef, secret?: string): Promise<Account> {
@@ -58,6 +59,9 @@ export class AccountManager {
       for (const [path, selected] of Object.entries(s.projects)) if (selected.accountId === a.id) delete s.projects[path];
     });
     await this.vault.delete(a.credential);
-    if (remove) this.store.update(s => { s.accounts = s.accounts.filter(x => x.id !== a.id); });
+    if (remove) this.store.update(s => {
+      s.accounts = s.accounts.filter(x => x.id !== a.id);
+      for (const key of Object.keys(s.reasoningPreferences ?? {})) if (key.startsWith(a.id + ':')) delete s.reasoningPreferences![key];
+    });
   }
 }

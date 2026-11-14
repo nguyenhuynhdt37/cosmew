@@ -484,7 +484,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
               conversation = undefined;
               conversationAccountId = undefined;
             }
-            await app.accounts.logout(account.id);
+            await app.accounts.logout(account.id, true);
             output(app, `Đã đăng xuất ${account.alias} trên máy này. Gõ /login để đăng nhập lại.`);
           }
         } else if (text === '/status') {
@@ -624,7 +624,7 @@ async function main() {
     } else if (['mcp', 'plugin', 'plugins', 'compact'].includes(group ?? '')) {
       throw new HannesError('UNSUPPORTED');
     } else if (group === 'logout') {
-      await app.accounts.logout(account().id);
+      await app.accounts.logout(account().id, true);
       output(app, 'Logged out locally; remote keys require provider-console revocation.');
     } else if (group === 'login' && str(options, 'provider')) {
       await login(app, options, controller.signal);
@@ -701,7 +701,7 @@ async function main() {
           !!options.json,
         );
       } else if (action === 'logout') {
-        await app.accounts.logout(account().id);
+        await app.accounts.logout(account().id, true);
         output(app, 'Logged out locally. Revoke API keys in the provider console; environment values are not deleted from your shell.');
       } else {
         fail();

@@ -262,7 +262,14 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   const discoverModels = async (account: Account, signal?: AbortSignal) => {
     const provider = registry.get(account.providerId);
     if (!provider.runtime) return catalog(account).discover(signal);
-    const models = await subscriptions.models(provider, account, signal);
+    const observed = new Map(catalog(account).cached().map(model => [model.id, model]));
+    const models = (await subscriptions.models(provider, account, signal)).map(model => {
+      const previous = observed.get(model.id);
+      if (model.contextLimit == null && previous?.metadataSource?.endsWith(':observed-context') && previous.contextLimit) {
+        return { ...model, contextLimit: previous.contextLimit, metadataSource: previous.metadataSource, metadataFetchedAt: previous.metadataFetchedAt };
+      }
+      return model;
+    });
     settings.update(state => {
       const fresh = state.accounts.find(a => a.id === account.id);
       if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) throw new HannesError('POLICY');

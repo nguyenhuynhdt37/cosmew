@@ -70,3 +70,16 @@ Report modals hide stale background banners. Account pickers show readable regis
 Visual QA inspected actual framebuffer renderings at 100×30 for usage, context, status and logout with deterministic fixture data. Regression coverage checks concise defaults, D/d detail toggling, small-terminal paging and session preservation, alongside the real PTY flows.
 
 Follow-up checks: `bun run typecheck` and `bun run lint` pass; `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests` reports **145 pass, 0 fail**, including actual PTY and native-vault checks. No authenticated vendor inference was repeated for these presentation changes.
+
+## Selection, context measurement and logout removal (2026-11-15)
+
+[ADR 0010](../adr/0010-terminal-selection-and-logout-removal.md), contract 1.4:
+
+- Drag over visible chat/report text to select. Ctrl+C or Ctrl+Y sends the selected text to the terminal clipboard using OSC 52; Esc clears it. While selected, the display is frozen but the provider stream continues. Resize or another action clears selection. Shift+drag is available for native terminal selection/copy. Clipboard support depends on the terminal/host; no clipboard contents are read.
+- Context summaries and the chat footer show measured **used / total** when a runtime measurement is available. A new draft or missing measurement uses a visibly marked local estimate. Observed model windows survive catalog refresh/restart for the same account/model. The compact composer reserves room for the context indicator on ordinary chat widths, keeping it ahead of less essential hints.
+- A successful user logout deletes credentials and removes the account/preferences from the list. There is no successful-logout tombstone to reactivate. Failed credential deletion remains fenced/retryable; in-place reconnect still preserves the identity intentionally. Confirmation remains required. Previously saved conversations are preserved, but removing credentials does not implicitly rebind their identity to another login.
+- Selecting the account already active performs no new activation, request or session change. The switch chooser marks the active row, skips it during navigation and selects another account initially. A→B→A switching remains available.
+
+Tests cover real SGR drag input through a PTY, fragmented input, inverse selection highlighting and the actual OSC 52 payload; reverse/multiline selection, masked-key copying, frozen selection during generation, clipboard bounds, duplicate-account no-ops, measured context/cache retention and successful removal vs failed cleanup. These are terminal/protocol checks; changing a specific emulator's OS clipboard and authenticated live-provider generation remain separate acceptance.
+
+Final verification: `bun run typecheck` and `bun run lint` pass. `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests` reports **151 pass, 0 fail across 15 files**. Separate integration and terminal/end-to-end runs report **40 pass** and **71 pass**, respectively. Visual inspection of the rendered fixture framebuffer confirms selected chat text and the copy/clear hint. No authenticated live-provider inference was performed for this increment.

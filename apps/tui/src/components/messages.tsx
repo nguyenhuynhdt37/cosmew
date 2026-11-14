@@ -286,7 +286,7 @@ export function renderTranscriptMessages(options: {
       const totalTok = (item.usage.inputTokens ?? 0) + (item.usage.outputTokens ?? 0);
       if (totalTok > 0) metaParts.push(`${totalTok} tok`);
       if (item.usage.costUSD !== null && item.usage.costUSD !== undefined) {
-        metaParts.push(`${item.usage.costEstimated ? '~' : ''}$${item.usage.costUSD.toFixed(4)}${item.usage.costEstimated ? ' estimated' : ''}`);
+        metaParts.push(`${item.usage.costEstimated ? '~' : ''}$${item.usage.costUSD.toFixed(item.usage.costUSD > 0 && item.usage.costUSD < 0.0001 ? 6 : 4)}${item.usage.costEstimated ? ' estimated' : ''}`);
       }
     }
 

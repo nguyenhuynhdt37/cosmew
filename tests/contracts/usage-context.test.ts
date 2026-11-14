@@ -177,6 +177,17 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
   const wait = async (text: string, from = 0) => { const until = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < until) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
     await wait('FUTRYN'); terminal.write('Hello terminal usage\r'); await wait('Hello fixture');
+    await wait('Completed turn');
+    const painted = [...output.matchAll(/\x1b\[(\d+);1H([\s\S]*?)(?=\x1b\[\d+;1H|$)/g)].map(match => ({row:Number(match[1]), text:match[2]!.replace(/\x1b\[[0-9;]*m/g,'')})).filter(line => line.text.includes('Hello fixture')).at(-1)!;
+    const start = painted.text.indexOf('Hello fixture') + 1; const end = start + 12;
+    let selectionMark = output.length;
+    terminal.write(`\x1b[<0;${start};`); await Bun.sleep(5); terminal.write(`${painted.row}M`);
+    terminal.write(`\x1b[<32;${end};${painted.row}M\x1b[<0;${end};${painted.row}m`);
+    await wait('Ctrl+C Copy', selectionMark); expect(output.slice(selectionMark)).toContain('\x1b[7m');
+    selectionMark = output.length; terminal.write('\x19'); await wait('\x1b]52;c;', selectionMark); await wait('\x07', selectionMark);
+    const payload = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(output.slice(selectionMark))![1]!;
+    expect(Buffer.from(payload,'base64').toString()).toBe('Hello fixture');
+    expect(child.exitCode).toBeNull(); terminal.write('\x1b'); await Bun.sleep(50);
     for (const command of ['usage', 'context', 'status']) {
       const mark = output.length; terminal.write(`/${command}\r`); await wait(({usage:'Session usage', context:'Context window', status:'Session status'} as Record<string,string>)[command]!, mark);
       terminal.write('\x1b[6~'); await Bun.sleep(30); terminal.write('\x1b'); await Bun.sleep(30);
@@ -189,7 +200,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
     mark = output.length; terminal.write('/logout second\r'); await wait('Sign out of second?', mark);
     expect(c.app.accounts.get('second').status).not.toBe('logged-out');
     terminal.write('\x1b[B\r'); await wait('Signed out of', mark);
-    expect(c.app.accounts.get('second').status).toBe('logged-out');
+    expect(() => c.app.accounts.get('second')).toThrow();
     expect(c.app.accounts.get('first').status).not.toBe('logged-out');
     terminal.write('\x03'); expect(await child.exited).toBe(0);
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
@@ -299,4 +310,57 @@ test('reports start as short summaries and D reveals technical detail without ch
     expect(c.client.activeSession()!.id).toBe(session);
     await c.tui.handleKey('Escape');
   }
+});
+
+test('dragging chat text highlights and copies rendered content without exiting or changing the draft', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Select the reply');
+  const frame = c.tui.computeFrameSnapshot(); const row = frame.plainLines.findIndex(line => line.includes('Hello fixture')); const col = frame.plainLines[row]!.indexOf('Hello fixture');
+  for (const key of parseMouse(row,col,row,col + 12)) await c.tui.handleKey(key);
+  expect(c.tui.selectedText()).toBe('Hello fixture');
+  expect(c.tui.computeFrameSnapshot().cells[row]![col]!.selected).toBe(true);
+  await c.tui.handleKey('Ctrl+C');
+  const clipboard = c.tui.takeClipboardSequence();
+  expect(Buffer.from(clipboard.slice(7,-1),'base64').toString()).toBe('Hello fixture');
+  expect(c.tui.takeClipboardSequence()).toBe(''); expect(c.tui.isExitRequested()).toBe(false);
+  await c.tui.handleKey('Escape'); expect(c.tui.selectedText()).toBe('');
+  expect(c.tui.getComposerState().value).toBe('');
+  for (const key of parseMouse(row,col,row,col + 12)) await c.tui.handleKey(key);
+  c.tui.resize(50,18); expect(c.tui.selectedText()).toBe('');
+});
+function parseMouse(row: number, col: number, endRow: number, endCol: number) {
+  return [`MouseDown:${row}:${col}`, `MouseDrag:${endRow}:${endCol}`, `MouseUp:${endRow}:${endCol}`];
+}
+
+test('selection is stable while the provider streams, then Esc restores the updated live view', async () => {
+  const c = await setup(); await c.tui.submitPrompt('First reply');
+  c.server.set({streamDelay:100}); const turn = c.tui.submitPrompt('Streaming reply');
+  const frame = c.tui.computeFrameSnapshot(); const row = frame.plainLines.findIndex(line => line.includes('Hello fixture')); const col = frame.plainLines[row]!.indexOf('Hello fixture');
+  for (const key of parseMouse(row,col,row,col + 12)) await c.tui.handleKey(key);
+  const frozen = c.tui.computeFrameSnapshot().plainText;
+  c.tui.stepAnimation(0.8); await turn;
+  expect(c.tui.computeFrameSnapshot().plainText).toBe(frozen);
+  expect(c.tui.getTranscript().at(-1)!.content).toBe('Hello fixture');
+  await c.tui.handleKey('Escape');
+  expect(c.tui.computeFrameSnapshot().plainText).not.toBe(frozen);
+});
+
+test('choosing the active account is a no-op and switching A→B→A still works', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Original context'); const original = c.client.activeSession()!.id;
+  const requests = c.server.requests.length;
+  c.client.useAccount(c.account.id); await c.client.switchAccount(c.account.id, true);
+  await c.tui.executeSlashCommand('/switch first');
+  expect(c.tui.getActiveOverlay()).toBe('none'); expect(c.tui.getStatusBanner()).toContain('Already using');
+  expect(c.client.activeSession()!.id).toBe(original); expect(c.server.requests).toHaveLength(requests);
+  const second = await c.app.accounts.add('usage','second',{kind:'none'});
+  await c.client.switchAccount('second',true); await send(c.client,'Second account');
+  await c.client.switchAccount('first',true); expect(c.client.status().activeAccount?.id).toBe(c.account.id);
+  await send(c.client,'Back to first'); await c.client.switchAccount('second',true);
+  expect(c.client.status().activeAccount?.id).toBe(second.id);
+  expect(c.client.activeSession()!.messages.some(message => message.content === 'Back to first')).toBe(true);
+  const selected = c.client.activeSession()!.id;
+  await c.tui.executeSlashCommand('/switch');
+  // The active row is visible but cannot be reactivated; another account is selected.
+  await c.tui.handleKey('ArrowUp'); await c.tui.handleKey('Enter');
+  expect(c.client.activeSession()!.id).toBe(selected); // Confirmation precedes an actual switch.
+  await c.tui.handleKey('Escape');
 });

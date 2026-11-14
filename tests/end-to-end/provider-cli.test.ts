@@ -38,7 +38,7 @@ test('actual CLI: provider/account/auth/discovery/selection/streamed chat/doctor
   expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
   expect((await x.cli(['auth', 'logout'])).code).toBe(0);
   const before = x.server.requests.length; expect((await x.cli(['run'], 'No request')).code).toBe(1); expect(x.server.requests.length).toBe(before);
-  expect((await x.cli(['accounts', 'remove', 'personal'])).code).toBe(0); expect((await x.cli(['providers', 'remove', 'gateway'])).code).toBe(0);
+  expect(JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout)).toEqual([]); expect((await x.cli(['providers', 'remove', 'gateway'])).code).toBe(0);
 });
 test('actual CLI: two native protocols and account/provider switching never transfers old context', async () => {
   const x = context(); await configure(x, 'openai-custom', 'responses');
@@ -102,7 +102,6 @@ test('actual CLI emits streaming text before completion and SIGINT cancels witho
 test('actual CLI reauthenticates existing identity and can connect via interactive commands', async () => {
   const x = context(); await configure(x);
   const before = JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout)[0].id;
-  expect((await x.cli(['auth', 'logout'])).code).toBe(0);
   expect((await x.cli(['auth', 'login', '--account', 'personal', '--env', 'HANNES_TEST_KEY'])).code).toBe(0);
   const after = JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout)[0].id; expect(after).toBe(before);
   expect((await x.cli(['models', 'select', 'fixture-model'])).code).toBe(0);
@@ -115,7 +114,7 @@ test('slash login configures a fresh gateway, selects its model, logs out and re
     '/status', '/login', 'custom', 'wizard-router', x.server.url + '/v1', 'responses', 'api-key', 'n',
     'env', 'fixture-model', 'HANNES_TEST_KEY', 'First private conversation',
     '/logout', '/status', 'Must never be sent while logged out', '/logout',
-    '/login wizard-router', 'env', 'fixture-model', 'HANNES_TEST_KEY', 'Fresh conversation after login', '/exit', '',
+    '/login', 'wizard-router', 'env', 'fixture-model', 'HANNES_TEST_KEY', 'Fresh conversation after login', '/exit', '',
   ].join('\n'));
   expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập wizard-router');
   expect(result.stdout).toContain('Đã đăng xuất wizard-router'); expect(result.stdout).toContain('"selection": null');
@@ -134,7 +133,7 @@ test('slash login can be cancelled or fail validation without sending wizard ans
   expect(cancelled.code).toBe(0); expect(cancelled.stdout).toContain('Đã hủy'); expect(x.server.requests).toHaveLength(0);
   await configure(x); const before = x.server.requests.length;
   await x.cli(['auth', 'logout', '--account', 'personal']);
-  const failed = await x.cli(['chat'], '/login personal\nenv\nHANNES_UNSET_FIXTURE\nDo not reuse old conversation\n/status\n/exit\n');
+  const failed = await x.cli(['chat'], '/login\ngateway\nenv\nHANNES_UNSET_FIXTURE\nDo not reuse old conversation\n/status\n/exit\n');
   expect(failed.code).toBe(0); expect(failed.stderr).toContain('AUTH'); expect(failed.stdout).not.toContain('Đã đăng nhập');
   expect(failed.stdout).toContain('"selection": null'); expect(x.server.requests.length).toBe(before);
 });
@@ -189,7 +188,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
     expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
     const posts = x.server.requests.filter(r => r.body); expect(posts).toHaveLength(1);
     expect(posts[0]?.body.messages).toEqual([{ role: 'user', content: 'Hello after hidden login' }]);
-    expect((await x.cli(['auth', 'status', '--account', 'gateway', '--json'])).stdout).toContain('"credentialAvailable":false');
+    expect(JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout)).toEqual([]);
   } finally { child.kill(); await child.exited; terminal.close(); await x.cli(['accounts', 'remove', 'gateway']); }
 }, 20000);
 test.skipIf(process.platform === 'win32')('Ctrl-C at the hidden login prompt exits cleanly without creating credentials or sending a request', async () => {

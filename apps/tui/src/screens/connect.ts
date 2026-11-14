@@ -30,7 +30,7 @@ export function filterIntegrations(integrations: Integration[], query: string): 
   const q = query.trim().toLowerCase();
   return integrations.filter(i => `${i.provider.name} ${i.provider.id} ${i.provider.baseURL} ${i.providerIds?.join(' ') ?? ''} ${i.methods.map(m => m.name).join(' ')}`.toLowerCase().includes(q));
 }
-export function connectionChoices(state: ConnectProviderState, integrations: Integration[], accounts: Account[]): { id: string; label: string }[] {
+export function connectionChoices(state: ConnectProviderState, integrations: Integration[], accounts: Account[], activeAccountId?: string | null): { id: string; label: string; disabled?: boolean }[] {
   const integration = integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(state.providerId!));
   const nameOf = (id: string) => integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(id))?.provider.name ?? id;
   switch (state.step) {
@@ -42,8 +42,8 @@ export function connectionChoices(state: ConnectProviderState, integrations: Int
     case 'protocol': return ['chat', 'responses', 'anthropic', 'gemini'].map(id => ({ id, label: id }));
     case 'auth': return [{ id: 'api-key', label: 'API key' }, { id: 'none', label: 'No authentication — public/local endpoint' }];
     case 'catalog': return [{ id: 'openai', label: 'Discover models · OpenAI /models' }, { id: 'anthropic', label: 'Discover models · Anthropic /models' }, { id: 'gemini', label: 'Discover models · Gemini' }, { id: 'ollama', label: 'Discover models · Ollama /api/tags' }, { id: 'manual', label: 'Manual model ID · validate with a real generation' }];
-    case 'accounts': return accounts.filter(a => !state.switchOnly || a.status !== 'logged-out').filter(a => !state.providerId || a.providerId === state.providerId).filter(a => `${a.alias} ${a.providerId} ${nameOf(a.providerId)}`.toLowerCase().includes(state.query.toLowerCase())).map(a => ({ id: a.id, label: `${state.switchOnly ? (accounts.filter(item => item.status !== 'logged-out').findIndex(item => item.id === a.id) + 1) + '. ' : ''}${a.alias}  ·  ${state.switchOnly || state.logoutOnly ? nameOf(a.providerId) + (a.status === 'logged-out' ? ' · Signed out' : '') : a.providerId + ' · ' + a.status}` }));
-    case 'actions': return ['switch', 'add', 'rename', 'reconnect', 'logout', 'remove'].map(id => ({ id, label: ({ switch: 'Switch account and choose model', add: 'Add another account', rename: 'Rename account', reconnect: 'Reconnect / replace credential', logout: 'Logout · delete local credential', remove: 'Remove account and local credential' })[id]! }));
+    case 'accounts': return accounts.filter(a => !state.switchOnly || a.status !== 'logged-out').filter(a => !state.providerId || a.providerId === state.providerId).filter(a => `${a.alias} ${a.providerId} ${nameOf(a.providerId)}`.toLowerCase().includes(state.query.toLowerCase())).map(a => ({ id: a.id, disabled: state.switchOnly && a.id === activeAccountId, label: `${state.switchOnly ? (accounts.filter(item => item.status !== 'logged-out').findIndex(item => item.id === a.id) + 1) + '. ' : ''}${a.alias}  ·  ${state.switchOnly || state.logoutOnly ? nameOf(a.providerId) + (a.status === 'logged-out' ? ' · Signed out' : '') : a.providerId + ' · ' + a.status}` }));
+    case 'actions': return ['switch', 'add', 'rename', 'reconnect', 'logout', 'remove'].map(id => ({ id, disabled: id === 'switch' && state.accountId === activeAccountId, label: ({ switch: state.accountId === activeAccountId ? 'Already active' : 'Switch account and choose model', add: 'Add another account', rename: 'Rename account', reconnect: 'Reconnect / replace credential', logout: 'Logout · delete local credential', remove: 'Remove account and local credential' })[id]! }));
     case 'confirm': return [{ id: 'cancel', label: 'Cancel' }, { id: 'confirm', label: state.pendingAction === 'switch' ? 'Continue with this account' : state.pendingAction === 'remove' ? 'Remove account' : 'Sign out' }];
     default: return [];
   }
@@ -59,7 +59,7 @@ export function renderConnectProviderOverlay(options: {
   state: ConnectProviderState; tokens: ThemeTokens; borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
   const { width, height: maxHeight, integrations, accounts, activeAccountId, state: s, tokens: t } = options;
-  const choices = connectionChoices(s, integrations, accounts);
+  const choices = connectionChoices(s, integrations, accounts, activeAccountId);
   const statusLines: string[] = [];
   if (s.statusMessage) {
     let line = '';
@@ -99,7 +99,7 @@ export function renderConnectProviderOverlay(options: {
   const start = Math.max(0, Math.min(s.selectedIndex - room + 1, choices.length - room));
   for (const [offset, item] of choices.slice(start, start + room).entries()) {
     const selected = start + offset === s.selectedIndex;
-    row(`${selected ? '›' : ' '} ${item.label}${item.id === activeAccountId ? '  ● active' : ''}`, selected ? t.selectionForeground : t.foreground, selected ? t.selection : t.overlayBackground, selected);
+    row(`${selected ? '›' : ' '} ${item.label}${item.id === activeAccountId ? '  ● active' : ''}`, item.disabled ? t.foregroundSubtle : selected ? t.selectionForeground : t.foreground, selected ? t.selection : t.overlayBackground, selected);
   }
   if (s.step === 'accounts' && !choices.length) row('No accounts yet. Use /login to connect.', t.foregroundMuted);
   while (lines.length < height - 4 - errorRows) row('');

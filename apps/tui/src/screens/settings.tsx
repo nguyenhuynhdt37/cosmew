@@ -868,6 +868,7 @@ export function renderHelpOverlay(options: {
   pushRow('   /            Slash Command Autocomplete     @            Workspace File Autocomplete');
   pushRow('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
   pushRow('   !            Shell mode: Not implemented     Alt+Enter    Newline (also Ctrl+J)');
+  pushRow('   Mouse drag   Select text · Ctrl+C/Ctrl+Y Copy · Esc Clear · Shift+drag native selection');
   pushRow('   Ctrl+R       Toggle reasoning summary        /model: Ctrl+E cycles active model effort');
   pushRow('');
   pushRow(' Slash Commands:', tokens.markdownHeading, true);

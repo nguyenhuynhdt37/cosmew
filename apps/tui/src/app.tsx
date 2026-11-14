@@ -8,7 +8,8 @@ import {
   type ToolCall,
 } from '@hannes/contracts';
 import { acceptSlashSelection, parseSlashCommand, type FutrynClient } from '@hannes/sdk';
-import { reportRows, renderReportOverlay } from './screens/telemetry';
+import { contextDisplay, reportRows, renderReportOverlay } from './screens/telemetry';
+import { TextSelection } from './components/text-selection';
 import { connectionChoices } from './screens/connect';
 import {
   createInitialDiffViewState,
@@ -95,6 +96,7 @@ export interface FrameCell {
   fg: string;
   bg: string;
   bold: boolean;
+  selected?: boolean;
 }
 
 export interface FrameSnapshot {
@@ -140,17 +142,22 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       }
 
       if (termIdx !== -1) {
-        const mouseData = str.slice(i + 3, termIdx);
-        const parts = mouseData.split(';');
-        const button = parseInt(parts[0] || '0', 10);
-        if (button === 64) {
-          keys.push('PageUp');
-        } else if (button === 65) {
-          keys.push('PageDown');
+        const match = /^(\d{1,5});(\d{1,5});(\d{1,5})$/.exec(str.slice(i + 3, termIdx));
+        if (match) {
+          const button = Number(match[1]); const col = Number(match[2]) - 1; const row = Number(match[3]) - 1;
+          const released = str[termIdx] === 'm';
+          if (col >= 0 && row >= 0) {
+            if (button === 64 && !released) keys.push('PageUp');
+            else if (button === 65 && !released) keys.push('PageDown');
+            else if (released && (button === 0 || button === 3 || button === 35)) keys.push(`MouseUp:${row}:${col}`);
+            else if (button === 0) keys.push(`MouseDown:${row}:${col}`);
+            else if (button === 32) keys.push(`MouseDrag:${row}:${col}`);
+          }
         }
         i = termIdx + 1;
         continue;
       }
+      break; // Incomplete mouse input must never become a composer draft.
     }
     if (str.startsWith('\x1b[I', i)) {
       keys.push('FocusIn');
@@ -264,6 +271,9 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
     } else if (code === 24) {
       keys.push('Ctrl+X');
       i++;
+    } else if (code === 25) {
+      keys.push('Ctrl+Y');
+      i++;
     } else if (code === 26) {
       keys.push('Ctrl+Z');
       i++;
@@ -278,6 +288,30 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
     }
   }
   return keys;
+}
+
+/** Preserve split CSI/mouse sequences and UTF-8 characters across PTY chunks. */
+export class TerminalInputDecoder {
+  private pending = '';
+  private readonly decoder = new TextDecoder();
+  private discardCSI = false;
+  get waiting(): boolean { return !!this.pending; }
+  feed(chunk: Uint8Array | string): string[] {
+    let text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, {stream:true});
+    if (this.discardCSI) {
+      const final = text.search(/[@-~]/); if (final < 0) return [];
+      text = text.slice(final + 1); this.discardCSI = false;
+    }
+    this.pending += text;
+    const at = this.pending.lastIndexOf('\x1b');
+    const tail = at >= 0 ? this.pending.slice(at) : '';
+    if (tail === '\x1b' || /^\x1b\[[0-?]*$/.test(tail)) {
+      const ready = this.pending.slice(0, at); this.pending = tail.length <= 128 ? tail : ''; if (tail.length > 128) this.discardCSI = true;
+      return parseRawTerminalKey(ready);
+    }
+    const ready = this.pending; this.pending = ''; return parseRawTerminalKey(ready);
+  }
+  flush(): string[] { const escape = this.pending === '\x1b'; if (this.pending.startsWith('\x1b[')) this.discardCSI = true; this.pending = ''; return escape ? ['Escape'] : []; }
 }
 
 export class FutrynTuiApp {
@@ -308,6 +342,10 @@ export class FutrynTuiApp {
   private statusBanner: string | null = null;
   private isStreaming = false;
   private activeAbortController: AbortController | null = null;
+  private readonly textSelection = new TextSelection();
+  private clipboardSequence = '';
+  public selectedText(): string { return this.textSelection.text(); }
+  public takeClipboardSequence(): string { const value = this.clipboardSequence; this.clipboardSequence = ''; return value; }
   private previousCells: FrameCell[][] | null = null;
   private animationTimeSeconds = 0;
   private readonly companion = new FynCompanion();
@@ -358,6 +396,7 @@ export class FutrynTuiApp {
   }
 
   public resize(cols: number, rows: number): void {
+    this.textSelection.clear();
     this.cols = Math.max(20, cols);
     this.rows = Math.max(8, rows);
     this.previousCells = null;
@@ -388,6 +427,7 @@ export class FutrynTuiApp {
   }
 
   public openOverlay(target: ActiveOverlay): void {
+    this.textSelection.clear();
     if (this.overlay === 'connect' && target !== 'connect') {
       this.authAbort?.abort();
       if (this.connectState.authChallenge) void this.client.cancelProviderAuth(this.connectState.authChallenge.id);
@@ -432,6 +472,7 @@ export class FutrynTuiApp {
   }
 
   public async executeSlashCommand(rawInput: string): Promise<void> {
+    this.textSelection.clear();
     const parsed = parseSlashCommand(rawInput);
     if (parsed.error) { this.statusBanner = parsed.error; return; }
     const trimmed = parsed.input;
@@ -460,10 +501,13 @@ export class FutrynTuiApp {
       if (!accounts.length) { this.statusBanner = 'No connected accounts. Use /login.'; return; }
       const target = parsed.args ? (/^\d+$/.test(parsed.args) ? accounts[Number(parsed.args) - 1] : accounts.find(a => a.id === parsed.args || a.alias === parsed.args)) : null;
       if (parsed.args && !target) { this.statusBanner = 'Account not found. Use /switch to choose.'; return; }
+      const activeId = this.client.status().activeAccount?.id;
+      if (target?.id === activeId) { this.statusBanner = `Already using ${target!.alias}.`; return; }
+      if (!target && accounts.every(account => account.id === activeId)) { this.statusBanner = 'Only the current account is connected. Use /login to add another.'; return; }
       this.openOverlay('connect');
       this.connectState = { ...createInitialConnectProviderState(), step: target ? 'confirm' : 'accounts', switchOnly: true,
         accountId: target?.id, providerLabel: target?.alias, pendingAction: 'switch',
-        selectedIndex: target ? 0 : Math.max(0, accounts.findIndex(a => a.id === this.client.status().activeAccount?.id)) };
+        selectedIndex: target ? 0 : Math.max(0, accounts.findIndex(a => a.id !== activeId)) };
       return;
     }
     if (lower.startsWith('/model ')) {
@@ -595,6 +639,7 @@ export class FutrynTuiApp {
   }
 
   private async continueWithAccount(id: string, modelId?: string): Promise<boolean> {
+    if (this.client.status().activeAccount?.id === id) { this.openOverlay('none'); this.statusBanner = 'This account is already active.'; return false; }
     const task = this.runAccountSwitch(id, modelId); this.switchTask = task;
     try { return await task; } finally { if (this.switchTask === task) this.switchTask = null; }
   }
@@ -630,6 +675,7 @@ export class FutrynTuiApp {
   }
 
   public async shutdown(): Promise<void> {
+    this.textSelection.clear(); this.clipboardSequence = '';
     this.authAbort?.abort();
     this.switchAbort?.abort();
     this.activeAbortController?.abort();
@@ -739,6 +785,23 @@ export class FutrynTuiApp {
   }
 
   public async handleKey(key: string): Promise<void> {
+    const mouse = /^(MouseDown|MouseDrag|MouseUp):(\d+):(\d+)$/.exec(key);
+    if (mouse) {
+      const point = {row:Number(mouse[2]), col:Number(mouse[3])};
+      if (mouse[1] === 'MouseDown') { this.textSelection.clear(); this.textSelection.begin(this.computeFrameSnapshot(), point); }
+      else if (mouse[1] === 'MouseDrag') this.textSelection.move(point);
+      else this.textSelection.release(point);
+      return;
+    }
+    if (this.textSelection.active() && (key === 'Ctrl+C' || key === 'Ctrl+Y')) {
+      const sequence = this.textSelection.copySequence();
+      if (sequence) this.clipboardSequence = sequence;
+      return;
+    }
+    if (key !== 'FocusIn' && key !== 'FocusOut' && this.textSelection.frame) {
+      this.textSelection.clear(); if (key === 'Escape') return;
+    }
+
     if (key !== 'FocusIn' && key !== 'FocusOut') this.companion.activity();
     if (key !== 'FocusIn' && key !== 'FocusOut') this.statusBanner = null;
     if (key === 'FocusIn') {
@@ -1446,13 +1509,19 @@ export class FutrynTuiApp {
       this.connectState = { ...createInitialConnectProviderState(), step: st.step === 'provider' ? 'accounts' : 'provider' };
       return;
     }
-    const choices = connectionChoices(st, this.client.listIntegrations(), this.client.listAccounts());
+    const choices = connectionChoices(st, this.client.listIntegrations(), this.client.listAccounts(), this.client.status().activeAccount?.id);
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-      if (choices.length) st.selectedIndex = (st.selectedIndex + (key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length;
+      if (choices.length) {
+        for (let count = 0; count < choices.length; count++) {
+          st.selectedIndex = (st.selectedIndex + (key === 'ArrowDown' ? 1 : -1) + choices.length) % choices.length;
+          if (!choices[st.selectedIndex]?.disabled) break;
+        }
+      }
       return;
     }
     if (key === 'Enter') {
       const chosen = choices[st.selectedIndex];
+      if (chosen?.disabled) { st.statusMessage = 'This account is already active.'; return; }
       const next = (step: ConnectProviderState['step'], draft = '') => { this.connectState = { ...st, step, draft, selectedIndex: 0, statusMessage: undefined }; };
       try {
         if (st.step === 'provider' && chosen) {
@@ -1524,7 +1593,7 @@ export class FutrynTuiApp {
           if (chosen.id === 'confirm' && st.logoutOnly) { await this.signOutAccount(st.accountId!); return; }
           if (chosen.id === 'cancel' && (st.logoutOnly || st.switchOnly)) { this.openOverlay('none'); return; }
           if (chosen.id === 'confirm') {
-            await this.client.logoutAccount(st.accountId!, st.pendingAction === 'remove');
+            await this.client.logoutAccount(st.accountId!, true);
             this.syncTranscriptFromActiveSession();
           }
           this.connectState = { ...createInitialConnectProviderState(), step: 'accounts', statusMessage: chosen.id === 'confirm' ? 'Local credential removed. Revoke remote API keys in the provider console; shell environment values remain in your shell.' : 'Cancelled.' };
@@ -1883,6 +1952,7 @@ export class FutrynTuiApp {
   // ============================================================================
 
   public computeFrameSnapshot(): FrameSnapshot {
+    if (this.textSelection.frame) return this.textSelection.view(this.themeEngine.getActiveTokens());
     const cols = this.cols;
     const rows = this.rows;
     const tokens = this.themeEngine.getActiveTokens();
@@ -2005,10 +2075,11 @@ export class FutrynTuiApp {
       borderStyle: manifest.borderStyle,
       workspaceFiles,
       maxHeight: Math.max(4, rows - 6),
-      telemetryLabel: contentWidth >= 90 ? (() => {
+      telemetryLabel: chatting && contentWidth >= 54 ? (() => {
         const context = this.client.context(this.composer.value);
         const cost = status.usage.costUSD;
-        return `ctx ~${context.estimateTokens}/${context.limitTokens ?? '?'}${cost == null ? '' : ` · ~$${cost.toFixed(4)}`}`;
+        const display = contextDisplay(context);
+        return `ctx ${display.measured ? '' : '~'}${display.used}/${display.total ?? '?'}${cost == null || contentWidth < 90 ? '' : ` · ~$${cost.toFixed(cost > 0 && cost < 0.0001 ? 6 : 4)}`}`;
       })() : undefined,
     });
 
@@ -2302,7 +2373,7 @@ export class FutrynTuiApp {
         for (let x = 0; x < row.length; x++) {
           const a = row[x]!;
           const b = prevRow[x]!;
-          if (a.ch !== b.ch || a.fg !== b.fg || a.bg !== b.bg || a.bold !== b.bold) {
+          if (a.ch !== b.ch || a.fg !== b.fg || a.bg !== b.bg || a.bold !== b.bold || a.selected !== b.selected) {
             rowChanged = true;
             break;
           }
@@ -2314,9 +2385,13 @@ export class FutrynTuiApp {
       let curFg = '';
       let curBg = '';
       let curBold = false;
+      let curSelected = false;
 
       for (let x = 0; x < row.length; x++) {
         const cell = row[x]!;
+        if (cap === 'none' && Boolean(cell.selected) !== curSelected) {
+          out += cell.selected ? '\x1b[7m' : '\x1b[27m'; curSelected = Boolean(cell.selected);
+        }
         if (cell.bold !== curBold) {
           out += cell.bold ? '\x1b[1m' : '\x1b[22m';
           curBold = cell.bold;
@@ -2359,10 +2434,13 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
 
   let cleanedUp = false;
   let timer: ReturnType<typeof setInterval> | null = null;
+  let inputTimer: ReturnType<typeof setTimeout> | null = null;
+  const inputDecoder = new TerminalInputDecoder();
 
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    if (inputTimer) { clearTimeout(inputTimer); inputTimer = null; }
     if (timer) {
       clearInterval(timer);
       timer = null;
@@ -2388,6 +2466,7 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
 
   const renderNow = (force = false) => {
     if (cleanedUp) return;
+    const clipboard = app.takeClipboardSequence(); if (clipboard) stdout.write(clipboard);
     const ansi = app.renderAnsiFrame(force);
     if (ansi) stdout.write(ansi);
   };
@@ -2411,7 +2490,15 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
       };
       const onData = async (chunk: Buffer) => {
         try {
-          const keys = parseRawTerminalKey(chunk);
+          if (inputTimer) { clearTimeout(inputTimer); inputTimer = null; }
+          const keys = inputDecoder.feed(chunk);
+          if (inputDecoder.waiting) inputTimer = setTimeout(() => {
+            inputTimer = null;
+            void (async () => {
+              for (const key of inputDecoder.flush()) await app.handleKey(key);
+              if (app.isExitRequested()) finish(); else renderNow(false);
+            })().catch(error => finish(error instanceof HannesError ? error : new HannesError('INVALID_INPUT')));
+          }, 30);
           for (const key of keys) {
             await app.handleKey(key);
             if (app.isExitRequested()) { finish(); return; }

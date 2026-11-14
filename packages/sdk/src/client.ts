@@ -327,6 +327,9 @@ export class FutrynClient {
   }
 
   useAccount(idOrAlias: string): Account {
+    const target = this.ports.getAccount(idOrAlias);
+    if (target.status === 'logged-out') throw new HannesError('AUTH');
+    if (this.status().activeAccount?.id === target.id) return target;
     const account = this.ports.useAccount(idOrAlias);
     this.clearSessionAuthorization();
     this.currentSession = null;
@@ -337,7 +340,7 @@ export class FutrynClient {
     return this.ports.renameAccount(idOrAlias, newAlias);
   }
 
-  async logoutAccount(idOrAlias: string, remove = false): Promise<void> {
+  async logoutAccount(idOrAlias: string, remove = true): Promise<void> {
     const target = this.ports.getAccount(idOrAlias);
     if (this.currentSession?.selection.accountId === target.id) {
       this.clearSessionAuthorization();
@@ -488,6 +491,13 @@ export class FutrynClient {
           this.emitReactiveEvent('streaming');
         } else if (event.type === 'reasoningDelta') {
           this.emitReactiveEvent('reasoning', 'Provider reasoning summary');
+        } else if (event.type === 'context' && event.context.source !== 'estimate' && event.context.limitTokens != null) {
+          // Remember only an observed runtime limit for this exact model/account.
+          this.ports.settings.update(settings => {
+            if (!settings.accounts.some(account => account.id === session.selection.accountId && account.status !== 'logged-out')) return;
+            const model = settings.catalogs.find(cache => cache.accountId === session.selection.accountId)?.models.find(model => model.id === session.selection.modelId);
+            if (model && (model.contextLimit == null || model.metadataSource?.endsWith(':observed-context'))) { model.contextLimit = event.context.limitTokens; model.metadataSource = `${event.context.source}:observed-context`; model.metadataFetchedAt = event.context.measuredAt; }
+          });
         } else if (event.type === 'toolCallComplete') {
           this.emitReactiveEvent('tool', event.call.name);
         } else if (event.type === 'completed') {
@@ -522,12 +532,14 @@ export class FutrynClient {
     const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
     const estimate = components.length ? Math.ceil(bytes / 4) + components.length * 16 + 64 : 0;
     const runtime = !!status.activeProvider?.runtime;
-    const last = this.usage().last?.context ?? null;
-    const limit = status.activeModel?.contextLimit ?? last?.limitTokens ?? null;
+    const latest = this.usage().last;
+    const last = latest?.context && latest.context.source !== 'estimate' ? latest.context : null;
+    const limit = last?.limitTokens ?? status.activeModel?.contextLimit ?? null;
     const reserve = Math.min(4096, status.activeModel?.outputLimit ?? 4096);
     return { estimateTokens: estimate, estimateMethod: 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
       limitTokens: limit, outputReserve: runtime ? null : reserve, outputLimit: status.activeModel?.outputLimit ?? null, runtimeHiddenContext: runtime,
       estimatedPercent: limit && !runtime ? Math.round(estimate / limit * 1000) / 10 : null,
+      measuredCurrentHistory: !draft.trim() && (!this.sending || latest?.outcome === 'pending') && last?.usedTokens != null && last.limitTokens != null,
       lastMeasured: last, metadataSource: status.activeModel?.metadataSource ?? null,
       metadataAt: status.activeModel?.metadataFetchedAt ?? null, messages: components.length };
   }
@@ -553,7 +565,8 @@ export class FutrynClient {
     const target = /^\d+$/.test(reference) ? accounts[Number(reference) - 1] : accounts.find(a => a.id === reference || a.alias === reference);
     if (!target) throw new HannesError('NOT_FOUND');
     const source = this.currentSession;
-    if (source?.selection.accountId === target.id) return target;
+    const current = source?.selection ?? this.status().selection;
+    if ((current?.accountId ?? this.status().activeAccount?.id) === target.id && (!modelId || current?.modelId === modelId)) return target;
     if (signal?.aborted) throw new HannesError('CANCELLED');
     const catalog = await this.ports.discoverModels(target, signal);
     if (signal?.aborted) throw new HannesError('CANCELLED');
