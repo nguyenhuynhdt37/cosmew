@@ -2,6 +2,18 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { join, dirname, resolve } from 'node:path';
 import { HannesError } from '@hannes/contracts';
 
+// Copilot CLI 1.0.107 writes this header before its otherwise strict JSON.
+// Normalize only the known managed format, leaving strings (including tokens
+// and URLs containing //) untouched. Vault documents remain strict JSON so
+// nested credential values still participate in secret redaction.
+function credentialDocument(name: string, raw: string): string {
+  const text = name === 'config.json'
+    ? raw.replace(/^\/\/ User settings belong in settings\.json\.\r?\n\/\/ This file is managed automatically\.\r?\n/, '')
+    : raw;
+  try { return JSON.stringify(JSON.parse(text)); }
+  catch { throw new HannesError('STORAGE'); }
+}
+
 /** Persistence owns every temporary runtime write. Only named credential files
  * may enter the vault; runtime logs, transcripts and workspace files cannot. */
 export class RuntimeProfile {
@@ -21,7 +33,7 @@ export class RuntimeProfile {
         if (record.version !== 1 || !record.files || typeof record.files !== 'object') throw new HannesError('STORAGE');
         for (const [name, value] of Object.entries(record.files)) {
           if (!allowed.includes(name) || typeof value !== 'string' || Buffer.byteLength(value) > 65536) throw new HannesError('STORAGE');
-          JSON.parse(value); this.write(name, value);
+          this.write(name, credentialDocument(name, value));
         }
       }
       for (const [name, value] of Object.entries(settings)) this.write(name, value);
@@ -40,7 +52,7 @@ export class RuntimeProfile {
       let stat;
       try { stat = lstatSync(path); } catch { continue; }
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536 || !realpathSync(path).startsWith(this.directory + '/')) throw new HannesError('STORAGE');
-      const raw = readFileSync(path, 'utf8'); JSON.parse(raw); files[name] = raw;
+      files[name] = credentialDocument(name, readFileSync(path, 'utf8'));
     }
     if (!Object.keys(files).length) throw new HannesError('AUTH');
     const payload = JSON.stringify({ version: 1, files });

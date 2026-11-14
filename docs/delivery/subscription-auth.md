@@ -91,3 +91,26 @@ The first live user report found `AUTH` after GitHub consent. The Copilot runtim
 The subprocess fixture now honors `--no-auto-login` semantics, so the existing full Copilot login/model/chat/restart tests detect this regression. Subscription errors use the provider's sign-in context, not API-key instructions, and longer diagnostics wrap inside the dialog. An isolated native `copilot login --device-code` probe reached the authorization URL/code without a TTY or API key and was cancelled without consent; no real tokens were read or model request sent. Full post-consent vendor validation still needs the user's next sign-in.
 
 Official source: [Copilot SDK authentication](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md), “Disabling auto-login”, accessed 2026-11-14. Configuration follows the existing `useLoggedInUser` behavior; public contract/storage versions and provider scopes are unchanged.
+
+## Follow-up: native Copilot credential document parsing
+
+The user still observed `AUTH` after that change. A second fault was reproduced on installed Copilot CLI **1.0.107** (macOS arm64): the CLI writes `config.json` with these leading lines, followed by JSON:
+
+```text
+// User settings belong in settings.json.
+// This file is managed automatically.
+```
+
+`RuntimeProfile.snapshot()` previously passed the entire file to `JSON.parse`, throwing before the credential could enter the vault. The old subprocess fixture used plain JSON and missed this failure. With the observed header added to that fixture, the Copilot login/model/chat test failed at snapshot capture (`Unrecognized token '/'`) before the fix.
+
+Persistence now accepts that exact managed header (LF or CRLF) for allowlisted `config.json` and stores canonical strict JSON. Restore accepts both existing strict documents and the same managed format. This avoids general comment stripping inside tokens/URLs, preserves nested-token redaction, and leaves the snapshot schema at version 1. Unknown comment formats, malformed JSON, extra trailing content and existing file/path/size violations fail closed with a safe storage error.
+
+Evidence recorded 2026-11-14:
+
+- Installed native runtime: `/opt/homebrew/Caskroom/copilot-cli/1.0.107/copilot`. Its extracted `prebuilds/darwin-arm64/runtime.node` SHA-256 is `0eae290b7e80529f44935ddce0e87919a49c017353269fad5e239579bc3ade3a`; no vendor binary/source is added to the repository.
+- A fresh isolated native runtime writes benign `appTipShown` state through `globalState.writeKey`; FUTRYN captures the resulting native document, restores it in a different private profile, and a second native process reads the saved value via `globalState.load`. Automated opt-in: `HANNES_TEST_COPILOT=1 bun test tests/end-to-end/subscriptions.test.ts`. No existing auth cache is imported, browser consent requested, token read or model request sent by this probe.
+- Deterministic Copilot lifecycle tests now use the native header for authentication output. Actual PTY coverage includes GitHub Copilot → device-flow fixture → model → streamed fixture response → logout.
+- A disposable native OS-vault test checks capture of a header-bearing synthetic token document, nested secret redaction, vault retrieval and deletion.
+- Verification on a separate checkout of `4c412d3` plus this fix: typecheck/lint pass; `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests` reports **123 pass, 0 fail**, including unit/integration, PTY and native-state tests. The shared working tree reports 122 pass / 2 fail in Fyn rendering assertions affected by concurrent, uncommitted TUI edits; those edits are preserved and excluded from this auth fix.
+
+These checks verify the parsing fault and native document persistence. Authenticated Copilot model/chat acceptance after browser consent remains **Needs verification**; the benign native-state test does not establish token entitlement or a successful vendor response.

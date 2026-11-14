@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { HannesError, type SubscriptionRuntime } from '@hannes/contracts';
 import { FutrynTuiApp } from '@hannes/tui';
+import { RuntimeProfile } from '@hannes/persistence';
+import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
+import { SubscriptionRpc } from '../../apps/cli/src/subscriptions/rpc';
 import { memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -133,14 +136,15 @@ test('login UX groups subscriptions under the vendor and asks only for the selec
   expect(c.app.accounts.list()).toHaveLength(0);
 });
 
-test.skipIf(process.platform === 'win32')('actual PTY: vendor → subscription → model → chat → logout, without alias or token prompts', async () => {
+for (const vendor of ['OpenAI', 'GitHub Copilot']) test.skipIf(process.platform === 'win32')(`actual PTY: ${vendor} → subscription → model → chat → logout, without alias or token prompts`, async () => {
   const c = await context(); let output = '';
   const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_t, bytes) { output += Buffer.from(bytes).toString('utf8'); } });
   const child = Bun.spawn([process.execPath, resolve('tests/subscription-fixtures/tui.ts')], { terminal, env: { ...process.env, FUTRYN_TEST_HOME: c.dir, NO_COLOR: '1' } });
   const wait = async (text: string) => { const deadline = Date.now() + 4000; while (!output.includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output).toContain(text); };
   try {
     await wait('FUTRYN'); terminal.write('/login\r'); await wait('Choose your provider');
-    terminal.write('\r'); await wait('Sign in to OpenAI');
+    if (vendor === 'GitHub Copilot') terminal.write('copilot');
+    terminal.write('\r'); await wait(`Sign in to ${vendor}`);
     terminal.write('\r'); await wait('runtime-model');
     expect(output).not.toContain('Name this account'); expect(output).not.toContain('Enter API key');
     terminal.write('\rHello from terminal\r'); await wait('Subscription fixture response');
@@ -153,6 +157,27 @@ test.skipIf(process.platform === 'win32')('actual PTY: vendor → subscription �
     expect(output).toContain('\x1b[?1049l');
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 }, 15000);
+
+test.skipIf(process.env.HANNES_TEST_COPILOT !== '1')('installed Copilot: native managed state survives capture and a fresh runtime restore (no login or model request)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'futryn-native-copilot-'));
+  const recipe = SUBSCRIPTION_RECIPES.copilot;
+  const command = Bun.which(recipe.command); expect(command).not.toBeNull();
+  const profile = new RuntimeProfile(dir, recipe.credentialFiles, recipe.settingsFiles);
+  let restored: RuntimeProfile | undefined;
+  let rpc: SubscriptionRpc | undefined;
+  try {
+    rpc = new SubscriptionRpc(command!, recipe.args, subscriptionEnvironment(recipe, profile.directory), profile.workspace, recipe.framing);
+    await rpc.request('ping', {}, 10000);
+    await rpc.request('globalState.writeKey', { key: 'appTipShown', value: true }, 5000);
+    await rpc.close();
+    const snapshot = profile.snapshot();
+    restored = new RuntimeProfile(dir, recipe.credentialFiles, recipe.settingsFiles, snapshot);
+    profile.close();
+    rpc = new SubscriptionRpc(command!, recipe.args, subscriptionEnvironment(recipe, restored.directory), restored.workspace, recipe.framing);
+    await rpc.request('ping', {}, 10000);
+    expect((await rpc.request('globalState.load', {}, 5000)).appTipShown).toBe(true);
+  } finally { await rpc?.close(); restored?.close(); profile.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 30000);
 
 
 test('two clients cannot race rotating credentials for the same account', async () => {

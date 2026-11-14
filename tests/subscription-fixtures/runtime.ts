@@ -11,9 +11,11 @@ const credential = runtime === 'codex' ? 'auth.json' : copilot ? 'config.json' :
 const save = () => {
   if (scenario === 'missing-creds') return;
   const path = join(profile, credential); mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ access_token: 'fixture-runtime-secret-' + crypto.randomUUID(), refresh_token: 'fixture-refresh' }), { mode: 0o600 });
+  // Copilot 1.0.107 prefixes its managed credential document with comments.
+  const header = copilot ? '// User settings belong in settings.json.\n// This file is managed automatically.\n' : '';
+  writeFileSync(path, header + JSON.stringify({ access_token: 'fixture-runtime-secret-' + crypto.randomUUID(), refresh_token: 'fixture-refresh' }), { mode: 0o600 });
 };
-const valid = () => { if (copilot && process.argv.includes('--no-auto-login')) return false; try { return !!JSON.parse(readFileSync(join(profile, credential), 'utf8')).access_token; } catch { return false; } };
+const valid = () => { if (copilot && process.argv.includes('--no-auto-login')) return false; try { return !!JSON.parse(readFileSync(join(profile, credential), 'utf8').replace(/^(?:\/\/[^\n]*\n)*/, '')).access_token; } catch { return false; } };
 if (copilot && process.argv.includes('login')) {
   process.stdout.write('https://github.com/login/device\nDevice code: ABCD-1234\n');
   setTimeout(() => { save(); process.exit(scenario === 'reject' ? 1 : 0); }, scenario === 'slow-auth' ? 20000 : 30);

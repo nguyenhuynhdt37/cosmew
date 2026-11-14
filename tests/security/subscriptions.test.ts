@@ -2,6 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { HannesError } from '@hannes/contracts';
 import { RuntimeProfile } from '@hannes/persistence';
 import { SecureVault, Redactor, SUBSCRIPTION_RECIPES, authorizeSubscription, subscriptionEnvironment, denyRuntimeRequest } from '@hannes/security';
 import { providerPresets } from '@hannes/models';
@@ -41,10 +42,31 @@ test('runtime snapshots reject traversal, symlinks, oversized files and unexpect
   expect(() => new RuntimeProfile(unsafeRoot, ['auth.json'], {})).toThrow();
 });
 
+test('Copilot managed credential headers normalize to strict JSON without altering secret strings', () => {
+  const root = directory();
+  const profile = new RuntimeProfile(root, ['config.json'], {}); cleanups.push(() => profile.close());
+  const tokens = { authTokens: { fixture: 'fixture-secret//not-a-comment' }, url: 'https://github.com' };
+  const header = '// User settings belong in settings.json.\r\n// This file is managed automatically.\r\n';
+  writeFileSync(join(profile.directory, 'config.json'), header + JSON.stringify(tokens));
+  const snapshot = profile.snapshot();
+  expect(JSON.parse(JSON.parse(snapshot).files['config.json'])).toEqual(tokens);
+  const restored = new RuntimeProfile(root, ['config.json'], {}, snapshot); cleanups.push(() => restored.close());
+  expect(JSON.parse(readFileSync(join(restored.directory, 'config.json'), 'utf8'))).toEqual(tokens);
+  // Native runtimes rewrite the header after refresh; subsequent captures work.
+  writeFileSync(join(restored.directory, 'config.json'), header + JSON.stringify(tokens));
+  expect(restored.snapshot()).toBe(snapshot);
+  for (const invalid of [header + '{"token":"private",}', '// unknown format\n{}', header + '{"token":"private"} trailing']) {
+    writeFileSync(join(profile.directory, 'config.json'), invalid);
+    expect(() => profile.snapshot()).toThrow(HannesError);
+  }
+});
+
 test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('native vault protects structured runtime credentials, redacts nested tokens and deletes logout material', async () => {
   const redactor = new Redactor(); const vault = new SecureVault(redactor);
-  const ref = { kind: 'runtime' as const, key: crypto.randomUUID(), runtime: 'codex' as const };
-  const record = JSON.stringify({ version: 1, files: { 'auth.json': '{"access_token":"fixture-native-runtime-token","refresh_token":"fixture-native-refresh"}' } });
+  const ref = { kind: 'runtime' as const, key: crypto.randomUUID(), runtime: 'copilot' as const };
+  const profile = new RuntimeProfile(directory(), ['config.json'], {}); cleanups.push(() => profile.close());
+  writeFileSync(join(profile.directory, 'config.json'), '// User settings belong in settings.json.\n// This file is managed automatically.\n{"authTokens":{"fixture":"fixture-native-runtime-token"},"refresh_token":"fixture-native-refresh"}');
+  const record = profile.snapshot();
   cleanups.push(() => vault.delete(ref));
   await vault.setRuntime(ref.key, record);
   expect(await vault.getRuntime(ref)).toBe(record);
