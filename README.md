@@ -15,7 +15,7 @@ The account/model selection and custom endpoints persist across restart. API key
 
 `bun run hannes chat` retains the line-oriented wizard described below. Bare interactive `hannes` now also opens the TUI.
 
-Trong Hannes, gõ **`/login`** rồi chọn provider hoặc gateway 9Router. Wizard hỏi URL/protocol nếu cần, nhập key ẩn, kiểm tra kết nối và chọn model ngay tại chỗ. Gõ **`/logout`** để đăng xuất và tiếp tục ở trong CLI; **`/login <account>`** để đăng nhập lại tài khoản đã lưu. Chưa có tài khoản vẫn mở được Hannes và dùng `/login`. Các menu nhận số thứ tự, ID hoặc từ khóa lọc models. `/cancel` hủy wizard; Ctrl-C thoát.
+Trong Hannes, gõ **`/login`** rồi chọn provider hoặc gateway 9Router. Chọn hãng rồi chọn cách đăng nhập; tên tài khoản được tạo tự động. Subscription dùng browser/device, API key chỉ hỏi key ẩn. URL/protocol chỉ xuất hiện khi chủ động chọn custom endpoint. Gõ **`/logout`** để đăng xuất và tiếp tục ở trong CLI; **`/login <account>`** để đăng nhập lại tài khoản đã lưu. Chưa có tài khoản vẫn mở được Hannes và dùng `/login`. Các menu nhận số thứ tự, ID hoặc từ khóa lọc models. `/cancel` hủy wizard; Ctrl-C thoát.
 
 ```text
 hannes> /login
@@ -63,3 +63,6 @@ HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts
 See [CLI/auth setup and troubleshooting](docs/subsystems/providers-and-auth.md), [provider/auth matrix](docs/compatibility/providers-auth-matrix.md), [architecture audit and plan](docs/delivery/provider-auth-plan.md), [upstream comparison](docs/delivery/provider-auth-research.md), [ADR 0005](docs/adr/0005-provider-auth-product.md), [security review](docs/delivery/provider-auth-security-review.md), and [acceptance evidence](docs/delivery/provider-auth-acceptance.md).
 
 The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, general tool execution, MCP/plugins, remote server, full recovery and GUI compatibility are **Not implemented**. Empty source placeholders are not feature evidence.
+
+
+Current login UX and official subscription transports: [subscription sign-in and verification](docs/delivery/subscription-auth.md). Vendors are grouped once; subscription opens browser/device sign-in, API key asks only for the hidden key, and account names are automatic.

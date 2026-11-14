@@ -113,12 +113,12 @@ test('slash login configures a fresh gateway, selects its model, logs out and re
   const x = context();
   const result = await x.cli(['chat'], [
     '/status', '/login', 'custom', 'wizard-router', x.server.url + '/v1', 'responses', 'api-key', 'n',
-    'wizard-main', 'fixture-model', 'env', 'HANNES_TEST_KEY', 'First private conversation',
+    'env', 'fixture-model', 'HANNES_TEST_KEY', 'First private conversation',
     '/logout', '/status', 'Must never be sent while logged out', '/logout',
-    '/login wizard-main', '', 'env', 'HANNES_TEST_KEY', 'Fresh conversation after login', '/exit', '',
+    '/login wizard-router', 'env', 'fixture-model', 'HANNES_TEST_KEY', 'Fresh conversation after login', '/exit', '',
   ].join('\n'));
-  expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập wizard-main');
-  expect(result.stdout).toContain('Đã đăng xuất wizard-main'); expect(result.stdout).toContain('"selection": null');
+  expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập wizard-router');
+  expect(result.stdout).toContain('Đã đăng xuất wizard-router'); expect(result.stdout).toContain('"selection": null');
   expect(result.stdout).toContain('Bạn đã đăng xuất'); expect(result.stdout).toContain('Hello fixture');
   const posts = x.server.requests.filter(r => r.body);
   expect(posts).toHaveLength(4); expect(JSON.stringify(posts)).not.toContain('Must never be sent');
@@ -126,21 +126,22 @@ test('slash login configures a fresh gateway, selects its model, logs out and re
   expect(JSON.stringify(posts.at(-1)?.body)).not.toContain('First private conversation');
   expect(JSON.stringify(posts)).not.toContain('HANNES_TEST_KEY');
   const accounts = JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout);
-  expect(accounts).toHaveLength(1); expect(accounts[0].alias).toBe('wizard-main');
+  expect(accounts).toHaveLength(1); expect(accounts[0].alias).toBe('wizard-router');
 });
 test('slash login can be cancelled or fail validation without sending wizard answers or old chat context', async () => {
   const x = context();
   const cancelled = await x.cli(['chat'], '/login\n/cancel\n/status\n/logout\n/exit\n');
   expect(cancelled.code).toBe(0); expect(cancelled.stdout).toContain('Đã hủy'); expect(x.server.requests).toHaveLength(0);
   await configure(x); const before = x.server.requests.length;
-  const failed = await x.cli(['chat'], '/login personal\nn\nenv\nHANNES_UNSET_FIXTURE\nDo not reuse old conversation\n/status\n/exit\n');
+  await x.cli(['auth', 'logout', '--account', 'personal']);
+  const failed = await x.cli(['chat'], '/login personal\nenv\nHANNES_UNSET_FIXTURE\nDo not reuse old conversation\n/status\n/exit\n');
   expect(failed.code).toBe(0); expect(failed.stderr).toContain('AUTH'); expect(failed.stdout).not.toContain('Đã đăng nhập');
   expect(failed.stdout).toContain('"selection": null'); expect(x.server.requests.length).toBe(before);
 });
 test('slash login chooses saved credentials and model without shell commands; logout can target another account', async () => {
   const x = context(); await configure(x);
   expect((await x.cli(['auth', 'login', '--provider', 'gateway', '--alias', 'backup', '--env', 'HANNES_WORK_KEY'])).code).toBe(0);
-  const result = await x.cli(['chat'], '/login personal\ny\nfixture\n1\nReady to chat\n/logout backup\nStill on personal\n/logout\n/exit\n');
+  const result = await x.cli(['chat'], '/login personal\nfixture\n1\nReady to chat\n/logout backup\nStill on personal\n/logout\n/exit\n');
   expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập personal');
   expect(result.stdout).toContain('Đã đăng xuất backup'); expect(result.stdout).toContain('Đã đăng xuất personal');
   const posts = x.server.requests.filter(r => r.body);
@@ -148,7 +149,7 @@ test('slash login chooses saved credentials and model without shell commands; lo
 });
 test('slash login replaces a retired default model using fresh discovery', async () => {
   const x = context(); await configure(x); x.server.set({ modelName: 'replacement-model' });
-  const result = await x.cli(['chat'], '/login personal\ny\n\nUse available model\n/exit\n');
+  const result = await x.cli(['chat'], '/login personal\n\nUse available model\n/exit\n');
   expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập personal');
   expect(result.stdout).toContain('replacement-model');
   expect(x.server.requests.filter(r => r.body).at(-1)?.body.model).toBe('replacement-model');
@@ -175,27 +176,26 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
   });
   try {
     await waitFor('hannes> '); terminal.write('/login\r');
-    await waitFor('Provider [7]: '); terminal.write('gateway\r');
-    await waitFor('Tên tài khoản [gateway]: '); terminal.write('pty-main\r');
-    await waitFor('Lưu key [keyring]: '); terminal.write('\r');
+    await waitFor('Provider ['); terminal.write('gateway\r');
+    await waitFor('Cách đăng nhập [keyring]: '); terminal.write('\r');
     await waitFor('API key (hidden): '); terminal.write('fixture-e2e-sensitive-value\r');
     await waitFor('Model [fixture-model]: '); terminal.write('\r');
-    await waitFor('Đã đăng nhập pty-main'); await waitFor('hannes> ');
+    await waitFor('Đã đăng nhập gateway'); await waitFor('hannes> ');
     terminal.write('\x1b[AHello after hidden login\r'); await waitFor('Hello fixture'); await waitFor('hannes> ');
-    terminal.write('/logout\r'); await waitFor('Đã đăng xuất pty-main'); await waitFor('hannes> ');
+    terminal.write('/logout\r'); await waitFor('Đã đăng xuất gateway'); await waitFor('hannes> ');
     terminal.write('/status\r'); await waitFor('"selection": null'); await waitFor('hannes> ');
     terminal.write('/exit\r'); expect(await child.exited).toBe(0);
     expect(transcript).not.toContain('fixture-e2e-sensitive-value');
     expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
     const posts = x.server.requests.filter(r => r.body); expect(posts).toHaveLength(1);
     expect(posts[0]?.body.messages).toEqual([{ role: 'user', content: 'Hello after hidden login' }]);
-    expect((await x.cli(['auth', 'status', '--account', 'pty-main', '--json'])).stdout).toContain('"credentialAvailable":false');
-  } finally { child.kill(); await child.exited; terminal.close(); await x.cli(['accounts', 'remove', 'pty-main']); }
+    expect((await x.cli(['auth', 'status', '--account', 'gateway', '--json'])).stdout).toContain('"credentialAvailable":false');
+  } finally { child.kill(); await child.exited; terminal.close(); await x.cli(['accounts', 'remove', 'gateway']); }
 }, 20000);
 test.skipIf(process.platform === 'win32')('Ctrl-C at the hidden login prompt exits cleanly without creating credentials or sending a request', async () => {
   const x = context();
   expect((await x.cli(['providers', 'add', 'gateway', '--url', x.server.url + '/v1', '--protocol', 'chat', '--catalog', 'openai'])).code).toBe(0);
-  const steps = [['hannes> ', '/login\r'], ['Provider [7]: ', 'gateway\r'], ['Tên tài khoản [gateway]: ', 'cancelled-key\r'], ['Lưu key [keyring]: ', '\r'], ['API key (hidden): ', '\x03']];
+  const steps = [['hannes> ', '/login\r'], ['Provider [', 'gateway\r'], ['Cách đăng nhập [keyring]: ', '\r'], ['API key (hidden): ', '\x03']];
   let transcript = ''; let cursor = 0; let step = 0; const decoder = new TextDecoder();
   const terminal = new Bun.Terminal({ data(term, data) {
     transcript += decoder.decode(data, { stream: true }); const next = steps[step]; if (!next) return;

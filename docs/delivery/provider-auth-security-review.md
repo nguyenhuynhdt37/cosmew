@@ -45,3 +45,6 @@ Authentication completion is mediated by composition/SDK; the TUI never receives
 TUI shutdown cancels and drains active auth/chat work before closing SQLite, so termination cannot strand credential rollback.
 
 No dependencies were added. Built-in Web Crypto, fetch, Node SHA-256 and the already evaluated native keyring are used. No external auth plugins, remote execution or delegated-CLI processes are launched. Device-code/refresh-token drivers and external plugin loading remain Not implemented. Local deletion cannot revoke a remote OAuth-issued API key; revocation is through the OpenRouter console. See [current tests/limits](provider-connect-acceptance.md).
+
+
+SUB1 security review and evidence: [runtime/environment/vault/permission boundaries](subscription-auth.md). Official transports use private temporary profiles, OS-vault credential snapshots, fixed argv, minimized environments, runtime tool controls and denied permission/client filesystem requests. A separate process is not advertised as an OS sandbox; authenticated native-runtime hostile-tool acceptance remains pending.

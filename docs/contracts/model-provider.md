@@ -60,3 +60,6 @@ Optional maxEstimatedCostUSD is an explicit estimate guard: missing prices or an
 ## Provider Connect contract 1.1
 
 [ADR 0007](../adr/0007-provider-connect-and-commands.md) adds Integration, AuthMethod and ProviderAuthChallenge metadata, optional SDK auth-challenge ports and optional connect input fields. All current consumers migrate together. Storage remains schema 1: OpenRouter's official PKCE yields an existing keyring API-key reference; verifiers/codes are never durable. TUI consumes registry metadata, not a hardcoded provider list. No plugin host/vault access or MCP auth is exposed. Model changes start a fresh pinned conversation; permission scopes hash full targets and session grants are cleared at conversation boundaries. Existing schema-1 data loads without rewriting.
+
+
+Contract 1.2 ([ADR 0008](../adr/0008-subscription-runtime-auth.md)) adds optional runtime/family provider metadata, runtime credential references, automatic/polling auth and method target/advanced metadata. Existing schema-1 rows remain unchanged. New runtime refs must match their provider runtime and cannot resolve through API-key credential access. All current consumers migrate together; older readers reject unfamiliar runtime data.

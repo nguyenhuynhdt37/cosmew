@@ -26,3 +26,6 @@ User requested `/login` and `/logout` to avoid long setup commands. CLI now star
 ## Provider Connect rebuild
 
 User-requested 2026-11-14. Audited the current dirty PA1/TUI1 implementation and current OpenCode/Claude references before editing. Reused existing adapters, core, stores, theme renderer and CLI; added registry-driven search/auth/account flow, official OpenRouter headless PKCE, custom endpoint setup, command migration/diagnostics, rollback and pinned model/session behavior. Tests include actual HTTP/PTY and disposable native-keyring flows. See [ADR 0007](../adr/0007-provider-connect-and-commands.md) and [current evidence](provider-connect-acceptance.md). No dependencies installed, external agents delegated or unrelated placeholders implemented. Live authenticated provider testing remains pending the user's local credential configuration.
+
+
+SUB1 is authorized by the follow-up request to support subscriptions, with the subsequent UX correction making vendor grouping and immediate sign-in mandatory. [ADR 0008](../adr/0008-subscription-runtime-auth.md) and [implementation/evidence](subscription-auth.md) record the bounded runtime transports, contract migration and live gates.

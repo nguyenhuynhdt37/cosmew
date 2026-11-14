@@ -95,3 +95,6 @@ Accessed 2026-11-14; dynamic docs hashes identify the inspected snapshot and are
 ## Outstanding acceptance
 
 Authenticated live model generation and real browser OpenRouter authorization require the user's locally configured account and are **not verified**. Manual visual acceptance in iTerm/Kitty/Windows Terminal, Linux/Windows keyring behavior, device-code drivers, delegated CLIs, external auth plugins, MCP, shell/file tools, permission-policy editing and context compaction remain **Not implemented / Needs verification** as applicable. No claim of a fully accepted Product MVP is made.
+
+
+SUB1 and login UX follow-up: [current behavior and evidence](subscription-auth.md), [ADR 0008](../adr/0008-subscription-runtime-auth.md). This supersedes the alias-entry step and separate subscription-provider rows: vendors are grouped, ordinary login does not ask for account names, and advanced environment/custom settings are secondary.

@@ -51,3 +51,6 @@ The delegated-agent blocker is precise: this repository has no implemented gener
 
 
 Provider Connect follow-up: [ADR 0007](../adr/0007-provider-connect-and-commands.md), [command/acceptance evidence](../delivery/provider-connect-acceptance.md). Device-code/delegated-CLI authentication and external auth plugins remain Not implemented. OpenRouter OAuth uses its own API credits and does not grant access through another consumer subscription.
+
+
+SUB1 follow-up: [current subscription implementation and exact evidence](../delivery/subscription-auth.md) supersede the older blanket “Hannes integration Not implemented” rows for bounded official Codex/Copilot/Gemini/Qwen transports. Installed/vendor acceptance is still pending as detailed there; Claude subscription sign-in still requires approval.

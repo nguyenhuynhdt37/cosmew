@@ -1,5 +1,6 @@
 import { HannesError, modelIdSchema, providerSchema, type Account, type Provider } from '@hannes/contracts';
 import { terminalText, validateEndpoint } from '@hannes/security';
+import { loginSubscription } from './subscriptions/login';
 import type { Application } from './bootstrap/startup';
 import type { ChatInput } from './input';
 
@@ -21,20 +22,13 @@ async function choose(input: ChatInput, print: Print, label: string, choices: { 
 export async function loginWizard(app: Application, input: ChatInput, signal: AbortSignal,
   validate: (account: Account) => Promise<unknown>, project?: string, accountId?: string): Promise<Account> {
   const print: Print = text => process.stdout.write(terminalText(app.redactor.text(text)) + '\n');
-  print('Đăng nhập — chọn provider, tài khoản và model. Gõ /cancel ở câu hỏi để hủy.');
-  let existing = accountId ? app.accounts.get(accountId) : undefined;
-  if (!accountId && app.accounts.list().length) {
-    const selected = await choose(input, print, 'Tài khoản', [
-      ...app.accounts.list().map(a => ({ id: a.id, aliases: [a.alias], name: `${a.alias} · ${a.providerId} · ${a.status}` })),
-      { id: 'new', name: 'Thêm tài khoản mới' },
-    ], '1');
-    if (selected !== 'new') existing = app.accounts.get(selected);
-  }
+  print('Đăng nhập — chọn hãng rồi chọn cách đăng nhập. /cancel để hủy.');
+  const existing = accountId ? app.accounts.get(accountId) : undefined;
   let provider: Provider;
   if (existing) provider = app.registry.get(existing.providerId);
   else {
     const available = app.integrations.list().map(i => i.provider);
-    const id = await choose(input, print, 'Provider', [...available, { id: '@custom', aliases: ['custom'], name: 'Gateway riêng / 9Router (URL + model)' }], String(available.length + 1));
+    const id = await choose(input, print, 'Provider', [...available, { id: '@custom', aliases: ['custom'], name: 'Gateway riêng / 9Router (URL + model)' }], '1');
     if (id === '@custom') {
       const id = await input.ask('Tên cấu hình gateway', 'my-9router');
       if (app.registry.list().some(p => p.id === id)) throw new HannesError('INVALID_INPUT');
@@ -50,49 +44,53 @@ export async function loginWizard(app: Application, input: ChatInput, signal: Ab
         catalog: discover.toLowerCase() === 'y' ? protocol === 'anthropic' ? 'anthropic' : protocol === 'gemini' ? 'gemini' : 'openai' : 'manual', metadataVersion: 1 }));
     } else provider = app.registry.list().find(p => p.id === id) ?? app.registry.add(available.find(p => p.id === id)!);
   }
-  const alias = existing?.alias ?? await input.ask('Tên tài khoản', provider.id);
-  if (!existing) {
-    const saved = app.accounts.list().find(a => a.alias === alias);
-    if (saved && saved.providerId !== provider.id) throw new HannesError('INVALID_INPUT');
-    existing = saved;
-  }
-  const manualModel = provider.catalog === 'manual' ? modelIdSchema.parse(await input.ask('Model ID', existing?.defaultModel)) : undefined;
-  const reuse = existing && existing.status !== 'logged-out' ? await input.ask('Dùng thông tin đăng nhập đã lưu? (y/n)', 'y') : 'n';
-  if (!['y', 'n'].includes(reuse.toLowerCase())) throw new HannesError('INVALID_INPUT');
+  let alias = existing?.alias ?? provider.id.slice(0, 90); let suffix = 2;
+  while (!existing && app.accounts.list().some(account => account.alias === alias)) alias = `${provider.id.slice(0, 90)}-${suffix++}`;
   let account: Account;
-  if (reuse.toLowerCase() === 'y') account = existing!;
+  let manualModel: string | undefined;
+  const reuse = !!existing && existing.status !== 'logged-out';
+  if (reuse) account = existing;
   else {
-    const methods = app.integrations.list().find(i => i.provider.id === provider.id)!.methods;
-    const method = provider.auth === 'none' ? 'none' : await choose(input, print, 'Lưu key', methods.map(m => ({
-      id: m.id === 'api-key' ? 'keyring' : m.id,
-      name: m.id === 'api-key' ? 'Nhập key ẩn và lưu vào OS keyring' : m.id === 'env' ? 'Dùng biến môi trường đã có' : m.name,
-    })), 'keyring');
-    if (method === 'openrouter-oauth') {
+    const methods = app.integrations.list().find(i => (i.providerIds ?? [i.provider.id]).includes(provider.id))!.methods;
+    const method = provider.auth === 'none' ? 'none' : await choose(input, print, 'Cách đăng nhập', methods.map(m => ({
+      id: m.id === 'api-key' ? 'keyring' : m.id, name: m.name,
+    })), methods[0]?.id === 'api-key' ? 'keyring' : methods[0]?.id);
+    const selected = methods.find(m => m.id === (method === 'keyring' ? 'api-key' : method));
+    if (selected?.providerId && selected.providerId !== provider.id) {
+      provider = app.registry.list().find(p => p.id === selected.providerId) ?? app.registry.add(app.integrations.get(selected.providerId).provider);
+      alias = existing?.alias ?? provider.id.slice(0, 90); suffix = 2;
+      while (!existing && app.accounts.list().some(a => a.alias === alias)) alias = `${provider.id.slice(0, 90)}-${suffix++}`;
+    }
+    manualModel = provider.catalog === 'manual' && !provider.runtime ? modelIdSchema.parse(await input.ask('Model ID', existing?.defaultModel)) : undefined;
+    if (provider.runtime) account = await loginSubscription(app, provider, alias, signal, existing, method === 'subscription-device');
+    else {
       const client = app.createFutrynClient();
-      const challenge = await client.beginProviderAuth(provider.id);
-      try {
-        print('OpenRouter OAuth: open this URL in your browser, authorize and paste the one-time code:');
-        print(challenge.authorizationURL);
-        const code = await input.secret();
-        account = await client.connectAccount({ providerId: provider.id, alias, credential: { kind: 'keyring', key: crypto.randomUUID() },
-          authChallengeId: challenge.id, authorizationCode: code, reauthenticateAccountId: existing?.id, manualModelId: manualModel }, signal);
-      } finally { client.cancelProviderAuth(challenge.id); }
-    } else {
-      const credential = method === 'none' ? { kind: 'none' as const } : method === 'env'
-        ? { kind: 'env' as const, name: await input.ask('Tên biến môi trường (không nhập giá trị key)') }
-        : { kind: 'keyring' as const, key: crypto.randomUUID() };
-      const secret = method === 'keyring' ? await input.secret() : undefined;
-      signal.throwIfAborted();
-      account = existing ? await app.accounts.reauthenticate(existing.id, credential, secret) : await app.accounts.add(provider.id, alias, credential, secret);
+      if (method === 'openrouter-oauth') {
+        const challenge = await client.beginProviderAuth(provider.id);
+        try {
+          print('Mở URL và dán mã xác nhận:'); print(challenge.authorizationURL);
+          const code = await input.secret();
+          account = await client.connectAccount({ providerId: provider.id, alias, credential: { kind: 'keyring', key: crypto.randomUUID() },
+            authChallengeId: challenge.id, authorizationCode: code, reauthenticateAccountId: existing?.id, manualModelId: manualModel }, signal);
+        } finally { await client.cancelProviderAuth(challenge.id); }
+      } else {
+        const credential = method === 'none' ? { kind: 'none' as const } : method === 'env'
+          ? { kind: 'env' as const, name: await input.ask('Tên biến môi trường (không nhập giá trị key)') }
+          : { kind: 'keyring' as const, key: crypto.randomUUID() };
+        const secret = method === 'keyring' ? await input.secret() : undefined;
+        signal.throwIfAborted();
+        account = await client.connectAccount({ providerId: provider.id, alias, credential, secret, manualModelId: manualModel, reauthenticateAccountId: existing?.id }, signal);
+      }
     }
   }
   if (manualModel) app.catalog(account).manual(manualModel);
   // Validation must use the selected manual model rather than an old account default.
   if (manualModel) app.router.select(account, app.catalog(account).cached().find(m => m.id === manualModel)!, project);
   try {
-    print('Đang kiểm tra kết nối…'); await validate(app.accounts.get(account.id)); signal.throwIfAborted();
+    if (reuse) { print('Đang kiểm tra kết nối…'); await validate(app.accounts.get(account.id)); }
+    signal.throwIfAborted();
   } catch (error) {
-    if (reuse.toLowerCase() !== 'y') await app.accounts.logout(account.id, !existing);
+    if (!reuse) await app.accounts.logout(account.id, !existing);
     throw error;
   }
   account = app.accounts.get(account.id);

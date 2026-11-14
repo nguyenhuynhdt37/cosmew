@@ -29,14 +29,15 @@ async function waitFor(check: () => boolean, timeout = 3000) {
   while (!check() && Date.now() < deadline) await Bun.sleep(10);
   expect(check()).toBe(true);
 }
-async function login(tui: FutrynTuiApp, alias: string, method: 'env' | 'none' | 'api-key' = 'env') {
+async function login(tui: FutrynTuiApp, _alias: string, method: 'env' | 'none' | 'api-key' = 'env') {
   await tui.executeSlashCommand('/login');
   await type(tui, 'fixture');
   expect(tui.computeFrameSnapshot().plainText).toContain('Fixture');
   await tui.handleKey('Enter');
-  if (method === 'env') await tui.handleKey('ArrowDown');
-  await tui.handleKey('Enter');
-  await type(tui, alias);
+  if (method === 'env') {
+    await tui.handleKey('ArrowDown'); await tui.handleKey('Enter'); // More options
+    await tui.handleKey('ArrowDown');
+  }
   await tui.handleKey('Enter');
   if (method !== 'none') {
     await type(tui, method === 'env' ? 'FUTRYN_CONNECT_TEST_KEY' : 'synthetic-connect-sensitive-value');
@@ -58,6 +59,7 @@ test('registry-driven /login → env auth → model → HTTP chat → account li
   expect(filterIntegrations(tui.client.listIntegrations(), 'unknown')).toHaveLength(0);
   await login(tui, 'personal');
   await waitFor(() => tui.getActiveOverlay() === 'models');
+  tui.client.renameAccount(tui.client.status().activeAccount!.id, 'personal');
   expect(tui.computeFrameSnapshot().plainText).toContain('fixture-model');
   await tui.handleKey('Enter');
   await tui.submitPrompt('First account message');
@@ -73,6 +75,7 @@ test('registry-driven /login → env auth → model → HTTP chat → account li
   expect(JSON.stringify(server.requests.filter(r => r.body).at(-1)?.body)).not.toContain('First account message');
   await login(tui, 'work');
   await waitFor(() => tui.getActiveOverlay() === 'models');
+  tui.client.renameAccount(tui.client.status().activeAccount!.id, 'work');
   await tui.handleKey('Enter');
   expect(app.accounts.list()).toHaveLength(2);
   await action(tui, 'work', 2); // Rename
@@ -108,6 +111,7 @@ test('no-auth login needs no secret, failures roll back, expiry is actionable, c
   const { app, tui, server } = await setup('none');
   await login(tui, 'local', 'none');
   await waitFor(() => tui.getActiveOverlay() === 'models');
+  tui.client.renameAccount(tui.client.status().activeAccount!.id, 'local');
   expect(server.requests[0]?.authorization).toBeNull();
   await tui.handleKey('Enter');
   server.set({ status: 401 });
@@ -120,7 +124,7 @@ test('no-auth login needs no secret, failures roll back, expiry is actionable, c
   await login(tui, 'cancelled', 'none');
   expect(tui.computeFrameSnapshot().plainText).toContain('validating');
   await tui.handleKey('Escape');
-  await waitFor(() => !app.accounts.list().some(a => a.alias === 'cancelled'));
+  await waitFor(() => app.accounts.list().length === 1);
   expect(tui.getActiveOverlay()).toBe('connect');
   expect(app.accounts.list()).toHaveLength(1);
 });
@@ -137,7 +141,6 @@ test('custom endpoint dialog configures protocol, no-auth and manual model with 
   await tui.handleKey('Enter'); // Manual
   await type(tui, 'manual-model'); await tui.handleKey('Enter');
   await tui.handleKey('Enter'); // No auth method
-  await type(tui, 'gateway-local'); await tui.handleKey('Enter');
   await waitFor(() => tui.getActiveOverlay() === 'models');
   expect(app.registry.get('gateway').protocol).toBe('chat');
   expect(server.requests.some(r => r.body?.model === 'manual-model')).toBe(true);
@@ -184,12 +187,12 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('TUI API key login uses rea
   const { app, tui } = await setup();
   await login(tui, 'native', 'api-key');
   await waitFor(() => tui.getActiveOverlay() === 'models');
+  tui.client.renameAccount(tui.client.status().activeAccount!.id, 'native');
   const account = app.accounts.get('native');
   try {
     expect(await app.vault.get(account.credential)).toBe('synthetic-connect-sensitive-value');
     await action(tui, 'native', 3); // Reconnect
     await tui.handleKey('Enter'); // API key
-    await tui.handleKey('Enter'); // Existing alias
     await type(tui, 'synthetic-rotated-value'); await tui.handleKey('Enter');
     await waitFor(() => tui.getActiveOverlay() === 'models');
     expect(app.accounts.get('native').id).toBe(account.id);
@@ -217,8 +220,8 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
     first.terminal.write('/login\r');
     await waitFor(() => first.output().includes('Connect a provider'));
     first.terminal.write('fixture\r');
-    await waitFor(() => first.output().includes('Choose authentication'));
-    first.terminal.write('\rterminal-local\r');
+    await waitFor(() => first.output().includes('Sign in to Fixture'));
+    first.terminal.write('\r');
     await waitFor(() => first.output().includes('fixture-model'));
     first.terminal.write('\rHello terminal\r');
     await waitFor(() => first.output().includes('Hello fixture'));
@@ -229,7 +232,7 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
   } finally { first.child.kill(); await first.child.exited; first.terminal.close(); }
   const second = launch();
   try {
-    await waitFor(() => second.output().includes('terminal-local'));
+    await waitFor(() => second.output().includes('fixture'));
     second.terminal.write('/logout\r');
     await waitFor(() => second.output().includes('Manage accounts'));
     second.terminal.write('\r');
@@ -268,8 +271,7 @@ test('registered OpenRouter OAuth integrates hidden code → real HTTP exchange 
   await expect(tui.client.beginProviderAuth('fixture')).rejects.toMatchObject({ code: 'UNSUPPORTED' });
   await tui.executeSlashCommand('/login'); await type(tui, 'openrouter'); await tui.handleKey('Enter');
   expect(tui.computeFrameSnapshot().plainText).toContain('OpenRouter OAuth');
-  await tui.handleKey('ArrowDown'); await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
-  await type(tui, 'oauth-account'); await tui.handleKey('Enter');
+  await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   const frame = tui.computeFrameSnapshot().plainText;
   const compact = frame.replace(/\s/g, '');
   challenge = /code_challenge=([^&]+)&/.exec(compact)![1]!;
@@ -279,6 +281,7 @@ test('registered OpenRouter OAuth integrates hidden code → real HTTP exchange 
   await tui.handleKey('Enter');
   await waitFor(() => tui.getActiveOverlay() === 'models');
   expect(vault.values.size).toBe(1);
+  tui.client.renameAccount(tui.client.status().activeAccount!.id, 'oauth-account');
   expect(app.accounts.get('oauth-account').status).toBe('valid');
   await tui.handleKey('Enter'); await tui.submitPrompt('OAuth chat');
   expect(tui.getTranscript().at(-1)?.content).toBe('Hello fixture');
@@ -329,7 +332,7 @@ test.skipIf(process.platform === 'win32')('terminal SIGTERM during login drains 
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], { terminal, env: { ...process.env, HANNES_HOME: dir, NO_COLOR: '1' } });
   try {
     await waitFor(() => output.includes('FUTRYN'));
-    terminal.write('/login\rfixture\r\rinterrupted\r');
+    terminal.write('/login\rfixture\r\r');
     await waitFor(() => server.requests.length > 0);
     child.kill('SIGTERM');
     expect(await Promise.race([child.exited, Bun.sleep(3000).then(() => -1)])).toBe(130);

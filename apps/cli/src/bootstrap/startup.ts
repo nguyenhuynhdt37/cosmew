@@ -16,16 +16,19 @@ import {
   ModelCatalog,
   ModelRouter,
   ProviderAdapter,
+  SubscriptionAdapter,
   ProviderRegistry,
   ProviderTransport,
   providerPresets,
 } from '@hannes/models';
 import {
   FileCustomThemeStore,
+  RuntimeLeases,
   SqliteConversations,
   SqliteSettings,
   openPrivateDatabase,
 } from '@hannes/persistence';
+import { SubscriptionHost, type SubscriptionHostOptions } from '../subscriptions/host';
 import { FutrynClient } from '@hannes/sdk';
 import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, redactModel, terminalText, validateEndpoint } from '@hannes/security';
 
@@ -191,7 +194,7 @@ export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffRep
   }
 }
 
-export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch } = {}) {
+export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions } = {}) {
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
@@ -205,6 +208,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   const accounts = new AccountManager(settings, vault);
   const router = new ModelRouter(settings);
   const policy = new ConfiguredNetworkPolicy();
+  const subscriptions = new SubscriptionHost(directory, vault, settings, new RuntimeLeases(db), services.subscriptions);
 
   const transport = (account: Account) =>
     new ProviderTransport(registry.get(account.providerId), account, vault, {
@@ -236,7 +240,9 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     if (!info) throw new HannesError('NOT_FOUND');
     return new Conversation(
       selection,
-      redactModel(new ProviderAdapter(transport(account), selection.modelId, info), redactor),
+      redactModel(registry.get(account.providerId).runtime
+        ? new SubscriptionAdapter(selection.modelId, (request, signal) => subscriptions.stream(registry.get(account.providerId), account, request, signal))
+        : new ProviderAdapter(transport(account), selection.modelId, info), redactor),
       conversations,
       existingSession,
     );
@@ -245,6 +251,19 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   const conversation = (project?: string) => {
     const selection = router.resolve(project);
     return createConversationForSelection(selection);
+  };
+
+  const discoverModels = async (account: Account, signal?: AbortSignal) => {
+    const provider = registry.get(account.providerId);
+    if (!provider.runtime) return catalog(account).discover(signal);
+    const models = await subscriptions.models(provider, account, signal);
+    settings.update(state => {
+      const fresh = state.accounts.find(a => a.id === account.id);
+      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) throw new HannesError('POLICY');
+      state.catalogs = state.catalogs.filter(c => c.accountId !== account.id);
+      state.catalogs.push({ accountId: account.id, providerFingerprint: JSON.stringify(provider), fetchedAt: new Date().toISOString(), models });
+    });
+    return { models, stale: false };
   };
 
   const validateAccount = async (account: Account, signal?: AbortSignal, generate = false) => {
@@ -256,18 +275,18 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const info = await transport(account).json('key', signal);
         if (!info || typeof info !== 'object' || !('data' in info) || !info.data || typeof info.data !== 'object') throw new HannesError('PROTOCOL');
       }
-      const res = await catalog(account).discover(signal);
+      const res = await discoverModels(account, signal);
       if (res.stale) throw new HannesError('TRANSPORT');
       const modelId = account.defaultModel ?? res.models[0]?.id;
-      if ((generate || p.catalog === 'manual') && !modelId) throw new HannesError('NOT_FOUND');
-      if ((generate || p.catalog === 'manual') && modelId) {
-        await new ProviderAdapter(transport(account), modelId).generate({ requestId: crypto.randomUUID(), modelId,
+      if ((generate || (p.catalog === 'manual' && !p.runtime)) && !modelId) throw new HannesError('NOT_FOUND');
+      if ((generate || (p.catalog === 'manual' && !p.runtime)) && modelId) {
+        await (p.runtime ? new SubscriptionAdapter(modelId, (request, turnSignal) => subscriptions.stream(p, account, request, turnSignal)) : new ProviderAdapter(transport(account), modelId)).generate({ requestId: crypto.randomUUID(), modelId,
           messages: [{ role: 'user', content: 'Reply with OK.' }], maxOutputTokens: 16, tools: [] }, signal);
       }
       if (signal?.aborted) throw new HannesError('CANCELLED');
       accounts.validation(account.id, true, account);
       return { accountId: account.id, providerId: p.id, connection: 'validated', models: res.models.length,
-        validation: generate || p.catalog === 'manual' ? 'generation' : currentKey ? 'authenticated-key-and-model-discovery' : 'model-discovery',
+        validation: generate || (p.catalog === 'manual' && !p.runtime) ? 'generation' : currentKey ? 'authenticated-key-and-model-discovery' : p.runtime ? 'subscription-runtime-model-discovery' : 'model-discovery',
         checkedAt: new Date().toISOString() };
     } catch (error) {
       if (error instanceof HannesError && ['AUTH', 'FORBIDDEN'].includes(error.code)) accounts.validation(account.id, false, account);
@@ -281,18 +300,27 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return new FutrynClient({
       workspace: resolve(workspaceRoot),
       settings,
-      listIntegrations: () => integrations.list(),
-      beginProviderAuth: async providerId => {
-        const integration = integrations.list().find(i => i.provider.id === providerId);
+      listIntegrations: () => integrations.list().map(integration => ({ ...integration,
+        methods: integration.methods.map(method => {
+          const provider = integrations.get(method.providerId ?? integration.provider.id).provider;
+          return provider.runtime ? { ...method, available: subscriptions.available(provider), diagnostic: subscriptions.available(provider) ? undefined : `Install the official ${provider.runtime} runtime on PATH, then retry. No credentials were read or imported.` } : method;
+        }),
+      })),
+      beginProviderAuth: async (providerId, methodId, signal) => {
+        const integration = integrations.get(providerId);
+        if (integration?.provider.runtime) return subscriptions.begin(integration.provider, methodId === 'subscription-device', signal);
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new HannesError('UNSUPPORTED');
         return oauth.begin();
       },
       completeProviderAuth: async (providerId, challengeId, code, signal) => {
-        const integration = integrations.list().find(i => i.provider.id === providerId);
+        const integration = integrations.get(providerId);
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new HannesError('UNSUPPORTED');
         return oauth.complete(challengeId, code, signal);
       },
-      cancelProviderAuth: id => oauth.cancel(id),
+      providerAuthProgress: id => subscriptions.progress(id),
+      completeSubscriptionAuth: (providerId, id, signal) => subscriptions.complete(registry.get(providerId), id, signal),
+      discardSubscriptionCredential: ref => vault.delete(ref),
+      cancelProviderAuth: id => { oauth.cancel(id); return subscriptions.cancel(id); },
       listProviders: () => registry.list(),
       listProviderPresets: () => [...providerPresets],
       addProvider: p => registry.add({ ...p, baseURL: validateEndpoint(p.baseURL) }),
@@ -309,9 +337,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         accounts.rename(target.id, newAlias);
         return accounts.get(target.id);
       },
-      logoutAccount: (idOrAlias, remove) => accounts.logout(idOrAlias, remove),
+      logoutAccount: async (idOrAlias, remove) => {
+        const target = accounts.get(idOrAlias);
+        try { await accounts.logout(target.id, remove); } finally { await subscriptions.revoke(target); }
+      },
       validateAccount,
-      discoverModels: (account, signal) => catalog(account).discover(signal),
+      discoverModels,
       cachedModels: account => catalog(account).cached(),
       addManualModel: (account, modelId) => catalog(account).manual(modelId),
       selectModel: (account, model, project) => router.select(account, model, project),
@@ -393,6 +424,8 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     conversation,
     createFutrynClient,
     validateAccount,
+    discoverModels,
+    subscriptions,
   };
 }
 

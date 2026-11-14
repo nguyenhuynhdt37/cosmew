@@ -7,13 +7,13 @@ export class AccountManager {
   async add(providerId: string, alias: string, credential: CredentialRef, secret?: string): Promise<Account> {
     const account = accountSchema.parse({ id: crypto.randomUUID(), providerId, alias, credential, status: 'unvalidated', validatedAt: null, authGeneration: 1 });
     const state = this.store.read();
-    if (!state.providers.some(p => p.id === providerId) || state.accounts.some(a => a.alias === alias || (credential.kind === 'keyring' && a.credential.kind === 'keyring' && a.credential.key === credential.key))) throw new HannesError('INVALID_INPUT');
+    if (!state.providers.some(p => p.id === providerId) || state.accounts.some(a => a.alias === alias || ((credential.kind === 'keyring' || credential.kind === 'runtime') && (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') && a.credential.key === credential.key))) throw new HannesError('INVALID_INPUT');
     if (credential.kind === 'keyring') { if (!secret) throw new HannesError('AUTH'); await this.vault.set(credential.key, secret); }
     try {
       this.store.update(s => {
         const provider = s.providers.find(p => p.id === providerId);
         if (!provider || s.accounts.some(a => a.alias === alias)) throw new HannesError('INVALID_INPUT');
-        if ((provider.auth === 'api-key') === (credential.kind === 'none')) throw new HannesError('AUTH');
+        if ((credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) || (provider.auth === 'api-key') === (credential.kind === 'none')) throw new HannesError('AUTH');
         s.accounts.push(account); if (!s.activeAccountId) s.activeAccountId = account.id;
       });
     } catch (e) { if (credential.kind === 'keyring') await this.vault.delete(credential); throw e; }
@@ -26,8 +26,8 @@ export class AccountManager {
   async reauthenticate(id: string, credential: CredentialRef, secret?: string): Promise<Account> {
     const current = this.get(id); const provider = this.store.read().providers.find(p => p.id === current.providerId)!;
     accountSchema.parse({ ...current, credential });
-    if ((provider.auth === 'api-key') === (credential.kind === 'none')) throw new HannesError('AUTH');
-    if (credential.kind === 'keyring' && this.list().some(a => a.credential.kind === 'keyring' && a.credential.key === credential.key)) throw new HannesError('INVALID_INPUT');
+    if ((credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) || (provider.auth === 'api-key') === (credential.kind === 'none')) throw new HannesError('AUTH');
+    if ((credential.kind === 'keyring' || credential.kind === 'runtime') && this.list().some(a => (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') && a.credential.key === credential.key)) throw new HannesError('INVALID_INPUT');
     await this.logout(current.id);
     if (credential.kind === 'keyring') { if (!secret) throw new HannesError('AUTH'); await this.vault.set(credential.key, secret); }
     try {

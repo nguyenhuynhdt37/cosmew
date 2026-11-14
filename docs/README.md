@@ -73,3 +73,6 @@ Kết quả kiểm kê 2026-11-14: **77 thư mục con (78 nếu tính root), 11
 - [Upstream comparison](delivery/provider-auth-research.md), [resolved dependency inventory](delivery/provider-auth-dependencies.md).
 - [CLI/authentication usage](subsystems/providers-and-auth.md), [implemented contract](contracts/model-provider.md).
 - [Provider/auth support matrix](compatibility/providers-auth-matrix.md), [security review](delivery/provider-auth-security-review.md), [acceptance report](delivery/provider-auth-acceptance.md).
+
+
+Current subscription and simplified login: [usage, prerequisites and evidence](delivery/subscription-auth.md), [ADR 0008](adr/0008-subscription-runtime-auth.md).

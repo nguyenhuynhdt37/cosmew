@@ -107,3 +107,6 @@ Logout deletes the local keyring entry and clears selections, project references
 ## Provider Connect TUI and canonical commands
 
 [Current usage and complete command audit](../delivery/provider-connect-acceptance.md) supersede the older line-wizard-only instructions above. Use `bun run futryn`, `/login`, `/model`, then chat. The TUI includes all account lifecycle actions, custom endpoint discovery/manual configuration, explicit cancellation/rollback and OS-keyring/environment/no-auth flows. OpenRouter's official headless OAuth PKCE is available in the TUI and guided line wizard; no third-party subscription entitlement is implied. Shared validation probes OpenRouter `/key` before discovery. `/status` reports historical validation; `/doctor` checks live. Unsupported MCP/plugin/compaction/policy-editing/shell capabilities are diagnosed. No auth plugin host is enabled.
+
+
+Current subscription and reduced login steps: [usage/evidence](../delivery/subscription-auth.md). Account names are generated, not required input. Saved-account login reuses valid credentials without an extra confirmation. Vendor rows group API and subscription methods.

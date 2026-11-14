@@ -1,0 +1,52 @@
+import { afterEach, expect, test } from 'bun:test';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RuntimeProfile } from '@hannes/persistence';
+import { SecureVault, Redactor, SUBSCRIPTION_RECIPES, authorizeSubscription, subscriptionEnvironment, denyRuntimeRequest } from '@hannes/security';
+import { providerPresets } from '@hannes/models';
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
+function directory() { const root = mkdtempSync(join(tmpdir(), 'futryn-sub-security-')); cleanups.push(() => rmSync(root, { recursive: true, force: true })); return root; }
+
+test('runtime transport environment drops inherited API keys, tokens, hooks and auto-approval', () => {
+  const env = subscriptionEnvironment(SUBSCRIPTION_RECIPES.codex, '/private/futryn-profile', { PATH: '/bin', OPENAI_API_KEY: 'private', GITHUB_TOKEN: 'private', NODE_OPTIONS: '--require /evil.js', COPILOT_ALLOW_ALL: 'true', CODEX_HOME: '/user/auth' });
+  expect(env.CODEX_HOME).toBe('/private/futryn-profile');
+  expect(env.OPENAI_API_KEY).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined(); expect(env.NODE_OPTIONS).toBeUndefined(); expect(env.COPILOT_ALLOW_ALL).toBe('false');
+  expect(() => authorizeSubscription({ ...providerPresets.find(p => p.id === 'chatgpt')!, baseURL: 'https://evil.example' })).toThrow();
+  expect(denyRuntimeRequest('session/request_permission')).toEqual({ outcome: { outcome: 'cancelled' } });
+  expect(denyRuntimeRequest('item/fileChange/requestApproval')).toEqual({ decision: 'decline' });
+  expect(() => denyRuntimeRequest('fs/read_text_file')).toThrow();
+});
+
+test('runtime snapshots reject traversal, symlinks, oversized files and unexpected credential paths', () => {
+  const root = directory();
+  expect(() => new RuntimeProfile(root, ['auth.json'], {}, JSON.stringify({ version: 1, files: { '../escape.json': '{}' } }))).toThrow();
+  const profile = new RuntimeProfile(root, ['auth.json'], {});
+  cleanups.push(() => profile.close());
+  const outside = join(root, 'outside.json'); writeFileSync(outside, '{}');
+  symlinkSync(outside, join(profile.directory, 'auth.json'));
+  expect(() => profile.snapshot()).toThrow();
+  rmSync(join(profile.directory, 'auth.json'));
+  writeFileSync(join(profile.directory, 'auth.json'), 'x'.repeat(65537)); expect(() => profile.snapshot()).toThrow();
+  rmSync(join(profile.directory, 'auth.json'));
+  writeFileSync(join(profile.directory, 'auth.json'), '{"access_token":"fixture-private"}', { mode: 0o600 });
+  writeFileSync(join(profile.directory, 'prompt-log.txt'), 'Never persist this prompt');
+  expect(profile.snapshot()).not.toContain('Never persist this prompt');
+  const restored = new RuntimeProfile(root, ['auth.json'], {}, profile.snapshot()); cleanups.push(() => restored.close());
+  expect(readFileSync(join(restored.directory, 'auth.json'), 'utf8')).toContain('fixture-private');
+  const unsafeRoot = directory(); mkdirSync(join(unsafeRoot, 'unsafe')); symlinkSync(join(unsafeRoot, 'unsafe'), join(unsafeRoot, 'runtime-tmp'));
+  expect(() => new RuntimeProfile(unsafeRoot, ['auth.json'], {})).toThrow();
+});
+
+test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('native vault protects structured runtime credentials, redacts nested tokens and deletes logout material', async () => {
+  const redactor = new Redactor(); const vault = new SecureVault(redactor);
+  const ref = { kind: 'runtime' as const, key: crypto.randomUUID(), runtime: 'codex' as const };
+  const record = JSON.stringify({ version: 1, files: { 'auth.json': '{"access_token":"fixture-native-runtime-token","refresh_token":"fixture-native-refresh"}' } });
+  cleanups.push(() => vault.delete(ref));
+  await vault.setRuntime(ref.key, record);
+  expect(await vault.getRuntime(ref)).toBe(record);
+  expect(await vault.get(ref)).toBeUndefined(); // Cannot accidentally become an API-key bearer.
+  expect(redactor.text('fixture-native-runtime-token fixture-native-refresh')).toBe('[REDACTED] [REDACTED]');
+  await vault.delete(ref); expect(await vault.getRuntime(ref)).toBeUndefined();
+});

@@ -356,7 +356,7 @@ export class FutrynTuiApp {
   public openOverlay(target: ActiveOverlay): void {
     if (this.overlay === 'connect' && target !== 'connect') {
       this.authAbort?.abort();
-      if (this.connectState.authChallenge) this.client.cancelProviderAuth(this.connectState.authChallenge.id);
+      if (this.connectState.authChallenge) void this.client.cancelProviderAuth(this.connectState.authChallenge.id);
       this.connectState.secretDraft = '';
     }
     if (this.overlay === 'themes' && target !== 'themes' && this.themeEngine.isPreviewing()) {
@@ -510,7 +510,7 @@ export class FutrynTuiApp {
   public async shutdown(): Promise<void> {
     this.authAbort?.abort();
     this.activeAbortController?.abort();
-    if (this.connectState.authChallenge) this.client.cancelProviderAuth(this.connectState.authChallenge.id);
+    if (this.connectState.authChallenge) await this.client.cancelProviderAuth(this.connectState.authChallenge.id);
     this.connectState.secretDraft = '';
     await Promise.allSettled([this.authTask, this.turnTask]);
   }
@@ -1262,7 +1262,7 @@ export class FutrynTuiApp {
 
   private async handleConnectOverlayKey(key: string): Promise<void> {
     const st = this.connectState;
-    if (st.step === 'oauth' && (key === 'PageDown' || key === 'PageUp')) { st.scrollOffset = Math.max(0, Math.min(40, (st.scrollOffset ?? 0) + (key === 'PageDown' ? 1 : -1))); return; }
+    if (st.authChallenge && (key === 'PageDown' || key === 'PageUp')) { st.scrollOffset = Math.max(0, Math.min(40, (st.scrollOffset ?? 0) + (key === 'PageDown' ? 1 : -1))); return; }
     if (st.step === 'busy') {
       if (key === 'Escape' || key === 'Ctrl+C') {
         this.authAbort?.abort();
@@ -1272,7 +1272,7 @@ export class FutrynTuiApp {
     }
     if (key === 'Escape') {
       this.connectState.secretDraft = '';
-      if (st.authChallenge) this.client.cancelProviderAuth(st.authChallenge.id);
+      if (st.authChallenge) await this.client.cancelProviderAuth(st.authChallenge.id);
       if (st.step === 'provider' || st.step === 'accounts') this.openOverlay('none');
       else if (st.step === 'actions' || st.step === 'confirm' || st.step === 'rename') this.connectState = { ...st, step: 'accounts', query: '', selectedIndex: 0, secretDraft: '' };
       else this.connectState = createInitialConnectProviderState();
@@ -1293,17 +1293,25 @@ export class FutrynTuiApp {
       try {
         if (st.step === 'provider' && chosen) {
           if (chosen.id === '__custom') { next('custom-id'); this.connectState.custom = {}; }
-          else { st.providerId = chosen.id; st.accountId = undefined; next('method'); }
+          else { st.providerId = chosen.id; st.providerLabel = this.client.listIntegrations().find(i => i.provider.id === chosen.id)?.provider.name; st.accountId = undefined; next('method'); }
         } else if (st.step === 'method' && chosen) {
+          if (chosen.id === '__advanced') { st.showAdvanced = !st.showAdvanced; st.selectedIndex = 0; return; }
+          const method = this.client.listIntegrations().find(i => (i.providerIds ?? [i.provider.id]).includes(st.providerId!))?.methods.find(m => m.id === chosen.id);
+          if (method?.available === false) { st.statusMessage = method.diagnostic ?? 'Install the official runtime and retry.'; return; }
           st.method = chosen.id as ConnectProviderState['method'];
+          st.providerId = method?.providerId ?? st.providerId;
           st.authChallenge = undefined;
-          st.aliasDraft = st.accountId ? this.client.listAccounts().find(a => a.id === st.accountId)!.alias : '';
-          next('alias');
-        } else if (st.step === 'alias') {
-          if (!st.aliasDraft.trim()) { st.statusMessage = 'Enter a unique account name.'; return; }
-          if (st.method === 'openrouter-oauth') {
-            const challenge = await this.client.beginProviderAuth(st.providerId!);
+          const baseAlias = st.providerId!.slice(0, 90);
+          const accounts = this.client.listAccounts();
+          let alias = baseAlias; let suffix = 2;
+          while (accounts.some(account => account.alias === alias)) alias = `${baseAlias}-${suffix++}`;
+          st.aliasDraft = st.accountId ? accounts.find(account => account.id === st.accountId)!.alias : alias;
+          if (st.method === 'subscription-browser' || st.method === 'subscription-device') {
+            this.startProviderSignIn(st);
+          } else if (st.method === 'openrouter-oauth') {
+            const challenge = await this.client.beginProviderAuth(st.providerId!, st.method);
             next('oauth'); this.connectState.authChallenge = challenge;
+            if (challenge.autoComplete) this.startConnectionAuthentication(this.connectState);
           } else if (st.method === 'none') this.startConnectionAuthentication(st);
           else next(st.method === 'env' ? 'env' : 'secret');
         } else if (st.step === 'secret' || st.step === 'env' || st.step === 'oauth') {
@@ -1354,7 +1362,7 @@ export class FutrynTuiApp {
       }
       return;
     }
-    const field = st.step === 'provider' || st.step === 'accounts' ? 'query' : st.step === 'alias' ? 'aliasDraft' : st.step === 'secret' || st.step === 'oauth' ? 'secretDraft' : 'draft';
+    const field = st.step === 'provider' || st.step === 'accounts' ? 'query' : st.step === 'secret' || st.step === 'oauth' ? 'secretDraft' : 'draft';
     if (choices.length && st.step !== 'provider' && st.step !== 'accounts') return;
     if (key === 'Backspace') st[field] = st[field].slice(0, -1);
     else if (key.length === 1 && !/[\x00-\x1f\x7f-\x9f]/.test(key)) st[field] = (st[field] + key).slice(0, field === 'secretDraft' ? 8192 : 2048);
@@ -1364,12 +1372,13 @@ export class FutrynTuiApp {
   private saveCustomProvider(st: ConnectProviderState): void {
     const provider = providerSchema.parse({ ...st.custom, metadataVersion: 1, timeoutMs: 60000 });
     this.client.addProvider(provider);
-    this.connectState = { ...st, providerId: provider.id, step: 'method', selectedIndex: 0, draft: '', statusMessage: 'Endpoint saved. Choose authentication.' };
+    this.connectState = { ...st, providerId: provider.id, providerLabel: provider.name, step: 'method', selectedIndex: 0, draft: '', statusMessage: 'Endpoint saved. Choose authentication.' };
   }
 
   private connectionError(error: unknown): string {
     const code = error instanceof HannesError ? error.code : 'INVALID_INPUT';
     const hints: Record<string, string> = {
+      RUNTIME_UNAVAILABLE: 'Install the official Codex, Copilot CLI, Gemini CLI or Qwen Code runtime on PATH for this subscription.',
       AUTH: 'Credential rejected or missing. Reconnect with a valid API key or environment variable.',
       FORBIDDEN: 'Access denied. Check API entitlement, billing and endpoint permissions.',
       STORAGE: 'OS keyring unavailable or storage failed. Unlock the keyring or choose an environment reference. Retry /logout if cleanup failed.',
@@ -1382,6 +1391,26 @@ export class FutrynTuiApp {
       INVALID_INPUT: 'Check the fields and use a unique provider/account name.',
     };
     return `${code}: ${hints[code] ?? 'Provider response was invalid. Check API protocol and model discovery settings.'}`;
+  }
+
+  private startProviderSignIn(st: ConnectProviderState): void {
+    if (this.authAbort) return;
+    const controller = new AbortController();
+    this.authAbort = controller;
+    const starting = this.connectState = { ...st, step: 'busy', statusMessage: 'Opening sign-in…' };
+    this.authTask = (async () => {
+      try {
+        const challenge = await this.client.beginProviderAuth(st.providerId!, st.method, controller.signal);
+        if (controller.signal.aborted || this.overlay !== 'connect' || this.connectState !== starting) {
+          await this.client.cancelProviderAuth(challenge.id); return;
+        }
+        this.authAbort = null;
+        this.connectState = { ...st, step: 'oauth', authChallenge: challenge };
+        await this.authenticateConnection(this.connectState);
+      } catch (error) {
+        if (this.overlay === 'connect' && this.connectState === starting) this.connectState = { ...st, step: 'method', statusMessage: this.connectionError(error) };
+      } finally { if (this.authAbort === controller) this.authAbort = null; }
+    })();
   }
 
   private startConnectionAuthentication(st: ConnectProviderState): void {
@@ -1397,6 +1426,16 @@ export class FutrynTuiApp {
     st.secretDraft = '';
     this.connectState = { ...st, step: 'busy', secretDraft: '', statusMessage: 'Validating connectivity. Esc cancels.' };
     const busyState = this.connectState;
+    const progressTimer = st.authChallenge?.autoComplete ? setInterval(() => {
+      try {
+        const progress = this.client.providerAuthProgress(st.authChallenge!.id);
+        if (this.connectState === busyState && busyState.authChallenge) {
+          if (progress.authorizationURL) busyState.authChallenge.authorizationURL = progress.authorizationURL;
+          busyState.authChallenge.userCode = progress.userCode;
+          busyState.statusMessage = progress.message ?? 'Waiting for provider sign-in. Esc cancels.';
+        }
+      } catch { /* Completion may consume the challenge before the final UI update. */ }
+    }, 150) : null;
     try {
       const account = await this.client.connectAccount({
         providerId: st.providerId!, alias: st.aliasDraft.trim(),
@@ -1412,8 +1451,9 @@ export class FutrynTuiApp {
       this.openOverlay('models');
       this.statusBanner = `Connected ${account.alias}. Choose a model to chat.`;
     } catch (error) {
-      if (this.overlay === 'connect' && this.connectState === busyState) this.connectState = { ...st, authChallenge: undefined, step: 'method', secretDraft: '', selectedIndex: 0, statusMessage: this.connectionError(error) };
+      if (this.overlay === 'connect' && this.connectState === busyState) this.connectState = { ...st, authChallenge: undefined, step: st.method === 'api-key' ? 'secret' : st.method === 'env' ? 'env' : 'method', secretDraft: '', selectedIndex: 0, statusMessage: this.connectionError(error) };
     } finally {
+      if (progressTimer) clearInterval(progressTimer);
       this.authAbort = null;
     }
   }
@@ -1842,7 +1882,11 @@ export class FutrynTuiApp {
 
     // 7. Draw Active Overlay on top of center viewport if open
     if (this.overlay !== 'none') {
-      const overlayWidth = Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
+      if (this.overlay === 'connect') {
+        // A modal backdrop must cover the wider composer and sidebar too.
+        for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
+      }
+      const overlayWidth = this.overlay === 'connect' ? Math.min(cols - 2, 68) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
       const overlayHeight = Math.min(rows - 2, Math.max(12, Math.floor(rows * 0.82)));
       let overlayLines: RenderedBoxLine[] = [];
 
@@ -1974,8 +2018,8 @@ export class FutrynTuiApp {
     const thinking = this.isStreaming ? '● ' : '';
     const leftText = this.statusBanner
       ? ` ${this.statusBanner}`
-      : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
-    const rightText = this.statusBanner ? '' : `ctrl+p lệnh `;
+      : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
+    const rightText = this.statusBanner || this.overlay === 'connect' ? '' : `ctrl+p lệnh `;
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     drawSpansAt(
       rows - 1,

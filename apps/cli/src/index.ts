@@ -13,6 +13,7 @@ import {
 import { providerPresets } from '@hannes/models';
 import { fetchModelsDev, terminalText, validateEndpoint } from '@hannes/security';
 import { SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab } from '@hannes/tui';
+import { loginSubscription } from './subscriptions/login';
 import { loginWizard } from './auth-wizard';
 import { startup, type Application } from './bootstrap/startup';
 import { ChatInput, ask, readSecretStdin, secretInput } from './input';
@@ -27,8 +28,8 @@ const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
         --catalog openai|anthropic|gemini|ollama|manual --auth api-key|none [--stream-usage]
   login --provider <id> (alias of auth login)
   logout [--account <id-or-alias>] | status | doctor
-  auth login --provider <id> --alias <alias> [--env KEY_VARIABLE | --key-stdin]
-    [--method api-key|env|none] [--model <manual-model-id>]
+  auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
+    [--method api-key|env|none|subscription-browser|subscription-device] [--model <manual-model-id>]
   auth list | methods | status [--account <id-or-alias>] | logout --account <id-or-alias>
     login --account <existing-id-or-alias> reauthenticates and preserves its stable ID.
   accounts list | use <id-or-alias> | rename <id-or-alias> --alias <new> | remove <id-or-alias>
@@ -53,8 +54,11 @@ Canonical TUI commands: /login (/connect), /logout, /model (/models), /status,
   /config (/settings), /permissions, /mcp, /plugin, /theme (/themes), /resume,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start FUTRYN: bun run futryn. Existing administration commands remain supported.
-OpenRouter OAuth PKCE is available in /login and the guided chat wizard. Consumer
-subscription/delegated-agent logins are not implemented; use provider API access. Local logout does not revoke API keys remotely.
+Sign in via /login: one row per vendor, then subscription or API key. Account names
+are automatic. Official subscription runtimes: Codex, Copilot CLI, Gemini CLI and
+Qwen Code (installed-version and account access required). Claude subscription
+sign-in requires Anthropic approval. OpenRouter OAuth uses OpenRouter API credits.
+Local logout deletes FUTRYN credentials; remote revocation is provider-managed.
 `;
 
 const stringOptions = [
@@ -119,11 +123,11 @@ async function check(app: Application, account: Account, signal: AbortSignal, ge
 }
 
 async function login(app: Application, options: Options, signal: AbortSignal) {
-  if (str(options, 'method') && !['env', 'api-key', 'none'].includes(str(options, 'method')!)) {
+  if (str(options, 'method') && !['env', 'api-key', 'none', 'subscription-browser', 'subscription-device'].includes(str(options, 'method')!)) {
     throw new HannesError('UNSUPPORTED');
   }
   const existing = str(options, 'account') ? app.accounts.get(str(options, 'account')!) : undefined;
-  const providerId =
+  let providerId =
     str(options, 'provider') ??
     existing?.providerId ??
     (await ask('Provider ID (openai, anthropic, gemini, openrouter, ollama or configured gateway)'));
@@ -134,7 +138,22 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
     if (!preset) throw new HannesError('NOT_FOUND');
     provider = app.registry.add(preset);
   }
-  const alias = str(options, 'alias') ?? existing?.alias ?? (await ask('Account alias'));
+  const requestedMethod = str(options, 'method');
+  const group = app.integrations.list().find(i => (i.providerIds ?? [i.provider.id]).includes(provider!.id));
+  const target = group?.methods.find(method => method.id === requestedMethod)?.providerId;
+  if (target && target !== provider.id) {
+    if (existing) throw new HannesError('POLICY');
+    providerId = target;
+    provider = app.registry.list().find(p => p.id === target) ?? app.registry.add(app.integrations.get(target).provider);
+  }
+  let alias = str(options, 'alias') ?? existing?.alias ?? provider.id.slice(0, 90);
+  if (!str(options, 'alias') && !existing) { let suffix = 2; while (app.accounts.list().some(account => account.alias === alias)) alias = `${provider.id.slice(0, 90)}-${suffix++}`; }
+  if (provider.runtime) {
+    if (options['key-stdin'] || str(options, 'env') || (requestedMethod && !['subscription-browser', 'subscription-device'].includes(requestedMethod))) fail();
+    const account = await loginSubscription(app, provider, alias, signal, existing, str(options, 'method') === 'subscription-device');
+    output(app, { accountId: account.id, alias: account.alias, status: account.status }, !!options.json);
+    return account;
+  }
   const method =
     str(options, 'method') ?? (str(options, 'env') ? 'env' : provider.auth === 'none' ? 'none' : 'api-key');
   if (!['env', 'api-key', 'none'].includes(method)) throw new HannesError('UNSUPPORTED');
@@ -447,7 +466,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           }
           output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null });
         } else if (text === '/models') {
-          output(app, await app.catalog(app.resolveAccount()).discover(signal));
+          output(app, await app.discoverModels(app.resolveAccount(), signal));
         } else if (text === '/accounts' || text.startsWith('/accounts ')) {
           output(app, accountView(app));
           const selected = text.startsWith('/accounts ')
@@ -629,14 +648,14 @@ async function main() {
           app,
           {
             integrations: app.integrations.list().map(i => ({ provider: i.provider.id, methods: i.methods, notice: i.notice })),
-            unsupportedRawSubscriptionAuth: ['ChatGPT/Codex', 'Claude subscription', 'Gemini CLI subscription', 'GitHub Copilot', 'Qwen Code subscription'],
-            alternative: 'Use API credentials. Official delegated CLIs/SDKs require separate Hannes permission mediation; not implemented.',
+            unsupportedSubscriptionMethods: [{ provider: 'Claude', reason: 'Third-party subscription sign-in requires Anthropic approval; use API access.' }],
+            note: 'Subscription methods use isolated official runtime profiles. Runtime prerequisites and account entitlements apply.',
           },
           !!options.json,
         );
       } else if (action === 'status') {
         const a = account();
-        const present = a.status !== 'logged-out' && (a.credential.kind === 'none' || !!(await app.vault.get(a.credential)));
+        const present = a.status !== 'logged-out' && (a.credential.kind === 'none' || (a.credential.kind === 'runtime' ? !!(await app.vault.getRuntime?.(a.credential)) : !!(await app.vault.get(a.credential))));
         output(
           app,
           {
@@ -675,7 +694,7 @@ async function main() {
       } else {
         const result = options.offline
           ? { models: catalog.cached(), stale: true, warning: 'Offline cache; availability unverified.' }
-          : await progress('Discovering models', () => catalog.discover(controller.signal));
+          : await progress('Discovering models', () => app.discoverModels(a, controller.signal));
         let models = action === 'search' ? catalog.search(argument ?? '', result.models) : result.models;
         const capability = str(options, 'capability');
         if (capability) {
@@ -704,7 +723,7 @@ async function main() {
           check: await progress('Diagnosing connection', () => check(app, a, controller.signal, !!options.generate)),
           fallback: 'disabled',
           tools: 'disabled',
-          subscriptionAuth: 'not-implemented',
+          subscriptionAuth: app.registry.get(a.providerId).runtime ?? 'api-key',
         },
         !!options.json,
       );
@@ -724,6 +743,7 @@ async function main() {
   } finally {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
+    await app.subscriptions.shutdown();
     app.db.close();
   }
 }

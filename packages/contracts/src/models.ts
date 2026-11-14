@@ -1,10 +1,12 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.1' as const;
+export const CONTRACT_VERSION = '1.2' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
 export const modelIdSchema = z.string().min(1).max(200).regex(/^[\w~./:@+-]+$/);
+export const subscriptionRuntimeSchema = z.enum(['codex', 'copilot', 'gemini-cli', 'qwen-code']);
+export type SubscriptionRuntime = z.infer<typeof subscriptionRuntimeSchema>;
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
 export const providerSchema = z.strictObject({
   id: idSchema, name: z.string().min(1).max(100).regex(/^[^\x00-\x1f\x7f]+$/),
@@ -12,22 +14,39 @@ export const providerSchema = z.strictObject({
   auth: z.enum(['api-key', 'none']), catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
   metadataVersion: z.literal(1), timeoutMs: z.number().int().min(100).max(300000).default(60000),
   streamUsage: z.boolean().optional(),
+  runtime: subscriptionRuntimeSchema.optional(),
+  family: idSchema.optional(),
 });
 export type Provider = z.infer<typeof providerSchema>;
 
 /** Registry metadata is introduced in contract 1.1; no credential bytes cross this boundary. */
 export interface AuthMethod {
-  id: 'api-key' | 'env' | 'none' | 'openrouter-oauth';
+  id: 'api-key' | 'env' | 'none' | 'openrouter-oauth' | 'subscription-browser' | 'subscription-device';
   name: string;
   description: string;
+  providerId?: string;
+  advanced?: boolean;
+  available?: boolean;
+  diagnostic?: string;
+  autoComplete?: boolean;
 }
 export interface ProviderAuthChallenge {
   id: string;
   authorizationURL: string;
   expiresAt: string;
+  autoComplete?: boolean;
+  userCode?: string;
+  message?: string;
+}
+export interface ProviderAuthProgress {
+  state: 'pending' | 'ready' | 'failed';
+  authorizationURL?: string;
+  userCode?: string;
+  message?: string;
 }
 export interface Integration {
   provider: Provider;
+  providerIds?: string[];
   methods: AuthMethod[];
   notice: string;
 }
@@ -36,6 +55,7 @@ export const credentialRefSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('keyring'), key: z.string().uuid() }),
   z.strictObject({ kind: z.literal('env'), name: z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/) }),
   z.strictObject({ kind: z.literal('none') }),
+  z.strictObject({ kind: z.literal('runtime'), key: z.string().uuid(), runtime: subscriptionRuntimeSchema }),
 ]);
 export type CredentialRef = z.infer<typeof credentialRefSchema>;
 export const accountSchema = z.strictObject({
@@ -87,6 +107,8 @@ export interface CredentialVault {
   get(ref: CredentialRef): Promise<string | undefined>;
   set(key: string, secret: string): Promise<void>;
   delete(ref: CredentialRef): Promise<void>;
+  setRuntime?(key: string, payload: string): Promise<void>;
+  getRuntime?(ref: Extract<CredentialRef, {kind: 'runtime'}>): Promise<string | undefined>;
 }
 export interface NetworkPolicy { authorize(provider: Provider, account: Account): void }
 export const cacheSchema = z.strictObject({
@@ -273,8 +295,12 @@ export const settingsSchema = z.strictObject({
   const unique = (values: string[]) => new Set(values).size === values.length;
   const validAccount = (id: string) => settings.accounts.some(a => a.id === id && a.status !== 'logged-out');
   if (!unique(settings.providers.map(p => p.id)) || !unique(settings.accounts.map(a => a.id)) || !unique(settings.accounts.map(a => a.alias)) || !unique(settings.catalogs.map(c => c.accountId))) ctx.addIssue({ code: 'custom', message: 'Duplicate identity' });
-  const keys = settings.accounts.flatMap(a => a.credential.kind === 'keyring' ? [a.credential.key] : []);
+  const keys = settings.accounts.flatMap(a => (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') ? [a.credential.key] : []);
   if (!unique(keys) || settings.accounts.some(a => !settings.providers.some(p => p.id === a.providerId)) || settings.catalogs.some(c => !settings.accounts.some(a => a.id === c.accountId))) ctx.addIssue({ code: 'custom', message: 'Invalid identity reference' });
+  if (settings.accounts.some(account => {
+    const provider = settings.providers.find(p => p.id === account.providerId);
+    return provider?.runtime ? account.credential.kind !== 'runtime' || account.credential.runtime !== provider.runtime : account.credential.kind === 'runtime';
+  })) ctx.addIssue({ code: 'custom', message: 'Runtime credential does not match provider' });
   if ((settings.activeAccountId && !validAccount(settings.activeAccountId)) || (settings.selection && !validAccount(settings.selection.accountId)) || Object.values(settings.projects).some(p => !validAccount(p.accountId))) ctx.addIssue({ code: 'custom', message: 'Invalid selection' });
 });
 export type Settings = z.infer<typeof settingsSchema>;

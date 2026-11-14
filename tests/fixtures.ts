@@ -4,7 +4,9 @@ export const memoryVault = (): CredentialVault & { values: Map<string, string> }
   values: new Map(),
   async get(ref) { return ref.kind === 'keyring' ? this.values.get(ref.key) : ref.kind === 'env' ? process.env[ref.name] : undefined; },
   async set(key, value) { this.values.set(key, value); },
-  async delete(ref) { if (ref.kind === 'keyring') this.values.delete(ref.key); },
+  async setRuntime(key, value) { this.values.set(key, value); },
+  async getRuntime(ref) { return this.values.get(ref.key); },
+  async delete(ref) { if (ref.kind === 'keyring' || ref.kind === 'runtime') this.values.delete(ref.key); },
 });
 export function fixtureServer() {
   const requests: { path: string; body: any; authorization: string | null; apiKey: string | null }[] = [];

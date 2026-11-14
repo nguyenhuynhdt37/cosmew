@@ -9,6 +9,7 @@ import {
   type Account,
   type Integration,
   type ProviderAuthChallenge,
+  type ProviderAuthProgress,
   type AppearanceConfig,
   type CredentialRef,
   type Message,
@@ -68,9 +69,12 @@ export interface FutrynBackendPorts {
   workspace: string;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
-  beginProviderAuth?(providerId: string): Promise<ProviderAuthChallenge>;
+  beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
   completeProviderAuth?(providerId: string, challengeId: string, code: string, signal?: AbortSignal): Promise<string>;
-  cancelProviderAuth?(challengeId: string): void;
+  cancelProviderAuth?(challengeId: string): void | Promise<void>;
+  providerAuthProgress?(challengeId: string): ProviderAuthProgress;
+  completeSubscriptionAuth?(providerId: string, challengeId: string, signal?: AbortSignal): Promise<CredentialRef>;
+  discardSubscriptionCredential?(ref: CredentialRef): Promise<void>;
   listProviders(): Provider[];
   listProviderPresets(): Provider[];
   addProvider(provider: Provider): Provider;
@@ -228,12 +232,16 @@ export class FutrynClient {
   }
 
   // Providers, Accounts & Models
-  async beginProviderAuth(providerId: string): Promise<ProviderAuthChallenge> {
+  async beginProviderAuth(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge> {
     if (!this.ports.beginProviderAuth) throw new HannesError('UNSUPPORTED');
-    return this.ports.beginProviderAuth(providerId);
+    return this.ports.beginProviderAuth(providerId, methodId, signal);
   }
 
-  cancelProviderAuth(challengeId: string): void { this.ports.cancelProviderAuth?.(challengeId); }
+  async cancelProviderAuth(challengeId: string): Promise<void> { await this.ports.cancelProviderAuth?.(challengeId); }
+  providerAuthProgress(challengeId: string): ProviderAuthProgress {
+    if (!this.ports.providerAuthProgress) throw new HannesError('UNSUPPORTED');
+    return this.ports.providerAuthProgress(challengeId);
+  }
 
   listIntegrations(): Integration[] {
     return this.ports.listIntegrations?.() ?? [];
@@ -268,16 +276,21 @@ export class FutrynClient {
     }
     if (signal?.aborted) throw new HannesError('CANCELLED');
     let account: Account | undefined;
+    let runtimeCredential: CredentialRef | undefined;
     try {
+      let credential = input.credential;
       let secret = input.secret;
-      if (input.authChallengeId) {
+      if (input.authChallengeId && this.ports.listProviders().find(p => p.id === input.providerId)?.runtime) {
+        if (!this.ports.completeSubscriptionAuth) throw new HannesError('UNSUPPORTED');
+        credential = runtimeCredential = await this.ports.completeSubscriptionAuth(input.providerId, input.authChallengeId, signal);
+      } else if (input.authChallengeId) {
         if (!this.ports.completeProviderAuth || !input.authorizationCode || input.credential.kind !== 'keyring') throw new HannesError('UNSUPPORTED');
         secret = await this.ports.completeProviderAuth(input.providerId, input.authChallengeId, input.authorizationCode, signal);
       }
       if (input.reauthenticateAccountId && this.ports.getAccount(input.reauthenticateAccountId).providerId !== input.providerId) throw new HannesError('POLICY');
       account = input.reauthenticateAccountId
-        ? await this.ports.reauthenticateAccount(input.reauthenticateAccountId, input.credential, secret)
-        : await this.ports.addAccount(input.providerId, input.alias, input.credential, secret);
+        ? await this.ports.reauthenticateAccount(input.reauthenticateAccountId, credential, secret)
+        : await this.ports.addAccount(input.providerId, input.alias, credential, secret);
       if (signal?.aborted) throw new HannesError('CANCELLED');
       if (input.manualModelId) this.ports.addManualModel(account, input.manualModelId);
       if (input.validate !== false) await this.ports.validateAccount(this.ports.getAccount(account.id), signal);
@@ -294,6 +307,7 @@ export class FutrynClient {
       // A failed or cancelled login cannot leave a usable credential behind.
       // Failed cleanup is surfaced so the account remains retryable via /logout.
       if (account) await this.ports.logoutAccount(account.id, !input.reauthenticateAccountId);
+      else if (runtimeCredential) await this.ports.discardSubscriptionCredential?.(runtimeCredential);
       throw error;
     }
   }

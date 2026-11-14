@@ -38,7 +38,7 @@ export class SecureVault implements CredentialVault {
   async get(reference: CredentialRef): Promise<string | undefined> {
     try {
       const ref = credentialRefSchema.parse(reference);
-      const secret = ref.kind === 'none' ? undefined : ref.kind === 'env' ? this.environment[ref.name] : (await (await this.entry(ref.key)).getPassword()) ?? undefined;
+      const secret = ref.kind === 'runtime' ? undefined : ref.kind === 'none' ? undefined : ref.kind === 'env' ? this.environment[ref.name] : (await (await this.entry(ref.key)).getPassword()) ?? undefined;
       if (secret && (secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret))) throw new HannesError('AUTH');
       if (secret) this.redactor.register(secret);
       return secret;
@@ -50,8 +50,32 @@ export class SecureVault implements CredentialVault {
     try { credentialRefSchema.parse({ kind: 'keyring', key }); await (await this.entry(key)).setPassword(secret); }
     catch { throw new HannesError('STORAGE'); }
   }
+  async setRuntime(key: string, payload: string): Promise<void> {
+    if (Buffer.byteLength(payload) > 65536) throw new HannesError('INVALID_INPUT');
+    try {
+      credentialRefSchema.parse({ kind: 'keyring', key });
+      const data = JSON.parse(payload);
+      if (data.version !== 1 || typeof data.files !== 'object') throw new HannesError('INVALID_INPUT');
+      this.registerRuntimeSecrets(data);
+      await (await this.entry(key)).setPassword(payload);
+    } catch (error) { if (error instanceof HannesError) throw error; throw new HannesError('STORAGE'); }
+  }
+  private registerRuntimeSecrets(value: unknown): void {
+    if (typeof value === 'string') {
+      this.redactor.register(value);
+      try { this.registerRuntimeSecrets(JSON.parse(value)); } catch { /* opaque string */ }
+    } else if (value && typeof value === 'object') for (const v of Object.values(value)) this.registerRuntimeSecrets(v);
+  }
+  async getRuntime(ref: Extract<CredentialRef, {kind: 'runtime'}>): Promise<string | undefined> {
+    try {
+      credentialRefSchema.parse(ref);
+      const payload = (await (await this.entry(ref.key)).getPassword()) ?? undefined;
+      if (payload) { if (Buffer.byteLength(payload) > 65536) throw new HannesError('STORAGE'); this.registerRuntimeSecrets(JSON.parse(payload)); }
+      return payload;
+    } catch { throw new HannesError('STORAGE'); }
+  }
   async delete(ref: CredentialRef): Promise<void> {
-    try { if (ref.kind === 'keyring') await (await this.entry(ref.key)).deleteCredential(); }
+    try { if (ref.kind === 'keyring' || ref.kind === 'runtime') await (await this.entry(ref.key)).deleteCredential(); }
     catch { throw new HannesError('STORAGE'); }
   }
 }

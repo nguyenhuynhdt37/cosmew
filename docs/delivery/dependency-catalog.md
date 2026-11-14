@@ -106,3 +106,16 @@ Registry evidence is read directly from https://registry.npmjs.org; exact versio
 ### Tool schema validation correction
 
 Selected `ajv` 8.20.0, MIT, https://github.com/ajv-validator/ajv.git, registry inspected 2026-11-14. A negative fixture demonstrated that passing bare JSON Schema to AI SDK jsonSchema does not itself guarantee tool input validation. Ajv performs explicit synchronous draft-07 validation at the adapter boundary. Disable mutation/coercion/default insertion, disallow async validation, no compileAsync/loadSchema or external reference loading. Compilation can execute generated code and expensive hostile schemas remain a resource risk; descriptors are bounded and only supplied by trusted application ports in this slice (no plugins/tools enabled). Pure JS, Bun verified by tests; no install hooks or native ABI. Transitives: fast-deep-equal, fast-uri, json-schema-traverse, require-from-string; lock/inventory reviewed. No provenance attestation advertised for Ajv.
+
+## SUB1: external official provider runtimes (2026-11-14)
+
+No new npm dependency/install or lockfile change. Provider transport integration uses Node/Bun built-ins and user-installed official CLIs. This inventory evaluates executable prerequisites; presence is not subscription access.
+
+| Runtime | Version/source inspected | License/provenance | Bun/OS and threat surface |
+|---|---|---|---|
+| OpenAI Codex CLI | Installed 0.167.0; official app-server schemas | Official OpenAI distribution; open-source core Apache-2.0, [source](https://github.com/openai/codex) | External process, not a Bun module. Native macOS arm64 initialization observed; OAuth file/profile, callbacks, network and builtin tools require explicit controls. |
+| GitHub Copilot CLI | Installed 1.0.107, RPC protocol 3; current SDK source | Official GitHub CLI distribution governed by GitHub terms; SDK source MIT does not relicense the CLI. [SDK](https://github.com/github/copilot-sdk) | External process. Native macOS initialization observed. Fixed argv, no updates, private home/keytar disabled, empty tools/config discovery disabled. |
+| Google Gemini CLI | Official source commit 4ed06ed0ddc523a6d356a4ad35ddfea331041888; source version 0.70.0-nightly.20261110.g1603e9bab | Google official repository, Apache-2.0 | External Node >=20 CLI; not installed here. Needs installed-version/OS acceptance. Browser auth, credential files and tools must remain isolated/denied. |
+| Qwen Code CLI | Official source commit dab5253c628be736c8fdd43c9d9e36e8d1e9ff00; source version 0.27.2 | Official QwenLM repository, Apache-2.0 source headers | External Node >=22 CLI; not installed here. Needs installed-version/OS acceptance, including OAuth advertisement inconsistency and exact deny semantics. |
+
+Never automatically fetch arbitrary executables or forward workspace access just because these are separate processes. See [ADR 0008](../adr/0008-subscription-runtime-auth.md) and [security/evidence](subscription-auth.md).

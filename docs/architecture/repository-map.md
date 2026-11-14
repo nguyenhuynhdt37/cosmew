@@ -311,3 +311,6 @@ New package-internal files are private; all cross-package imports use `@hannes/<
 - `tests/security/provider-oauth.test.ts`, `tests/end-to-end/provider-connect.test.ts`: OAuth security, full connection/account/model lifecycle and actual PTY acceptance fixtures.
 
 No package ownership/dependency edge changed. See [ADR 0007](../adr/0007-provider-connect-and-commands.md) and [evidence](../delivery/provider-connect-acceptance.md).
+
+
+SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-side official runtime lifecycle and line UX; `packages/security/src/subscription-policy.ts` owns fixed recipes and denied capabilities; `packages/persistence/src/runtime-profile.ts` owns private temporary/profile writes; `packages/models/src/subscription.ts` adapts the injected transport to ModelPort. No new package edge. [ADR 0008](../adr/0008-subscription-runtime-auth.md).
