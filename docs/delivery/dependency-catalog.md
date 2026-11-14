@@ -83,3 +83,26 @@ Tra trực tiếp npm registry `dist-tags.latest` ngày 2026-11-13, ngoại tr�
 | 9Router | [npm](https://www.npmjs.com/package/9router), [GitHub org](https://github.com/9router), [decolua/9router](https://github.com/decolua/9router) |
 
 **Cần xác minh tiếp:** OS/đóng gói; Bun support riêng cho LSP/JSON-RPC, exporters, parser và TUI; MCP transport/auth; nhu cầu OpenCode plugin; Cordis fork; ý nghĩa “9Router”; compiler/test toolchain. Không có dependency nào được pin ở đây.
+
+## PA1 evaluated selection (2026-11-14)
+
+Registry evidence is read directly from https://registry.npmjs.org; exact versions below are selected before installation. Bun runtime 1.4.4 is installed in a temporary tools prefix, not globally. SDK packages require Node >=22 APIs; Bun interoperability must pass this slice tests, not assumed from imports. No install scripts for workspace dependencies.
+
+| Package | Version | License | Provenance | Threat/compatibility review |
+|---|---|---|---|---|
+| `bun` | 1.4.4 | MIT | git+https://github.com/oven-sh/bun.git; registry integrity recorded in lock; no registry attestation advertised | Dev/runtime toolchain; runs local code; platform binaries require trusted registry integrity |
+| `typescript` | 7.0.2 | Apache-2.0 | git+https://github.com/microsoft/TypeScript.git; registry integrity recorded in lock; no registry attestation advertised | Dev/runtime toolchain; runs local code; platform binaries require trusted registry integrity |
+| `@types/bun` | 1.4.4 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git; registry integrity recorded in lock; no registry attestation advertised | Dev/runtime toolchain; runs local code; platform binaries require trusted registry integrity |
+| `ai` | 7.0.173 | Apache-2.0 | https://github.com/vercel/ai; registry integrity recorded in lock; SLSA attestation advertised | HTTP generation parser accesses prompts/keys; disable retries/telemetry and gate target; test Bun fetch/streams/cancel |
+| `@ai-sdk/openai` | 4.0.118 | Apache-2.0 | https://github.com/vercel/ai; registry integrity recorded in lock; SLSA attestation advertised | HTTP generation parser accesses prompts/keys; disable retries/telemetry and gate target; test Bun fetch/streams/cancel |
+| `@ai-sdk/anthropic` | 4.0.105 | Apache-2.0 | https://github.com/vercel/ai; registry integrity recorded in lock; SLSA attestation advertised | HTTP generation parser accesses prompts/keys; disable retries/telemetry and gate target; test Bun fetch/streams/cancel |
+| `@ai-sdk/google` | 4.0.121 | Apache-2.0 | https://github.com/vercel/ai; registry integrity recorded in lock; SLSA attestation advertised | HTTP generation parser accesses prompts/keys; disable retries/telemetry and gate target; test Bun fetch/streams/cancel |
+| `@ai-sdk/openai-compatible` | 3.0.92 | Apache-2.0 | https://github.com/vercel/ai; registry integrity recorded in lock; SLSA attestation advertised | HTTP generation parser accesses prompts/keys; disable retries/telemetry and gate target; test Bun fetch/streams/cancel |
+| `zod` | 4.6.7 | MIT | git+https://github.com/colinhacks/zod.git; registry integrity recorded in lock; SLSA attestation advertised | Pure JS/TS schemas; no credential/network access on import |
+| `@napi-rs/keyring` | 2.1.2 | MIT | git+https://github.com/Brooooooklyn/keyring-node.git; registry integrity recorded in lock; SLSA attestation advertised | Native N-API binary accesses OS credential store; supported OS backends differ, no plaintext fallback; verify macOS locally |
+
+`@opencode/ai` 2.3.0 (MIT, SLSA advertised) evaluated but not installed: Effect 4.1.0, @opencode/schema, AWS credential providers, Google auth and media protocols broaden dependency/security surface. Vercel package licenses are Apache-2.0 in the selected npm artifacts (root repo license detection is not sufficient). @napi-rs/keyring includes platform optional binary packages; Bun supports N-API but OS credential backend availability is not guaranteed. Env-reference mode is the explicit portable alternative; no secret values in settings. Transitive lock inventory and audit are reviewed after resolution.
+
+### Tool schema validation correction
+
+Selected `ajv` 8.20.0, MIT, https://github.com/ajv-validator/ajv.git, registry inspected 2026-11-14. A negative fixture demonstrated that passing bare JSON Schema to AI SDK jsonSchema does not itself guarantee tool input validation. Ajv performs explicit synchronous draft-07 validation at the adapter boundary. Disable mutation/coercion/default insertion, disallow async validation, no compileAsync/loadSchema or external reference loading. Compilation can execute generated code and expensive hostile schemas remain a resource risk; descriptors are bounded and only supplied by trusted application ports in this slice (no plugins/tools enabled). Pure JS, Bun verified by tests; no install hooks or native ABI. Transitives: fast-deep-equal, fast-uri, json-schema-traverse, require-from-string; lock/inventory reviewed. No provenance attestation advertised for Ajv.

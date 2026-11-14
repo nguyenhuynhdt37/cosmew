@@ -1,0 +1,28 @@
+{
+  "name": "hannes",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.4",
+  "workspaces": [
+    "apps/cli",
+    "packages/contracts",
+    "packages/core",
+    "packages/models",
+    "packages/security",
+    "packages/persistence"
+  ],
+  "scripts": {
+    "hannes": "bun apps/cli/src/index.ts",
+    "test": "bun test tests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/bun": "1.4.4",
+    "@hannes/contracts": "workspace:*",
+    "@hannes/security": "workspace:*",
+    "@hannes/persistence": "workspace:*",
+    "@hannes/models": "workspace:*",
+    "@hannes/core": "workspace:*"
+  }
+}

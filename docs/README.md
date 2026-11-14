@@ -1,6 +1,8 @@
 # Điều hướng đặc tả Hannes
 
-**Documentation-only, Phase 0. Tất cả tính năng: Not implemented.** Source placeholders không có declarations hay implementation. Đọc [quy tắc agents](../AGENTS.md) trước khi thay đổi repository. Nghiên cứu thực hiện 2026-11-13; tổng hợp/quality gate 2026-11-14. Không install/build/lint/test/start application trong Phase 0.
+> PA1 implementation is authorized: [plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
+
+**Historical Phase 0 baseline follows.** The PA1 implementation and evidence are linked below; unrelated subsystems remain Not implemented. Đọc [quy tắc agents](../AGENTS.md) trước khi thay đổi repository. Nghiên cứu thực hiện 2026-11-13; tổng hợp/quality gate 2026-11-14. Không install/build/lint/test/start application trong Phase 0.
 
 ## Đường đọc cho người triển khai
 
@@ -58,3 +60,11 @@ Tất cả hàng truy cập 2026-11-13; nghiên cứu current-library docs dùng
 Kiểm kê toàn cây và map đúng 118 source placeholders; kiểm 0 byte cho source/.gitkeep, Markdown có nội dung và links nội bộ tồn tại; kiểm không có manifests/configs/lockfiles/dependencies/binaries/artifacts/implementation. Nội dung từng subsystem có 13 mục; contracts có fields/invariants/versioning; compatibility rows đều Not implemented. Đây là kiểm tra tài liệu/filesystem, không test suite. Không tiếp tục Phase 1 sau scaffold.
 
 Kết quả kiểm kê 2026-11-14: **77 thư mục con (78 nếu tính root), 118 source files 0 byte, 13 .gitkeep 0 byte, 41 Markdown có nội dung; tổng 172 files**. Không phát hiện link nội bộ trỏ tới file thiếu, file ngoài loại được phép hoặc credential pattern trong Markdown. Mỗi subsystem có đủ 13 mục; repository-map bao phủ đúng tập 118 source files. Không thực thi build/lint/tests/application hay cài packages; kết quả này chỉ xác nhận scaffold và documentation, không xác nhận runtime behavior.
+
+
+## Provider & Authentication PA1
+
+- [Audit and implementation plan](delivery/provider-auth-plan.md), [decision ADR](adr/0005-provider-auth-product.md).
+- [Upstream comparison](delivery/provider-auth-research.md), [resolved dependency inventory](delivery/provider-auth-dependencies.md).
+- [CLI/authentication usage](subsystems/providers-and-auth.md), [implemented contract](contracts/model-provider.md).
+- [Provider/auth support matrix](compatibility/providers-auth-matrix.md), [security review](delivery/provider-auth-security-review.md), [acceptance report](delivery/provider-auth-acceptance.md).

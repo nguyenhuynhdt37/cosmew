@@ -1,5 +1,7 @@
 # Bản đồ repository và ownership
 
+> Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.
+
 **Not implemented.** Mỗi đường dẫn dưới đây là placeholder source 0 byte; mô tả là trách nhiệm dự kiến. `index.ts` là public entry tương lai; mọi file khác private trừ ADR công bố subpath. TUI app.tsx là UI entry, không API dùng cho core. Import allowlist chính xác nằm tại [dependency rules](dependency-rules.md); owner trong bảng không cho phép package khác deep-import.
 
 ## Public/private và thay đổi cần ADR
@@ -279,3 +281,20 @@ ADR bắt buộc cho: public schema/semantics/version, dependency edge mới, sh
 | .github/workflows/.gitkeep | Chỉ placeholder, chưa có CI workflow/deployment |
 
 Không có package.json, tsconfig, lockfile, dependencies hoặc build artifacts. Cây baseline được giữ nguyên; audit/observability/event bus không tạo package mới: ports ở contracts, implementation ownership theo [system overview](system-overview.md). Context có đặc tả riêng tại [context and memory](../subsystems/context-and-memory.md); telemetry tại [observability](../subsystems/observability.md).
+
+
+## PA1 implemented ownership overlay
+
+The Phase 0 file table above is retained as the original roadmap. Actual nonempty source in this slice is limited to the following owners; other placeholders remain empty.
+
+| Owner | Implemented files / responsibility |
+|---|---|
+| contracts | index/models/events/sessions: public schemas, safe errors, model/vault/policy/config/conversation ports |
+| models | index/registry/accounts/catalog/http/adapter/router: registry, account lifecycle through injected ports, discovery/cache/manual/advisory metadata, gated transport, SDK normalization and explicit selection |
+| security | index/secrets/policies: OS keyring and environment resolution, redaction before transcript/UI, endpoint/account policy |
+| persistence | index/database/session-store: private SQLite schema 1, transactional settings/cache and transcript revision writes |
+| core | index and agent/engine: injected model-only Conversation, pending/complete/interrupted state; no SDK imports or tools |
+| apps/cli | index/input/bootstrap/startup: command parsing, hidden secret input, actual command workflows and root wiring |
+| tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
+
+New package-internal files are private; all cross-package imports use `@hannes/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).

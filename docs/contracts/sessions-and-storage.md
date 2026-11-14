@@ -1,5 +1,7 @@
 # Sessions và storage contracts
 
+> PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
+
 **Đề xuất v1; Not implemented.** Persistence là owner mọi SQLite write; core chỉ gọi transaction ports. Không có schema SQL/migration implementation trong Phase 0.
 
 | Entity | Fields dự kiến | Invariant |

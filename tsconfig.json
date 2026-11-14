@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [
+      "bun"
+    ],
+    "allowImportingTsExtensions": true,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    "packages/contracts/src/**/*.ts",
+    "packages/core/src/**/*.ts",
+    "packages/models/src/**/*.ts",
+    "packages/security/src/**/*.ts",
+    "packages/persistence/src/**/*.ts",
+    "apps/cli/src/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
+  ]
+}

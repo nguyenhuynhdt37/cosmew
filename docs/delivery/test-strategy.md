@@ -23,3 +23,10 @@ Failure matrix bắt buộc: provider drop trước/sau tool fragments; store di
 Determinism: seeded generators, fake clocks cho retries, event cursors và writer epochs. Integration tests dùng temporary workspaces và disposable identities, never production secrets. Live provider tests opt-in/capped budget và redacted recordings; fixture captures không chứa auth headers hoặc private repository content.
 
 Runner chưa chọn giữa Bun Test/Vitest; Bun native/parser/TUI và SDK/OAuth phải có interoperability probes trước pin. Playwright chỉ cho web/desktop-renderer surfaces phù hợp, không thay native terminal/OS sandbox tests. Coverage percent không là exit gate; bắt buộc mapped invariants, negative tests và unresolved-risk report. Các gate từng phase ở [roadmap](implementation-roadmap.md); feature status chỉ cập nhật sau implementation và evidence review.
+
+
+## Executable PA1 evidence
+
+Provider/auth tests now run with Bun 1.4.4 (`bun test tests`); typecheck is separate (`bun run typecheck`). Contract tests cover strict schemas, registry, account selection/rotation, metadata, actual deterministic HTTP adapters and routing. Security tests cover failure/secret/redirect/partial-stream cases. End-to-end tests launch the actual CLI as subprocesses, including streaming before terminal completion, SIGINT exit 130, multiple native protocols and account isolation. Optional `HANNES_TEST_KEYRING=1` runs the real OS credential backend; ordinary CI does not pretend an in-memory test vault proves keychain compatibility. Production never imports the test memory vault.
+
+The opt-in public catalog script contacts OpenRouter and Models.dev only; it is not generation/auth evidence. Live paid API smoke tests use `model doctor --generate` with user-supplied real API credentials and record provider/model/date/runtime without prompts/keys. [Acceptance evidence](provider-auth-acceptance.md) gives exact counts and blocked live checks. No tests for other planned subsystems are claimed implemented.

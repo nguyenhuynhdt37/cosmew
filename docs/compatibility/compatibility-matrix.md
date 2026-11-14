@@ -1,5 +1,7 @@
 # Compatibility matrix
 
+> PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
+
 Tất cả status là **Not implemented**. Target version là phạm vi cần pin để viết fixtures, không là cam kết support. `Needs verification` áp dụng cho exact pin/interoperability khi chưa có bằng chứng. Acceptance tests dưới đây chưa chạy.
 
 | Ecosystem | Capability | Target version | Strategy | Status | Acceptance test |

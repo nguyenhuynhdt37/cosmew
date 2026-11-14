@@ -1,0 +1,16 @@
+{
+  "name": "@hannes/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hannes": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hannes/contracts": "workspace:*",
+    "@hannes/core": "workspace:*",
+    "@hannes/models": "workspace:*",
+    "@hannes/security": "workspace:*",
+    "@hannes/persistence": "workspace:*"
+  }
+}

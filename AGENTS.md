@@ -1,7 +1,8 @@
 # Quy tắc cho coding agents
 
-Repository đang ở **Phase 0: documentation-only**. Chỉ tạo thư mục, source `.ts`/`.tsx` 0 byte, `.gitkeep` 0 byte và Markdown có nội dung. Không thêm implementation, declarations, imports, TODO comments, tests có code, dependencies, package manifests, build configs, CI hoặc binaries. Không install/build/lint/test/start application trong Phase 0.
+Repository đang ở **Provider & Authentication implementation slice (PA1)**, được người dùng cho phép ngày 2026-11-14. Phase 0 đã kết thúc riêng cho phạm vi này. Cho phép implementation, manifests, dependencies đã đánh giá, tooling và executable tests chỉ trong `contracts`, `models`, `security`, `persistence`, `core`, `apps/cli` và tests/docs liên quan. Các subsystem khác vẫn `Not implemented`; giữ placeholders rỗng và không thêm package mới.
 
+Đọc [ADR 0005](docs/adr/0005-provider-auth-product.md) và [plan](docs/delivery/provider-auth-plan.md) trước khi mở rộng slice. Có thể install/typecheck/test/run CLI trong PA1. Không triển khai shell/filesystem tools, plugins, MCP, TUI/server hay delegated agents trong slice này. Không tuyên bố Product MVP complete trước acceptance evidence.
 Trước mọi phase triển khai, đọc [docs](docs/README.md), toàn bộ [contracts](docs/contracts/agent-events.md), [dependency rules](docs/architecture/dependency-rules.md), [module ownership](docs/architecture/repository-map.md) và [roadmap](docs/delivery/implementation-roadmap.md). Chỉ triển khai phạm vi phase được giao; nguồn rỗng không phải bằng chứng tính năng hoạt động.
 
 - Public contracts chỉ được thay đổi cùng ADR, migration/versioning và cập nhật consumers. Không deep-import private files giữa packages.
@@ -15,4 +16,4 @@ Trước mọi phase triển khai, đọc [docs](docs/README.md), toàn bộ [co
 - Nghiên cứu upstream phải lưu URL/path, ngày truy cập, revision và giới hạn bằng chứng. `Needs verification` tốt hơn suy đoán.
 - Tất cả tính năng chưa triển khai mang trạng thái `Not implemented`. GUI compatibility cần GUI host riêng và acceptance tests riêng.
 
-Phase 0 được xác minh bằng filesystem/content/link inspection; không chạy application hoặc test suite. Quy tắc này không ngăn đọc nguồn công khai để nghiên cứu.
+Các vùng còn ở Phase 0 được xác minh bằng filesystem/content/link inspection. PA1 dùng executable checks và fixture tests; live verification phải được ghi riêng.

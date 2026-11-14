@@ -1,0 +1,97 @@
+import { generateText, streamText, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogle } from '@ai-sdk/google';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import Ajv, { type ValidateFunction } from 'ajv';
+import { HannesError, requestSchema, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage } from '@hannes/contracts';
+import { normalizeError, ProviderTransport } from './http';
+
+const usage = (u: { inputTokens?: number; outputTokens?: number }, info?: ModelInfo): Usage => ({
+  inputTokens: u.inputTokens ?? null, outputTokens: u.outputTokens ?? null,
+  costUSD: info?.pricing && u.inputTokens !== undefined && u.outputTokens !== undefined
+    ? (u.inputTokens * info.pricing.inputPerMillion + u.outputTokens * info.pricing.outputPerMillion) / 1000000 : null,
+  ...(info?.pricing && u.inputTokens !== undefined && u.outputTokens !== undefined ? { costEstimated: true } : {}),
+});
+export class ProviderAdapter implements ModelPort {
+  constructor(private readonly transport: ProviderTransport, private readonly modelId: string, private readonly info?: ModelInfo) {}
+  private async options(input: ModelRequest, signal?: AbortSignal) {
+    let request: ModelRequest;
+    try { request = requestSchema.parse(input); } catch { throw new HannesError('INVALID_INPUT'); }
+    if (request.modelId !== this.modelId || JSON.stringify(request).length > 1048576) throw new HannesError('INVALID_INPUT');
+    if (request.tools.length && this.info?.capabilities.tools !== 'supported') throw new HannesError('UNSUPPORTED');
+    if (request.maxEstimatedCostUSD !== undefined) {
+      const prices = this.info?.pricing; if (!prices) throw new HannesError('BUDGET');
+      // Deliberately an estimate guard, not an exact tokenizer or provider billing ceiling.
+      const inputEstimate = Buffer.byteLength(JSON.stringify(request.messages)) + Buffer.byteLength(JSON.stringify(request.tools)) + request.messages.length * 16 + 1024;
+      const outputEstimate = Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens);
+      if ((inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 > request.maxEstimatedCostUSD) throw new HannesError('BUDGET');
+    }
+    const key = await this.transport.credential(); const p = this.transport.provider;
+    const customFetch = ((url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      // Always resolve auth explicitly, never allow the SDK's environment fallback.
+      if (!key) { headers.delete('authorization'); headers.delete('x-api-key'); headers.delete('x-goog-api-key'); }
+      return this.transport.request(url, { ...init, headers });
+    }) as typeof fetch;
+    const settings = { baseURL: p.baseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch };
+    let model: LanguageModel;
+    if (p.protocol === 'anthropic') model = createAnthropic(settings)(this.modelId);
+    else if (p.protocol === 'gemini') model = createGoogle(settings)(this.modelId);
+    else if (p.protocol === 'responses') model = createOpenAI(settings).responses(this.modelId);
+    else model = createOpenAICompatible({ ...settings, name: p.id, includeUsage: p.streamUsage ?? false }).chatModel(this.modelId);
+    const tools: ToolSet = {}; const validators = new Map<string, ValidateFunction>();
+    const ajv = new Ajv({ strict: true, coerceTypes: false, removeAdditional: false, useDefaults: false, validateFormats: true, logger: false });
+    for (const descriptor of request.tools) {
+      let validate: ValidateFunction;
+      try { validate = ajv.compile(descriptor.inputSchema); if (('$async' in validate && validate.$async) || validators.has(descriptor.name)) throw new Error(); }
+      catch { throw new HannesError('INVALID_INPUT'); }
+      validators.set(descriptor.name, validate);
+      tools[descriptor.name] = { description: descriptor.description, inputSchema: jsonSchema(descriptor.inputSchema, {
+        validate: value => validate(value) ? { success: true, value } : { success: false, error: new Error('Invalid tool input') },
+      }) };
+    }
+    const controller = new AbortController();
+    const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(p.timeoutMs)]);
+    return { model, messages: request.messages, maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
+      maxRetries: 0, abortSignal, tools: request.tools.length ? tools : undefined,
+      experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators };
+  }
+  async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    const options = await this.options(request, signal); let bytes = 0; let complete = false; const calls = new Set<string>(); const pending = new Set<string>();
+    try {
+      yield { type: 'started', requestId: request.requestId };
+      const result = streamText({ ...options, onError: () => {}, onChunk: () => {} });
+      for await (const part of result.fullStream) {
+        options.abortSignal.throwIfAborted();
+        if (part.type === 'error') throw part.error;
+        if (part.type === 'tool-error') throw new HannesError('PROTOCOL');
+        if (part.type === 'tool-input-start') { if (pending.size >= 32) throw new HannesError('PROTOCOL'); pending.add(part.id); }
+        if (part.type === 'abort') throw new HannesError('CANCELLED');
+        if (part.type === 'text-delta') {
+          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new HannesError('PROTOCOL');
+          yield { type: 'textDelta', text: part.text };
+        } else if (part.type === 'tool-call') {
+          const validate = options.validators.get(part.toolName);
+          if (!validate || !validate(part.input) || calls.has(part.toolCallId) || calls.size >= 32 || JSON.stringify(part.input).length > 65536) throw new HannesError('PROTOCOL');
+          calls.add(part.toolCallId); pending.delete(part.toolCallId); yield { type: 'toolCallComplete', call: { id: part.toolCallId, name: part.toolName, input: part.input } };
+        } else if (part.type === 'finish') {
+          if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new HannesError('PROTOCOL');
+          complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: usage(part.totalUsage, this.info) };
+        }
+      }
+      if (!complete) throw new HannesError('PROTOCOL');
+    } catch (e) { throw normalizeError(e, options.abortSignal); }
+    finally { options.controller.abort(); }
+  }
+  async generate(request: ModelRequest, signal?: AbortSignal): Promise<{ text: string; calls: ToolCall[]; usage: Usage; finishReason: string }> {
+    const options = await this.options(request, signal);
+    try {
+      const result = await generateText(options);
+      for (const call of result.toolCalls) { const validate = options.validators.get(call.toolName); if (!validate || !validate(call.input)) throw new HannesError('PROTOCOL'); }
+      if (Buffer.byteLength(result.text) > 262144 || result.finishReason === 'error' || ['other', 'interrupted'].includes(result.finishReason) || result.toolCalls.length > 32 || new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length || result.toolCalls.some(c => JSON.stringify(c.input).length > 65536)) throw new HannesError('PROTOCOL');
+      return { text: result.text, calls: result.toolCalls.map(call => ({ id: call.toolCallId, name: call.toolName, input: call.input })), usage: usage(result.totalUsage, this.info), finishReason: result.finishReason.replaceAll('-', '_') };
+    } catch (e) { throw normalizeError(e, options.abortSignal); }
+    finally { options.controller.abort(); }
+  }
+}

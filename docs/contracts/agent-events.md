@@ -1,5 +1,7 @@
 # Agent events và commands
 
+> PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
+
 **Thiết kế contract v1; Not implemented.** Public wire format dự kiến JSON-compatible; IDs là opaque strings, thời gian UTC RFC3339, số sequence là integer không âm an toàn hoặc decimal string nếu vượt giới hạn. Không truyền Error/function/SDK instances. Bảng này là schema mô tả, chưa có TypeScript declarations.
 
 | Envelope field | Bắt buộc | Invariant |

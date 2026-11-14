@@ -1,0 +1,13 @@
+{
+  "name": "@hannes/security",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hannes/contracts": "workspace:*",
+    "@napi-rs/keyring": "2.1.2"
+  }
+}

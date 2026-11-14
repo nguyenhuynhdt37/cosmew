@@ -1,5 +1,7 @@
 # Threat model
 
+> PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
+
 **Thiết kế Phase 0; Not implemented.** Assets: source/workspace và Git history, model/MCP credentials, session/private memory, OS/network permissions, audit evidence và user approvals. Trust boundaries: model output → core; repository/skills → context; clients → authenticated server; plugin → host; MCP server → client; tool executor → OS; SQLite/artifacts → authorized reads. Process boundary riêng không tự là security sandbox.
 
 | Threat / attacker-controlled input | Attack | Mitigation và owner | Negative test / residual risk |

@@ -1,0 +1,18 @@
+{
+  "name": "@hannes/models",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@hannes/contracts": "workspace:*",
+    "ai": "7.0.173",
+    "@ai-sdk/openai": "4.0.118",
+    "@ai-sdk/anthropic": "4.0.105",
+    "@ai-sdk/google": "4.0.121",
+    "@ai-sdk/openai-compatible": "3.0.92",
+    "ajv": "8.20.0"
+  }
+}

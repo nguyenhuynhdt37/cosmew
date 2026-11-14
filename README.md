@@ -1,27 +1,51 @@
 # Hannes CLI
 
-Hannes hướng tới một coding agent độc lập: runtime headless, CLI/TUI, tools trong workspace, provider routing và khả năng mở rộng qua MCP, plugins và adapters. Feature parity là mục tiêu kiểm chứng theo capability, không phải tuyên bố tương thích hiện tại.
+Hannes is a TypeScript/Bun coding-agent harness under development. The **Provider & Authentication slice is implemented and fixture-tested**: persistent providers/accounts, OS keyring or environment-reference authentication, dynamic/manual catalogs, model selection, streamed multi-turn chat and diagnostics. **The full Product MVP is not accepted yet**: commercial generation has not been live-verified, and subscription/delegated-agent integrations remain Not implemented.
 
-**Trạng thái: Documentation-only — Phase 0.** Mọi file TypeScript/TSX là placeholder 0 byte. Chưa có application chạy được, dependencies, build configuration hay tests có thể thực thi. Không có lệnh cài đặt hoặc khởi chạy ở giai đoạn này.
+Requires Bun **1.4.4**. No application build is required; Bun runs the TypeScript workspace.
 
-Kiến trúc đề xuất: contracts ở đáy; core điều phối qua ports được inject; models/tools/security/persistence thực thi các ports; adapters chuyển đổi giao thức; apps là composition roots. SQLite giữ session và event log. Bun/TypeScript, OpenTUI, AI SDK và MCP SDK chính thức là lựa chọn cần đánh giá phiên bản trước Phase triển khai.
-
-```text
-hannes/
-├── README.md, AGENTS.md
-├── apps/          cli, tui, server; web và desktop dự trữ
-├── packages/      contracts, core, models, tools, workspace, mcp,
-│                 extensions, compat-opencode, compat-deepseek,
-│                 code-intel, security, persistence, agents, sdk, testkit
-├── docs/          product, architecture, contracts, subsystems,
-│                 compatibility, delivery, adr
-├── tests/         contracts, compatibility, security, end-to-end
-├── examples/      mcp, opencode-plugin, deepseek-plugin, hannes-plugin
-├── native/        dự trữ tối ưu native
-├── scripts/       dự trữ
-└── .github/workflows/  chỉ .gitkeep
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run hannes --help
+bun run hannes auth login --provider openai --alias personal
+bun run hannes models list
+bun run hannes models select <model-id-from-list>
+bun run hannes
 ```
 
-Bắt đầu tại [chỉ mục tài liệu](docs/README.md), [kiến trúc](docs/architecture/system-overview.md), [quy tắc phụ thuộc](docs/architecture/dependency-rules.md) và [contracts](docs/contracts/agent-events.md). [Bản đồ repository](docs/architecture/repository-map.md) giải thích từng placeholder. [Nguồn và dependencies](docs/delivery/dependency-catalog.md) ghi nhận bằng chứng nghiên cứu.
+Login prompts for an API key without echo and validates discovery against the provider. A successful model list establishes catalog access, not generation entitlement. `bun run hannes model doctor --generate` makes a small billable generation check with the selected/default model. Supply valid API credentials; ChatGPT/Claude/Gemini consumer plans do not automatically grant API access.
 
-[Roadmap](docs/delivery/implementation-roadmap.md): Phase 1 contracts/runtime/9Router/tools; Phase 2 streaming/storage/permissions/TUI; Phase 3 context/recovery/Git/intelligence; Phase 4 MCP; Phase 5 extensions; Phase 6 OpenCode; Phase 7 DeepSeek; Phase 8 subagents/sandbox; Phase 9 interfaces/marketplace/conformance. Phase 0 dừng ở scaffold và tài liệu.
+For a gateway such as your 9Router configuration, enter its URL, protocol and model ID:
+
+```sh
+bun run hannes providers add my-9router --url https://your-gateway.example/v1 --protocol responses --catalog manual
+bun run hannes auth login --provider my-9router --alias gateway-main --model your-model-id
+bun run hannes
+```
+
+Choose `chat` for Chat Completions, `responses` for Responses, `anthropic` for Messages, or `gemini` for native Gemini. Base URL includes the protocol prefix (usually `/v1`; Gemini `/v1beta`), not `/chat/completions`, `/responses` or `/messages`. For gateways with discovery, use `--catalog openai`/`anthropic`/`gemini`. No fixed 9Router service identity is assumed.
+
+Headless users can reference a secret-manager-injected environment variable by **name**:
+
+```sh
+bun run hannes auth login --provider openrouter --alias main --env OPENROUTER_API_KEY
+bun run hannes models list
+bun run hannes models select <model-id-from-list>
+printf 'Explain dependency injection.\n' | bun run hannes run --json
+```
+
+Never put key values in command arguments or repository settings. Default state is `~/.hannes/provider-auth.sqlite`; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic fallback or shell/filesystem tool execution.
+
+```sh
+bun run typecheck
+bun test tests
+# Optional OS keyring probes (create and remove disposable test entries):
+HANNES_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts
+HANNES_TEST_KEYRING=1 bun test tests/end-to-end/provider-cli.test.ts
+# Explicit public network checks; no authenticated generation:
+HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts
+```
+
+See [CLI/auth setup and troubleshooting](docs/subsystems/providers-and-auth.md), [provider/auth matrix](docs/compatibility/providers-auth-matrix.md), [architecture audit and plan](docs/delivery/provider-auth-plan.md), [upstream comparison](docs/delivery/provider-auth-research.md), [ADR 0005](docs/adr/0005-provider-auth-product.md), [security review](docs/delivery/provider-auth-security-review.md), and [acceptance evidence](docs/delivery/provider-auth-acceptance.md).
+
+The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, general tool execution, MCP/plugins, TUI/server, recovery and GUI compatibility are **Not implemented**. Empty source placeholders are not feature evidence.

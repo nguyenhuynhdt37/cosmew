@@ -1,6 +1,6 @@
 # Model provider port
 
-**Đề xuất v1; Not implemented.** `models` sở hữu chuyển đổi provider; core chỉ biết normalized request/stream/result. Không để AI SDK điều khiển loop/tool execution thay core. AI SDK cung cấp primitives; tool descriptors không có privileged execute callbacks truyền cho model layer.
+**Original full-agent v1 proposal; partially implemented by PA1 as specified below.** `models` sở hữu chuyển đổi provider; core chỉ biết normalized request/stream/result. Không để AI SDK điều khiển loop/tool execution thay core. AI SDK cung cấp primitives; tool descriptors không có privileged execute callbacks truyền cho model layer.
 
 | Request field | Quy tắc |
 |---|---|
@@ -31,3 +31,27 @@ Finish reasons: stop, tool_calls, length, content_filter, error, cancelled, unkn
 Retry: 429/temporary transport trước effects có backoff + Retry-After ceiling; auth/invalid input không retry. Khi đã stream partial text, retry tạo attempt mới và replace/mark previous partial, không nối thành message sai. Timeout gồm connect/first-byte/idle/total; các giá trị pin trong resolved config và test theo fake clock ở phase triển khai.
 
 Version migration cần ADR khi đổi role/part semantics. Acceptance fixtures: interleaved calls, malformed JSON, SSE disconnect, no usage, provider refusing tools, cancellation và secret redaction. 9Router model list/auth/limits là Needs verification trước Phase 1.
+
+
+## Implemented PA1 model/conversation contract 1.0
+
+[ADR 0005](../adr/0005-provider-auth-product.md) scopes the first executable API. The original table above is not a claim that the full agent loop/event protocol exists. `packages/contracts/src/index.ts` is the only public entry. Contracts export no SDK or Bun types; Zod validates strict records. All new consumers migrate together from the zero-byte baseline; no deployed v0 data/API exists. Optional `streamUsage` and `authGeneration` fields preserve schema-1 compatibility; absent auth generation means generation 1. Newer storage/config versions fail closed. Future incompatible semantics require ADR and migration.
+
+| API | Actual fields/semantics |
+|---|---|
+| Provider | id/name, protocol(chat/responses/anthropic/gemini), baseURL, auth(api-key/none), catalog(openai/anthropic/gemini/ollama/manual), metadataVersion=1, timeoutMs, optional streamUsage |
+| Account | UUID id, providerId, unique alias, CredentialRef(keyring UUID/env NAME/none), status, validatedAt, optional defaultModel/authGeneration |
+| ModelInfo | Opaque model ID including provider namespaces/aliases (`~` supported), name, five tri-state capabilities, nullable limits/pricing and source/fetch/metadata provenance |
+| SettingsStore | read and transactional update; schema 1 checks duplicate IDs/aliases/credential refs and provider/account/selection relationships |
+| CredentialVault | get/set/delete reference; secret bytes are runtime-only return values, never serialized account/model/event fields |
+| ModelRequest | UUID requestId, pinned modelId, bounded user/assistant text messages, maxOutputTokens, optional maxEstimatedCostUSD and descriptor-only tools; no credential/SDK fields |
+| ModelPort | stream(request, AbortSignal?) and generate(request, AbortSignal?); bound provider/account resolved by injected adapter |
+| ModelEvent | started(requestId), textDelta(text), toolCallComplete(call), completed(finishReason, usage); exceptions are HannesError safe diagnostics |
+| Tool descriptors/results | Draft-07 JSON Schema validated explicitly with Ajv; invalid/unknown names, async/external unresolved schemas, duplicates, incomplete arguments and oversized content fail. No execute callback or dispatcher exists. |
+| Usage | inputTokens/outputTokens/costUSD are number or null; costEstimated=true labels cost computed from advisory prices and reported usage |
+| NetworkPolicy | authorize(provider, account); root rereads durable auth generation/status and endpoint snapshot per operation/wire chunk |
+| ConversationStore | create(selection), append pending/committed, complete with revision fencing, interrupt. Full event log/recovery protocol is not implemented. |
+
+Adapters normalize SDK `tool-calls`/`content-filter` into underscore finish reasons. Missing/error/other/interrupted terminal results are rejected, not committed as complete. Total provider deadline propagates into fetch and stream consumption; caller cancellation aborts it. Safe GET discovery has at most 3 attempts and Retry-After/jitter ceilings; generation has no automatic retry because remote acceptance/cost is uncertain. Text output is capped at 256 KiB; request serialization at 1 MiB; HTTP wire response at 4 MiB; complete tool arguments at 64 KiB and 32 calls. Core history is capped at 200 messages and bounded serialized bytes.
+
+Optional maxEstimatedCostUSD is an explicit estimate guard: missing prices or an input-byte/output-token cost estimate above the limit deny before network. The estimate includes message/tool JSON bytes plus framing allowance; it is not an exact tokenizer or billing ceiling. No implicit cross-provider fallback, reasoning transcript exposure, tool execution, multimodal inputs, provider-specific sampling options, hard dollar budgets, exact provider token counting or delegated-agent execution is advertised by this contract. Metadata capabilities remain unknown when not independently verified. See [runtime/CLI](../subsystems/providers-and-auth.md) and [acceptance](../delivery/provider-auth-acceptance.md).

@@ -1,5 +1,7 @@
 # Configuration và profiles
 
+> PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
+
 **Not implemented.** Tài liệu này là data design; Phase 0 không tạo config thực tế. Profile là snapshot lựa chọn model/mode/tools/extensions/budgets cho một run; bundle là nhóm plugin/profile có provenance, không là quyền thực thi tự động.
 
 | Lớp | Nội dung | Quy tắc |
