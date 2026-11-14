@@ -178,6 +178,7 @@ export function renderPromptComposerLines(options: {
   workspaceFiles?: string[];
   maxHeight?: number;
   telemetryLabel?: string;
+  contextLine?: RenderedBoxLine;
 }): RenderedBoxLine[] {
   const {
     width,
@@ -324,7 +325,7 @@ export function renderPromptComposerLines(options: {
       offset += line.length + 1;
     }
     const cursorRow = Math.max(0, visual.findLastIndex(row => row.start <= state.cursor));
-    const maxInput = Math.max(1, Math.min(6, (options.maxHeight ?? 20) - lines.length - 3));
+    const maxInput = Math.max(1, Math.min(6, (options.maxHeight ?? 20) - lines.length - 3 - (options.contextLine ? 1 : 0)));
     const first = Math.max(0, cursorRow - maxInput + 1);
     for (const [index, row] of visual.slice(first, first + maxInput).entries()) {
       const cursorCol = state.cursor - row.start;
@@ -382,5 +383,6 @@ export function renderPromptComposerLines(options: {
     ],
   });
 
+  if (options.contextLine) lines.push(options.contextLine);
   return lines;
 }

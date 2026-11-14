@@ -171,12 +171,18 @@ test('reasoning summaries use streaming redaction independently of answer text',
 
 test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status paging, switch-and-continue, then explicit logout confirmation', async () => {
   const c = await setup(); await c.app.accounts.add('usage', 'second', {kind: 'none'});
+  c.app.settings.update(settings => { const model = settings.catalogs[0]!.models[0]!; model.contextLimit = 128000; model.reasoningEfforts = ['low', 'high']; });
   let output = '';
   const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); } });
   const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], { terminal, env: { ...process.env, HANNES_HOME: c.dir, NO_COLOR: '1' } });
   const wait = async (text: string, from = 0) => { const until = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < until) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
-    await wait('FUTRYN'); terminal.write('Hello terminal usage\r'); await wait('Hello fixture');
+    await wait('FUTRYN'); await wait('/ 128k tokens');
+    let effortMark = output.length; terminal.write('/effort\r'); await wait('Reasoning effort', effortMark);
+    effortMark = output.length; terminal.write('\x1b[C\x1b[C'); await wait('[ high ]', effortMark);
+    terminal.write('\x1b'); await Bun.sleep(50);
+    expect(c.app.settings.read().reasoningPreferences?.[c.account.id + ':fixture-model']).toBeUndefined();
+    terminal.write('Hello terminal usage\r'); await wait('Hello fixture');
     await wait('Completed turn');
     const painted = [...output.matchAll(/\x1b\[(\d+);1H([\s\S]*?)(?=\x1b\[\d+;1H|$)/g)].map(match => ({row:Number(match[1]), text:match[2]!.replace(/\x1b\[[0-9;]*m/g,'')})).filter(line => line.text.includes('Hello fixture')).at(-1)!;
     const start = painted.text.indexOf('Hello fixture') + 1; const end = start + 12;
@@ -363,4 +369,59 @@ test('choosing the active account is a no-op and switching A→B→A still works
   await c.tui.handleKey('ArrowUp'); await c.tui.handleKey('Enter');
   expect(c.client.activeSession()!.id).toBe(selected); // Confirmation precedes an actual switch.
   await c.tui.handleKey('Escape');
+});
+
+test('context window is visible before the first message and after model selection, without abbreviated ctx', async () => {
+  const c = await setup();
+  c.app.settings.update(settings => { settings.catalogs[0]!.models[0]!.contextLimit = 128000; });
+  const welcome = c.tui.computeFrameSnapshot().plainText;
+  expect(welcome).toContain('Context  ~0 / 128k tokens');
+  expect(welcome).not.toContain('ctx ');
+  await c.tui.executeSlashCommand('/model');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Max context 128,000');
+  await c.tui.handleKey('Enter');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('/ 128k tokens');
+  await c.tui.submitPrompt('Context visibility');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('/ 128k tokens');
+  for (const width of [30, 54, 80, 120]) {
+    c.tui.resize(width, 24);
+    const snapshot = c.tui.computeFrameSnapshot();
+    expect(snapshot.plainText).toContain('Context');
+    expect(snapshot.plainText).toContain('128k');
+    expect(snapshot.plainLines.every(line => line.length <= width)).toBe(true);
+  }
+  c.app.settings.update(settings => { settings.catalogs[0]!.models[0]!.contextLimit = null; });
+  c.tui.resize(80, 24);
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('not reported');
+});
+
+test('/effort follows Claude command naming with staged keyboard selection, auto and compatibility alias', async () => {
+  const c = await setup();
+  expect(parseSlashCommand('/model effort high').definition?.command).toBe('/effort');
+  expect(getMatchingSlashCommands('/eff')[0]?.command).toBe('/effort');
+  await c.tui.executeSlashCommand('/effort');
+  expect(c.tui.getStatusBanner()).toContain('not advertised');
+  c.app.settings.update(settings => {
+    const model = settings.catalogs[0]!.models[0]!;
+    model.reasoningEfforts = ['low', 'high']; model.defaultReasoningEffort = 'low';
+  });
+  await c.tui.executeSlashCommand('/effort');
+  expect(c.tui.getActiveOverlay()).toBe('effort');
+  await c.tui.handleKey('ArrowRight');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('[ high ]');
+  expect(c.client.status().reasoningEffort).toBe('low');
+  await c.tui.handleKey('Escape');
+  expect(c.client.status().reasoningEffort).toBe('low');
+  await c.tui.executeSlashCommand('/effort'); await c.tui.handleKey('ArrowRight'); await c.tui.handleKey('Enter');
+  expect(c.client.status().reasoningEffort).toBe('high');
+  await c.tui.executeSlashCommand('/effort auto');
+  expect(c.client.status().reasoningEffort).toBe('low');
+  await c.tui.executeSlashCommand('/model'); await c.tui.handleKey('ArrowRight');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Effort: high');
+  await c.tui.handleKey('Escape'); expect(c.client.status().reasoningEffort).toBe('low');
+  await c.tui.executeSlashCommand('/model'); await c.tui.handleKey('ArrowRight'); await c.tui.handleKey('Enter');
+  expect(c.client.status().reasoningEffort).toBe('high');
+  await c.tui.executeSlashCommand('/effort status'); expect(c.tui.getStatusBanner()).toContain('high');
+  await c.tui.executeSlashCommand('/effort ultracode'); expect(c.client.status().reasoningEffort).toBe('high');
+  expect(c.tui.getStatusBanner()).toContain('not supported');
 });

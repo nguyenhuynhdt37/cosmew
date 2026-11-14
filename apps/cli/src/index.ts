@@ -53,7 +53,7 @@ API keys are entered hidden, from secret-manager stdin, or referenced by environ
 variable NAME. Never pass a key as an argument. Default storage: ~/.hannes (0700).
 Canonical TUI commands: /login (/connect), /logout, /model (/models), /status,
   /config (/settings), /permissions, /mcp, /plugin, /theme (/themes), /resume,
-  /usage (/cost), /context, /switch <index-or-alias>, /model effort <value>,
+  /usage (/cost), /context, /switch <index-or-alias>, /effort <level|auto|status>,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start FUTRYN: bun run futryn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
@@ -445,8 +445,8 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
         if (parsedCommand?.definition?.unavailable) { output(app, parsedCommand.definition.unavailable);
         } else if (text === '/usage' || text === '/context') {
           output(app, reportRows(telemetryClient(), text.slice(1) as 'usage' | 'context', '', true).join('\n'));
-        } else if (text === '/model effort' || text.startsWith('/model effort ')) {
-          const client = telemetryClient(); if (parsedCommand?.args) client.setReasoningEffort(parsedCommand.args);
+        } else if (text === '/effort' || text.startsWith('/effort ')) {
+          const client = telemetryClient(); if (parsedCommand?.args && parsedCommand.args !== 'status') client.setReasoningEffort(parsedCommand.args === 'auto' ? 'default' : parsedCommand.args);
           output(app, { effort: client.status().reasoningEffort, available: client.status().activeModel?.reasoningEfforts ?? [] });
         } else if (text === '/switch' || text.startsWith('/switch ')) {
           const client = telemetryClient();

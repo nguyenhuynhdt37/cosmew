@@ -9,6 +9,28 @@ export function contextDisplay(context: ReturnType<FutrynClient['context']>) {
   const total = measured ? context.lastMeasured!.limitTokens! : context.limitTokens;
   return { used, total, measured, ratio: measured && total ? Math.round(used / total * 1000) / 10 : context.estimatedPercent };
 }
+const compactTokens = (value: number) => value >= 1_000_000 ? `${+(value / 1_000_000).toFixed(2)}M` : value >= 1000 ? `${+(value / 1000).toFixed(1)}k` : String(value);
+export function renderContextIndicator(context: ReturnType<FutrynClient['context']>, width: number, tokens: ThemeTokens): RenderedBoxLine {
+  const display = contextDisplay(context);
+  const total = display.total == null ? 'not reported' : compactTokens(display.total);
+  const used = `${display.measured ? '' : '~'}${compactTokens(display.used)}`;
+  const full = `Context  ${used} / ${total}${display.total == null ? '' : ' tokens'}`;
+  const label = full.length <= width ? full : `Context max ${total}`;
+  const ratio = display.ratio;
+  const suffix = ratio == null ? (context.runtimeHiddenContext ? 'local estimate' : '') : `${display.measured ? '' : '~'}${ratio}%`;
+  const barWidth = Math.min(12, width - label.length - suffix.length - 5);
+  const filled = ratio == null ? 0 : Math.round(Math.max(0, Math.min(100, ratio)) / 100 * Math.max(0, barWidth));
+  const color = ratio != null && ratio >= 90 ? tokens.error : ratio != null && ratio >= 75 ? tokens.warning : tokens.accent;
+  return { spans: [
+    { text: label.slice(0, width), fg: tokens.foreground, bold: true },
+    ...(barWidth >= 4 && ratio != null ? [
+      { text: '  ', fg: tokens.foregroundMuted },
+      { text: '━'.repeat(filled), fg: color },
+      { text: '─'.repeat(barWidth - filled), fg: tokens.foregroundSubtle },
+      { text: `  ${suffix}`, fg: tokens.foregroundMuted },
+    ] : suffix && label.length + suffix.length + 3 <= width ? [{ text: ` · ${suffix}`, fg: tokens.foregroundMuted }] : []),
+  ] };
+}
 export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'context', draft = '', details = false): string[] {
   const status = client.status(); const usage = client.usage(); const context = client.context(draft);
   if (!details) {
@@ -113,12 +135,12 @@ export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'con
     `Context: local estimate ~${count(context.estimateTokens)} / ${count(context.limitTokens)}`,
     `Output reserve: ${count(context.outputReserve)} · /context shows source and limitations.`,
     '', '/switch chooses another account; continuing transfers the committed chat history.',
-    '/model selects a model · /model effort <value> sets an advertised effort.',
+    '/model selects a model · /effort <level> sets an advertised effort.',
     '', 'BACKEND CAPABILITIES',
     ...Object.entries(status.capabilities).map(([name, value]) => `${name}: ${value}`),
   ];
 }
-export function renderReportOverlay(options: { title: string; rows: string[]; width: number; height: number; offset: number; details?: boolean; tokens: ThemeTokens }): { lines: RenderedBoxLine[]; offset: number } {
+export function renderReportOverlay(options: { title: string; rows: string[]; width: number; height: number; offset: number; details?: boolean; footer?: string; tokens: ThemeTokens }): { lines: RenderedBoxLine[]; offset: number } {
   const { title, rows, width, height, tokens } = options;
   const w = Math.max(1, width - 4); const wrapped: string[] = [];
   for (const row of rows) {
@@ -140,7 +162,7 @@ export function renderReportOverlay(options: { title: string; rows: string[]; wi
     return line(text, /^[A-Z][A-Z &/·-]+$/.test(text) ? tokens.accent : tokens.foreground, /^[A-Z][A-Z &/·-]+$/.test(text));
   });
   const scroll = wrapped.length > room ? (width < 40 ? '↑↓ · ' : '↑↓ Scroll · ') : '';
-  const footer = `${scroll}D ${options.details ? 'Summary' : 'Details'} · Esc${width >= 40 ? ' Close' : ''}`;
+  const footer = options.footer ?? `${scroll}D ${options.details ? 'Summary' : 'Details'} · Esc${width >= 40 ? ' Close' : ''}`;
   const lines = [line(title, tokens.accent, true), line(''), ...body, line(footer, tokens.foregroundSubtle)].slice(0, height);
   return { lines, offset };
 }

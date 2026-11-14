@@ -371,6 +371,7 @@ export function renderThemeEditorOverlay(options: {
 // ============================================================================
 
 export interface ModelPickerState {
+  effortDraft?: { modelId: string; value: string };
   query: string;
   selectedIndex: number;
   addingManual: boolean;
@@ -400,6 +401,7 @@ export function renderModelPickerOverlay(options: {
   height: number;
   models: ModelInfo[];
   activeModelId: string | null;
+  activeReasoningEffort?: string | null;
   activeAccountAlias: string | null;
   state: ModelPickerState;
   tokens: ThemeTokens;
@@ -471,9 +473,9 @@ export function renderModelPickerOverlay(options: {
       if (m.capabilities.reasoning === 'supported') caps.push('reason');
       if (m.capabilities.vision === 'supported') caps.push('vision');
       const capStr = caps.length > 0 ? `[${caps.join(',')}]` : '[basic]';
-      const ctxStr = m.contextLimit ? `${Math.round(m.contextLimit / 1000)}k ctx` : '';
-      const rightPart = `${capStr} ${ctxStr}`.trim();
-      const leftMax = Math.max(12, innerWidth - rightPart.length - 6);
+      const ctxStr = m.contextLimit ? `Max context ${m.contextLimit.toLocaleString('en-US')}` : 'Context not reported';
+      const rightPart = innerWidth >= 72 ? `${capStr} ${ctxStr}` : ctxStr;
+      const leftMax = Math.max(4, innerWidth - rightPart.length - 1);
       const leftPart = ` ${marker} ${m.id}`.slice(0, leftMax).padEnd(leftMax, ' ');
       const fullLine = `${leftPart} ${rightPart}`.slice(0, innerWidth).padEnd(innerWidth, ' ');
 
@@ -502,7 +504,11 @@ export function renderModelPickerOverlay(options: {
     });
   }
 
-  const statusLine = state.statusMessage ?? ' Select a model with Enter (Global) or Ctrl+P (Project-scoped).';
+  const focused = filtered[Math.max(0, Math.min(filtered.length - 1, state.selectedIndex))];
+  const effort = state.effortDraft?.modelId === focused?.id ? state.effortDraft?.value : focused?.id === activeModelId ? options.activeReasoningEffort ?? focused?.defaultReasoningEffort ?? 'auto' : focused?.defaultReasoningEffort ?? 'auto';
+  const statusLine = state.statusMessage ?? (focused?.reasoningEfforts?.length
+    ? ` Effort: ${effort === 'default' ? 'auto' : effort} · ←/→ Adjust · Enter Save model & effort`
+    : ' Effort: provider default · no adjustable levels reported.');
   lines.push({
     spans: [
       { text: glyphs.vertical, fg: tokens.borderFocused, bg },
@@ -511,7 +517,7 @@ export function renderModelPickerOverlay(options: {
     ],
   });
 
-  const footer = ' ↑/↓ Navigate · Enter Select Model · Tab Account · Ctrl+E Effort · Ctrl+R Discover · Ctrl+A Manual ID · Esc Close ';
+  const footer = innerWidth >= 60 ? ' ↑↓ Model · ←→ Effort · Tab Account · Enter Save · Esc Cancel ' : ' ↑↓ Model · ←→ Effort · Enter Save · Esc Cancel ';
   const footerFill = Math.max(0, innerWidth - footer.length);
   lines.push({
     spans: [

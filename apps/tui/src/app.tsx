@@ -8,7 +8,7 @@ import {
   type ToolCall,
 } from '@hannes/contracts';
 import { acceptSlashSelection, parseSlashCommand, type FutrynClient } from '@hannes/sdk';
-import { contextDisplay, reportRows, renderReportOverlay } from './screens/telemetry';
+import { renderContextIndicator, reportRows, renderReportOverlay } from './screens/telemetry';
 import { TextSelection } from './components/text-selection';
 import { connectionChoices } from './screens/connect';
 import {
@@ -86,6 +86,7 @@ export type ActiveOverlay =
   | 'diff'
   | 'palette'
   | 'settings'
+  | 'effort'
   | 'usage'
   | 'context'
   | 'status'
@@ -320,6 +321,7 @@ export class FutrynTuiApp {
   private cols: number;
   private rows: number;
   private overlay: ActiveOverlay = 'none';
+  private effortIndex = 0;
   private composer: ComposerState = createInitialComposerState();
   private transcript: TranscriptItem[] = [];
   private transcriptScrollOffset = -1; // -1 means auto-follow bottom
@@ -485,14 +487,19 @@ export class FutrynTuiApp {
     if (parsed.definition?.command === '/usage' || parsed.definition?.command === '/context') {
       this.openOverlay(parsed.definition.command.slice(1) as 'usage' | 'context'); return;
     }
-    if (parsed.definition?.command === '/model effort') {
+    if (parsed.definition?.command === '/effort') {
       try {
         const available = this.client.status().activeModel?.reasoningEfforts ?? [];
         if (!available.length) { this.statusBanner = 'Reasoning effort is not advertised by this model/transport. Provider default is used.'; return; }
-        if (parsed.args && parsed.args !== 'default' && !available.includes(parsed.args)) { this.statusBanner = `Available efforts: ${available.join(', ')}. Use /model effort <value>.`; return; }
-        if (parsed.args) this.client.setReasoningEffort(parsed.args);
-        const status = this.client.status();
-        this.statusBanner = `Effort: ${status.reasoningEffort ?? 'provider default'}. Available: ${status.activeModel?.reasoningEfforts?.join(', ') || 'not advertised by this model/transport'}.`;
+        const value = parsed.args === 'auto' ? 'default' : parsed.args;
+        if (!value) {
+          this.openOverlay('effort');
+          this.effortIndex = Math.max(0, ['default', ...available].indexOf(this.client.status().reasoningEffort ?? 'default'));
+          return;
+        }
+        if (value !== 'status' && value !== 'default' && !available.includes(value)) { this.statusBanner = `Available efforts: ${available.join(', ')}. Use /effort <level> or /effort auto. Advanced Claude-only modes are not supported by this transport.`; return; }
+        if (value !== 'status') this.client.setReasoningEffort(value);
+        this.statusBanner = `Effort: ${this.client.status().reasoningEffort ?? 'provider default'}. Available: ${available.join(', ')}.`;
       } catch (error) { this.statusBanner = this.connectionError(error); }
       return;
     }
@@ -1045,6 +1052,17 @@ export class FutrynTuiApp {
 
   private async handleOverlayKey(key: string): Promise<void> {
     switch (this.overlay) {
+      case 'effort': {
+        const values = ['default', ...(this.client.status().activeModel?.reasoningEfforts ?? [])];
+        if (key === 'Escape') { this.overlay = 'none'; return; }
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(key)) {
+          this.effortIndex = Math.max(0, Math.min(values.length - 1, this.effortIndex + (key === 'ArrowLeft' || key === 'ArrowUp' ? -1 : 1)));
+        } else if (key === 'Enter') {
+          try { this.client.setReasoningEffort(values[this.effortIndex] ?? 'default'); this.statusBanner = `Effort: ${values[this.effortIndex] === 'default' ? 'auto (provider default)' : values[this.effortIndex]}.`; this.overlay = 'none'; }
+          catch (error) { this.statusBanner = this.connectionError(error); }
+        }
+        return;
+      }
       case 'themes':
         await this.handleThemesOverlayKey(key);
         return;
@@ -1419,7 +1437,7 @@ export class FutrynTuiApp {
       };
       return;
     }
-    if ((key === 'Tab' || key === 'Shift+Tab' || key === 'Ctrl+E') && this.pendingSwitchAccountId) {
+    if ((key === 'Tab' || key === 'Shift+Tab') && this.pendingSwitchAccountId) {
       this.modelPickerState.statusMessage = 'Choose a model for this account or Esc to cancel the switch.'; return;
     }
     if (key === 'Tab' || key === 'Shift+Tab') {
@@ -1431,12 +1449,16 @@ export class FutrynTuiApp {
       this.modelPickerState = { ...createInitialModelPickerState(), statusMessage: `${target.providerId} · ${target.alias}. Ctrl+R discovers models; Tab switches accounts.` };
       return;
     }
-    if (key === 'Ctrl+E') {
+    if (key === 'Ctrl+E' || key === 'ArrowLeft' || key === 'ArrowRight') {
       if (this.isStreaming) { this.modelPickerState.statusMessage = 'Cancel the response before changing effort.'; return; }
-      const status = this.client.status(); const values = status.activeModel?.reasoningEfforts ?? [];
-      if (!values.length) { this.modelPickerState.statusMessage = 'Reasoning effort is not advertised by this model/transport.'; return; }
-      const next = values[(values.indexOf(status.reasoningEffort ?? '') + 1) % values.length]!;
-      this.client.setReasoningEffort(next); this.modelPickerState.statusMessage = `Reasoning effort: ${next}. Ctrl+E cycles advertised values.`; return;
+      const chosen = models[st.selectedIndex];
+      const levels = chosen?.reasoningEfforts ?? [];
+      if (!levels.length) { this.modelPickerState.statusMessage = 'Reasoning effort is not advertised by this model/transport.'; return; }
+      const values = ['default', ...levels];
+      const current = st.effortDraft?.modelId === chosen!.id ? st.effortDraft.value : chosen!.id === this.client.status().selection?.modelId ? this.client.status().reasoningEffort ?? 'default' : chosen!.defaultReasoningEffort ?? 'default';
+      const index = Math.max(0, values.indexOf(current));
+      const next = values[Math.max(0, Math.min(values.length - 1, index + (key === 'ArrowLeft' ? -1 : 1)))]!;
+      this.modelPickerState = { ...st, effortDraft: { modelId: chosen!.id, value: next }, statusMessage: undefined }; return;
     }
     if (key === 'Ctrl+R') {
       try {
@@ -1462,8 +1484,14 @@ export class FutrynTuiApp {
       const chosen = models[st.selectedIndex];
       if (chosen) {
         try {
-          if (this.pendingSwitchAccountId) { await this.continueWithAccount(this.pendingSwitchAccountId, chosen.id); return; }
+          if (this.pendingSwitchAccountId) {
+            const targetAccountId = this.pendingSwitchAccountId;
+            await this.continueWithAccount(targetAccountId, chosen.id);
+            if (this.client.status().selection?.accountId === targetAccountId && this.client.status().selection?.modelId === chosen.id && this.overlay === 'none' && st.effortDraft?.modelId === chosen.id) this.client.setReasoningEffort(st.effortDraft.value);
+            return;
+          }
           this.client.selectModel(chosen.id);
+          if (st.effortDraft?.modelId === chosen.id) this.client.setReasoningEffort(st.effortDraft.value);
           this.pendingSwitchAccountId = null;
           this.syncTranscriptFromActiveSession();
           this.overlay = 'none';
@@ -2075,12 +2103,8 @@ export class FutrynTuiApp {
       borderStyle: manifest.borderStyle,
       workspaceFiles,
       maxHeight: Math.max(4, rows - 6),
-      telemetryLabel: chatting && contentWidth >= 54 ? (() => {
-        const context = this.client.context(this.composer.value);
-        const cost = status.usage.costUSD;
-        const display = contextDisplay(context);
-        return `ctx ${display.measured ? '' : '~'}${display.used}/${display.total ?? '?'}${cost == null || contentWidth < 90 ? '' : ` · ~$${cost.toFixed(cost > 0 && cost < 0.0001 ? 6 : 4)}`}`;
-      })() : undefined,
+      telemetryLabel: chatting && contentWidth >= 90 && status.usage.costUSD != null ? `~$${status.usage.costUSD.toFixed(status.usage.costUSD > 0 && status.usage.costUSD < 0.0001 ? 6 : 4)}` : undefined,
+      contextLine: status.selection && rows >= 12 ? renderContextIndicator(this.client.context(this.composer.value), contentWidth, tokens) : undefined,
     });
 
     if (!chatting) {
@@ -2194,13 +2218,13 @@ export class FutrynTuiApp {
 
     // 7. Draw Active Overlay on top of center viewport if open
     if (this.overlay !== 'none') {
-      if (['connect', 'status', 'usage', 'context'].includes(this.overlay)) {
+      if (['connect', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay)) {
         // A modal backdrop must cover the wider composer and sidebar too.
         for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
       }
-      const reportSummary = ['status', 'usage', 'context'].includes(this.overlay) && !this.reportDetails;
-      const overlayWidth = this.overlay === 'connect' ? Math.min(cols - 2, 68) : reportSummary ? Math.min(cols - 2, 58) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
-      const overlayHeight = Math.min(rows - 2, Math.max(12, Math.floor(rows * 0.82)));
+      const reportSummary = (this.overlay === 'effort' || ['status', 'usage', 'context'].includes(this.overlay) && !this.reportDetails);
+      const overlayWidth = this.overlay === 'models' ? Math.min(cols - 2, 76) : this.overlay === 'connect' ? Math.min(cols - 2, 68) : reportSummary ? Math.min(cols - 2, 58) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
+      const overlayHeight = Math.min(rows - 2, this.overlay === 'models' ? Math.max(9, Math.min(8, this.client.cachedModels(this.pendingSwitchAccountId ?? undefined).length) + 5) : Math.max(12, Math.floor(rows * 0.82)));
       let overlayLines: RenderedBoxLine[] = [];
 
       switch (this.overlay) {
@@ -2230,6 +2254,7 @@ export class FutrynTuiApp {
             height: overlayHeight,
             models: this.client.cachedModels(this.pendingSwitchAccountId ?? undefined),
             activeModelId: status.selection?.modelId ?? null,
+            activeReasoningEffort: status.reasoningEffort,
             activeAccountAlias: this.pendingSwitchAccountId ? this.client.listAccounts().find(a => a.id === this.pendingSwitchAccountId)?.alias ?? null : status.activeAccount?.alias ?? null,
             state: this.modelPickerState,
             tokens,
@@ -2299,6 +2324,15 @@ export class FutrynTuiApp {
             borderStyle: manifest.borderStyle,
           });
           break;
+        case 'effort': {
+          const values = ['auto', ...(status.activeModel?.reasoningEfforts ?? [])];
+          overlayLines = renderReportOverlay({ title: 'Reasoning effort', rows: [
+            `Effort: [ ${values[this.effortIndex]} ]`,
+            values.map((value, index) => index === this.effortIndex ? `[ ${value} ]` : value).join(' ─ '), '',
+            this.effortIndex === 0 ? 'Auto uses the provider default.' : 'Higher effort can increase latency and usage.', '',
+          ], width: overlayWidth, height: overlayHeight, offset: 0, footer: '←/→ Adjust · Enter Save · Esc Cancel', tokens }).lines;
+          break;
+        }
         case 'usage':
         case 'context':
         case 'status':

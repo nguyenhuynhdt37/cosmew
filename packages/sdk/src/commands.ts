@@ -14,7 +14,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   { command: '/switch', aliases: ['/account'], title: 'Switch Account', description: 'Choose an account and continue with an explicit context transfer', category: 'Providers & Models', arguments: 'optional' },
   { command: '/usage', aliases: ['/cost'], title: 'Usage & Estimated Cost', description: 'Per-turn and session usage with coverage and pricing provenance', category: 'Navigation', duringRequest: true },
   { command: '/context', aliases: [], title: 'Context Window', description: 'Model limits, output reserve, measured or estimated context', category: 'Navigation', duringRequest: true },
-  { command: '/model effort', aliases: [], title: 'Reasoning Effort', description: 'Set an effort advertised by the active provider/model', category: 'Providers & Models', arguments: 'optional' },
+  { command: '/effort', aliases: ['/model effort'], title: 'Reasoning Effort', description: 'Set an effort advertised by the active provider/model', category: 'Providers & Models', arguments: 'optional' },
   { command: '/theme set', aliases: ['/themes set'], title: 'Apply Theme', description: 'Apply a saved theme by ID', category: 'Appearance', arguments: 'required' },
   {
     command: '/theme', duringRequest: true, arguments: 'optional',
