@@ -17,3 +17,7 @@ Each increment requires its relevant checks before proceeding. Final acceptance 
 ## Increment outcome
 
 Foundation schemas/storage/security were typechecked and tested before adapter work. Adapters/catalog/accounts passed deterministic protocol tests before CLI integration. Core/CLI passed subprocess end-to-end tests before security review and live probes. Negative review tests found and fixed model alias validation, missing JSON Schema runtime validation, credential-reference reuse and late-validation/logout races. Final scoped implementation is delivered; overall Product MVP remains pending the exact blockers in the [acceptance report](provider-auth-acceptance.md). No unrelated phase was advanced.
+
+## Interactive authentication follow-up
+
+User requested `/login` and `/logout` to avoid long setup commands. CLI now starts signed out, presents a guided provider/gateway/account/model wizard, reuses existing auth/vault/validation ports and keeps the prompt open after logout. No domain contracts, dependencies, package boundaries or provider support claims change. Chat and wizard use one bounded input reader with history disabled and secret echo suppression. Verify actual subprocess login/logout/relogin, cancellation/failure/context isolation, and a real terminal/keyring roundtrip before delivery.

@@ -294,7 +294,7 @@ The Phase 0 file table above is retained as the original roadmap. Actual nonempt
 | security | index/secrets/policies: OS keyring and environment resolution, redaction before transcript/UI, endpoint/account policy |
 | persistence | index/database/session-store: private SQLite schema 1, transactional settings/cache and transcript revision writes |
 | core | index and agent/engine: injected model-only Conversation, pending/complete/interrupted state; no SDK imports or tools |
-| apps/cli | index/input/bootstrap/startup: command parsing, hidden secret input, actual command workflows and root wiring |
+| apps/cli | index/input/auth-wizard/bootstrap/startup: command parsing, shared chat/wizard input, hidden secret input, guided login/logout and root wiring |
 | tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
 
 New package-internal files are private; all cross-package imports use `@hannes/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).

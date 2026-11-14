@@ -37,7 +37,7 @@ The selection boundary does not expose SDK types, so adding a native adapter doe
 
 | Mode | Hannes status | Evidence / alternative |
 |---|---|---|
-| API key in OS secure storage | Implemented; native macOS keyring and CLI key-stdin tested | Disposable entry roundtrip/delete and actual login/status/remove against HTTP fixture; Linux/Windows pending |
+| API key in OS secure storage | Implemented; native macOS keyring and CLI key-stdin tested | Disposable entry roundtrip/delete, CLI key-stdin lifecycle and a real terminal `/login` → chat → `/logout` with masked key/history checks against HTTP fixtures; Linux/Windows pending |
 | Environment variable reference | Implemented/tested | Only variable name persisted; logout fences identity, not the parent shell variable |
 | Explicit no-auth | Implemented/tested | Local/public configuration only; public discovery does not establish paid generation entitlement |
 | API key refresh | Not applicable | API keys are replaced via stable-ID reauthentication; no invented refresh/revoke protocol |

@@ -6,12 +6,19 @@ Requires Bun **1.4.4**. No application build is required; Bun runs the TypeScrip
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
-bun run hannes --help
-bun run hannes auth login --provider openai --alias personal
-bun run hannes models list
-bun run hannes models select <model-id-from-list>
 bun run hannes
 ```
+
+Trong Hannes, gõ **`/login`** rồi chọn provider hoặc gateway 9Router. Wizard hỏi URL/protocol nếu cần, nhập key ẩn, kiểm tra kết nối và chọn model ngay tại chỗ. Gõ **`/logout`** để đăng xuất và tiếp tục ở trong CLI; **`/login <account>`** để đăng nhập lại tài khoản đã lưu. Chưa có tài khoản vẫn mở được Hannes và dùng `/login`. Các menu nhận số thứ tự, ID hoặc từ khóa lọc models. `/cancel` hủy wizard; Ctrl-C thoát.
+
+```text
+hannes> /login
+... chọn provider, nhập URL/model/key theo hướng dẫn ...
+hannes> Xin chào
+hannes> /logout
+```
+
+Các lệnh dài bên dưới vẫn có cho scripts; không cần dùng chúng để thiết lập tương tác. `bun run hannes --help` hiển thị toàn bộ lệnh.
 
 Login prompts for an API key without echo and validates discovery against the provider. A successful model list establishes catalog access, not generation entitlement. `bun run hannes model doctor --generate` makes a small billable generation check with the selected/default model. Supply valid API credentials; ChatGPT/Claude/Gemini consumer plans do not automatically grant API access.
 

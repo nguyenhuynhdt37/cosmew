@@ -23,8 +23,8 @@ Evidence date: **2026-11-14**. Host: **macOS 15.8.1 arm64**, Bun **1.4.4**, Type
 |---|---|
 | `bun install --frozen-lockfile --ignore-scripts` | Pass; lock resolves, no install scripts enabled |
 | `bun run typecheck` | Pass |
-| `HANNES_TEST_KEYRING=1 bun test tests` | **49 pass, 0 fail; 372 assertions; 4 files**, including 10 actual CLI subprocess end-to-end tests. Native OS credential test is opt-in and actually ran on this host. |
-| `bun test tests` without keyring opt-in | Same deterministic suite, native keyring test intentionally skipped; do not claim this verifies a CI OS backend |
+| `HANNES_TEST_KEYRING=1 bun test tests` | **55 pass, 0 fail; 470 assertions; 4 files**, including 16 actual CLI subprocess end-to-end tests. Both native OS credential tests are opt-in and actually ran on this host; terminal Ctrl-C coverage also ran. |
+| `bun test tests` without keyring opt-in | Same deterministic suite, two native keyring tests intentionally skipped; do not claim this verifies a CI OS backend |
 | `HANNES_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts` | Live local OS keyring: create/read roundtrip true, delete true; uses only a disposable Hannes entry |
 | `HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts` | Live OpenRouter public catalog and Models.dev advisory enrichment passed through actual Hannes CLI; authenticated generation explicitly not tested |
 | `bun run hannes --help` | Starts successfully with documented command and actual command help |
@@ -67,3 +67,7 @@ Coverage includes strict schema/relationship validation; registry/config persist
 6. **Tier 2/cloud providers** are assessed but have no named verified integrations/presets. Custom protocol configuration is experimental per endpoint. No SDK import or shared protocol is used as their support evidence.
 
 The code can make actual provider requests once configured with valid credentials. This report deliberately distinguishes that implemented ability from a successfully observed live vendor interaction. Product MVP completion must wait for the unchecked items, not just compilation or additional empty abstractions.
+
+## Interactive authentication follow-up
+
+The user requested `/login` and `/logout` to replace long setup commands. Delivered guided provider/gateway URL/protocol/account/model selection inside chat, signed-out startup, saved-credential reuse, stable-ID reauthentication, logout without exiting, account-targeted logout and `/cancel`. No new dependencies or public domain/schema versions were introduced. A shared bounded reader disables history and suppresses secret echo; wizard answers are consumed outside the chat transcript. Subprocess/PTY tests cover failure, cancellation, masked input, logout/relogin and context isolation. Ctrl-C at the hidden prompt explicitly closes the reader and exits 130 instead of leaving an unresolved input promise. The overall Product MVP decision and vendor live-verification limitations above remain unchanged.

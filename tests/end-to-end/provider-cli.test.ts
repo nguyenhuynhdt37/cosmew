@@ -109,6 +109,50 @@ test('actual CLI reauthenticates existing identity and can connect via interacti
   const connected = await x.cli(['chat'], '/connect gateway backup HANNES_WORK_KEY\n/model fixture-model\nNew account prompt\n/exit\n');
   expect(connected.code).toBe(0); expect(connected.stdout).toContain('Account connected'); expect(connected.stdout).toContain('Hello fixture');
 });
+test('slash login configures a fresh gateway, selects its model, logs out and reauthenticates in the same chat', async () => {
+  const x = context();
+  const result = await x.cli(['chat'], [
+    '/status', '/login', 'custom', 'wizard-router', x.server.url + '/v1', 'responses', 'api-key', 'n',
+    'wizard-main', 'fixture-model', 'env', 'HANNES_TEST_KEY', 'First private conversation',
+    '/logout', '/status', 'Must never be sent while logged out', '/logout',
+    '/login wizard-main', '', 'env', 'HANNES_TEST_KEY', 'Fresh conversation after login', '/exit', '',
+  ].join('\n'));
+  expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập wizard-main');
+  expect(result.stdout).toContain('Đã đăng xuất wizard-main'); expect(result.stdout).toContain('"selection": null');
+  expect(result.stdout).toContain('Bạn đã đăng xuất'); expect(result.stdout).toContain('Hello fixture');
+  const posts = x.server.requests.filter(r => r.body);
+  expect(posts).toHaveLength(4); expect(JSON.stringify(posts)).not.toContain('Must never be sent');
+  expect(JSON.stringify(posts.at(-1)?.body)).toContain('Fresh conversation after login');
+  expect(JSON.stringify(posts.at(-1)?.body)).not.toContain('First private conversation');
+  expect(JSON.stringify(posts)).not.toContain('HANNES_TEST_KEY');
+  const accounts = JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout);
+  expect(accounts).toHaveLength(1); expect(accounts[0].alias).toBe('wizard-main');
+});
+test('slash login can be cancelled or fail validation without sending wizard answers or old chat context', async () => {
+  const x = context();
+  const cancelled = await x.cli(['chat'], '/login\n/cancel\n/status\n/logout\n/exit\n');
+  expect(cancelled.code).toBe(0); expect(cancelled.stdout).toContain('Đã hủy'); expect(x.server.requests).toHaveLength(0);
+  await configure(x); const before = x.server.requests.length;
+  const failed = await x.cli(['chat'], '/login personal\nn\nenv\nHANNES_UNSET_FIXTURE\nDo not reuse old conversation\n/status\n/exit\n');
+  expect(failed.code).toBe(0); expect(failed.stderr).toContain('AUTH'); expect(failed.stdout).not.toContain('Đã đăng nhập');
+  expect(failed.stdout).toContain('"selection": null'); expect(x.server.requests.length).toBe(before);
+});
+test('slash login chooses saved credentials and model without shell commands; logout can target another account', async () => {
+  const x = context(); await configure(x);
+  expect((await x.cli(['auth', 'login', '--provider', 'gateway', '--alias', 'backup', '--env', 'HANNES_WORK_KEY'])).code).toBe(0);
+  const result = await x.cli(['chat'], '/login personal\ny\nfixture\n1\nReady to chat\n/logout backup\nStill on personal\n/logout\n/exit\n');
+  expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập personal');
+  expect(result.stdout).toContain('Đã đăng xuất backup'); expect(result.stdout).toContain('Đã đăng xuất personal');
+  const posts = x.server.requests.filter(r => r.body);
+  expect(posts.at(-1)?.body.messages).toEqual([{ role: 'user', content: 'Ready to chat' }, { role: 'assistant', content: 'Hello fixture' }, { role: 'user', content: 'Still on personal' }]);
+});
+test('slash login replaces a retired default model using fresh discovery', async () => {
+  const x = context(); await configure(x); x.server.set({ modelName: 'replacement-model' });
+  const result = await x.cli(['chat'], '/login personal\ny\n\nUse available model\n/exit\n');
+  expect(result.code).toBe(0); expect(result.stdout).toContain('Đã đăng nhập personal');
+  expect(result.stdout).toContain('replacement-model');
+  expect(x.server.requests.filter(r => r.body).at(-1)?.body.model).toBe('replacement-model');
+});
 test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('actual CLI key-stdin uses native OS vault and deletes credentials on logout', async () => {
   const x = context();
   expect((await x.cli(['providers', 'add', 'gateway', '--url', x.server.url + '/v1', '--protocol', 'chat', '--catalog', 'openai'])).code).toBe(0);
@@ -118,3 +162,50 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('actual CLI key-stdin uses 
     expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
   } finally { expect((await x.cli(['accounts', 'remove', 'native-keyring'])).code).toBe(0); }
 });
+test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win32')('real terminal slash login hides key input/history and logout stays in the same CLI', async () => {
+  const x = context();
+  expect((await x.cli(['providers', 'add', 'gateway', '--url', x.server.url + '/v1', '--protocol', 'chat', '--catalog', 'openai'])).code).toBe(0);
+  let transcript = ''; let cursor = 0; let notify = () => {}; const decoder = new TextDecoder();
+  const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, data) { transcript += decoder.decode(data, { stream: true }); notify(); } });
+  const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'chat'], { terminal, env: { ...process.env, HANNES_HOME: x.dir } });
+  const waitFor = (needle: string) => new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { notify = () => {}; reject(new Error('Terminal did not reach expected prompt: ' + needle)); }, 4000);
+    notify = () => { const index = transcript.indexOf(needle, cursor); if (index >= 0) { cursor = index + needle.length; clearTimeout(timer); notify = () => {}; resolve(); } };
+    notify();
+  });
+  try {
+    await waitFor('hannes> '); terminal.write('/login\r');
+    await waitFor('Provider [7]: '); terminal.write('gateway\r');
+    await waitFor('Tên tài khoản [gateway]: '); terminal.write('pty-main\r');
+    await waitFor('Lưu key [keyring]: '); terminal.write('\r');
+    await waitFor('API key (hidden): '); terminal.write('fixture-e2e-sensitive-value\r');
+    await waitFor('Model [fixture-model]: '); terminal.write('\r');
+    await waitFor('Đã đăng nhập pty-main'); await waitFor('hannes> ');
+    terminal.write('\x1b[AHello after hidden login\r'); await waitFor('Hello fixture'); await waitFor('hannes> ');
+    terminal.write('/logout\r'); await waitFor('Đã đăng xuất pty-main'); await waitFor('hannes> ');
+    terminal.write('/status\r'); await waitFor('"selection": null'); await waitFor('hannes> ');
+    terminal.write('/exit\r'); expect(await child.exited).toBe(0);
+    expect(transcript).not.toContain('fixture-e2e-sensitive-value');
+    expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
+    const posts = x.server.requests.filter(r => r.body); expect(posts).toHaveLength(1);
+    expect(posts[0]?.body.messages).toEqual([{ role: 'user', content: 'Hello after hidden login' }]);
+    expect((await x.cli(['auth', 'status', '--account', 'pty-main', '--json'])).stdout).toContain('"credentialAvailable":false');
+  } finally { child.kill(); await child.exited; terminal.close(); await x.cli(['accounts', 'remove', 'pty-main']); }
+}, 20000);
+test.skipIf(process.platform === 'win32')('Ctrl-C at the hidden login prompt exits cleanly without creating credentials or sending a request', async () => {
+  const x = context();
+  expect((await x.cli(['providers', 'add', 'gateway', '--url', x.server.url + '/v1', '--protocol', 'chat', '--catalog', 'openai'])).code).toBe(0);
+  const steps = [['hannes> ', '/login\r'], ['Provider [7]: ', 'gateway\r'], ['Tên tài khoản [gateway]: ', 'cancelled-key\r'], ['Lưu key [keyring]: ', '\r'], ['API key (hidden): ', '\x03']];
+  let transcript = ''; let cursor = 0; let step = 0; const decoder = new TextDecoder();
+  const terminal = new Bun.Terminal({ data(term, data) {
+    transcript += decoder.decode(data, { stream: true }); const next = steps[step]; if (!next) return;
+    const index = transcript.indexOf(next[0]!, cursor);
+    if (index >= 0) { cursor = index + next[0]!.length; step++; term.write(next[1]!); }
+  } });
+  const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'chat'], { terminal, env: { ...process.env, HANNES_HOME: x.dir } });
+  const timeout = setTimeout(() => child.kill(), 6000);
+  try {
+    expect(await child.exited).toBe(130); expect(step).toBe(steps.length); expect(transcript).toContain('CANCELLED');
+    expect(x.server.requests).toHaveLength(0); expect(JSON.parse((await x.cli(['accounts', 'list', '--json'])).stdout)).toEqual([]);
+  } finally { clearTimeout(timeout); child.kill(); await child.exited; terminal.close(); }
+}, 8000);

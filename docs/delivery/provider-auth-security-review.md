@@ -30,3 +30,7 @@
 - Dependency registry audit initially returned `{}` (no reported advisories); final audit result is recorded with acceptance. Registry integrity/advertised provenance does not independently establish artifact safety. Install hooks remain disabled.
 
 These limitations are release-readiness findings. The Product MVP is not marked complete until applicable acceptance gates have real evidence.
+
+## Interactive login/logout follow-up
+
+The signed-out prompt and `/login` wizard reuse existing policy/vault/account services. One input owner consumes both chat and wizard answers; terminal history is disabled and key echo suppressed. Piped wizard input may use environment references, but cannot pretend to provide hidden terminal input. Extra queued lines after a secret are discarded/rejected. Current-account logout clears in-memory context before deletion, including failed deletion paths. Tests cover fresh setup, saved credentials, failed auth, cancellation and cross-login context isolation; an opt-in real PTY/native keyring test checks that key bytes do not appear in terminal output/history/database or chat messages. Commercial provider live status remains unchanged.

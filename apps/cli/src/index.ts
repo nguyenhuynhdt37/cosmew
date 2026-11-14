@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 import { parseArgs } from 'node:util';
-import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { HannesError, providerSchema, type Account, type ModelInfo } from '@hannes/contracts';
 import { ProviderAdapter, providerPresets } from '@hannes/models';
 import { fetchModelsDev, terminalText, validateEndpoint } from '@hannes/security';
 import { startup, type Application } from './bootstrap/startup';
-import { ask, readSecretStdin, secretInput } from './input';
+import { ask, ChatInput, readSecretStdin, secretInput } from './input';
+import { loginWizard } from './auth-wizard';
 
 // Suppress third-party raw warning output; diagnostics are normalized by Hannes.
 (globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS: boolean }).AI_SDK_LOG_WARNINGS = false;
@@ -30,7 +30,7 @@ const HELP = `Hannes provider & authentication CLI
 Options: --json, --help, --project, --timeout-ms <100..300000> (provider add).
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
 variable NAME. Never pass a key as an argument. Default storage: ~/.hannes (0700).
-Interactive commands: /connect <provider> <alias> <ENV_NAME> [model-id], /models,
+Interactive commands: /login [account], /logout [account], /connect, /models,
   /accounts [alias], /model <model-id>, /status, /new, /exit.
 Subscription OAuth/delegated-agent logins are not implemented; use API credentials
 or the provider's official CLI separately. Local logout does not revoke API keys remotely.
@@ -98,20 +98,24 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
 function accountView(app: Application) {
   const state = app.settings.read(); return state.accounts.map(a => ({ id: a.id, providerId: a.providerId, alias: a.alias, authentication: a.credential.kind, status: a.status, validatedAt: a.validatedAt, defaultModel: a.defaultModel ?? null, active: state.activeAccountId === a.id }));
 }
-async function chooseModel(app: Application, options: Options, signal: AbortSignal) {
-  const account = app.resolveAccount(str(options, 'account')); const result = await progress('Discovering models', () => app.catalog(account).discover(signal));
-  output(app, result);
-  const id = await ask('Select model ID'); const model = result.models.find(m => m.id === id); if (!model) throw new HannesError('NOT_FOUND');
-  output(app, app.router.select(account, model, options.project ? resolve('.') : undefined));
-}
 async function chat(app: Application, options: Options, signal: AbortSignal, single = false) {
   const maxOutput = numberOption(options, 'max-output-tokens', 4096); if (maxOutput < 1 || maxOutput > 32768) fail();
   const budgetInput = str(options, 'max-estimated-cost-usd'); const estimatedBudget = budgetInput === undefined ? undefined : Number(budgetInput);
   if (estimatedBudget !== undefined && (!Number.isFinite(estimatedBudget) || estimatedBudget <= 0 || estimatedBudget > 1000)) fail();
-  let conversation: ReturnType<Application['conversation']> | undefined = app.conversation(options.project ? resolve('.') : undefined);
+  const project = options.project ? resolve('.') : undefined;
+  let conversation: ReturnType<Application['conversation']> | undefined;
+  let conversationAccountId: string | undefined;
+  const resetConversation = () => {
+    conversation = undefined; conversationAccountId = undefined;
+    try {
+      const selection = app.router.resolve(project);
+      conversation = app.conversation(project); conversationAccountId = selection.accountId;
+    } catch (e) { if (single || !(e instanceof HannesError) || !['AUTH', 'POLICY', 'NOT_FOUND'].includes(e.code)) throw e; }
+  };
+  resetConversation();
   const send = async (message: string) => {
     if (!message.trim()) return;
-    if (!conversation) throw new HannesError('POLICY');
+    if (!conversation) { output(app, 'Chưa có tài khoản/model đang dùng. Gõ /login để bắt đầu.'); return; }
     let text = ''; let final: unknown;
     const streamRedactor = app.redactor.stream();
     for await (const event of conversation.send(message, signal, maxOutput, estimatedBudget)) {
@@ -129,38 +133,60 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     for await (const chunk of process.stdin) { message += chunk.toString(); if (message.length > 262144) fail(); }
     if (!message.trim()) fail(); await send(message.trim()); return;
   }
-  output(app, 'Hannes conversation. /status /models /accounts /model /connect /new /exit. Ctrl-C cancels and exits.');
-  const input = createInterface({ input: process.stdin, output: process.stderr, terminal: !!process.stdin.isTTY });
+  output(app, 'Hannes · /login /logout /models /accounts /model /status /new /exit. Ctrl-C cancels and exits.');
+  if (!conversation) output(app, 'Chưa đăng nhập hoặc chưa chọn model. Gõ /login để bắt đầu.');
+  const input = new ChatInput(signal);
   try {
-    if (process.stdin.isTTY) input.setPrompt('hannes> '); input.prompt();
-    for await (const line of input) {
+    while (true) {
+      const line = await input.line('hannes> ');
       if (signal.aborted) throw new HannesError('CANCELLED');
+      if (line === undefined) break;
       const text = line.trim(); if (text === '/exit' || text === '/quit') break;
       try {
-        if (text === '/status') output(app, { accounts: accountView(app), selection: app.router.resolve(options.project ? resolve('.') : undefined), conversationId: conversation?.id ?? null });
+        if (text === '/login' || text.startsWith('/login ') || text === '/connect') {
+          conversation = undefined; conversationAccountId = undefined;
+          await loginWizard(app, input, signal, a => check(app, a, signal), project, text.startsWith('/login ') ? text.slice(7) : undefined);
+          resetConversation();
+        } else if (text === '/logout' || text.startsWith('/logout ')) {
+          const target = text.startsWith('/logout ') ? text.slice(8) : conversationAccountId ?? app.settings.read().activeAccountId;
+          if (!target) output(app, 'Bạn đã đăng xuất. Gõ /login để đăng nhập lại.');
+          else {
+            const account = app.accounts.get(target);
+            if (account.id === conversationAccountId || account.id === app.settings.read().activeAccountId) { conversation = undefined; conversationAccountId = undefined; }
+            await app.accounts.logout(account.id);
+            output(app, `Đã đăng xuất ${account.alias} trên máy này. Gõ /login để đăng nhập lại.`);
+          }
+        } else if (text === '/status') {
+          let selection = null; try { selection = app.router.resolve(project); } catch (e) { if (!(e instanceof HannesError) || !['AUTH', 'POLICY'].includes(e.code)) throw e; }
+          output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null });
+        }
         else if (text === '/models') output(app, await app.catalog(app.resolveAccount()).discover(signal));
         else if (text === '/accounts' || text.startsWith('/accounts ')) {
           output(app, accountView(app));
-          const selected = text.startsWith('/accounts ') ? text.slice(10) : process.stdin.isTTY ? await input.question('Account ID/alias (empty to keep current): ') : '';
+          const selected = text.startsWith('/accounts ') ? text.slice(10) : process.stdin.isTTY ? await input.ask('Account ID/alias (empty to keep current)') : '';
           if (selected) {
-            conversation = undefined; app.accounts.use(selected);
+            conversation = undefined; conversationAccountId = undefined; app.accounts.use(selected);
             if (options.project) app.settings.update(s => { delete s.projects[resolve('.')]; });
-            conversation = app.conversation(); output(app, 'Account switched; started a fresh conversation.');
+            resetConversation(); output(app, conversation ? 'Account switched; started a fresh conversation.' : 'Tài khoản chưa có model. Gõ /login để chọn.');
           }
         } else if (text.startsWith('/model ')) {
           const account = app.resolveAccount(); const model = app.catalog(account).cached().find(m => m.id === text.slice(7)); if (!model) throw new HannesError('NOT_FOUND');
-          app.router.select(account, model, options.project ? resolve('.') : undefined); conversation = app.conversation(options.project ? resolve('.') : undefined); output(app, 'Model switched; started a fresh conversation.');
+          app.router.select(account, model, project); resetConversation(); output(app, 'Model switched; started a fresh conversation.');
         } else if (text === '/model') { output(app, 'Use /models, then /model <model-id>.'); }
         else if (text.startsWith('/connect ')) {
           const [, provider, alias, env, model] = text.split(/\s+/); if (!provider || !alias || !env) fail();
-          const added = await login(app, { provider, alias, env, model }, signal); conversation = undefined; app.accounts.use(added.id);
+          conversation = undefined; conversationAccountId = undefined; const added = await login(app, { provider, alias, env, model }, signal); app.accounts.use(added.id);
           output(app, 'Account connected. Use /models then /model <model-id> to start a fresh conversation.');
-        } else if (text === '/connect') { output(app, 'Use /connect <provider> <alias> <ENV_NAME> [model-id]; the value stays in your environment. For hidden API key entry, use hannes auth login.'); }
-        else if (text === '/new') { conversation = app.conversation(options.project ? resolve('.') : undefined); output(app, 'Started a fresh conversation.'); }
+        }
+        else if (text === '/new') { resetConversation(); output(app, conversation ? 'Started a fresh conversation.' : 'Gõ /login để bắt đầu.'); }
         else if (text.startsWith('/')) fail();
         else await send(line);
-      } catch (e) { if (signal.aborted) throw e; const safe = e instanceof HannesError ? e : new HannesError('INVALID_INPUT'); process.stderr.write(JSON.stringify(safe) + '\n'); }
-      if (process.stdin.isTTY) input.prompt();
+      } catch (e) {
+        if (signal.aborted) throw e;
+        const safe = e instanceof HannesError ? e : new HannesError('INVALID_INPUT');
+        if (safe.code === 'CANCELLED') output(app, 'Đã hủy. Bạn vẫn ở trong Hannes; gõ /login để thử lại.');
+        else process.stderr.write(JSON.stringify(safe) + '\n');
+      }
     }
   } finally { input.close(); }
 }
@@ -225,11 +251,6 @@ async function main() {
       const a = account(); const selected = app.settings.read().selection;
       output(app, { selected, account: a.alias, protocol: app.registry.get(a.providerId).protocol, check: await progress('Diagnosing connection', () => check(app, a, controller.signal, !!options.generate)), fallback: 'disabled', tools: 'disabled', subscriptionAuth: 'not-implemented' }, !!options.json);
     } else if (!group || group === 'chat' || group === 'run') {
-      if (!app.settings.read().selection && !(options.project && app.settings.read().projects[resolve('.')])) {
-        if (!process.stdin.isTTY || group === 'run') throw new HannesError('POLICY');
-        if (!app.settings.read().accounts.length) await login(app, {}, controller.signal);
-        await chooseModel(app, options, controller.signal);
-      }
       await chat(app, options, controller.signal, group === 'run');
     } else fail();
   } finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); app.db.close(); }
