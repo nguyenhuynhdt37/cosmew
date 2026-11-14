@@ -308,6 +308,7 @@ export function renderPromptComposerLines(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
   workspaceFiles?: string[];
+  maxHeight?: number;
 }): RenderedBoxLine[] {
   const {
     width,
@@ -334,8 +335,9 @@ export function renderPromptComposerLines(options: {
   // 1. Autocomplete Popup Menu (Slash commands or @file mentions)
   const popupItems: { label: string; hint: string }[] = [];
   let popupHeader = '';
+  const popupLimit = Math.min(5, Math.max(0, (options.maxHeight ?? 20) - 8));
   if (state.slashMenuOpen) {
-    const matches = getMatchingSlashCommands(state.value).slice(0, 5);
+    const matches = getMatchingSlashCommands(state.value).slice(0, popupLimit);
     popupHeader = `Commands (${matches.length})`;
     for (const cmd of matches) {
       popupItems.push({
@@ -344,7 +346,7 @@ export function renderPromptComposerLines(options: {
       });
     }
   } else if (state.fileMenuOpen && workspaceFiles.length > 0) {
-    const topFiles = workspaceFiles.slice(0, 5);
+    const topFiles = workspaceFiles.slice(0, popupLimit);
     popupHeader = `Files (${workspaceFiles.length})`;
     for (const f of topFiles) {
       popupItems.push({ label: `@${f}`, hint: '' });
@@ -355,7 +357,7 @@ export function renderPromptComposerLines(options: {
     const selIdx =
       (state.slashMenuOpen ? state.slashSelectedIndex : state.fileSelectedIndex) % popupItems.length;
     const topTitle = ` ${popupHeader} `;
-    const padTop = Math.max(0, innerWidth - topTitle.length);
+    const padTop = Math.max(0, innerWidth - topTitle.length - 1);
 
     lines.push({
       spans: [
@@ -370,7 +372,8 @@ export function renderPromptComposerLines(options: {
       const rowBg = isSelected ? tokens.selection : tokens.overlayBackground;
       const rowFg = isSelected ? tokens.selectionForeground : tokens.foreground;
       const marker = isSelected ? '▸ ' : '  ';
-      const labelCol = `${marker}${item.label}`.padEnd(20, ' ');
+      const labelWidth = Math.min(20, Math.max(1, innerWidth - 2));
+      const labelCol = `${marker}${item.label}`.slice(0, labelWidth).padEnd(labelWidth, ' ');
       const hintMax = Math.max(0, innerWidth - labelCol.length - 2);
       const hintCol = fill(item.hint, hintMax);
 
@@ -397,124 +400,110 @@ export function renderPromptComposerLines(options: {
     lines.push({ spans: [] });
   }
 
-  // 2. Composer Top Border (Rounded corners)
+  // 2. Composer frame. A quiet label on the rule, a prompt mark, then a footer.
+  const title = '';
+  const titleDash = title.length > 0 ? glyphs.horizontal : '';
+  const titleRest = Math.max(0, innerWidth - title.length - titleDash.length);
   lines.push({
     spans: [
-      {
-        text: `${glyphs.topLeft}${glyphs.horizontal.repeat(innerWidth)}${glyphs.topRight}`,
-        fg: borderColor,
-        bg,
-      },
+      { text: `${glyphs.topLeft}${titleDash}`, fg: borderColor, bg },
+      { text: title, fg: tokens.foregroundSubtle, bg },
+      { text: `${glyphs.horizontal.repeat(titleRest)}${glyphs.topRight}`, fg: borderColor, bg },
     ],
   });
 
-  // 3. Text input. The card stays one row tall until the draft wraps.
-  const hPad = '  ';
-  const textCols = Math.max(1, innerWidth - hPad.length * 2);
-  const placeholder = isStreaming
-    ? 'Replying…  Esc to stop'
-    : 'Message Fyn…   @ files    / commands';
+  // 3. Text input. One row until the draft wraps. The prompt mark stays on the first line.
+  const lead = '  › ';
+  const textCols = Math.max(1, innerWidth - lead.length);
+  const placeholder = isStreaming ? 'Replying…' : 'Ask anything…';
 
-  if (state.value.length === 0) {
-    const cursorGlyph = focused ? '▌' : ' ';
-    const padAfter = Math.max(0, textCols - placeholder.length - 2);
+  const pushInputRow = (body: StyledSpan[], prefix: string) => {
+    const used = body.reduce((sum, span) => sum + span.text.length, 0);
+    const markAt = Math.max(0, prefix.length - 2);
     lines.push({
       spans: [
         { text: glyphs.vertical, fg: borderColor, bg },
-        { text: hPad, fg: tokens.foreground, bg },
-        { text: cursorGlyph, fg: tokens.cursor, bg, bold: true },
-        { text: ' ', fg: tokens.foreground, bg },
-        { text: placeholder.slice(0, textCols - 2), fg: tokens.foregroundSubtle, bg },
-        { text: ' '.repeat(padAfter), fg: tokens.foreground, bg },
-        { text: hPad, fg: tokens.foreground, bg },
+        { text: prefix.slice(0, markAt), fg: tokens.foreground, bg },
+        { text: prefix.slice(markAt, markAt + 1), fg: tokens.accent, bg },
+        { text: prefix.slice(markAt + 1), fg: tokens.foreground, bg },
+        ...body,
+        { text: ' '.repeat(Math.max(0, textCols - used)), fg: tokens.foreground, bg },
         { text: glyphs.vertical, fg: borderColor, bg },
       ],
     });
+  };
+
+  if (state.value.length === 0) {
+    const cursorGlyph = focused ? '▌' : ' ';
+    const shown = placeholder.slice(0, Math.max(0, textCols - 1));
+    pushInputRow([
+      { text: cursorGlyph, fg: tokens.cursor, bg, bold: true },
+      { text: shown, fg: tokens.foregroundSubtle, bg },
+    ], lead);
   } else {
-    let charOffset = 0;
-    const rawLines = state.value.split('\n');
-    rawLines.slice(0, 6).forEach((lineText) => {
-      const lineStart = charOffset;
-      const lineEnd = lineStart + lineText.length;
-      charOffset = lineEnd + 1;
-      const hasCursor = focused && state.cursor >= lineStart && state.cursor <= lineEnd;
-
-      if (hasCursor) {
-        const cursorCol = state.cursor - lineStart;
-        const before = lineText.slice(0, cursorCol);
-        const cursorChar = lineText[cursorCol] ?? ' ';
-        const after = lineText.slice(cursorCol + 1);
-        const usedLen = before.length + 1 + after.length;
-        const padRight = ' '.repeat(Math.max(0, textCols - usedLen));
-
-        lines.push({
-          spans: [
-            { text: glyphs.vertical, fg: borderColor, bg },
-            { text: hPad, fg: tokens.foreground, bg },
-            { text: before.slice(0, textCols), fg: tokens.foreground, bg },
-            { text: cursorChar, fg: tokens.accentForeground, bg: tokens.cursor, bold: true },
-            {
-              text: (after + padRight).slice(0, Math.max(0, textCols - before.length - 1)),
-              fg: tokens.foreground,
-              bg,
-            },
-            { text: hPad, fg: tokens.foreground, bg },
-            { text: glyphs.vertical, fg: borderColor, bg },
-          ],
-        });
-      } else {
-        const paddedText = fill(lineText, textCols);
-        lines.push({
-          spans: [
-            { text: glyphs.vertical, fg: borderColor, bg },
-            { text: hPad, fg: tokens.foreground, bg },
-            { text: paddedText, fg: tokens.foreground, bg },
-            { text: hPad, fg: tokens.foreground, bg },
-            { text: glyphs.vertical, fg: borderColor, bg },
-          ],
-        });
+    const visual: { text: string; start: number }[] = [];
+    let offset = 0;
+    for (const line of state.value.split('\n')) {
+      for (let start = 0; start <= line.length; start += textCols) {
+        visual.push({ text: line.slice(start, start + textCols), start: offset + start });
+        if (start + textCols > line.length) break;
       }
-    });
+      offset += line.length + 1;
+    }
+    const cursorRow = Math.max(0, visual.findLastIndex(row => row.start <= state.cursor));
+    const maxInput = Math.max(1, Math.min(6, (options.maxHeight ?? 20) - lines.length - 3));
+    const first = Math.max(0, cursorRow - maxInput + 1);
+    for (const [index, row] of visual.slice(first, first + maxInput).entries()) {
+      const cursorCol = state.cursor - row.start;
+      const hasCursor = focused && first + index === cursorRow;
+      pushInputRow(hasCursor ? [
+        { text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg },
+        { text: row.text[cursorCol] ?? ' ', fg: tokens.accentForeground, bg: tokens.cursor, bold: true },
+        { text: row.text.slice(cursorCol + 1), fg: tokens.foreground, bg },
+      ] : [{ text: row.text, fg: tokens.foreground, bg }], first + index === 0 ? lead : ' '.repeat(lead.length));
+    }
   }
 
-  // 4. Hairline between the draft and the pill footer
-  lines.push({
-    spans: [
-      { text: '├', fg: borderColor, bg },
-      { text: '─'.repeat(innerWidth), fg: borderColor, bg },
-      { text: '┤', fg: borderColor, bg },
-    ],
-  });
+  lines.push({ spans: [{
+    text: `${glyphs.bottomLeft}${glyphs.horizontal.repeat(innerWidth)}${glyphs.bottomRight}`,
+    fg: borderColor, bg,
+  }] });
 
-  // 6. Footer: mode pill, model, shortcut
   const modeName = mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
-  const pill = ` ${modeName} `;
-  const pillFg = mode === 'chat' ? tokens.accentForeground : mode === 'plan' ? tokens.warning : tokens.info;
-  const pillBg = mode === 'chat' ? tokens.accent : tokens.backgroundElevated;
-  const meta = `  ${activeModelLabel}${activeAccountLabel ? ` · ${activeAccountLabel}` : ''}`;
-  const rightHint = isStreaming ? ' Esc ' : ' Ctrl+P ';
-  const gap = Math.max(0, innerWidth - pill.length - meta.length - rightHint.length);
-  const metaRoom = Math.max(0, innerWidth - pill.length - rightHint.length);
+  const modeColor = mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
+  const modeChip = ` ${modeName} `;
+  const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
+  const shortHints: StyledSpan[] = [
+    { text: '@', fg: tokens.accent, bg },
+    { text: '  ', fg: tokens.foregroundSubtle, bg },
+    { text: '/', fg: tokens.accent, bg },
+  ];
+  const longHints: StyledSpan[] = [
+    { text: '@', fg: tokens.accent, bg },
+    { text: ' files   ', fg: tokens.foregroundSubtle, bg },
+    { text: '/', fg: tokens.accent, bg },
+    { text: ' commands', fg: tokens.foregroundSubtle, bg },
+  ];
+  const hintLenOf = (parts: StyledSpan[]) => parts.reduce((sum, span) => sum + span.text.length, 0);
+  const roomFor = (hintLen: number) => Math.max(0, innerWidth - modeChip.length - 1 - hintLen);
+  const hintParts = isStreaming
+    ? [{ text: 'Esc', fg: tokens.foregroundSubtle, bg }]
+    : meta.length + 2 <= roomFor(hintLenOf(longHints))
+      ? longHints
+      : shortHints;
+  const metaRoom = roomFor(hintLenOf(hintParts));
+  const shownMeta = meta.slice(0, meta.length + 2 <= metaRoom ? meta.length : Math.max(0, metaRoom - 2));
+  const gap = Math.max(0, metaRoom - shownMeta.length);
 
   lines.push({
     spans: [
-      { text: glyphs.vertical, fg: borderColor, bg },
-      { text: pill, fg: pillFg, bg: pillBg, bold: true },
-      { text: meta.slice(0, metaRoom), fg: tokens.foregroundMuted, bg },
-      { text: ' '.repeat(meta.length > metaRoom ? 0 : gap), fg: tokens.foreground, bg },
-      { text: rightHint, fg: tokens.foregroundSubtle, bg },
-      { text: glyphs.vertical, fg: borderColor, bg },
-    ],
-  });
-
-  // 8. Composer Bottom Border (Rounded corners)
-  lines.push({
-    spans: [
-      {
-        text: `${glyphs.bottomLeft}${glyphs.horizontal.repeat(innerWidth)}${glyphs.bottomRight}`,
-        fg: borderColor,
-        bg,
-      },
+      { text: ' ', fg: borderColor, bg: tokens.background },
+      { text: modeChip, fg: modeColor, bg: tokens.backgroundElevated, bold: true },
+      { text: ' ', fg: tokens.foreground, bg },
+      { text: shownMeta, fg: tokens.foregroundSubtle, bg },
+      { text: ' '.repeat(gap), fg: tokens.foreground, bg },
+      ...hintParts,
+      { text: ' ', fg: borderColor, bg: tokens.background },
     ],
   });
 

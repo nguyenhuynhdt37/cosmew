@@ -291,13 +291,40 @@ test('TUI: responsive full-screen width utilizes full terminal cols without 88-c
   const x = context();
   const a = await x.launch(160, 40);
   try {
-    const snap = a.tui.computeFrameSnapshot();
-    expect(snap.cols).toBe(160);
-    expect(snap.rows).toBe(40);
-    // Viền ngang của composer phải trải rộng gần hết 160 cột (>= 100 ký tự '─')
-    const wideBorderLine = snap.plainLines.find(line => line.includes('─'.repeat(100)));
+    const home = a.tui.computeFrameSnapshot();
+    expect(home.cols).toBe(160);
+    expect(home.rows).toBe(40);
+    // Màn trống dùng thẻ nhập hẹp, căn giữa. Không kẹp cả khung về 88 cột.
+    const homeBorder = home.plainLines.find(line => line.includes('─'.repeat(40)));
+    expect(homeBorder).toBeDefined();
+    expect(homeBorder!.trim().length).toBeLessThan(90);
+    await a.tui.submitPrompt('Wide room');
+    const chat = a.tui.computeFrameSnapshot();
+    const wideBorderLine = chat.plainLines.find(line => line.includes('─'.repeat(100)));
     expect(wideBorderLine).toBeDefined();
   } finally {
     a.close();
   }
+});
+
+test('chat resize keeps the composer usable and shows complete Fyn art or its status fallback', async () => {
+  const x = context(); await configure(x);
+  const a = await x.launch(100, 30);
+  try {
+    await a.tui.submitPrompt('Responsive chat');
+    for (const [cols, rows] of [[100, 30], [60, 24], [40, 14], [30, 10], [20, 10], [160, 40]]) {
+      a.tui.resize(cols!, rows!);
+      const frame = a.tui.computeFrameSnapshot();
+      expect(frame.plainLines).toHaveLength(rows!);
+      expect(frame.plainLines.every(line => line.length === cols)).toBe(true);
+      expect(frame.plainText).toContain('Ask anything');
+      if (rows! >= 24) {
+        const labelRow = frame.plainLines.findIndex(line => line.includes('Fyn ·'));
+        expect(labelRow).toBeGreaterThanOrEqual(5);
+        // All five art rows precede the label, above the input frame.
+        const art = frame.plainLines.slice(labelRow - 5, labelRow);
+        expect(art.every(line => /[▀▄]/.test(line))).toBe(true);
+      }
+    }
+  } finally { a.close(); }
 });

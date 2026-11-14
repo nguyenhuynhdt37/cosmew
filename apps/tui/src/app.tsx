@@ -1834,12 +1834,22 @@ export class FutrynTuiApp {
       });
     };
 
-    // 3. Responsive Prompt Composer & Content Area
+    // Empty desk uses a narrow centered card. A live thread fills the screen
+    // with the same inset on every side, larger when the terminal is large.
     const workspaceFiles = this.composer.fileMenuOpen
       ? this.client.listWorkspaceFiles(this.composer.fileQuery)
       : [];
+    const chatting = this.transcript.length > 0;
+    const wantPad = mainWidth >= 150 ? 6 : mainWidth >= 110 ? 4 : 2;
+    const framePad = !chatting || mainWidth < 32 ? 0 : Math.min(wantPad, Math.max(1, Math.floor((rows - 12) / 2)));
+    const contentWidth = chatting
+      ? Math.max(18, mainWidth - framePad * 2)
+      : Math.min(56, colWidth);
+    const contentLeft = chatting
+      ? framePad
+      : Math.max(0, Math.floor((mainWidth - contentWidth) / 2));
     const composerLines = renderPromptComposerLines({
-      width: colWidth,
+      width: contentWidth,
       state: this.composer,
       mode: status.mode,
       activeModelLabel: status.selection?.modelId ?? 'chưa chọn model',
@@ -1849,10 +1859,11 @@ export class FutrynTuiApp {
       tokens,
       borderStyle: manifest.borderStyle,
       workspaceFiles,
+      maxHeight: Math.max(4, rows - 6),
     });
 
-    if (this.transcript.length === 0) {
-      // Trang chủ: logo + prompt xếp thành một khối ở giữa màn hình.
+    if (!chatting) {
+      // Chưa có câu nào: linh vật gốc thu nhỏ, căn giữa cùng lời chào.
       const welcomeLines = renderWelcomeScreen({
         width: mainWidth,
         height: rows,
@@ -1863,8 +1874,13 @@ export class FutrynTuiApp {
         borderStyle: manifest.borderStyle,
       });
       const availableHeight = rows - 2 - welcomeLines.length - composerLines.length;
-      if (availableHeight >= 3) {
-        const mascotLines = renderFyn({ ...companionView, tokens, width: Math.min(28, mainWidth - 4), compact: availableHeight < 13 });
+      if (availableHeight >= 6) {
+        const mascotLines = renderFyn({
+          ...companionView,
+          tokens,
+          width: 28,
+          scale: 5,
+        });
         const welcomeWidth = welcomeLines[0]?.spans.reduce((sum, span) => sum + span.text.length, 0) ?? colWidth;
         const centered = mascotLines.map(line => {
           const width = line.spans.reduce((sum, span) => sum + span.text.length, 0);
@@ -1886,16 +1902,18 @@ export class FutrynTuiApp {
         welcomeLines,
         welcomeWidth,
       );
-      drawBoxBlock(startRow + welcomeLines.length + 1, colLeft, composerLines, colWidth);
+      drawBoxBlock(startRow + welcomeLines.length + 1, contentLeft, composerLines, contentWidth);
     } else {
-      // Giao diện khi Chat phong cách OpenAI Codex kết hợp Fyn Companion
-      const showHeader = rows >= 16 && mainWidth >= 40;
-      let transcriptStartRow = 0;
-
-      if (showHeader) {
-        // 1. Top Header Bar thanh lịch ở mép trên cùng
+      const composerStartRow = Math.max(framePad + 1, rows - 1 - framePad - composerLines.length);
+      const mascotLines = contentWidth >= 28 && composerStartRow >= framePad + 10
+        ? renderFyn({ ...companionView, tokens, width: 28, scale: 5 })
+        : [];
+      const mascotRow = composerStartRow - mascotLines.length;
+      const showMascot = mascotLines.length > 0 && mascotRow >= framePad;
+      let transcriptStartRow = framePad;
+      if (!showMascot && rows >= 12 && mainWidth >= 40) {
         const headerSpans = renderTopHeaderBar({
-          width: mainWidth,
+          width: contentWidth,
           status,
           manifest,
           reactiveEvent,
@@ -1904,27 +1922,37 @@ export class FutrynTuiApp {
           tokens,
           companionState: companionView.state,
         });
-        drawSpansAt(0, 0, headerSpans, mainWidth);
-        drawSpansAt(1, 0, [{ text: '─'.repeat(mainWidth), fg: tokens.border, bg: tokens.background }], mainWidth);
-        transcriptStartRow = 2;
+        drawSpansAt(framePad, contentLeft, headerSpans, contentWidth);
+        transcriptStartRow = framePad + 2;
       }
-
-      // 2. Prompt Composer cố định ở đáy màn hình
-      const composerStartRow = Math.max(transcriptStartRow + 1, rows - 1 - composerLines.length);
-
-      // 3. Transcript Viewport chiếm trọn toàn bộ chiều cao giữa header và composer
-      const transcriptHeight = Math.max(1, composerStartRow - transcriptStartRow);
-      const vp = renderTranscriptViewport({
-        items: this.transcript,
-        width: colWidth,
-        height: transcriptHeight,
-        scrollOffset: this.transcriptScrollOffset,
-        tokens,
-        borderStyle: manifest.borderStyle,
-        syntaxHighlighting: appearance.syntaxHighlighting,
-      });
-      drawBoxBlock(transcriptStartRow, colLeft, vp.lines, colWidth);
-      drawBoxBlock(composerStartRow, colLeft, composerLines, colWidth);
+      const transcriptHeight = Math.max(0, (showMascot ? mascotRow : composerStartRow) - transcriptStartRow);
+      if (transcriptHeight > 0) {
+        const vp = renderTranscriptViewport({
+          items: this.transcript,
+          width: contentWidth,
+          height: transcriptHeight,
+          scrollOffset: this.transcriptScrollOffset,
+          tokens,
+          borderStyle: manifest.borderStyle,
+          syntaxHighlighting: appearance.syntaxHighlighting,
+        });
+        drawBoxBlock(transcriptStartRow, contentLeft, vp.lines, contentWidth);
+      }
+      if (showMascot) {
+        drawBoxBlock(mascotRow, contentLeft, mascotLines, 28);
+        if (this.isStreaming && contentWidth >= 44) {
+          const phases = ['·    ', '··   ', '···  ', ' ··· ', '  ···', '   ··'];
+          const pulse = phases[Math.floor(companionView.time * 5) % phases.length]!;
+          drawSpansAt(mascotRow + 2, contentLeft + 28, [
+            { text: pulse, fg: tokens.accent },
+            { text: companionView.state === 'streaming' ? ' Replying' : ' Working', fg: tokens.foregroundMuted },
+          ], contentWidth - 28);
+          drawSpansAt(mascotRow + 3, contentLeft + 28, [
+            { text: 'Esc to interrupt', fg: tokens.foregroundSubtle },
+          ], contentWidth - 28);
+        }
+      }
+      drawBoxBlock(composerStartRow, contentLeft, composerLines, contentWidth);
     }
     void reactiveEvent;
 

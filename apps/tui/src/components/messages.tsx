@@ -143,48 +143,46 @@ export function renderMarkdownBody(options: {
       if (!inCodeBlock) {
         inCodeBlock = true;
         codeLang = raw.trimStart().slice(3).trim() || 'code';
-        const header = `  ${codeLang}`;
         rendered.push({
-          spans: [{ text: header.slice(0, contentWidth).padEnd(contentWidth, ' '), fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated }],
+          spans: [{ text: codeLang.slice(0, contentWidth), fg: tokens.foregroundSubtle, bg }],
         });
       } else {
         inCodeBlock = false;
-        const footer = ' ';
-        rendered.push({
-          spans: [{ text: footer.slice(0, contentWidth).padEnd(contentWidth, ' '), fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated }],
-        });
       }
       continue;
     }
 
     if (inCodeBlock) {
-      const clipped = raw.slice(0, Math.max(1, contentWidth - 4));
-      const padRight = ' '.repeat(Math.max(0, contentWidth - 4 - clipped.length));
-      const codeSpans = highlightCodeLine(`${clipped}${padRight}`, tokens, tokens.backgroundElevated, syntaxHighlighting);
-      rendered.push({
-        spans: [
-          { text: '   ', fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated },
+      const codeWidth = Math.max(1, contentWidth - 2);
+      // Preserve long source lines rather than silently dropping their suffix.
+      for (let start = 0; start < Math.max(1, raw.length); start += codeWidth) {
+        const codeSpans = highlightCodeLine(raw.slice(start, start + codeWidth), tokens, tokens.backgroundElevated, syntaxHighlighting);
+        rendered.push({ spans: [
+          { text: ' ', fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated },
           ...codeSpans,
           { text: ' ', fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated },
-        ],
-      });
+        ] });
+      }
       continue;
     }
 
-    const wrapped = wrapTextToWidth(raw, contentWidth - 2);
+    const wrapped = wrapTextToWidth(raw, Math.max(8, contentWidth - 2));
     for (const line of wrapped) {
-      const padded = ` ${line}`.slice(0, contentWidth).padEnd(contentWidth, ' ');
-      if (/^#{1,4}\s+/.test(line)) {
+      const text = line.slice(0, contentWidth);
+      if (text.length === 0) {
+        rendered.push({ spans: [] });
+        continue;
+      }
+      if (/^#{1,4}\s+/.test(text)) {
         rendered.push({
-          spans: [{ text: padded, fg: tokens.markdownHeading, bg, bold: true }],
+          spans: [{ text, fg: tokens.markdownHeading, bg, bold: true }],
         });
-      } else if (line.includes('`') && syntaxHighlighting) {
-        // Inline code spans
-        const parts = padded.split(/(`[^`]+`)/g);
+      } else if (text.includes('`') && syntaxHighlighting) {
+        const parts = text.split(/(`[^`]+`)/g);
         const spans: StyledSpan[] = [];
         for (const part of parts) {
           if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
-            spans.push({ text: part, fg: tokens.markdownCode, bg: tokens.backgroundElevated, bold: true });
+            spans.push({ text: part, fg: tokens.markdownCode, bg: tokens.backgroundElevated });
           } else if (part.length > 0) {
             spans.push({ text: part, fg: tokens.foreground, bg });
           }
@@ -192,7 +190,7 @@ export function renderMarkdownBody(options: {
         rendered.push({ spans });
       } else {
         rendered.push({
-          spans: [{ text: padded, fg: tokens.foreground, bg }],
+          spans: [{ text, fg: tokens.foreground, bg }],
         });
       }
     }
@@ -209,7 +207,7 @@ export function renderTranscriptMessages(options: {
   syntaxHighlighting?: boolean;
 }): RenderedBoxLine[] {
   const { items, width, tokens, syntaxHighlighting = true } = options;
-  const innerWidth = Math.max(12, width - 2);
+  const innerWidth = Math.max(16, width - 4);
   const lines: RenderedBoxLine[] = [];
   const bg = tokens.background;
 
@@ -220,55 +218,43 @@ export function renderTranscriptMessages(options: {
     if (idx > 0) lines.push({ spans: [] });
 
     if (isUser) {
-      const maxText = Math.max(8, innerWidth - 2);
-      const wrapped = wrapTextToWidth(item.content || '', maxText);
-      const textWidth = Math.min(maxText, Math.max(1, ...wrapped.map(line => line.length)));
-      const left = Math.max(0, innerWidth - (textWidth + 2));
-      for (const line of wrapped) {
-        lines.push({
-          spans: [
-            { text: ' '.repeat(left), fg: tokens.foregroundSubtle, bg },
-            {
-              text: ` ${line.slice(0, textWidth).padEnd(textWidth, ' ')} `,
-              fg: tokens.accentForeground,
-              bg: tokens.accent,
-            },
-          ],
-        });
+      const wrapped = wrapTextToWidth(item.content || '', Math.max(8, innerWidth - 4));
+      for (const [row, text] of wrapped.entries()) {
+        lines.push({ spans: [
+          { text: row === 0 ? '› ' : '  ', fg: tokens.accent, bg: tokens.backgroundElevated, bold: true },
+          { text: text.padEnd(innerWidth - 2), fg: tokens.foreground, bg: tokens.backgroundElevated },
+        ] });
       }
       continue;
     }
 
-    lines.push({
-      spans: [
-        { text: 'Fyn', fg: tokens.accent, bg, bold: true },
-        { text: item.streaming ? '  ···' : '', fg: tokens.foregroundMuted, bg },
-      ],
-    });
-
-    const body = renderMarkdownBody({
-      content: item.content || (item.streaming ? '▍' : ''),
-      width: Math.max(8, innerWidth - 2),
-      tokens,
-      bg,
-      syntaxHighlighting,
-    });
-    for (const bLine of body) {
-      lines.push({
-        spans: [{ text: '│ ', fg: tokens.border, bg }, ...bLine.spans],
+    if (item.content || item.streaming) {
+      const body = renderMarkdownBody({
+        content: item.content || '▍',
+        width: Math.max(8, innerWidth - 4),
+        tokens,
+        bg,
+        syntaxHighlighting,
       });
+      for (const [row, bLine] of body.entries()) {
+        if (bLine.spans.length === 0) {
+          lines.push({ spans: [] });
+          continue;
+        }
+        lines.push({
+          spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.accent, bg }, ...bLine.spans],
+        });
+      }
     }
 
-    // 3. Thông báo lỗi (nếu có)
     if (item.errorText) {
       lines.push({
         spans: [
-          { text: `  ⚠ ${item.errorText}`.slice(0, innerWidth).padEnd(innerWidth, ' '), fg: tokens.error, bg, bold: true },
+          { text: `  ${item.errorText}`.slice(0, innerWidth), fg: tokens.error, bg },
         ],
       });
     }
 
-    // 4. Danh sách thực thi công cụ kiểu Codex Action Steps
     if (item.toolCalls && item.toolCalls.length > 0) {
       for (const call of item.toolCalls) {
         lines.push(
@@ -282,7 +268,6 @@ export function renderTranscriptMessages(options: {
       }
     }
 
-    // 5. Dòng tổng kết lượt thực thi (Turn Footer) chuẩn OpenAI Codex + Fyn Companion
     const metaParts: string[] = [];
     if (item.durationMs !== undefined && item.durationMs > 0) {
       metaParts.push(`Worked for ${(item.durationMs / 1000).toFixed(1)}s`);
@@ -294,12 +279,6 @@ export function renderTranscriptMessages(options: {
         metaParts.push(`$${item.usage.costUSD.toFixed(4)}`);
       }
     }
-    if (item.modelId) {
-      metaParts.push(item.modelId);
-    }
-    if (item.accountAlias) {
-      metaParts.push(`@${item.accountAlias}`);
-    }
 
     if (!item.streaming && metaParts.length > 0) {
       lines.push({
@@ -308,7 +287,6 @@ export function renderTranscriptMessages(options: {
         ],
       });
     }
-    lines.push({ spans: [] });
   }
 
   return lines;

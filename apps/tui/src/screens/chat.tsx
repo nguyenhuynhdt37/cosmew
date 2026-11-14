@@ -51,9 +51,9 @@ export function renderWelcomeScreen(options: {
   lines.push(center('FUTRYN', tokens.accent, true));
   lines.push(center(manifest.greeting ?? 'Quiet desk. Clear answers.', tokens.foregroundMuted));
   if (!status.activeAccount) {
-    lines.push(pills(['/connect', '/models', '/themes']));
+    lines.push(pills(['/login', '/model', '/theme']));
   } else if (!status.selection) {
-    lines.push(pills(['/models', '/themes']));
+    lines.push(pills(['/model', '/theme']));
   } else {
     lines.push(center(status.selection.modelId, tokens.foregroundSubtle));
   }
@@ -148,7 +148,7 @@ export function renderTopHeaderBar(options: {
   tokens: ThemeTokens;
   companionState?: FynState;
 }): StyledSpan[] {
-  const { width, status, manifest, reactiveEvent, reactiveEffectsEnabled, isPreviewing, tokens, companionState } = options;
+  const { width, status, reactiveEvent, reactiveEffectsEnabled, isPreviewing, tokens, companionState } = options;
   const bg = tokens.backgroundPanel;
 
   const stateKey: FynState = companionState ?? (reactiveEffectsEnabled && reactiveEvent.kind !== 'idle' ? (
@@ -192,9 +192,6 @@ export function renderTopHeaderBar(options: {
   const bits = [
     isPreviewing ? 'preview' : '',
     status.selection?.modelId ?? '',
-    status.activeAccount?.alias ? `@${status.activeAccount.alias}` : '',
-    status.mode,
-    manifest.name,
   ].filter(Boolean);
   const room = Math.max(0, width - leftLen);
   const rightText = room > 0 ? ` ${bits.join(' · ')} `.slice(0, room) : '';
@@ -234,6 +231,7 @@ export function renderTranscriptViewport(options: {
   const result: RenderedBoxLine[] = [];
   for (let row = 0; row < height; row++) {
     const line = slice[row] ?? { spans: [] };
+    const used = line.spans.reduce((sum, span) => sum + span.text.length, 0);
     let thumb = ' ';
     if (totalLines > height) {
       const thumbPos = Math.floor((clampedOffset / Math.max(1, maxOffset)) * (height - 1));
@@ -242,8 +240,8 @@ export function renderTranscriptViewport(options: {
     result.push({
       spans: [
         ...line.spans,
-        ...(line.spans.length > 0
-          ? [{ text: ` ${thumb}`, fg: tokens.scrollbar, bg: tokens.background }]
+        ...(totalLines > height
+          ? [{ text: `${' '.repeat(Math.max(0, contentWidth - used))} ${thumb}`, fg: tokens.scrollbar, bg: tokens.background }]
           : []),
       ],
     });
