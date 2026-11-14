@@ -236,6 +236,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
   const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: { role: 'user' | 'assistant'; content: string }[] }) => {
     const account = accounts.get(selection.accountId);
+    if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
     if (!info) throw new HannesError('NOT_FOUND');
     return new Conversation(
@@ -251,6 +252,11 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   const conversation = (project?: string) => {
     const selection = router.resolve(project);
     return createConversationForSelection(selection);
+  };
+
+  const resumeConversation = (id: string) => {
+    const record = conversations.get(id); if (!record) throw new HannesError('NOT_FOUND');
+    return createConversationForSelection(record.selection, { id, messages: record.messages.filter(m => m.state === 'committed').map(m => ({ role: m.role, content: m.content })) });
   };
 
   const discoverModels = async (account: Account, signal?: AbortSignal) => {
@@ -359,6 +365,15 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         activeConvMap.delete(id);
         return conversations.delete(id);
       },
+      forkSession: (id, selection) => {
+        // Validate the target account/model before creating any durable copy.
+        createConversationForSelection(selection, { id, messages: [] });
+        const record = conversations.fork(id, selection);
+        const messages = record.messages.map(m => ({ role: m.role, content: m.content }));
+        const conv = createConversationForSelection(selection, { id: record.id, messages });
+        activeConvMap.set(conv.id, conv);
+        return { id: conv.id, selection, messages };
+      },
       startSession: project => {
         const conv = conversation(project);
         const selection = router.resolve(project);
@@ -382,7 +397,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           messages: committed,
         };
       },
-      sendTurn: async function* (sessionId, content, signal, maxOutputTokens = 4096, maxEstimatedCostUSD) {
+      sendTurn: async function* (sessionId, content, signal, maxOutputTokens = 4096, maxEstimatedCostUSD, reasoningEffort) {
         let conv = activeConvMap.get(sessionId);
         if (!conv) {
           const record = conversations.get(sessionId);
@@ -396,7 +411,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           });
           activeConvMap.set(conv.id, conv);
         }
-        yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD);
+        yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
       },
       loadCustomThemes: () => customThemes.loadAll(),
       saveCustomTheme: manifest => customThemes.save(manifest),
@@ -422,6 +437,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     catalog,
     resolveAccount,
     conversation,
+    resumeConversation,
     createFutrynClient,
     validateAccount,
     discoverModels,

@@ -10,9 +10,10 @@ import {
   type ModelInfo,
   type ThemeMode,
 } from '@hannes/contracts';
+import { parseSlashCommand } from '@hannes/sdk';
 import { providerPresets } from '@hannes/models';
 import { fetchModelsDev, terminalText, validateEndpoint } from '@hannes/security';
-import { SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab } from '@hannes/tui';
+import { reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab } from '@hannes/tui';
 import { loginSubscription } from './subscriptions/login';
 import { loginWizard } from './auth-wizard';
 import { startup, type Application } from './bootstrap/startup';
@@ -52,6 +53,7 @@ API keys are entered hidden, from secret-manager stdin, or referenced by environ
 variable NAME. Never pass a key as an argument. Default storage: ~/.hannes (0700).
 Canonical TUI commands: /login (/connect), /logout, /model (/models), /status,
   /config (/settings), /permissions, /mcp, /plugin, /theme (/themes), /resume,
+  /usage (/cost), /context, /switch <index-or-alias>, /model effort <value>,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start FUTRYN: bun run futryn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
@@ -376,6 +378,11 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
   const project = options.project ? resolve('.') : undefined;
   let conversation: ReturnType<Application['conversation']> | undefined;
   let conversationAccountId: string | undefined;
+  const telemetryClient = () => {
+    const client = app.createFutrynClient(resolve('.'));
+    if (conversation) client.resumeSession(conversation.id);
+    return client;
+  };
   const resetConversation = () => {
     conversation = undefined;
     conversationAccountId = undefined;
@@ -397,7 +404,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     let text = '';
     let final: unknown;
     const streamRedactor = app.redactor.stream();
-    for await (const event of conversation.send(message, signal, maxOutput, estimatedBudget)) {
+    for await (const event of conversation.send(message, signal, maxOutput, estimatedBudget, telemetryClient().status().reasoningEffort ?? undefined)) {
       if (event.type === 'textDelta') {
         text += event.text;
         if (!options.json) process.stdout.write(terminalText(streamRedactor.push(event.text)));
@@ -428,10 +435,32 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       const line = await input.line('hannes> ');
       if (signal.aborted) throw new HannesError('CANCELLED');
       if (line === undefined) break;
-      const text = line.trim();
+      const parsedCommand = line.trim().startsWith('/') ? parseSlashCommand(line) : null;
+      // Legacy scripted /connect provider alias ENV model remains supported.
+      const legacyConnect = line.trim().startsWith('/connect ');
+      if (parsedCommand?.error && !legacyConnect) { output(app, parsedCommand.error); continue; }
+      const text = legacyConnect ? line.trim() : parsedCommand?.input ?? line.trim();
       if (text === '/exit' || text === '/quit') break;
       try {
-        if (text === '/login' || text.startsWith('/login ') || text === '/connect') {
+        if (parsedCommand?.definition?.unavailable) { output(app, parsedCommand.definition.unavailable);
+        } else if (text === '/usage' || text === '/context') {
+          output(app, reportRows(telemetryClient(), text.slice(1) as 'usage' | 'context').join('\n'));
+        } else if (text === '/model effort' || text.startsWith('/model effort ')) {
+          const client = telemetryClient(); if (parsedCommand?.args) client.setReasoningEffort(parsedCommand.args);
+          output(app, { effort: client.status().reasoningEffort, available: client.status().activeModel?.reasoningEfforts ?? [] });
+        } else if (text === '/switch' || text.startsWith('/switch ')) {
+          const client = telemetryClient();
+          if (!parsedCommand?.args) output(app, client.listAccounts().filter(a => a.status !== 'logged-out').map((a, i) => ({ index: i + 1, alias: a.alias, provider: a.providerId })));
+          else {
+            if (process.stdin.isTTY && (await input.ask('Continue using another account and transfer committed chat history? [y/N]')).toLowerCase() !== 'y') { output(app, 'Cancelled.'); continue; }
+            const account = await client.switchAccount(parsedCommand.args, true);
+            const session = client.activeSession();
+            conversation = session ? app.resumeConversation(session.id) : app.conversation(project); conversationAccountId = account.id;
+            output(app, `Using ${account.alias}; original session preserved.`);
+          }
+        } else if (text.startsWith('/resume ')) {
+          conversation = app.resumeConversation(parsedCommand!.args); conversationAccountId = app.conversations.get(conversation.id)?.selection.accountId; output(app, 'Session resumed.');
+        } else if (text === '/login' || text.startsWith('/login ') || text === '/connect') {
           conversation = undefined;
           conversationAccountId = undefined;
           await loginWizard(
@@ -450,6 +479,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           if (!target) output(app, 'Bạn đã đăng xuất. Gõ /login để đăng nhập lại.');
           else {
             const account = app.accounts.get(target);
+            if (process.stdin.isTTY && (await input.ask(`Sign out of ${account.alias}? Deletes the local credential. [y/N]`)).toLowerCase() !== 'y') { output(app, 'Cancelled.'); continue; }
             if (account.id === conversationAccountId || account.id === app.settings.read().activeAccountId) {
               conversation = undefined;
               conversationAccountId = undefined;
@@ -464,8 +494,8 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           } catch (e) {
             if (!(e instanceof HannesError) || !['AUTH', 'POLICY'].includes(e.code)) throw e;
           }
-          output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null });
-        } else if (text === '/models') {
+          output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null, details: reportRows(telemetryClient(), 'status') });
+        } else if (line.trim() === '/models') {
           output(app, await app.discoverModels(app.resolveAccount(), signal));
         } else if (text === '/accounts' || text.startsWith('/accounts ')) {
           output(app, accountView(app));
@@ -494,8 +524,8 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           output(app, 'Model switched; started a fresh conversation.');
         } else if (text === '/model') {
           output(app, 'Use /models, then /model <model-id>.');
-        } else if (text === '/themes' || text.startsWith('/themes ')) {
-          const arg = text.slice(7).trim();
+        } else if (text === '/theme' || text.startsWith('/theme set ') || (parsedCommand?.definition?.command === '/theme' && parsedCommand.args)) {
+          const arg = text.startsWith('/theme set ') ? text.slice(11).trim() : text.slice(6).trim();
           const client = app.createFutrynClient(resolve('.'));
           const engine = new ThemeEngine({ client });
           await engine.initialize();
@@ -525,7 +555,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           output(app, await app.createFutrynClient(resolve('.')).diagnose(signal));
         } else if (text === '/help' || text === '/?') {
           output(app, SLASH_COMMANDS.map(c => `${c.command}: ${c.description}`).join('\n'));
-        } else if (['/config', '/settings', '/theme', '/permissions', '/resume'].includes(text)) {
+        } else if (['/config', '/settings', '/theme', '/theme edit', '/permissions', '/resume'].includes(text)) {
           if (process.stdin.isTTY && process.stdout.isTTY) {
             await runInteractiveTui({ client: app.createFutrynClient(resolve('.')), initialCommand: text });
             resetConversation();
@@ -581,9 +611,14 @@ async function main() {
   process.once('SIGTERM', interrupt);
   const account = () => app.resolveAccount(str(options, 'account'));
   try {
-    if (group === 'status') {
-      const status = app.createFutrynClient(resolve('.')).status();
-      output(app, { account: status.activeAccount?.alias ?? null, provider: status.activeProvider?.id ?? null, model: status.selection?.modelId ?? null, validatedAt: status.activeAccount?.validatedAt ?? null, connectivity: 'Historical validation only; run doctor for a live check.', capabilities: status.capabilities }, !!options.json);
+    if (group === 'usage' || group === 'cost' || group === 'context') {
+      const client = app.createFutrynClient(resolve('.'));
+      if (action) client.resumeSession(action);
+      output(app, reportRows(client, group === 'context' ? 'context' : 'usage').join('\n'), !!options.json);
+    } else if (group === 'status') {
+      const client = app.createFutrynClient(resolve('.')); if (action) client.resumeSession(action);
+      const status = client.status();
+      output(app, { usage: client.usage(), context: client.context(), reasoningEffort: status.reasoningEffort, sessionId: status.activeSessionId, account: status.activeAccount?.alias ?? null, provider: status.activeProvider?.id ?? null, model: status.selection?.modelId ?? null, validatedAt: status.activeAccount?.validatedAt ?? null, connectivity: 'Historical validation only; run doctor for a live check.', capabilities: status.capabilities }, !!options.json);
     } else if (group === 'doctor') {
       output(app, await app.createFutrynClient(resolve('.')).diagnose(controller.signal), !!options.json);
     } else if (['mcp', 'plugin', 'plugins', 'compact'].includes(group ?? '')) {
@@ -593,7 +628,7 @@ async function main() {
       output(app, 'Logged out locally; remote keys require provider-console revocation.');
     } else if (group === 'login' && str(options, 'provider')) {
       await login(app, options, controller.signal);
-    } else if ((['login', 'connect', 'model', 'config', 'permissions', 'resume', 'clear'].includes(group ?? '') && !(group === 'model' && action === 'doctor')) || (!group && process.stdin.isTTY && process.stdout.isTTY)) {
+    } else if ((['login', 'connect', 'model', 'config', 'permissions', 'resume', 'clear', 'switch'].includes(group ?? '') && !(group === 'model' && action === 'doctor')) || (!group && process.stdin.isTTY && process.stdout.isTTY)) {
       await runInteractiveTui({ client: app.createFutrynClient(resolve('.')), initialCommand: group ? `/${group}${action ? ' ' + action : ''}` : undefined });
     } else if (group === 'exit') {
       return;

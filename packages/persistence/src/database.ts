@@ -18,13 +18,15 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, { strict: true });
     db.exec('PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (version > 1) { db.close(); throw new HannesError('STORAGE'); }
+    if (version > 2) { db.close(); throw new HannesError('STORAGE'); }
     db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, selection TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS messages (conversation TEXT NOT NULL REFERENCES conversations(id), revision INTEGER NOT NULL,
           role TEXT NOT NULL, content TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(conversation,revision));
-        PRAGMA user_version=1;`);
+        CREATE TABLE IF NOT EXISTS turn_receipts (conversation TEXT NOT NULL REFERENCES conversations(id), revision INTEGER NOT NULL,
+          data TEXT NOT NULL, PRIMARY KEY(conversation,revision));
+        PRAGMA user_version=2;`);
     })();
     return db;
   } catch { throw new HannesError('STORAGE'); }

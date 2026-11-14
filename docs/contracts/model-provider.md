@@ -63,3 +63,11 @@ Optional maxEstimatedCostUSD is an explicit estimate guard: missing prices or an
 
 
 Contract 1.2 ([ADR 0008](../adr/0008-subscription-runtime-auth.md)) adds optional runtime/family provider metadata, runtime credential references, automatic/polling auth and method target/advanced metadata. Existing schema-1 rows remain unchanged. New runtime refs must match their provider runtime and cannot resolve through API-key credential access. All current consumers migrate together; older readers reject unfamiliar runtime data.
+
+## Contract 1.3: telemetry, reasoning and account continuation
+
+[ADR 0009](../adr/0009-command-telemetry-and-account-continuation.md) versions the additive request effort/model-effort metadata, optional reasoning preferences, reasoning-summary/usage/context stream events and validated turn receipts. All CLI/core/SDK/TUI/model/security/persistence consumers migrate together. Consumers must distinguish progress/reasoning events from answer text, and usage observations from terminal completion. `costEstimated`, pricing source/time, optional cache/reasoning subsets, premium-request units and account quota snapshots retain their meanings through persistence and UI. Unknown values are nullable, not zero.
+
+SQLite schema 2 adds turn receipts alongside existing schema-1 messages. `ConversationStore.append`, `complete`, `interrupt` accept optional receipts; `observeTurn` durably records intermediate usage/context without committing the answer. Complete/interrupt share transactions with their final receipts. Existing sessions have missing historical coverage, never synthetic zero receipts. `/switch` forks committed history into a new selection-bound session after explicit UI confirmation, without copying usage or permissions. Source sessions remain unchanged.
+
+Effort requires provider-advertised model values. Native Codex/Copilot and supported Responses requests carry the selected value; unsupported models expose no effective control. Context includes a labelled local heuristic and separately dated runtime measurements; no exact tokenizer, complete hidden runtime context or billing reconciliation is claimed.

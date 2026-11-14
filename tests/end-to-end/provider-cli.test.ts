@@ -182,7 +182,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
     await waitFor('Model [fixture-model]: '); terminal.write('\r');
     await waitFor('Đã đăng nhập gateway'); await waitFor('hannes> ');
     terminal.write('\x1b[AHello after hidden login\r'); await waitFor('Hello fixture'); await waitFor('hannes> ');
-    terminal.write('/logout\r'); await waitFor('Đã đăng xuất gateway'); await waitFor('hannes> ');
+    terminal.write('/logout\r'); await waitFor('Sign out of gateway?'); terminal.write('y\r'); await waitFor('Đã đăng xuất gateway'); await waitFor('hannes> ');
     terminal.write('/status\r'); await waitFor('"selection": null'); await waitFor('hannes> ');
     terminal.write('/exit\r'); expect(await child.exited).toBe(0);
     expect(transcript).not.toContain('fixture-e2e-sensitive-value');

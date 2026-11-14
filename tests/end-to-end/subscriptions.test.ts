@@ -148,7 +148,7 @@ for (const vendor of ['OpenAI', 'GitHub Copilot']) test.skipIf(process.platform 
     terminal.write('\r'); await wait('runtime-model');
     expect(output).not.toContain('Name this account'); expect(output).not.toContain('Enter API key');
     terminal.write('\rHello from terminal\r'); await wait('Subscription fixture response');
-    terminal.write('/logout\r'); await wait('Local credential removed');
+    terminal.write('/logout\r'); await wait('Deletes the local credential'); terminal.write('\x1b[B\r'); await wait('Local credential removed');
     terminal.write('\x1b\x03');
     expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
     expect(output).not.toContain('fixture-runtime-secret');
@@ -201,4 +201,26 @@ test('GitHub subscription errors stay in the sign-in context and never ask for a
   expect(text).toContain('Try signing in again.');
   expect(text).not.toContain('API key'); expect(text).not.toContain('environment variable');
   expect(c.app.accounts.list()).toHaveLength(0);
+});
+
+for (const runtime of ['codex', 'copilot'] as const) test(`${runtime}: official usage/context/summary events and advertised effort reach a durable session`, async () => {
+  const c = await context('telemetry'); await connect(c, runtime);
+  expect(c.client.status().activeModel?.reasoningEfforts).toEqual(['low', 'high']);
+  c.client.setReasoningEffort('high');
+  const events = []; for await (const event of c.client.sendMessage('Explain briefly')) events.push(event);
+  expect(events.some(e => e.type === 'reasoningDelta' && e.text === 'Provider supplied summary')).toBe(true);
+  expect(c.client.usage().inputTokens).toBe(100); expect(c.client.usage().outputTokens).toBe(20);
+  expect(c.client.usage().last?.usage?.reasoningTokens).toBe(8);
+  expect(c.client.usage().last?.usage?.cacheReadTokens).toBe(30);
+  expect(c.client.usage().costUSD).toBeNull();
+  expect(c.client.usage().last?.usage?.quota?.[0]?.usedPercent).toBe(25);
+  expect(c.client.usage().premiumRequests).toBe(runtime === 'copilot' ? 1.5 : null);
+  expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+  expect(c.client.context().estimatedPercent).toBeNull(); // Runtime-added context is not locally measurable.
+  const session = c.client.activeSession()!.id;
+  const another = c.app.createFutrynClient(c.dir); another.resumeSession(session);
+  expect(another.usage().inputTokens).toBe(100);
+  expect(another.status().reasoningEffort).toBe('high');
+  expect(c.app.conversations.get(session)?.messages.some(m => m.content.includes('Provider supplied summary'))).toBe(false);
+  expect(() => another.setReasoningEffort('invented')).toThrow();
 });

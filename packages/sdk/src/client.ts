@@ -1,3 +1,4 @@
+import { summarizeUsage } from './telemetry';
 import { createHash } from 'node:crypto';
 import {
   HannesError,
@@ -31,7 +32,7 @@ import {
 
 export type AgentMode = 'chat' | 'plan' | 'review';
 
-export type ReactiveAgentEventKind = 'idle' | 'thinking' | 'streaming' | 'tool' | 'permission' | 'error' | 'done';
+export type ReactiveAgentEventKind = 'idle' | 'thinking' | 'waiting' | 'reasoning' | 'streaming' | 'tool' | 'permission' | 'error' | 'done';
 
 export interface ReactiveAgentEvent {
   seq: number;
@@ -95,6 +96,7 @@ export interface FutrynBackendPorts {
   listSessions(): SessionSummary[];
   getSession(id: string): SessionRecord | undefined;
   deleteSession(id: string): boolean;
+  forkSession?(id: string, selection: Selection): { id: string; selection: Selection; messages: Message[] };
   startSession(project?: string): { id: string; selection: Selection; messages: Message[] };
   resumeSession(id: string): { id: string; selection: Selection; messages: Message[] };
   sendTurn(
@@ -103,6 +105,7 @@ export interface FutrynBackendPorts {
     signal?: AbortSignal,
     maxOutputTokens?: number,
     maxEstimatedCostUSD?: number,
+    reasoningEffort?: string,
   ): AsyncIterable<ModelEvent>;
   loadCustomThemes(): { themes: ThemeManifest[]; errors: { file: string; message: string }[] };
   saveCustomTheme(manifest: ThemeManifest): ThemeManifest;
@@ -116,6 +119,7 @@ export class FutrynClient {
   private currentSession: { id: string; selection: Selection; messages: Message[] } | null = null;
   private currentMode: AgentMode = 'chat';
   private lastUsage: Usage | null = null;
+  private sending = false;
   private eventSeq = 0;
   private latestEvent: ReactiveAgentEvent = { seq: 0, kind: 'idle', timestamp: Date.now() };
   private readonly eventListeners = new Set<(event: ReactiveAgentEvent) => void>();
@@ -197,7 +201,7 @@ export class FutrynClient {
   status(projectScoped = false) {
     const project = projectScoped ? this.ports.workspace : undefined;
     const state = this.ports.settings.read();
-    const selection = this.ports.resolveSelection(project);
+    const selection = this.currentSession?.selection ?? this.ports.resolveSelection(project);
     const activeAccount = selection
       ? state.accounts.find(a => a.id === selection.accountId) ?? null
       : state.activeAccountId
@@ -225,7 +229,10 @@ export class FutrynClient {
       activeModel,
       activeSessionId: this.currentSession?.id ?? null,
       messageCount: this.currentSession?.messages.length ?? 0,
-      lastUsage: this.lastUsage,
+      lastUsage: this.usage().last?.usage ?? this.lastUsage,
+      usage: this.usage(),
+      reasoningEffort: activeAccount && activeModel ? this.effort(activeAccount.id, activeModel) : null,
+      phase: this.latestEvent.kind,
       pendingPermissions: this.listPendingPermissions().length,
       capabilities: this.capabilities(),
     };
@@ -334,7 +341,7 @@ export class FutrynClient {
     const target = this.ports.getAccount(idOrAlias);
     if (this.currentSession?.selection.accountId === target.id) {
       this.clearSessionAuthorization();
-      this.currentSession = null;
+      this.currentSession = null; this.lastUsage = null;
     }
     await this.ports.logoutAccount(target.id, remove);
   }
@@ -421,6 +428,7 @@ export class FutrynClient {
   resumeSession(id: string): { id: string; selection: Selection; messages: Message[] } {
     this.clearSessionAuthorization();
     this.currentSession = this.ports.resumeSession(id);
+    this.lastUsage = this.ports.getSession(id)?.turns?.at(-1)?.usage ?? null;
     return {
       id: this.currentSession.id,
       selection: { ...this.currentSession.selection },
@@ -456,10 +464,12 @@ export class FutrynClient {
   ): AsyncIterable<ModelEvent> {
     const trimmed = content.trim();
     if (!trimmed) throw new HannesError('INVALID_INPUT');
+    if (this.sending) throw new HannesError('POLICY');
     if (!this.currentSession) {
       this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
     }
     const session = this.currentSession;
+    this.sending = true;
     this.emitReactiveEvent('thinking', 'Preparing request');
     let assistantText = '';
     try {
@@ -469,12 +479,15 @@ export class FutrynClient {
         options?.signal,
         options?.maxOutputTokens,
         options?.maxEstimatedCostUSD,
+        this.status().reasoningEffort ?? undefined,
       )) {
         if (event.type === 'started') {
-          this.emitReactiveEvent('streaming', event.requestId);
+          this.emitReactiveEvent('waiting', 'Waiting for provider');
         } else if (event.type === 'textDelta') {
           assistantText += event.text;
           this.emitReactiveEvent('streaming');
+        } else if (event.type === 'reasoningDelta') {
+          this.emitReactiveEvent('reasoning', 'Provider reasoning summary');
         } else if (event.type === 'toolCallComplete') {
           this.emitReactiveEvent('tool', event.call.name);
         } else if (event.type === 'completed') {
@@ -490,7 +503,71 @@ export class FutrynClient {
     } catch (err) {
       this.emitReactiveEvent('error', err instanceof HannesError ? err.code : 'ERROR');
       throw err;
-    }
+    } finally { this.sending = false; }
+  }
+
+  usage() {
+    const record = this.currentSession ? this.ports.getSession(this.currentSession.id) : undefined;
+    const turns = record?.turns ?? [];
+    const completed = turns.filter(t => t.outcome === 'completed').length;
+    return summarizeUsage(turns, Math.max(0, (record?.messages.filter(m => m.role === 'user' && m.state === 'committed').length ?? 0) - completed));
+  }
+
+  context(draft = '') {
+    const status = this.status();
+    const history = this.currentSession?.messages ?? [];
+    const pending = this.currentSession && ['thinking', 'waiting', 'reasoning', 'streaming'].includes(this.latestEvent.kind)
+      ? this.ports.getSession(this.currentSession.id)?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
+    const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(draft ? [{ role: 'user', content: draft }] : [])];
+    const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
+    const estimate = components.length ? Math.ceil(bytes / 4) + components.length * 16 + 64 : 0;
+    const runtime = !!status.activeProvider?.runtime;
+    const last = this.usage().last?.context ?? null;
+    const limit = status.activeModel?.contextLimit ?? last?.limitTokens ?? null;
+    const reserve = Math.min(4096, status.activeModel?.outputLimit ?? 4096);
+    return { estimateTokens: estimate, estimateMethod: 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
+      limitTokens: limit, outputReserve: runtime ? null : reserve, outputLimit: status.activeModel?.outputLimit ?? null, runtimeHiddenContext: runtime,
+      estimatedPercent: limit && !runtime ? Math.round(estimate / limit * 1000) / 10 : null,
+      lastMeasured: last, metadataSource: status.activeModel?.metadataSource ?? null,
+      metadataAt: status.activeModel?.metadataFetchedAt ?? null, messages: components.length };
+  }
+
+  private effort(accountId: string, model: ModelInfo): string | null {
+    const stored = this.ports.settings.read().reasoningPreferences?.[accountId + ':' + model.id];
+    return stored && model.reasoningEfforts?.includes(stored) ? stored : model.defaultReasoningEffort ?? null;
+  }
+  setReasoningEffort(value: string): void {
+    const status = this.status(); const model = status.activeModel; const account = status.activeAccount;
+    if (!model || !account || !model.reasoningEfforts?.length) throw new HannesError('UNSUPPORTED');
+    if (value !== 'default' && !model.reasoningEfforts.includes(value)) throw new HannesError('INVALID_INPUT');
+    this.ports.settings.update(settings => {
+      settings.reasoningPreferences ??= {};
+      const key = account.id + ':' + model.id;
+      if (value === 'default') delete settings.reasoningPreferences[key]; else settings.reasoningPreferences[key] = value;
+    });
+  }
+
+  async switchAccount(reference: string, continueHistory = false, modelId?: string, signal?: AbortSignal): Promise<Account> {
+    if (this.sending) throw new HannesError('POLICY');
+    const accounts = this.listAccounts().filter(account => account.status !== 'logged-out');
+    const target = /^\d+$/.test(reference) ? accounts[Number(reference) - 1] : accounts.find(a => a.id === reference || a.alias === reference);
+    if (!target) throw new HannesError('NOT_FOUND');
+    const source = this.currentSession;
+    if (source?.selection.accountId === target.id) return target;
+    if (signal?.aborted) throw new HannesError('CANCELLED');
+    const catalog = await this.ports.discoverModels(target, signal);
+    if (signal?.aborted) throw new HannesError('CANCELLED');
+    const previousId = source?.selection.modelId ?? this.status().selection?.modelId;
+    const model = modelId ? catalog.models.find(m => m.id === modelId) : catalog.models.find(m => m.id === previousId) ?? catalog.models.find(m => m.id === target.defaultModel);
+    if (!model) throw new HannesError('NOT_FOUND');
+    const selection = { accountId: target.id, modelId: model.id };
+    if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new HannesError('UNSUPPORTED');
+    const fork = continueHistory && source?.messages.length ? this.ports.forkSession!(source.id, selection) : null;
+    try { this.ports.selectModel(target, model); }
+    catch (error) { if (fork) this.ports.deleteSession(fork.id); throw error; }
+    this.clearSessionAuthorization(); this.currentSession = fork; this.lastUsage = null;
+    this.emitReactiveEvent('idle', 'Account switched');
+    return target;
   }
 
   // Appearance & Custom Themes

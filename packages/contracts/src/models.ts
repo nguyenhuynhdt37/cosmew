@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.2' as const;
+export const CONTRACT_VERSION = '1.3' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
@@ -74,6 +74,8 @@ export const capabilitiesSchema = z.strictObject({
 export type Capabilities = z.infer<typeof capabilitiesSchema>;
 export const modelSchema = z.strictObject({
   id: modelIdSchema, name: z.string().min(1).max(300), capabilities: capabilitiesSchema,
+  reasoningEfforts: z.array(z.string().min(1).max(40)).max(20).optional(),
+  defaultReasoningEffort: z.string().max(40).optional(),
   contextLimit: z.number().int().positive().nullable(), outputLimit: z.number().int().positive().nullable(),
   pricing: z.strictObject({ inputPerMillion: z.number().nonnegative(), outputPerMillion: z.number().nonnegative(), currency: z.literal('USD') }).nullable(),
   source: z.enum(['provider', 'manual']), fetchedAt: z.string().datetime(),
@@ -88,15 +90,19 @@ export const requestSchema = z.strictObject({
   requestId: z.string().uuid(), modelId: modelIdSchema,
   messages: z.array(messageSchema).min(1).max(200),
   maxOutputTokens: z.number().int().min(1).max(32768).default(4096),
+  reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),
   tools: z.array(z.strictObject({ name: idSchema, description: z.string().max(2000), inputSchema: z.record(z.string(), z.unknown()) })).max(32).default([]),
 });
 export type ModelRequest = z.infer<typeof requestSchema>;
-export interface Usage { inputTokens: number | null; outputTokens: number | null; costUSD: number | null; costEstimated?: boolean }
+export type Usage = z.infer<typeof import('./telemetry').usageSchema>;
 export interface ToolCall { id: string; name: string; input: unknown }
 export type ModelEvent =
   | { type: 'started'; requestId: string }
   | { type: 'textDelta'; text: string }
+  | { type: 'reasoningDelta'; text: string }
+  | { type: 'usage'; usage: Usage }
+  | { type: 'context'; context: import('./telemetry').ContextMeasurement }
   | { type: 'toolCallComplete'; call: ToolCall }
   | { type: 'completed'; finishReason: string; usage: Usage };
 export interface ModelPort {
@@ -289,6 +295,7 @@ export const settingsSchema = z.strictObject({
   schemaVersion: z.literal(1), providers: z.array(providerSchema).max(100), accounts: z.array(accountSchema).max(200),
   activeAccountId: z.string().uuid().nullable(), selection: selectionSchema.nullable(),
   projects: z.record(z.string(), selectionSchema), catalogs: z.array(cacheSchema).max(200),
+  reasoningPreferences: z.record(z.string(), z.string().min(1).max(40)).optional(),
   appearance: appearanceSchema.optional(),
   projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
 }).superRefine((settings, ctx) => {

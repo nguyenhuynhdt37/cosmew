@@ -26,3 +26,7 @@ Retention: tách event metadata, prompt/tool content, audit và artifacts; confi
 Migrations: monotonic schemaVersion, backup/restore và exclusive migration lock, reject newer unsupported DB; không âm thầm downgrade. Durable envelope major khác DB schema version. Rebuild views từ events cần đảm bảo không replay effects.
 
 Acceptance: power-loss giữa intent/effect/result; concurrent resume; migration interruption; disk full trước approval và trước result; artifact GC vẫn giữ checkpoint references; tenant isolation và deletion. Chi tiết [persistence subsystem](../subsystems/persistence.md).
+
+## PA1/TUI1 schema 2 usage receipts
+
+[ADR 0009](../adr/0009-command-telemetry-and-account-continuation.md) adds transactional `turn_receipts(conversation, revision, data)` and migrates SQLite `user_version` 0/1 to 2. Newer versions are rejected. Turn outcome, times, selection IDs, nullable usage, price provenance and optional context/quota measurements are stored; prompts, credential material and reasoning text are excluded from receipts. Pending messages and initial receipts, and completed/interrupted messages and final receipts, are atomic pairs. Intermediate reported usage/context is persisted without asserting successful completion. Unclean exits can leave pending/unfinalized receipts; the UI does not report these as completed. No fabricated history backfill. Account continuation copies only committed messages into a new session, retaining the original and clearing session permission grants.

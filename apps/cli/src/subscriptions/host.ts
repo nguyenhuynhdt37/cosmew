@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { HannesError, type Account, type CredentialRef, type CredentialVault, type ModelEvent, type ModelInfo, type ModelRequest, type Provider, type ProviderAuthChallenge, type ProviderAuthProgress, type SettingsStore, type SubscriptionRuntime } from '@hannes/contracts';
+import { HannesError, usageSchema, contextMeasurementSchema, type Account, type CredentialRef, type CredentialVault, type ModelEvent, type ModelInfo, type ModelRequest, type Provider, type ProviderAuthChallenge, type ProviderAuthProgress, type SettingsStore, type SubscriptionRuntime } from '@hannes/contracts';
 import { normalizeModel } from '@hannes/models';
 import { RuntimeProfile, type RuntimeLeases } from '@hannes/persistence';
 import { authorizeSubscription, subscriptionEnvironment, type SubscriptionRecipe } from '@hannes/security';
@@ -219,6 +219,23 @@ export class SubscriptionHost {
     if (Array.isArray(option?.options)) return option.options.map((m: any) => normalizeModel(m.value, m.name));
     throw new HannesError('PROTOCOL');
   }
+  private runtimeModel(raw: any, runtime: 'codex' | 'copilot'): ModelInfo {
+    const model = normalizeModel(raw.id, raw.displayName ?? raw.name);
+    const efforts = raw.supportedReasoningEfforts;
+    if (Array.isArray(efforts) && efforts.length <= 20) {
+      const values = efforts.map((entry: any) => runtime === 'codex' ? entry.reasoningEffort : entry);
+      if (values.every((value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 40)) model.reasoningEfforts = values;
+      if (model.reasoningEfforts?.length) model.capabilities.reasoning = 'supported';
+    }
+    if (typeof raw.defaultReasoningEffort === 'string' && model.reasoningEfforts?.includes(raw.defaultReasoningEffort)) model.defaultReasoningEffort = raw.defaultReasoningEffort;
+    const limits = raw.capabilities?.limits;
+    if (runtime === 'copilot' && limits) {
+      if (Number.isInteger(limits.max_context_window_tokens) && limits.max_context_window_tokens > 0) model.contextLimit = limits.max_context_window_tokens;
+      if (Number.isInteger(limits.max_output_tokens) && limits.max_output_tokens > 0) model.outputLimit = limits.max_output_tokens;
+    }
+    model.metadataSource = runtime + ':model/list'; model.metadataFetchedAt = model.fetchedAt;
+    return model;
+  }
   async models(provider: Provider, account: Account, signal?: AbortSignal): Promise<ModelInfo[]> {
     const connection = await this.connect(provider, account);
     const abort = () => { void connection.rpc.close(); };
@@ -229,12 +246,12 @@ export class SubscriptionHost {
       if (connection.recipe.runtime === 'codex') {
         const result = await connection.rpc.request('model/list', { limit: 100 });
         if (!Array.isArray(result?.data) || result.nextCursor) throw new HannesError('PROTOCOL');
-        models = result.data.map((m: any) => normalizeModel(m.id, m.displayName));
+        models = result.data.map((m: any) => this.runtimeModel(m, 'codex'));
       } else if (connection.recipe.runtime === 'copilot') {
         const result = await connection.rpc.request('models.list');
         const list = result?.models ?? result;
         if (!Array.isArray(list)) throw new HannesError('PROTOCOL');
-        models = list.map(m => normalizeModel(m.id, m.name));
+        models = list.map(m => this.runtimeModel(m, 'copilot'));
       } else {
         models = this.acpModels(await connection.rpc.request('session/new', { cwd: connection.profile.workspace, mcpServers: [] }));
       }
@@ -244,15 +261,24 @@ export class SubscriptionHost {
     } finally { signal?.removeEventListener('abort', abort); await this.close(connection, account); }
   }
   async *stream(provider: Provider, account: Account, request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    if (request.reasoningEffort && !this.settings.read().catalogs.find(c => c.accountId === account.id)?.models.find(m => m.id === request.modelId)?.reasoningEfforts?.includes(request.reasoningEffort)) throw new HannesError('UNSUPPORTED');
     const connection = await this.connect(provider, account);
     const { rpc, recipe, profile } = connection;
     const queue: ModelEvent[] = [];
+    let measuredUsage: import('@hannes/contracts').Usage = { inputTokens: null, outputTokens: null, costUSD: null };
+    const usageIds = new Set<string>();
+    let usageCalls = 0;
+    const measured = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+    const publishUsage = (value: unknown) => { measuredUsage = usageSchema.parse({ ...(measuredUsage.quota ? { quota: measuredUsage.quota } : {}), ...(value as object) }); queue.push({ type: 'usage', usage: measuredUsage }); wake?.(); };
+    const publishContext = (used: unknown, limit: unknown) => {
+      queue.push({ type: 'context', context: contextMeasurementSchema.parse({ usedTokens: measured(used), limitTokens: measured(limit), source: 'runtime', measuredAt: new Date().toISOString() }) }); wake?.();
+    };
     let wake: (() => void) | undefined; let terminal = false; let error: unknown; let bytes = 0;
     const fail = (cause: unknown) => { error = cause; terminal = true; wake?.(); };
-    const pushText = (value: unknown) => {
+    const pushText = (value: unknown, type: 'textDelta' | 'reasoningDelta' = 'textDelta') => {
       if (typeof value !== 'string') return;
       bytes += Buffer.byteLength(value); if (bytes > 262144) { fail(new HannesError('PROTOCOL')); return; }
-      queue.push({ type: 'textDelta', text: value }); wake?.();
+      queue.push({ type, text: value }); wake?.();
     };
     const finished = () => { terminal = true; wake?.(); };
     const listener = (message: RpcMessage) => {
@@ -260,11 +286,54 @@ export class SubscriptionHost {
         this.assertAccount(account);
         if (message.method === '__closed' && !terminal) { fail(new HannesError('TRANSPORT')); return; }
         if (recipe.runtime === 'codex') {
+          if (message.method === 'account/rateLimits/updated') {
+            const snapshot = message.params?.rateLimits;
+            const quota = ['primary', 'secondary'].flatMap(name => {
+              const window = snapshot?.[name]; if (!window) return [];
+              return [{ name: `codex ${name}`, usedPercent: measured(window.usedPercent),
+                resetAt: typeof window.resetsAt === 'number' && Number.isFinite(window.resetsAt) ? new Date(window.resetsAt * 1000).toISOString() : null,
+                observedAt: new Date().toISOString() }];
+            });
+            if (quota.length) publishUsage({ ...measuredUsage, quota });
+          }
+          if (message.method === 'item/reasoning/summaryTextDelta') pushText(message.params?.delta, 'reasoningDelta');
+          if (message.method === 'thread/tokenUsage/updated') {
+            const data = message.params?.tokenUsage; const last = data?.last;
+            if (last) publishUsage({ inputTokens: measured(last.inputTokens), outputTokens: measured(last.outputTokens), costUSD: null,
+              cacheReadTokens: measured(last.cachedInputTokens), cacheWriteTokens: measured(last.cacheWriteInputTokens), reasoningTokens: measured(last.reasoningOutputTokens) });
+            if (data) publishContext(last?.totalTokens, data.modelContextWindow);
+          }
           if (message.method === 'item/agentMessage/delta') pushText(message.params?.delta);
           if (message.method === 'turn/completed') message.params?.turn?.status === 'completed' ? finished() : fail(new HannesError('PROTOCOL'));
           if (message.method === 'item/started' && ['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall', 'collabToolCall', 'imageView'].includes(message.params?.item?.type)) fail(new HannesError('POLICY'));
         } else if (recipe.runtime === 'copilot' && message.method === 'session.event') {
           const event = message.params?.event;
+          if (event?.type === 'assistant.reasoning_delta') pushText(event.data?.deltaContent, 'reasoningDelta');
+          if (event?.type === 'session.usage_info') publishContext(event.data?.currentTokens, event.data?.tokenLimit);
+          if (event?.type === 'assistant.usage') {
+            const key = event.data?.apiCallId ?? event.id;
+            if (!key || !usageIds.has(key)) {
+              if (key) usageIds.add(key);
+              const data = event.data ?? {}; const sum = (previous: number | null | undefined, value: unknown) => {
+                const count = measured(value); return count === null || (usageCalls && previous == null) ? null : (previous ?? 0) + count;
+              };
+              publishUsage({ inputTokens: sum(measuredUsage.inputTokens, data.inputTokens), outputTokens: sum(measuredUsage.outputTokens, data.outputTokens), costUSD: null,
+                cacheReadTokens: sum(measuredUsage.cacheReadTokens, data.cacheReadTokens), cacheWriteTokens: sum(measuredUsage.cacheWriteTokens, data.cacheWriteTokens),
+                reasoningTokens: sum(measuredUsage.reasoningTokens, data.reasoningTokens), premiumRequests: sum(measuredUsage.premiumRequests, data.cost) });
+              if (data.quotaSnapshots && typeof data.quotaSnapshots === 'object') {
+                const quota = Object.entries(data.quotaSnapshots).slice(0, 20).flatMap(([name, raw]) => {
+                  const snapshot = raw as any;
+                  if (!/^[a-zA-Z0-9_ .:/-]{1,80}$/.test(name)) return [];
+                  const remaining = measured(snapshot?.remainingPercentage);
+                  const date = typeof snapshot?.resetDate === 'string' ? Date.parse(snapshot.resetDate) : NaN;
+                  return [{ name, usedPercent: remaining !== null && remaining <= 100 ? 100 - remaining : null,
+                    resetAt: Number.isFinite(date) ? new Date(date).toISOString() : null, observedAt: new Date().toISOString(), unlimited: snapshot?.entitlementRequests === -1 }];
+                });
+                publishUsage({ ...measuredUsage, quota });
+              }
+              usageCalls++;
+            }
+          }
           if (event?.type === 'assistant.message_delta') pushText(event.data?.deltaContent);
           if (event?.type === 'session.idle') finished();
           if (event?.type === 'session.error') fail(new HannesError('AUTH'));
@@ -287,10 +356,10 @@ export class SubscriptionHost {
       yield { type: 'started', requestId: request.requestId };
       if (recipe.runtime === 'codex') {
         const result = await rpc.request('thread/start', { model: request.modelId, cwd: profile.workspace, approvalPolicy: 'never', sandbox: 'read-only', ephemeral: true });
-        await rpc.request('turn/start', { threadId: result.thread.id, model: request.modelId, input: [{ type: 'text', text: prompt, text_elements: [] }], approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
+        await rpc.request('turn/start', { threadId: result.thread.id, model: request.modelId, input: [{ type: 'text', text: prompt, text_elements: [] }], ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}), approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
       } else if (recipe.runtime === 'copilot') {
         const result = await rpc.request('session.create', { model: request.modelId, sessionId: crypto.randomUUID(), streaming: true, workingDirectory: profile.workspace,
-          availableTools: [], excludedTools: ['builtin:*', 'mcp:*', 'custom:*'], tools: [], mcpServers: {}, installedPlugins: [], includedBuiltinSkills: [], includedBuiltinAgents: [], enableSkills: false, enableConfigDiscovery: false, requestPermission: true, hooks: false, clientName: 'FUTRYN' });
+          ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}), availableTools: [], excludedTools: ['builtin:*', 'mcp:*', 'custom:*'], tools: [], mcpServers: {}, installedPlugins: [], includedBuiltinSkills: [], includedBuiltinAgents: [], enableSkills: false, enableConfigDiscovery: false, requestPermission: true, hooks: false, clientName: 'FUTRYN' });
         await rpc.request('session.send', { sessionId: result.sessionId, prompt, attachments: [] });
       } else {
         const session = await rpc.request('session/new', { cwd: profile.workspace, mcpServers: [] });
@@ -308,7 +377,7 @@ export class SubscriptionHost {
       if (error) throw error;
       this.assertAccount(account);
       if (!bytes) throw new HannesError('PROTOCOL');
-      yield { type: 'completed', finishReason: 'stop', usage: { inputTokens: null, outputTokens: null, costUSD: null } };
+      yield { type: 'completed', finishReason: 'stop', usage: measuredUsage };
     } catch (cause) { if (signal?.aborted) throw new HannesError('CANCELLED'); throw cause; }
     finally { clearTimeout(deadline); off(); signal?.removeEventListener('abort', abort); await this.close(connection, account); }
   }

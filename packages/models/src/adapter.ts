@@ -4,14 +4,18 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogle } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import Ajv, { type ValidateFunction } from 'ajv';
-import { HannesError, requestSchema, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage } from '@hannes/contracts';
+import { HannesError, requestSchema, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@hannes/contracts';
 import { normalizeError, ProviderTransport } from './http';
 
-const usage = (u: { inputTokens?: number; outputTokens?: number }, info?: ModelInfo): Usage => ({
+const usage = (u: { inputTokens?: number; outputTokens?: number; inputTokenDetails?: {cacheReadTokens?: number; cacheWriteTokens?: number}; outputTokenDetails?: {reasoningTokens?: number} }, info?: ModelInfo): Usage => ({
   inputTokens: u.inputTokens ?? null, outputTokens: u.outputTokens ?? null,
-  costUSD: info?.pricing && u.inputTokens !== undefined && u.outputTokens !== undefined
+  ...((u.inputTokenDetails?.cacheReadTokens ?? 0) > 0 ? {cacheReadTokens: u.inputTokenDetails?.cacheReadTokens} : {}),
+  ...((u.inputTokenDetails?.cacheWriteTokens ?? 0) > 0 ? {cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens} : {}),
+  ...((u.outputTokenDetails?.reasoningTokens ?? 0) > 0 ? {reasoningTokens: u.outputTokenDetails?.reasoningTokens} : {}),
+  ...(info?.pricing ? {pricingSource: info.metadataSource, pricingAt: info.metadataFetchedAt} : {}),
+  costUSD: info?.pricing && !u.inputTokenDetails?.cacheReadTokens && !u.inputTokenDetails?.cacheWriteTokens && u.inputTokens !== undefined && u.outputTokens !== undefined
     ? (u.inputTokens * info.pricing.inputPerMillion + u.outputTokens * info.pricing.outputPerMillion) / 1000000 : null,
-  ...(info?.pricing && u.inputTokens !== undefined && u.outputTokens !== undefined ? { costEstimated: true } : {}),
+  ...(info?.pricing && !u.inputTokenDetails?.cacheReadTokens && !u.inputTokenDetails?.cacheWriteTokens && u.inputTokens !== undefined && u.outputTokens !== undefined ? { costEstimated: true } : {}),
 });
 export class ProviderAdapter implements ModelPort {
   constructor(private readonly transport: ProviderTransport, private readonly modelId: string, private readonly info?: ModelInfo) {}
@@ -27,6 +31,8 @@ export class ProviderAdapter implements ModelPort {
       const outputEstimate = Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens);
       if ((inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 > request.maxEstimatedCostUSD) throw new HannesError('BUDGET');
     }
+    if (request.reasoningEffort && (!this.info?.reasoningEfforts?.includes(request.reasoningEffort) || this.transport.provider.protocol !== 'responses')) throw new HannesError('UNSUPPORTED');
+    if (this.info?.contextLimit && Math.min(request.maxOutputTokens, this.info.outputLimit ?? request.maxOutputTokens) >= this.info.contextLimit) throw new HannesError('CONTEXT_LIMIT');
     const key = await this.transport.credential(); const p = this.transport.provider;
     const customFetch = ((url: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
@@ -54,6 +60,7 @@ export class ProviderAdapter implements ModelPort {
     const controller = new AbortController();
     const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(p.timeoutMs)]);
     return { model, messages: request.messages, maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
+      ...(request.reasoningEffort ? { providerOptions: { openai: { reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true } } } : {}),
       maxRetries: 0, abortSignal, tools: request.tools.length ? tools : undefined,
       experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators };
   }
@@ -68,7 +75,10 @@ export class ProviderAdapter implements ModelPort {
         if (part.type === 'tool-error') throw new HannesError('PROTOCOL');
         if (part.type === 'tool-input-start') { if (pending.size >= 32) throw new HannesError('PROTOCOL'); pending.add(part.id); }
         if (part.type === 'abort') throw new HannesError('CANCELLED');
-        if (part.type === 'text-delta') {
+        if (part.type === 'reasoning-delta') {
+          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new HannesError('PROTOCOL');
+          yield { type: 'reasoningDelta', text: part.text };
+        } else if (part.type === 'text-delta') {
           bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new HannesError('PROTOCOL');
           yield { type: 'textDelta', text: part.text };
         } else if (part.type === 'tool-call') {
@@ -76,8 +86,10 @@ export class ProviderAdapter implements ModelPort {
           if (!validate || !validate(part.input) || calls.has(part.toolCallId) || calls.size >= 32 || JSON.stringify(part.input).length > 65536) throw new HannesError('PROTOCOL');
           calls.add(part.toolCallId); pending.delete(part.toolCallId); yield { type: 'toolCallComplete', call: { id: part.toolCallId, name: part.toolName, input: part.input } };
         } else if (part.type === 'finish') {
+          const reported = usageSchema.parse(usage(part.totalUsage, this.info));
+          yield { type: 'usage', usage: reported };
           if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new HannesError('PROTOCOL');
-          complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: usage(part.totalUsage, this.info) };
+          complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported };
         }
       }
       if (!complete) throw new HannesError('PROTOCOL');
@@ -90,7 +102,7 @@ export class ProviderAdapter implements ModelPort {
       const result = await generateText(options);
       for (const call of result.toolCalls) { const validate = options.validators.get(call.toolName); if (!validate || !validate(call.input)) throw new HannesError('PROTOCOL'); }
       if (Buffer.byteLength(result.text) > 262144 || result.finishReason === 'error' || ['other', 'interrupted'].includes(result.finishReason) || result.toolCalls.length > 32 || new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length || result.toolCalls.some(c => JSON.stringify(c.input).length > 65536)) throw new HannesError('PROTOCOL');
-      return { text: result.text, calls: result.toolCalls.map(call => ({ id: call.toolCallId, name: call.toolName, input: call.input })), usage: usage(result.totalUsage, this.info), finishReason: result.finishReason.replaceAll('-', '_') };
+      return { text: result.text, calls: result.toolCalls.map(call => ({ id: call.toolCallId, name: call.toolName, input: call.input })), usage: usageSchema.parse(usage(result.totalUsage, this.info)), finishReason: result.finishReason.replaceAll('-', '_') };
     } catch (e) { throw normalizeError(e, options.abortSignal); }
     finally { options.controller.abort(); }
   }

@@ -2,141 +2,8 @@ import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
 import type { AgentMode } from '@hannes/sdk';
 import { getBorderGlyphs } from '../theme/theme';
 
-export interface SlashCommandDef {
-  command: string;
-  aliases: string[];
-  title: string;
-  description: string;
-  category: 'Navigation' | 'Appearance' | 'Providers & Models' | 'Sessions' | 'Workspace & Security';
-  shortcut?: string;
-}
-
-export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
-  {
-    command: '/theme',
-    aliases: ['/themes'],
-    title: 'Theme Picker',
-    description: 'Browse Featured, Colors, Live ASCII Wallpapers, and My Themes with live preview',
-    category: 'Appearance',
-    shortcut: 'Ctrl+T',
-  },
-  {
-    command: '/theme edit',
-    aliases: ['/editor', '/customize'],
-    title: 'Theme Editor',
-    description: 'Customize semantic tokens, wallpaper settings, duplicate, import, or export themes',
-    category: 'Appearance',
-  },
-  {
-    command: '/model',
-    aliases: ['/models'],
-    title: 'Select Model',
-    description: 'Search and select active model from discovered or cached provider catalog',
-    category: 'Providers & Models',
-    shortcut: 'Ctrl+L',
-  },
-  {
-    command: '/login',
-    aliases: ['/connect'],
-    title: 'Connect Provider Account',
-    description: 'Search providers and supported API key, environment or no-auth methods',
-    category: 'Providers & Models',
-  },
-  {
-    command: '/logout', aliases: [], title: 'Sign Out',
-    description: 'Sign out directly; choose an account when several are saved', category: 'Providers & Models',
-  },
-  {
-    command: '/doctor', aliases: [], title: 'Diagnose Connection',
-    description: 'Validate active provider connectivity and runtime configuration', category: 'Providers & Models',
-  },
-  {
-    command: '/mcp', aliases: [], title: 'MCP Management',
-    description: 'Not implemented in PA1/TUI1; MCP authentication is separate', category: 'Workspace & Security',
-  },
-  {
-    command: '/plugin', aliases: ['/plugins'], title: 'Plugin Management',
-    description: 'Not implemented in PA1/TUI1; no plugin host is enabled', category: 'Workspace & Security',
-  },
-  {
-    command: '/compact', aliases: [], title: 'Compact Context',
-    description: 'Not implemented: summarization and provenance backend unavailable', category: 'Sessions',
-  },
-  {
-    command: '/accounts',
-    aliases: ['/account'],
-    title: 'Switch Account',
-    description: 'Manage connected provider accounts, switch active account, or log out',
-    category: 'Providers & Models',
-  },
-  {
-    command: '/resume',
-    aliases: ['/sessions', '/continue'],
-    title: 'Session Picker',
-    description: 'Browse, search, resume, or delete saved conversation sessions',
-    category: 'Sessions',
-    shortcut: 'Ctrl+S',
-  },
-  {
-    command: '/new',
-    aliases: [],
-    title: 'New Session',
-    description: 'Start a fresh conversation session with the current model selection',
-    category: 'Sessions',
-    shortcut: 'Ctrl+N',
-  },
-  {
-    command: '/permissions',
-    aliases: ['/perm'],
-    title: 'Permission Requests',
-    description: 'Inspect and resolve pending security permission prompts (Allow once / Session / Deny)',
-    category: 'Workspace & Security',
-  },
-  {
-    command: '/diff',
-    aliases: [],
-    title: 'Workspace Diff Viewer',
-    description: 'Inspect git working tree changes with syntax-colored unified diff hunks',
-    category: 'Workspace & Security',
-    shortcut: 'Ctrl+D',
-  },
-  {
-    command: '/config',
-    aliases: ['/settings'],
-    title: 'Appearance & TUI Settings',
-    description: 'Configure dark/light/system mode, animation speed, veil, motion, and sidebar',
-    category: 'Appearance',
-  },
-  {
-    command: '/status',
-    aliases: [],
-    title: 'System & Provider Status',
-    description: 'View active provider, account, model, session stats, and backend capabilities',
-    category: 'Navigation',
-  },
-  {
-    command: '/clear',
-    aliases: [],
-    title: 'Clear Conversation',
-    description: 'Start a fresh conversation; previous sessions remain available via /resume',
-    category: 'Sessions',
-  },
-  {
-    command: '/help',
-    aliases: ['/?'],
-    title: 'Keyboard & Command Help',
-    description: 'Show all FUTRYN keyboard shortcuts, slash commands, and navigation rules',
-    category: 'Navigation',
-  },
-  {
-    command: '/exit',
-    aliases: ['/quit'],
-    title: 'Exit FUTRYN',
-    description: 'Restore terminal state cleanly and exit the TUI',
-    category: 'Navigation',
-    shortcut: 'Ctrl+C',
-  },
-];
+export { SLASH_COMMANDS, type SlashCommandDef } from '@hannes/sdk';
+import { SLASH_COMMANDS, type SlashCommandDef } from '@hannes/sdk';
 
 export interface ComposerState {
   value: string;
@@ -172,13 +39,14 @@ export function getMatchingSlashCommands(input: string): SlashCommandDef[] {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith('/')) return [];
   const q = trimmed.toLowerCase();
+  const ranked = (item: SlashCommandDef) => [item.command, ...item.aliases].some(name => name.toLowerCase() === q) ? 0 : [item.command, ...item.aliases].some(name => name.toLowerCase().startsWith(q)) ? 1 : 2;
   return SLASH_COMMANDS.filter(
     item =>
       item.command.toLowerCase().startsWith(q) ||
       item.aliases.some(a => a.toLowerCase().startsWith(q)) ||
       item.title.toLowerCase().includes(q.slice(1)) ||
       item.command.toLowerCase().includes(q),
-  );
+  ).sort((a, b) => ranked(a) - ranked(b));
 }
 
 export function extractActiveFileMention(value: string, cursor: number): { start: number; query: string } | null {
@@ -309,6 +177,7 @@ export function renderPromptComposerLines(options: {
   borderStyle: BorderStyle;
   workspaceFiles?: string[];
   maxHeight?: number;
+  telemetryLabel?: string;
 }): RenderedBoxLine[] {
   const {
     width,
@@ -337,12 +206,14 @@ export function renderPromptComposerLines(options: {
   let popupHeader = '';
   const popupLimit = Math.min(5, Math.max(0, (options.maxHeight ?? 20) - 8));
   if (state.slashMenuOpen) {
-    const matches = getMatchingSlashCommands(state.value).slice(0, popupLimit);
-    popupHeader = `Commands (${matches.length})`;
+    const allMatches = getMatchingSlashCommands(state.value);
+    const start = Math.max(0, Math.min(state.slashSelectedIndex - popupLimit + 1, allMatches.length - popupLimit));
+    const matches = allMatches.slice(start, start + popupLimit);
+    popupHeader = `Commands (${allMatches.length})`;
     for (const cmd of matches) {
       popupItems.push({
         label: cmd.command,
-        hint: `${cmd.description}${cmd.shortcut ? `  [${cmd.shortcut}]` : ''}`,
+        hint: `${cmd.unavailable ? 'Unavailable · ' : ''}${cmd.description}${cmd.shortcut ? `  [${cmd.shortcut}]` : ''}`,
       });
     }
   } else if (state.fileMenuOpen && workspaceFiles.length > 0) {
@@ -355,7 +226,9 @@ export function renderPromptComposerLines(options: {
 
   if (popupItems.length > 0) {
     const selIdx =
-      (state.slashMenuOpen ? state.slashSelectedIndex : state.fileSelectedIndex) % popupItems.length;
+      state.slashMenuOpen
+        ? state.slashSelectedIndex - Math.max(0, Math.min(state.slashSelectedIndex - popupLimit + 1, getMatchingSlashCommands(state.value).length - popupLimit))
+        : state.fileSelectedIndex % popupItems.length;
     const topTitle = ` ${popupHeader} `;
     const padTop = Math.max(0, innerWidth - topTitle.length - 1);
 
@@ -472,7 +345,7 @@ export function renderPromptComposerLines(options: {
   const modeName = mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
   const modeColor = mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
   const modeChip = ` ${modeName} `;
-  const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
+  const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}${options.telemetryLabel ? ` · ${options.telemetryLabel}` : ''}`;
   const shortHints: StyledSpan[] = [
     { text: '@', fg: tokens.accent, bg },
     { text: '  ', fg: tokens.foregroundSubtle, bg },

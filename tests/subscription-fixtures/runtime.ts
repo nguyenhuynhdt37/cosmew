@@ -51,8 +51,8 @@ if (copilot && process.argv.includes('login')) {
         save(); break;
       case 'account/read': result = { account: valid() ? { type: 'chatgpt', planType: 'plus' } : null }; break;
       case 'auth.getStatus': result = { isAuthenticated: valid() }; break;
-      case 'model/list': result = { data: [{ id: 'runtime-model', displayName: 'Runtime model' }, { id: 'runtime-alt', displayName: 'Alternate' }], nextCursor: null }; break;
-      case 'models.list': result = { models: [{ id: 'runtime-model', name: 'Runtime model' }, { id: 'runtime-alt', name: 'Alternate' }] }; break;
+      case 'model/list': result = { data: [{ id: 'runtime-model', displayName: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: [{reasoningEffort: 'low', description: 'Low'}, {reasoningEffort: 'high', description: 'High'}], defaultReasoningEffort: 'low' } : {}) }, { id: 'runtime-alt', displayName: 'Alternate' }], nextCursor: null }; break;
+      case 'models.list': result = { models: [{ id: 'runtime-model', name: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low', capabilities: { limits: { max_context_window_tokens: 32000, max_output_tokens: 8000 } } } : {}) }, { id: 'runtime-alt', name: 'Alternate' }] }; break;
       case 'session/new': {
         const settingsFile = runtime === 'gemini-cli' ? '.gemini/settings.json' : 'settings.json';
         const config = JSON.parse(readFileSync(join(profile, settingsFile), 'utf8'));
@@ -65,6 +65,7 @@ if (copilot && process.argv.includes('login')) {
         result = { thread: { id: session } }; break;
       case 'session.create':
         if (p.availableTools.length || !p.requestPermission || p.enableConfigDiscovery !== false || p.installedPlugins.length) process.exit(27);
+        if (scenario === 'telemetry' && p.reasoningEffort !== 'high') process.exit(40);
         result = { sessionId: session }; break;
       case 'turn/start': case 'session.send': case 'session/prompt': {
         if (!valid()) { send({ id: message.id, error: { code: -32000, message: 'Expired secret' } }); return; }
@@ -76,6 +77,19 @@ if (copilot && process.argv.includes('login')) {
           else if (runtime === 'codex') event('item/started', { item: { type: 'commandExecution' } });
           else event('session/update', { update: { sessionUpdate: 'tool_call' } });
           result = { stopReason: 'end_turn' }; break;
+        }
+        if (scenario === 'telemetry') {
+          if (runtime === 'codex' && p.effort !== 'high') process.exit(41);
+          const data = { inputTokens: 100, outputTokens: 20, cacheReadTokens: 30, cacheWriteTokens: 10, reasoningTokens: 8, cost: 1.5, apiCallId: 'fixture-call', quotaSnapshots: { premium_interactions: { remainingPercentage: 75, resetDate: '2026-12-01T00:00:00Z', entitlementRequests: 100 } } };
+          if (copilot) {
+            notifyCopilot('assistant.reasoning_delta', { deltaContent: 'Provider supplied summary' });
+            notifyCopilot('assistant.usage', data); notifyCopilot('assistant.usage', data); // Duplicate must not double count.
+            notifyCopilot('session.usage_info', { currentTokens: 120, tokenLimit: 32000 });
+          } else if (runtime === 'codex') {
+            event('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 25, resetsAt: 1800000000 } } });
+            event('item/reasoning/summaryTextDelta', { delta: 'Provider supplied summary' });
+            event('thread/tokenUsage/updated', { tokenUsage: { last: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30, cacheWriteInputTokens: 10, reasoningOutputTokens: 8, totalTokens: 120 }, modelContextWindow: 32000 } });
+          }
         }
         const text = 'Subscription fixture response';
         if (copilot) notifyCopilot('assistant.message_delta', { deltaContent: text });

@@ -511,7 +511,7 @@ export function renderModelPickerOverlay(options: {
     ],
   });
 
-  const footer = ' ↑/↓ Navigate · Enter Select Model · Tab Account · Ctrl+R Discover · Ctrl+A Manual ID · Esc Close ';
+  const footer = ' ↑/↓ Navigate · Enter Select Model · Tab Account · Ctrl+E Effort · Ctrl+R Discover · Ctrl+A Manual ID · Esc Close ';
   const footerFill = Math.max(0, innerWidth - footer.length);
   lines.push({
     spans: [
@@ -868,6 +868,7 @@ export function renderHelpOverlay(options: {
   pushRow('   /            Slash Command Autocomplete     @            Workspace File Autocomplete');
   pushRow('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
   pushRow('   !            Shell mode: Not implemented     Alt+Enter    Newline (also Ctrl+J)');
+  pushRow('   Ctrl+R       Toggle reasoning summary        /model: Ctrl+E cycles active model effort');
   pushRow('');
   pushRow(' Slash Commands:', tokens.markdownHeading, true);
   for (const cmd of SLASH_COMMANDS) {

@@ -234,6 +234,8 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
   try {
     await waitFor(() => second.output().includes('fixture'));
     second.terminal.write('/logout\r');
+    await waitFor(() => second.output().includes('Deletes the local credential'));
+    second.terminal.write('\x1b[B\r');
     await waitFor(() => second.output().includes('Local credential removed'));
     second.terminal.write('\x1b\x03');
     expect(await second.child.exited).toBe(0);
@@ -336,12 +338,17 @@ test.skipIf(process.platform === 'win32')('terminal SIGTERM during login drains 
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 });
 
-test('/logout signs out a single account immediately and keeps multi-account choice to one Enter', async () => {
+test('/logout names the account, defaults to Cancel, and confirms the selected sign-out', async () => {
   const { app, tui } = await setup();
   await tui.executeSlashCommand('/logout');
   expect(tui.getStatusBanner()).toContain('No accounts');
   await login(tui, 'first'); await waitFor(() => tui.getActiveOverlay() === 'models');
   await tui.executeSlashCommand('/logout');
+  expect(tui.getActiveOverlay()).toBe('connect');
+  await tui.handleKey('Enter'); // Cancel is the initial selection.
+  expect(app.accounts.list()[0]!.status).toBe('valid');
+  await tui.executeSlashCommand('/logout');
+  await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
   expect(tui.getStatusBanner()).toContain('Local credential removed');
   expect(app.accounts.list()[0]!.status).toBe('logged-out');
@@ -355,6 +362,7 @@ test('/logout signs out a single account immediately and keeps multi-account cho
   await tui.handleKey('Escape');
   expect(app.accounts.get(second.id).status).not.toBe('logged-out');
   await tui.executeSlashCommand('/logout'); await tui.handleKey('Enter');
+  await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('none');
   expect(app.accounts.get(second.id).status).toBe('logged-out');
 });
@@ -365,6 +373,7 @@ test('/logout keeps failed credential deletion visible and retryable without ext
   const originalDelete = app.vault.delete.bind(app.vault);
   app.vault.delete = async () => { throw new Error('synthetic deletion failure'); };
   await tui.executeSlashCommand('/logout');
+  await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(tui.getActiveOverlay()).toBe('connect');
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Local credential removed');
   expect(app.accounts.list()[0]!.status).toBe('logged-out');

@@ -42,7 +42,24 @@ export class ModelCatalog {
           // Gemini lists embedding and generation models together; only expose generateContent models.
           if (kind === 'gemini' && Array.isArray(item.supportedGenerationMethods) && !item.supportedGenerationMethods.includes('generateContent')) continue;
           const rawID = kind === 'ollama' ? item.name : kind === 'gemini' ? String(item.name).replace(/^models\//, '') : item.id;
-          models.push(normalizeModel(rawID, item.displayName ?? item.name ?? rawID));
+          const model = normalizeModel(rawID, item.displayName ?? item.name ?? rawID);
+          // Only documented provider fields; do not guess limits from model IDs.
+          if (kind === 'gemini') {
+            if (Number.isInteger(item.inputTokenLimit) && Number(item.inputTokenLimit) > 0) model.contextLimit = Number(item.inputTokenLimit);
+            if (Number.isInteger(item.outputTokenLimit) && Number(item.outputTokenLimit) > 0) model.outputLimit = Number(item.outputTokenLimit);
+            if (model.contextLimit || model.outputLimit) { model.metadataSource = this.transport.provider.baseURL + '/models'; model.metadataFetchedAt = model.fetchedAt; }
+          }
+          if (this.transport.provider.id === 'openrouter' && this.transport.provider.baseURL === 'https://openrouter.ai/api/v1') {
+            if (Number.isInteger(item.context_length) && Number(item.context_length) > 0) model.contextLimit = Number(item.context_length);
+            const top = item.top_provider && typeof item.top_provider === 'object' ? item.top_provider as Record<string, unknown> : {};
+            if (Number.isInteger(top.max_completion_tokens) && Number(top.max_completion_tokens) > 0) model.outputLimit = Number(top.max_completion_tokens);
+            const pricing = item.pricing && typeof item.pricing === 'object' ? item.pricing as Record<string, unknown> : {};
+            const price = (value: unknown) => typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) * 1000000 : null;
+            const input = price(pricing.prompt); const output = price(pricing.completion);
+            if (input !== null && output !== null && Number.isFinite(input) && Number.isFinite(output)) model.pricing = { inputPerMillion: input, outputPerMillion: output, currency: 'USD' };
+            model.metadataSource = this.transport.provider.baseURL + '/models'; model.metadataFetchedAt = model.fetchedAt;
+          }
+          models.push(model);
         }
         if (models.length > 10000) throw new HannesError('PROTOCOL');
         const next = kind === 'gemini' ? data.nextPageToken : data.has_more === true ? data.last_id : undefined;

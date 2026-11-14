@@ -18,6 +18,7 @@ export interface SessionSummary {
 
 export interface SessionRecord extends SessionSummary {
   messages: StoredMessage[];
+  turns?: import('./telemetry').TurnReceipt[];
 }
 
 export const diffLineSchema = z.strictObject({
@@ -47,9 +48,10 @@ export interface WorkspaceDiffReport {
 
 export interface ConversationStore {
   create(selection: Selection): string;
-  append(id: string, message: Message, state: 'pending' | 'committed'): number;
-  complete(id: string, revision: number, message: Message): void;
-  interrupt(id: string, revision: number): void;
+  append(id: string, message: Message, state: 'pending' | 'committed', receipt?: import('./telemetry').TurnReceipt): number;
+  complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt): void;
+  interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt): void;
+  observeTurn?(id: string, revision: number, receipt: import('./telemetry').TurnReceipt): void;
   list?(): SessionSummary[];
   get?(id: string): SessionRecord | undefined;
   delete?(id: string): boolean;

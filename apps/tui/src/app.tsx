@@ -7,7 +7,8 @@ import {
   WALLPAPER_PRESET_IDS,
   type ToolCall,
 } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import { acceptSlashSelection, parseSlashCommand, type FutrynClient } from '@hannes/sdk';
+import { reportRows, renderReportOverlay } from './screens/telemetry';
 import { connectionChoices } from './screens/connect';
 import {
   createInitialDiffViewState,
@@ -58,7 +59,6 @@ import {
   renderHelpOverlay,
   renderModelPickerOverlay,
   renderSettingsOverlay,
-  renderStatusOverlay,
   renderThemeEditorOverlay,
   renderThemePickerOverlay,
   type CommandPaletteState,
@@ -85,6 +85,8 @@ export type ActiveOverlay =
   | 'diff'
   | 'palette'
   | 'settings'
+  | 'usage'
+  | 'context'
   | 'status'
   | 'help';
 
@@ -297,6 +299,11 @@ export class FutrynTuiApp {
   private paletteState: CommandPaletteState = createInitialCommandPaletteState();
   private settingsSelectedIndex = 0;
   private helpOffset = 0;
+  private reportOffset = 0;
+  private showReasoning = false;
+  private pendingSwitchAccountId: string | null = null;
+  private switchAbort: AbortController | null = null;
+  private switchTask: Promise<boolean> | null = null;
   private statusBanner: string | null = null;
   private isStreaming = false;
   private activeAbortController: AbortController | null = null;
@@ -389,6 +396,8 @@ export class FutrynTuiApp {
       this.themeEngine.cancelPreview();
     }
     this.overlay = target;
+    this.pendingSwitchAccountId = null;
+    if (['status', 'usage', 'context'].includes(target)) this.reportOffset = 0;
     if (target === 'themes') {
       const currentTheme = this.themeEngine.getCommittedAppearance().theme;
       const list = this.themeEngine.listThemes(this.themePickerState.tab, this.themePickerState.query);
@@ -422,10 +431,38 @@ export class FutrynTuiApp {
   }
 
   public async executeSlashCommand(rawInput: string): Promise<void> {
-    const trimmed = rawInput.trim();
+    const parsed = parseSlashCommand(rawInput);
+    if (parsed.error) { this.statusBanner = parsed.error; return; }
+    const trimmed = parsed.input;
     const lower = trimmed.toLowerCase();
-    if (this.isStreaming && !['/status', '/help', '/theme', '/themes'].includes(lower)) {
+    if (this.isStreaming && !parsed.definition?.duringRequest) {
       this.statusBanner = 'Cancel the active response with Esc before changing accounts, model or session.';
+      return;
+    }
+    if (parsed.definition?.unavailable) { this.statusBanner = parsed.definition.unavailable; return; }
+    if (parsed.definition?.command === '/usage' || parsed.definition?.command === '/context') {
+      this.openOverlay(parsed.definition.command.slice(1) as 'usage' | 'context'); return;
+    }
+    if (parsed.definition?.command === '/model effort') {
+      try {
+        const available = this.client.status().activeModel?.reasoningEfforts ?? [];
+        if (!available.length) { this.statusBanner = 'Reasoning effort is not advertised by this model/transport. Provider default is used.'; return; }
+        if (parsed.args && parsed.args !== 'default' && !available.includes(parsed.args)) { this.statusBanner = `Available efforts: ${available.join(', ')}. Use /model effort <value>.`; return; }
+        if (parsed.args) this.client.setReasoningEffort(parsed.args);
+        const status = this.client.status();
+        this.statusBanner = `Effort: ${status.reasoningEffort ?? 'provider default'}. Available: ${status.activeModel?.reasoningEfforts?.join(', ') || 'not advertised by this model/transport'}.`;
+      } catch (error) { this.statusBanner = this.connectionError(error); }
+      return;
+    }
+    if (parsed.definition?.command === '/switch') {
+      const accounts = this.client.listAccounts().filter(a => a.status !== 'logged-out');
+      if (!accounts.length) { this.statusBanner = 'No connected accounts. Use /login.'; return; }
+      const target = parsed.args ? (/^\d+$/.test(parsed.args) ? accounts[Number(parsed.args) - 1] : accounts.find(a => a.id === parsed.args || a.alias === parsed.args)) : null;
+      if (parsed.args && !target) { this.statusBanner = 'Account not found. Use /switch to choose.'; return; }
+      this.openOverlay('connect');
+      this.connectState = { ...createInitialConnectProviderState(), step: target ? 'confirm' : 'accounts', switchOnly: true,
+        accountId: target?.id, providerLabel: target?.alias, pendingAction: 'switch',
+        selectedIndex: target ? 0 : Math.max(0, accounts.findIndex(a => a.id === this.client.status().activeAccount?.id)) };
       return;
     }
     if (lower.startsWith('/model ')) {
@@ -449,11 +486,16 @@ export class FutrynTuiApp {
       return;
     }
 
-    if (lower === '/themes' || lower === '/theme') {
+    if (parsed.definition?.command === '/theme') {
+      if (parsed.args) {
+        try { await this.themeEngine.setTheme(parsed.args); this.statusBanner = `Applied theme ${parsed.args}.`; }
+        catch { this.statusBanner = 'Theme not found. Use /theme to choose.'; }
+        return;
+      }
       this.openOverlay('themes');
       return;
     }
-    if (lower.startsWith('/theme edit') || lower === '/editor' || lower === '/customize') {
+    if (parsed.definition?.command === '/theme edit' || lower === '/editor' || lower === '/customize') {
       this.openOverlay('theme-editor');
       return;
     }
@@ -471,25 +513,31 @@ export class FutrynTuiApp {
       this.openOverlay('models');
       return;
     }
-    if (lower === '/connect' || lower === '/login') {
+    if (parsed.definition?.command === '/login') {
+      if (parsed.args) {
+        try { this.client.useAccount(parsed.args); this.syncTranscriptFromActiveSession(); this.openOverlay('models'); }
+        catch (error) { this.statusBanner = this.connectionError(error); }
+        return;
+      }
       this.openOverlay('connect');
       return;
     }
-    if (lower === '/logout') {
-      const accounts = this.client.listAccounts();
+    if (parsed.definition?.command === '/logout') {
+      const accounts = this.client.listAccounts().filter(a => !parsed.args || a.id === parsed.args || a.alias === parsed.args);
       if (!accounts.length) { this.statusBanner = 'No accounts to sign out.'; return; }
       this.openOverlay('connect');
       this.connectState = { ...createInitialConnectProviderState(), step: 'accounts', logoutOnly: true,
         selectedIndex: Math.max(0, accounts.findIndex(a => a.id === this.client.status().activeAccount?.id)) };
       if (accounts.length === 1) {
-        try { await this.signOutAccount(accounts[0]!.id); }
-        catch (error) { this.connectState.statusMessage = this.connectionError(error); }
+        this.connectState = { ...this.connectState, step: 'confirm', accountId: accounts[0]!.id,
+          providerLabel: accounts[0]!.alias, pendingAction: 'logout', selectedIndex: 0 };
       }
       return;
     }
-    if (lower === '/accounts' || lower === '/account') {
+    if (parsed.definition?.command === '/accounts') {
       this.openOverlay('connect');
       this.connectState.step = 'accounts';
+      this.connectState.query = parsed.args;
       return;
     }
     if (lower === '/sessions' || lower === '/resume' || lower === '/continue') {
@@ -545,6 +593,33 @@ export class FutrynTuiApp {
     this.statusBanner = `Unknown slash command "${trimmed}". Type /help or press Ctrl+P for commands.`;
   }
 
+  private async continueWithAccount(id: string, modelId?: string): Promise<boolean> {
+    const task = this.runAccountSwitch(id, modelId); this.switchTask = task;
+    try { return await task; } finally { if (this.switchTask === task) this.switchTask = null; }
+  }
+  private async runAccountSwitch(id: string, modelId?: string): Promise<boolean> {
+    const abort = new AbortController(); this.switchAbort = abort;
+    const alias = this.client.listAccounts().find(a => a.id === id)?.alias ?? 'account';
+    const alreadyUsing = this.client.activeSession()?.selection.accountId === id;
+    this.openOverlay('connect');
+    this.connectState = { ...createInitialConnectProviderState(), step: 'busy', switchOnly: true, pendingAction: 'switch', accountId: id, providerLabel: alias, statusMessage: 'Loading models for the selected account…' };
+    try {
+      const account = await this.client.switchAccount(id, true, modelId, abort.signal); this.syncTranscriptFromActiveSession(); this.openOverlay('none');
+      this.statusBanner = alreadyUsing ? `Already using ${account.alias}.` : this.client.activeSession()?.messages.length
+        ? `Using ${account.alias}. Continued in a new account-bound session; original history retained.` : `Using ${account.alias}. Ready to chat.`;
+      return true;
+    } catch (error) {
+      if (abort.signal.aborted) { this.openOverlay('none'); this.statusBanner = 'Account switch cancelled; current account and history preserved.'; }
+      else if (error instanceof HannesError && error.code === 'NOT_FOUND' && this.client.cachedModels(id).length) {
+        this.openOverlay('models'); this.pendingSwitchAccountId = id;
+        this.modelPickerState.statusMessage = 'Choose a model for the new account. Current account stays active until you confirm.';
+      } else {
+        this.connectState = { ...createInitialConnectProviderState(), step: 'confirm', switchOnly: true, pendingAction: 'switch', accountId: id, providerLabel: alias, statusMessage: this.connectionError(error) };
+      }
+      return false;
+    } finally { if (this.switchAbort === abort) this.switchAbort = null; }
+  }
+
   private async signOutAccount(id: string): Promise<void> {
     const alias = this.client.listAccounts().find(account => account.id === id)?.alias ?? 'account';
     await this.client.logoutAccount(id);
@@ -555,13 +630,15 @@ export class FutrynTuiApp {
 
   public async shutdown(): Promise<void> {
     this.authAbort?.abort();
+    this.switchAbort?.abort();
     this.activeAbortController?.abort();
     if (this.connectState.authChallenge) await this.client.cancelProviderAuth(this.connectState.authChallenge.id);
     this.connectState.secretDraft = '';
-    await Promise.allSettled([this.authTask, this.turnTask]);
+    await Promise.allSettled([this.authTask, this.turnTask, this.switchTask]);
   }
 
   public async submitPrompt(content: string): Promise<void> {
+    if (content.trim().startsWith('/')) { await this.submitPromptInternal(content); return; }
     const task = this.submitPromptInternal(content);
     this.turnTask = task;
     try { await task; } finally { if (this.turnTask === task) this.turnTask = null; }
@@ -569,7 +646,7 @@ export class FutrynTuiApp {
 
   private async submitPromptInternal(content: string): Promise<void> {
     const trimmed = content.trim();
-    if (!trimmed || this.isStreaming) return;
+    if (!trimmed || (this.isStreaming && !trimmed.startsWith('/'))) return;
 
     if (trimmed.startsWith('!')) {
       this.statusBanner = 'Shell mode: Not implemented in PA1/TUI1. No command was executed or sent to the provider.';
@@ -614,6 +691,10 @@ export class FutrynTuiApp {
         if (event.type === 'textDelta') {
           this.companion.transition('streaming');
           assistantItem.content += event.text;
+        } else if (event.type === 'reasoningDelta') {
+          assistantItem.reasoning = (assistantItem.reasoning ?? '') + event.text;
+          assistantItem.reasoningExpanded = true;
+          this.companion.transition('thinking');
         } else if (event.type === 'toolCallComplete') {
           const calls: ToolCall[] = assistantItem.toolCalls ?? [];
           calls.push(event.call);
@@ -628,9 +709,11 @@ export class FutrynTuiApp {
       if (abortController.signal.aborted) throw new HannesError('CANCELLED');
       if (!completed) throw new HannesError('PROTOCOL');
       assistantItem.streaming = false;
+      assistantItem.reasoningExpanded = this.showReasoning;
       const totalTok =
         (assistantItem.usage?.inputTokens ?? 0) + (assistantItem.usage?.outputTokens ?? 0);
-      this.statusBanner = `Completed turn (${totalTok} tokens).`;
+      this.statusBanner = assistantItem.usage?.inputTokens == null || assistantItem.usage?.outputTokens == null
+        ? 'Completed turn · token usage not reported.' : `Completed turn (${totalTok} tokens).`;
       this.companion.transition('done');
     } catch (err) {
       this.companion.transition(abortController.signal.aborted || (err instanceof HannesError && err.code === 'CANCELLED') ? 'cancelled' : 'error');
@@ -671,9 +754,12 @@ export class FutrynTuiApp {
       return;
     }
 
+    if (this.switchAbort && key !== 'Escape' && key !== 'Ctrl+C') return;
+
     // Global shortcuts
     if (key === 'Ctrl+C') {
       if (this.overlay === 'connect') {
+        if (this.switchAbort) { this.switchAbort.abort(); this.connectState.statusMessage = 'Cancelling account switch…'; return; }
         this.authAbort?.abort();
         this.connectState.secretDraft = '';
         this.openOverlay('none');
@@ -730,6 +816,11 @@ export class FutrynTuiApp {
     }
 
     // Main screen key handling
+    if (key === 'Ctrl+R') {
+      this.showReasoning = !this.showReasoning;
+      for (const item of this.transcript) item.reasoningExpanded = this.showReasoning;
+      return;
+    }
     if (key === 'Alt+Enter' || key === 'Ctrl+J') {
       const next = this.composer.value.slice(0, this.composer.cursor) + '\n' + this.composer.value.slice(this.composer.cursor);
       this.composer = updateComposerValue(this.composer, next, this.composer.cursor + 1);
@@ -802,7 +893,7 @@ export class FutrynTuiApp {
       if (key === 'Enter') {
         const chosen = matches[this.composer.slashSelectedIndex % Math.max(1, matches.length)];
         const toRun =
-          chosen && this.composer.value.trim() !== chosen.command ? chosen.command : this.composer.value;
+          acceptSlashSelection(this.composer.value, chosen);
         this.composer = recordComposerHistory(this.composer, toRun);
         await this.executeSlashCommand(toRun);
         return;
@@ -922,7 +1013,11 @@ export class FutrynTuiApp {
         else if (['ArrowUp', 'PageUp'].includes(key)) this.helpOffset = Math.max(0, this.helpOffset - (key === 'PageUp' ? 8 : 1));
         else if (key === 'Escape' || key === 'Enter') this.overlay = 'none';
         return;
+      case 'usage':
+      case 'context':
       case 'status':
+        if (['ArrowDown', 'PageDown'].includes(key)) this.reportOffset = Math.min(Number.MAX_SAFE_INTEGER, this.reportOffset + (key === 'PageDown' ? Math.max(1, Math.floor(this.rows * 0.6)) : 1));
+        else if (['ArrowUp', 'PageUp'].includes(key)) this.reportOffset = Math.max(0, this.reportOffset - (key === 'PageUp' ? Math.max(1, Math.floor(this.rows * 0.6)) : 1));
         if (key === 'Escape' || key === 'Enter') {
           this.overlay = 'none';
         }
@@ -1209,7 +1304,7 @@ export class FutrynTuiApp {
   private async handleModelsOverlayKey(key: string): Promise<void> {
     if (this.isStreaming && ['Enter', 'Tab', 'Shift+Tab', 'Ctrl+A'].includes(key)) { this.statusBanner = 'Cancel the active response with Esc first.'; return; }
     const st = this.modelPickerState;
-    const models = filterModels(this.client.cachedModels(), st.query);
+    const models = filterModels(this.client.cachedModels(this.pendingSwitchAccountId ?? undefined), st.query);
 
     if (st.addingManual) {
       if (key === 'Escape') {
@@ -1222,8 +1317,10 @@ export class FutrynTuiApp {
       }
       if (key === 'Enter') {
         try {
-          const added = this.client.addManualModel(st.manualDraft.trim());
+          const added = this.client.addManualModel(st.manualDraft.trim(), this.pendingSwitchAccountId ?? undefined);
+          if (this.pendingSwitchAccountId) { await this.continueWithAccount(this.pendingSwitchAccountId, added.id); return; }
           this.client.selectModel(added.id);
+          this.pendingSwitchAccountId = null;
           this.syncTranscriptFromActiveSession();
           this.modelPickerState = { ...st, addingManual: false, manualDraft: '' };
           this.overlay = 'none';
@@ -1244,6 +1341,7 @@ export class FutrynTuiApp {
     }
 
     if (key === 'Escape') {
+      this.pendingSwitchAccountId = null;
       this.overlay = 'none';
       return;
     }
@@ -1256,6 +1354,9 @@ export class FutrynTuiApp {
       };
       return;
     }
+    if ((key === 'Tab' || key === 'Shift+Tab' || key === 'Ctrl+E') && this.pendingSwitchAccountId) {
+      this.modelPickerState.statusMessage = 'Choose a model for this account or Esc to cancel the switch.'; return;
+    }
     if (key === 'Tab' || key === 'Shift+Tab') {
       const accounts = this.client.listAccounts().filter(a => a.status !== 'logged-out');
       if (!accounts.length) { this.modelPickerState.statusMessage = 'Use /login to connect a provider.'; return; }
@@ -1265,9 +1366,16 @@ export class FutrynTuiApp {
       this.modelPickerState = { ...createInitialModelPickerState(), statusMessage: `${target.providerId} · ${target.alias}. Ctrl+R discovers models; Tab switches accounts.` };
       return;
     }
+    if (key === 'Ctrl+E') {
+      if (this.isStreaming) { this.modelPickerState.statusMessage = 'Cancel the response before changing effort.'; return; }
+      const status = this.client.status(); const values = status.activeModel?.reasoningEfforts ?? [];
+      if (!values.length) { this.modelPickerState.statusMessage = 'Reasoning effort is not advertised by this model/transport.'; return; }
+      const next = values[(values.indexOf(status.reasoningEffort ?? '') + 1) % values.length]!;
+      this.client.setReasoningEffort(next); this.modelPickerState.statusMessage = `Reasoning effort: ${next}. Ctrl+E cycles advertised values.`; return;
+    }
     if (key === 'Ctrl+R') {
       try {
-        const res = await this.client.discoverModels();
+        const res = await this.client.discoverModels({ accountId: this.pendingSwitchAccountId ?? undefined });
         this.modelPickerState = {
           ...st,
           selectedIndex: 0,
@@ -1289,7 +1397,9 @@ export class FutrynTuiApp {
       const chosen = models[st.selectedIndex];
       if (chosen) {
         try {
+          if (this.pendingSwitchAccountId) { await this.continueWithAccount(this.pendingSwitchAccountId, chosen.id); return; }
           this.client.selectModel(chosen.id);
+          this.pendingSwitchAccountId = null;
           this.syncTranscriptFromActiveSession();
           this.overlay = 'none';
           this.statusBanner = `Selected model "${chosen.id}".`;
@@ -1311,6 +1421,10 @@ export class FutrynTuiApp {
   private async handleConnectOverlayKey(key: string): Promise<void> {
     const st = this.connectState;
     if (st.authChallenge && (key === 'PageDown' || key === 'PageUp')) { st.scrollOffset = Math.max(0, Math.min(40, (st.scrollOffset ?? 0) + (key === 'PageDown' ? 1 : -1))); return; }
+    if (st.step === 'busy' && st.pendingAction === 'switch') {
+      if (key === 'Escape' || key === 'Ctrl+C') { this.switchAbort?.abort(); st.statusMessage = 'Cancelling account switch…'; }
+      return;
+    }
     if (st.step === 'busy') {
       if (key === 'Escape' || key === 'Ctrl+C') {
         this.authAbort?.abort();
@@ -1321,12 +1435,12 @@ export class FutrynTuiApp {
     if (key === 'Escape') {
       this.connectState.secretDraft = '';
       if (st.authChallenge) await this.client.cancelProviderAuth(st.authChallenge.id);
-      if (st.step === 'provider' || st.step === 'accounts') this.openOverlay('none');
+      if (st.step === 'provider' || st.step === 'accounts' || ((st.logoutOnly || st.switchOnly) && st.step === 'confirm')) this.openOverlay('none');
       else if (st.step === 'actions' || st.step === 'confirm' || st.step === 'rename') this.connectState = { ...st, step: 'accounts', query: '', selectedIndex: 0, secretDraft: '' };
       else this.connectState = createInitialConnectProviderState();
       return;
     }
-    if (key === 'Ctrl+A' && !st.logoutOnly && (st.step === 'provider' || st.step === 'accounts')) {
+    if (key === 'Ctrl+A' && !st.logoutOnly && !st.switchOnly && (st.step === 'provider' || st.step === 'accounts')) {
       this.connectState = { ...createInitialConnectProviderState(), step: st.step === 'provider' ? 'accounts' : 'provider' };
       return;
     }
@@ -1385,7 +1499,10 @@ export class FutrynTuiApp {
         } else if (st.step === 'manual') {
           modelIdSchema.parse(st.draft); st.customModelId = st.draft; this.saveCustomProvider(st);
         } else if (st.step === 'accounts' && chosen) {
-          if (st.logoutOnly) { await this.signOutAccount(chosen.id); return; }
+          if (st.logoutOnly || st.switchOnly) {
+            st.accountId = chosen.id; st.providerLabel = this.client.listAccounts().find(a => a.id === chosen.id)?.alias;
+            st.pendingAction = st.switchOnly ? 'switch' : 'logout'; next('confirm'); return;
+          }
           st.accountId = chosen.id;
           st.providerId = this.client.listAccounts().find(a => a.id === chosen.id)!.providerId;
           next('actions');
@@ -1399,6 +1516,11 @@ export class FutrynTuiApp {
         } else if (st.step === 'rename') {
           this.client.renameAccount(st.accountId!, st.draft.trim()); next('accounts'); this.connectState.query = ''; this.connectState.statusMessage = 'Account renamed.';
         } else if (st.step === 'confirm' && chosen) {
+          if (chosen.id === 'confirm' && st.switchOnly) {
+            await this.continueWithAccount(st.accountId!); return;
+          }
+          if (chosen.id === 'confirm' && st.logoutOnly) { await this.signOutAccount(st.accountId!); return; }
+          if (chosen.id === 'cancel' && (st.logoutOnly || st.switchOnly)) { this.openOverlay('none'); return; }
           if (chosen.id === 'confirm') {
             await this.client.logoutAccount(st.accountId!, st.pendingAction === 'remove');
             this.syncTranscriptFromActiveSession();
@@ -1881,6 +2003,11 @@ export class FutrynTuiApp {
       borderStyle: manifest.borderStyle,
       workspaceFiles,
       maxHeight: Math.max(4, rows - 6),
+      telemetryLabel: contentWidth >= 90 ? (() => {
+        const context = this.client.context(this.composer.value);
+        const cost = status.usage.costUSD;
+        return `ctx ~${context.estimateTokens}/${context.limitTokens ?? '?'}${cost == null ? '' : ` · ~$${cost.toFixed(4)}`}`;
+      })() : undefined,
     });
 
     if (!chatting) {
@@ -1966,7 +2093,7 @@ export class FutrynTuiApp {
           const pulse = phases[Math.floor(companionView.time * 5) % phases.length]!;
           drawSpansAt(mascotRow + 2, contentLeft + 28, [
             { text: pulse, fg: tokens.accent },
-            { text: companionView.state === 'streaming' ? ' Replying' : ' Working', fg: tokens.foregroundMuted },
+            { text: status.phase === 'reasoning' ? ' Reasoning summary' : status.phase === 'waiting' ? ' Waiting for provider' : companionView.state === 'streaming' ? ' Replying' : ' Preparing request', fg: tokens.foregroundMuted },
           ], contentWidth - 28);
           drawSpansAt(mascotRow + 3, contentLeft + 28, [
             { text: 'Esc to interrupt', fg: tokens.foregroundSubtle },
@@ -1994,7 +2121,7 @@ export class FutrynTuiApp {
 
     // 7. Draw Active Overlay on top of center viewport if open
     if (this.overlay !== 'none') {
-      if (this.overlay === 'connect') {
+      if (['connect', 'status', 'usage', 'context'].includes(this.overlay)) {
         // A modal backdrop must cover the wider composer and sidebar too.
         for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
       }
@@ -2027,9 +2154,9 @@ export class FutrynTuiApp {
           overlayLines = renderModelPickerOverlay({
             width: overlayWidth,
             height: overlayHeight,
-            models: this.client.cachedModels(),
+            models: this.client.cachedModels(this.pendingSwitchAccountId ?? undefined),
             activeModelId: status.selection?.modelId ?? null,
-            activeAccountAlias: status.activeAccount?.alias ?? null,
+            activeAccountAlias: this.pendingSwitchAccountId ? this.client.listAccounts().find(a => a.id === this.pendingSwitchAccountId)?.alias ?? null : status.activeAccount?.alias ?? null,
             state: this.modelPickerState,
             tokens,
             borderStyle: manifest.borderStyle,
@@ -2098,16 +2225,12 @@ export class FutrynTuiApp {
             borderStyle: manifest.borderStyle,
           });
           break;
+        case 'usage':
+        case 'context':
         case 'status':
-          overlayLines = renderStatusOverlay({
-            width: overlayWidth,
-            height: overlayHeight,
-            status,
-            appearance,
-            colorCapability: this.themeEngine.colorCapability,
-            tokens,
-            borderStyle: manifest.borderStyle,
-          });
+          { const report = renderReportOverlay({ title: `FUTRYN /${this.overlay}`, rows: reportRows(this.client, this.overlay, this.composer.value), width: overlayWidth,
+            height: overlayHeight, offset: this.reportOffset, tokens });
+            overlayLines = report.lines; this.reportOffset = report.offset; }
           break;
         case 'help':
           overlayLines = renderHelpOverlay({
@@ -2320,3 +2443,5 @@ export * from './components/permission-dialog';
 export * from './screens/chat';
 export * from './screens/sessions';
 export * from './screens/settings';
+
+export { reportRows } from './screens/telemetry';

@@ -76,3 +76,5 @@ Kết quả kiểm kê 2026-11-14: **77 thư mục con (78 nếu tính root), 11
 
 
 Current subscription and simplified login: [usage, prerequisites and evidence](delivery/subscription-auth.md), [ADR 0008](adr/0008-subscription-runtime-auth.md).
+
+Commands/usage/context and continued multi-account chat: [usage and verification](delivery/commands-usage-context-acceptance.md), [ADR 0009](adr/0009-command-telemetry-and-account-continuation.md). This supersedes direct logout with a named confirmation and adds `/switch`, `/usage` (`/cost`) and `/context` within PA1/TUI1/SUB1.

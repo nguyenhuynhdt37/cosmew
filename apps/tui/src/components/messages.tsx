@@ -14,6 +14,8 @@ export interface TranscriptItem {
   streaming?: boolean;
   errorText?: string;
   durationMs?: number;
+  reasoning?: string;
+  reasoningExpanded?: boolean;
 }
 
 const CODE_KEYWORDS = new Set([
@@ -228,6 +230,14 @@ export function renderTranscriptMessages(options: {
       continue;
     }
 
+    if (item.reasoning) {
+      lines.push({ spans: [{ text: `  ${item.reasoningExpanded ? '▾' : '▸'} Provider reasoning summary · Ctrl+R`, fg: tokens.foregroundSubtle, bg }] });
+      if (item.reasoningExpanded) {
+        for (const line of renderMarkdownBody({ content: item.reasoning, width: innerWidth - 4, tokens, bg, syntaxHighlighting })) {
+          lines.push({ spans: [{ text: '  ', fg: tokens.foregroundSubtle, bg }, ...line.spans.map(span => ({ ...span, fg: tokens.foregroundMuted }))] });
+        }
+      }
+    }
     if (item.content || item.streaming) {
       const body = renderMarkdownBody({
         content: item.content || '▍',
@@ -276,7 +286,7 @@ export function renderTranscriptMessages(options: {
       const totalTok = (item.usage.inputTokens ?? 0) + (item.usage.outputTokens ?? 0);
       if (totalTok > 0) metaParts.push(`${totalTok} tok`);
       if (item.usage.costUSD !== null && item.usage.costUSD !== undefined) {
-        metaParts.push(`$${item.usage.costUSD.toFixed(4)}`);
+        metaParts.push(`${item.usage.costEstimated ? '~' : ''}$${item.usage.costUSD.toFixed(4)}${item.usage.costEstimated ? ' estimated' : ''}`);
       }
     }
 

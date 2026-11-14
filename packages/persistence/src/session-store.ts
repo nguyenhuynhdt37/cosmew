@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import {
   HannesError,
+  turnReceiptSchema, type TurnReceipt,
   messageSchema,
   selectionSchema,
   type ConversationStore,
@@ -22,20 +23,29 @@ export class SqliteConversations implements ConversationStore {
       throw new HannesError('STORAGE');
     }
   }
-  append(id: string, message: Message, state: 'pending' | 'committed'): number {
+  fork(id: string, selection: Selection): SessionRecord {
+    return this.db.transaction(() => {
+      const source = this.get(id); if (!source) throw new HannesError('NOT_FOUND');
+      const next = this.create(selection);
+      for (const message of source.messages.filter(m => m.state === 'committed')) this.append(next, { role: message.role, content: message.content }, 'committed');
+      return this.get(next)!;
+    }).immediate();
+  }
+  append(id: string, message: Message, state: 'pending' | 'committed', receipt?: TurnReceipt): number {
     try {
       return this.db.transaction(() => {
         messageSchema.parse(message);
         const row = this.db.query('UPDATE conversations SET revision=revision+1 WHERE id=? RETURNING revision').get(id) as { revision: number } | null;
         if (!row) throw new HannesError('STORAGE');
         this.db.query('INSERT INTO messages VALUES(?,?,?,?,?)').run(id, row.revision, message.role, message.content, state);
+        if (receipt) this.db.query('INSERT INTO turn_receipts VALUES(?,?,?)').run(id, row.revision, JSON.stringify(turnReceiptSchema.parse(receipt)));
         return row.revision;
       }).immediate();
     } catch {
       throw new HannesError('STORAGE');
     }
   }
-  complete(id: string, revision: number, message: Message): void {
+  complete(id: string, revision: number, message: Message, receipt?: TurnReceipt): void {
     try {
       this.db.transaction(() => {
         const row = this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as { revision: number } | null;
@@ -43,17 +53,26 @@ export class SqliteConversations implements ConversationStore {
         const result = this.db.query("UPDATE messages SET state='committed' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
         if (result.changes !== 1) throw new HannesError('STORAGE');
         this.append(id, messageSchema.parse(message), 'committed');
+        if (receipt) this.writeReceipt(id, revision, receipt);
       }).immediate();
     } catch {
       throw new HannesError('STORAGE');
     }
   }
-  interrupt(id: string, revision: number): void {
+  private writeReceipt(id: string, revision: number, receipt: TurnReceipt): void {
+    const result = this.db.query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?').run(JSON.stringify(turnReceiptSchema.parse(receipt)), id, revision);
+    if (result.changes !== 1) throw new HannesError('STORAGE');
+  }
+  observeTurn(id: string, revision: number, receipt: TurnReceipt): void {
+    try { this.writeReceipt(id, revision, receipt); } catch { throw new HannesError('STORAGE'); }
+  }
+  interrupt(id: string, revision: number, receipt?: TurnReceipt): void {
     try {
-      this.db.query("UPDATE messages SET state='interrupted' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
-    } catch {
-      throw new HannesError('STORAGE');
-    }
+      this.db.transaction(() => {
+        this.db.query("UPDATE messages SET state='interrupted' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
+        if (receipt) this.writeReceipt(id, revision, receipt);
+      }).immediate();
+    } catch { throw new HannesError('STORAGE'); }
   }
   list(): SessionSummary[] {
     try {
@@ -113,6 +132,9 @@ export class SqliteConversations implements ConversationStore {
         lastState: lastMsg?.state ?? 'idle',
         preview: lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet',
         messages,
+        turns: (this.db.query('SELECT data FROM turn_receipts WHERE conversation=? ORDER BY revision').all(id) as {data: string}[]).map(row => {
+          return turnReceiptSchema.parse(JSON.parse(row.data));
+        }),
       };
     } catch {
       throw new HannesError('STORAGE');
@@ -121,6 +143,7 @@ export class SqliteConversations implements ConversationStore {
   delete(id: string): boolean {
     try {
       return this.db.transaction(() => {
+        this.db.query('DELETE FROM turn_receipts WHERE conversation=?').run(id);
         this.db.query('DELETE FROM messages WHERE conversation=?').run(id);
         const res = this.db.query('DELETE FROM conversations WHERE id=?').run(id);
         return res.changes > 0;

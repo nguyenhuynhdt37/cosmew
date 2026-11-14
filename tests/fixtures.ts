@@ -10,7 +10,7 @@ export const memoryVault = (): CredentialVault & { values: Map<string, string> }
 });
 export function fixtureServer() {
   const requests: { path: string; body: any; authorization: string | null; apiKey: string | null }[] = [];
-  let status = 200; let delay = 0; let malformed = false; let dropped = false;
+  let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let malformed = false; let dropped = false;
   let tools = false; let includeUsage = true; let modelName = 'fixture-model'; let pages = false; let streamDelay = 0; let invalidTool = false;
   const sse = (items: unknown[], anthropic = false) => {
     const chunks = items.map(x => anthropic ? `event: ${(x as any).type}\ndata: ${JSON.stringify(x)}\n\n` : `data: ${JSON.stringify(x)}\n\n`);
@@ -51,10 +51,17 @@ export function fixtureServer() {
     }
     if (path.includes('responses')) {
       const output = tools ? [{ type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'lookup', arguments: '{"query":"hello"}', status: 'completed' }] : [{ type: 'message', id: 'msg_fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello fixture', annotations: [] }] }];
-      const response = { id: 'resp_fixture', object: 'response', created_at: 1234567890, model: modelName, status: 'completed', output, error: null, incomplete_details: null, usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 } };
+      const response = { id: 'resp_fixture', object: 'response', created_at: 1234567890, model: modelName, status: 'completed', output, error: null, incomplete_details: null, usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6, ...(cacheTokens !== undefined ? {input_tokens_details: {cached_tokens: cacheTokens}} : {}) } };
       if (!body.stream) return Response.json(response);
       return sse([
         { type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+        ...(reasoning ? [
+          { type: 'response.output_item.added', output_index: 1, item: { type: 'reasoning', id: 'rs_fixture', summary: [] } },
+          { type: 'response.reasoning_summary_part.added', item_id: 'rs_fixture', output_index: 1, summary_index: 0 },
+          { type: 'response.reasoning_summary_text.delta', item_id: 'rs_fixture', output_index: 1, summary_index: 0, delta: 'Provider HTTP summary' },
+          { type: 'response.reasoning_summary_part.done', item_id: 'rs_fixture', output_index: 1, summary_index: 0 },
+          { type: 'response.output_item.done', output_index: 1, item: { type: 'reasoning', id: 'rs_fixture', summary: [{ type: 'summary_text', text: 'Provider HTTP summary' }] } },
+        ] : []),
         { type: 'response.output_item.added', output_index: 0, item: output[0] },
         ...(tools ? [{ type: 'response.function_call_arguments.delta', item_id: 'fc_fixture', output_index: 0, delta: '{"query":"hello"}' }, { type: 'response.output_item.done', output_index: 0, item: output[0] }] : [
           { type: 'response.content_part.added', item_id: 'msg_fixture', output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } },
@@ -76,8 +83,8 @@ export function fixtureServer() {
     provider(protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat', overrides = {}) {
       return providerSchema.parse({ id: 'fixture', name: 'Fixture', protocol, baseURL: `http://127.0.0.1:${server.port}/${protocol === 'gemini' ? 'gemini' : 'v1'}`, auth: 'api-key', catalog: protocol === 'gemini' ? 'gemini' : protocol === 'anthropic' ? 'anthropic' : 'openai', metadataVersion: 1, timeoutMs: 1000, ...overrides });
     },
-    set(options: { status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean }) {
-      status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool;
+    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean }) {
+      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool;
     },
   };
 }
