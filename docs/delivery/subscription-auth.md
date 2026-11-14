@@ -82,3 +82,12 @@ Inspected dynamic source SHA-256 snapshots:
 - Copilot client.ts: `ccca591e6f3430c64e8709f9a6d533cb23a9d3ddcedf94a885139c7d5920dc45`.
 - Copilot session.ts: `0ece64143e23756f5d71cf8c0f659409bf8dd73ffb269fc756ccbcb8060fb9e7`.
 - Copilot types.ts: `2828179fed4beae3746a7e95d0efa175b6bdf43553b1edd815c19edcd325d3ec`.
+
+
+## Copilot saved-sign-in fix
+
+The first live user report found `AUTH` after GitHub consent. The Copilot runtime recipe incorrectly passed `--no-auto-login`: official SDK documentation states this ignores saved CLI credentials (`useLoggedInUser: false`). FUTRYN restores its own credential snapshot into a private `COPILOT_HOME`, so that flag prevented the runtime from using the sign-in it had just saved. The flag is removed; inherited tokens remain excluded, keytar stays disabled, and `GH_CONFIG_DIR`/XDG paths point inside the same private profile to prevent unrelated `gh`/user-config fallback. No global Copilot credential cache is imported.
+
+The subprocess fixture now honors `--no-auto-login` semantics, so the existing full Copilot login/model/chat/restart tests detect this regression. Subscription errors use the provider's sign-in context, not API-key instructions, and longer diagnostics wrap inside the dialog. An isolated native `copilot login --device-code` probe reached the authorization URL/code without a TTY or API key and was cancelled without consent; no real tokens were read or model request sent. Full post-consent vendor validation still needs the user's next sign-in.
+
+Official source: [Copilot SDK authentication](https://github.com/github/copilot-sdk/blob/main/docs/auth/authenticate.md), “Disabling auto-login”, accessed 2026-11-14. Configuration follows the existing `useLoggedInUser` behavior; public contract/storage versions and provider scopes are unchanged.

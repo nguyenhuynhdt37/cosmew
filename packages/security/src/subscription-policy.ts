@@ -29,7 +29,7 @@ persistence = "none"
 `;
 export const SUBSCRIPTION_RECIPES: Record<SubscriptionRuntime, SubscriptionRecipe> = {
   codex: { runtime: 'codex', command: 'codex', args: ['app-server'], framing: 'lines', profileEnv: 'CODEX_HOME', credentialFiles: ['auth.json'], settingsFiles: { 'config.toml': codexConfig }, installHint: 'Install the official OpenAI Codex CLI (codex).' },
-  copilot: { runtime: 'copilot', command: 'copilot', args: ['--headless', '--stdio', '--no-auto-update', '--no-auto-login', '--disable-builtin-mcps'], framing: 'content-length', profileEnv: 'COPILOT_HOME', credentialFiles: ['config.json'], settingsFiles: {}, installHint: 'Install the official GitHub Copilot CLI (copilot).' },
+  copilot: { runtime: 'copilot', command: 'copilot', args: ['--headless', '--stdio', '--no-auto-update', '--disable-builtin-mcps'], framing: 'content-length', profileEnv: 'COPILOT_HOME', credentialFiles: ['config.json'], settingsFiles: {}, installHint: 'Install the official GitHub Copilot CLI (copilot).' },
   'gemini-cli': { runtime: 'gemini-cli', command: 'gemini', args: ['--acp'], framing: 'lines', profileEnv: 'GEMINI_CLI_HOME', authMethod: 'oauth-personal', credentialFiles: ['.gemini/oauth_creds.json', '.gemini/google_accounts.json'], settingsFiles: { '.gemini/settings.json': JSON.stringify({ tools: { core: [] }, mcpServers: {}, context: { fileName: [] }, hooksConfig: { enabled: false }, security: { auth: { selectedType: 'oauth-personal' } }, telemetry: { enabled: false } }) }, installHint: 'Install the official Google Gemini CLI (gemini).' },
   'qwen-code': { runtime: 'qwen-code', command: 'qwen', args: ['--acp'], framing: 'lines', profileEnv: 'QWEN_HOME', authMethod: 'qwen-oauth', credentialFiles: ['oauth_creds.json'], settingsFiles: { 'settings.json': JSON.stringify({ tools: { core: ['__futryn_no_builtin_tools__'], exclude: ['*'], toolSearch: { enabled: false } }, permissions: { deny: ['*'] }, mcpServers: {}, disableAllHooks: true, context: { fileName: [] }, security: { auth: { selectedType: 'qwen-oauth' } }, telemetry: { enabled: false } }) }, installHint: 'Install an official Qwen Code CLI exposing qwen-oauth over ACP (qwen).' },
 };
@@ -40,6 +40,11 @@ export function subscriptionEnvironment(recipe: SubscriptionRecipe, profile: str
   const env: Record<string, string> = {};
   for (const key of ['PATH', 'SystemRoot', 'WINDIR', 'LANG', 'LC_ALL', 'TERM']) if (environment[key]) env[key] = environment[key]!;
   env[recipe.profileEnv] = profile;
+  // Restore only the account saved inside this private COPILOT_HOME.
+  // Disabling auto-login would ignore it. Isolate gh/XDG fallbacks instead.
+  env.GH_CONFIG_DIR = profile + '/gh';
+  env.XDG_CONFIG_HOME = profile + '/xdg-config';
+  env.XDG_CACHE_HOME = profile + '/xdg-cache';
   env.COPILOT_DISABLE_KEYTAR = '1';
   env.COPILOT_AUTO_UPDATE = 'false';
   env.COPILOT_ALLOW_ALL = 'false';

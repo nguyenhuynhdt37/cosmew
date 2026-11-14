@@ -1375,8 +1375,21 @@ export class FutrynTuiApp {
     this.connectState = { ...st, providerId: provider.id, providerLabel: provider.name, step: 'method', selectedIndex: 0, draft: '', statusMessage: 'Endpoint saved. Choose authentication.' };
   }
 
-  private connectionError(error: unknown): string {
+  private connectionError(error: unknown, providerId?: string): string {
     const code = error instanceof HannesError ? error.code : 'INVALID_INPUT';
+    const target = providerId ?? (this.overlay === 'connect' ? this.connectState.providerId : this.client.status().activeProvider?.id);
+    const provider = this.client.listProviders().find(p => p.id === target) ?? this.client.listIntegrations().find(i => i.provider.id === target)?.provider;
+    if (provider?.runtime) {
+      const name = provider.runtime === 'copilot' ? 'GitHub' : provider.name;
+      const subscriptionHints: Record<string, string> = {
+        AUTH: `${name} sign-in could not be verified. Try signing in again.`,
+        FORBIDDEN: `${name} signed in, but subscription access was denied. Check your plan or organization policy.`,
+        STORAGE: 'Secure sign-in storage is unavailable. Unlock the OS keyring and retry.',
+        POLICY: 'This account is busy or changed. Cancel the active request and retry.',
+        TRANSPORT: `${name} runtime connection failed. Restart FUTRYN and retry.`,
+      };
+      if (subscriptionHints[code]) return `${code}: ${subscriptionHints[code]}`;
+    }
     const hints: Record<string, string> = {
       RUNTIME_UNAVAILABLE: 'Install the official Codex, Copilot CLI, Gemini CLI or Qwen Code runtime on PATH for this subscription.',
       AUTH: 'Credential rejected or missing. Reconnect with a valid API key or environment variable.',
@@ -1408,7 +1421,7 @@ export class FutrynTuiApp {
         this.connectState = { ...st, step: 'oauth', authChallenge: challenge };
         await this.authenticateConnection(this.connectState);
       } catch (error) {
-        if (this.overlay === 'connect' && this.connectState === starting) this.connectState = { ...st, step: 'method', statusMessage: this.connectionError(error) };
+        if (this.overlay === 'connect' && this.connectState === starting) this.connectState = { ...st, step: 'method', statusMessage: this.connectionError(error, st.providerId) };
       } finally { if (this.authAbort === controller) this.authAbort = null; }
     })();
   }
@@ -1451,7 +1464,7 @@ export class FutrynTuiApp {
       this.openOverlay('models');
       this.statusBanner = `Connected ${account.alias}. Choose a model to chat.`;
     } catch (error) {
-      if (this.overlay === 'connect' && this.connectState === busyState) this.connectState = { ...st, authChallenge: undefined, step: st.method === 'api-key' ? 'secret' : st.method === 'env' ? 'env' : 'method', secretDraft: '', selectedIndex: 0, statusMessage: this.connectionError(error) };
+      if (this.overlay === 'connect' && this.connectState === busyState) this.connectState = { ...st, authChallenge: undefined, step: st.method === 'api-key' ? 'secret' : st.method === 'env' ? 'env' : 'method', secretDraft: '', selectedIndex: 0, statusMessage: this.connectionError(error, st.providerId) };
     } finally {
       if (progressTimer) clearInterval(progressTimer);
       this.authAbort = null;

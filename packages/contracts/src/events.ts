@@ -1,7 +1,7 @@
 export type ErrorCode = 'INVALID_INPUT' | 'AUTH' | 'FORBIDDEN' | 'NOT_FOUND' | 'RATE_LIMIT' | 'TIMEOUT' | 'CANCELLED' | 'TRANSPORT' | 'PROTOCOL' | 'POLICY' | 'STORAGE' | 'UNSUPPORTED' | 'BUDGET' | 'RUNTIME_UNAVAILABLE';
 const safeMessages: Record<ErrorCode, string> = {
   INVALID_INPUT: 'Invalid configuration or request. Check help and field formats.',
-  AUTH: 'Credential missing, expired or rejected. Run auth login/status; check API entitlements.',
+  AUTH: 'Account credentials are missing, expired or could not be verified. Sign in again or check provider access.',
   FORBIDDEN: 'Provider denied access. Check account permissions and API entitlements.',
   NOT_FOUND: 'Provider or model unavailable. Refresh models or check the configured URL/model ID.',
   RATE_LIMIT: 'Provider rate limit reached. Wait before retrying or explicitly choose another account.',

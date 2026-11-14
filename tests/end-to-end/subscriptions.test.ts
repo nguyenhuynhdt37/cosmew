@@ -164,3 +164,18 @@ test('two clients cannot race rotating credentials for the same account', async 
   finally { await other.subscriptions.shutdown(); other.db.close(); await c.client.logoutAccount(account.id); await expect(iterator.return!()).rejects.toMatchObject({ code: 'POLICY' }); }
   expect(c.vault.values.size).toBe(0);
 });
+
+test('GitHub subscription errors stay in the sign-in context and never ask for an API key', async () => {
+  const c = await context('reject');
+  const tui = new FutrynTuiApp({ client: c.client, cols: 80, rows: 24 }); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  await tui.executeSlashCommand('/login');
+  for (const key of 'copilot') await tui.handleKey(key);
+  await tui.handleKey('Enter'); await tui.handleKey('Enter');
+  const deadline = Date.now() + 4000;
+  while (!tui.computeFrameSnapshot().plainText.includes('AUTH:') && Date.now() < deadline) await Bun.sleep(10);
+  const text = tui.computeFrameSnapshot().plainLines.map(line => line.trim()).join(' ');
+  expect(text).toContain('GitHub sign-in could not be verified.');
+  expect(text).toContain('Try signing in again.');
+  expect(text).not.toContain('API key'); expect(text).not.toContain('environment variable');
+  expect(c.app.accounts.list()).toHaveLength(0);
+});

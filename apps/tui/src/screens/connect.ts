@@ -57,7 +57,17 @@ export function renderConnectProviderOverlay(options: {
 }): RenderedBoxLine[] {
   const { width, height: maxHeight, integrations, accounts, activeAccountId, state: s, tokens: t } = options;
   const choices = connectionChoices(s, integrations, accounts);
-  const height = Math.min(maxHeight, Math.max(8, choices.length ? choices.length + 8 : s.authChallenge ? 14 : 10));
+  const statusLines: string[] = [];
+  if (s.statusMessage) {
+    let line = '';
+    for (const word of s.statusMessage.split(/\s+/)) {
+      if (line && line.length + word.length + 1 > Math.max(10, width - 4)) { statusLines.push(line); line = word; }
+      else line += (line ? ' ' : '') + word;
+    }
+    if (line) statusLines.push(line);
+  }
+  const errorRows = Math.max(0, Math.min(3, statusLines.length) - 1);
+  const height = Math.min(maxHeight, Math.max(8, choices.length ? choices.length + 8 : s.authChallenge ? 14 : 10) + errorRows);
   const lines: RenderedBoxLine[] = [];
   const row = (text: string, fg = t.foreground, bg = t.overlayBackground, bold = false) => {
     const clean = text.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
@@ -89,10 +99,11 @@ export function renderConnectProviderOverlay(options: {
     row(`${selected ? '›' : ' '} ${item.label}${item.id === activeAccountId ? '  ● active' : ''}`, selected ? t.selectionForeground : t.foreground, selected ? t.selection : t.overlayBackground, selected);
   }
   if (s.step === 'accounts' && !choices.length) row('No accounts yet. Use /login to connect.', t.foregroundMuted);
-  while (lines.length < height - 4) row('');
+  while (lines.length < height - 4 - errorRows) row('');
   const group = integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(s.providerId!));
   const hint = s.step === 'method' && group?.notice ? group.notice : s.step === 'secret' ? 'Paste your API key. Input is hidden.' : s.step === 'env' ? 'Enter the variable name, not the key.' : '';
-  row(s.statusMessage ?? hint, s.statusMessage ? t.warning : t.foregroundMuted);
+  if (statusLines.length) for (const line of statusLines.slice(0, 3)) row(line, t.warning);
+  else row(hint, t.foregroundMuted);
   row(s.step === 'provider' ? '↑↓ Select   Enter Continue   Ctrl+A Accounts' : s.step === 'accounts' ? '↑↓ Select   Enter Manage   Ctrl+A Add provider' : s.step === 'busy' && s.authChallenge ? 'PgUp/PgDn Scroll link   Esc Cancel' : 'Enter Continue   Esc Back', t.foregroundSubtle);
   row('');
   if (lines.length <= height) return lines;

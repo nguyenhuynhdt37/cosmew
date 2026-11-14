@@ -13,6 +13,8 @@ test('runtime transport environment drops inherited API keys, tokens, hooks and 
   const env = subscriptionEnvironment(SUBSCRIPTION_RECIPES.codex, '/private/futryn-profile', { PATH: '/bin', OPENAI_API_KEY: 'private', GITHUB_TOKEN: 'private', NODE_OPTIONS: '--require /evil.js', COPILOT_ALLOW_ALL: 'true', CODEX_HOME: '/user/auth' });
   expect(env.CODEX_HOME).toBe('/private/futryn-profile');
   expect(env.OPENAI_API_KEY).toBeUndefined(); expect(env.GITHUB_TOKEN).toBeUndefined(); expect(env.NODE_OPTIONS).toBeUndefined(); expect(env.COPILOT_ALLOW_ALL).toBe('false');
+  expect(env.GH_CONFIG_DIR).toBe('/private/futryn-profile/gh');
+  expect(env.XDG_CONFIG_HOME).toBe('/private/futryn-profile/xdg-config');
   expect(() => authorizeSubscription({ ...providerPresets.find(p => p.id === 'chatgpt')!, baseURL: 'https://evil.example' })).toThrow();
   expect(denyRuntimeRequest('session/request_permission')).toEqual({ outcome: { outcome: 'cancelled' } });
   expect(denyRuntimeRequest('item/fileChange/requestApproval')).toEqual({ decision: 'decline' });
