@@ -294,14 +294,8 @@ export interface RenderedBoxLine {
 }
 
 /**
- * OpenCode-style PromptComposer:
- * - Rounded terminal-compatible corners (╭, ╮, ╰, ╯, ─, │)
- * - Consistent horizontal & vertical padding
- * - No orange vertical accent border
- * - Separate text input and composer footer
- * - Mode badge ([Build] / [Plan] / [Chat]) and model in footer
- * - Subtle border color changes on focus state
- * - Clean responsive width & multiline editing
+ * Prompt composer as a soft card: rounded frame, one text row, pill footer.
+ * Mode reads Chat / Plan / Review. Focus tints the border with the accent token.
  */
 export function renderPromptComposerLines(options: {
   width: number;
@@ -414,21 +408,12 @@ export function renderPromptComposerLines(options: {
     ],
   });
 
-  // 3. Top Inner Padding
-  lines.push({
-    spans: [
-      { text: glyphs.vertical, fg: borderColor, bg },
-      { text: ' '.repeat(innerWidth), fg: tokens.foreground, bg },
-      { text: glyphs.vertical, fg: borderColor, bg },
-    ],
-  });
-
-  // 4. Text Input Area (Padding ngang 2 spaces)
+  // 3. Text input. The card stays one row tall until the draft wraps.
   const hPad = '  ';
   const textCols = Math.max(1, innerWidth - hPad.length * 2);
   const placeholder = isStreaming
-    ? 'Streaming response... press Esc to interrupt'
-    : 'Ask FUTRYN anything, @ to mention files, / for commands...';
+    ? 'Replying…  Esc to stop'
+    : 'Message Fyn…   @ files    / commands';
 
   if (state.value.length === 0) {
     const cursorGlyph = focused ? '▌' : ' ';
@@ -492,16 +477,7 @@ export function renderPromptComposerLines(options: {
     });
   }
 
-  // 5. Bottom Inner Padding for Input Area
-  lines.push({
-    spans: [
-      { text: glyphs.vertical, fg: borderColor, bg },
-      { text: ' '.repeat(innerWidth), fg: tokens.foreground, bg },
-      { text: glyphs.vertical, fg: borderColor, bg },
-    ],
-  });
-
-  // 6. Horizontal Divider separating text input and composer footer
+  // 4. Hairline between the draft and the pill footer
   lines.push({
     spans: [
       { text: '├', fg: borderColor, bg },
@@ -510,27 +486,22 @@ export function renderPromptComposerLines(options: {
     ],
   });
 
-  // 7. Composer Footer (Mode badge, Model selector, Account, and shortcut hint)
-  const modeBadgeText =
-    mode === 'plan' ? '[Plan]' : mode === 'review' ? '[Review]' : '[Build]';
-  const modeBadgeColor =
-    mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
-
-  const leftParts = `  ${modeBadgeText} · ${activeModelLabel}${activeAccountLabel ? ` · ${activeAccountLabel}` : ''}`;
-  const rightHint = isStreaming ? 'Esc Cancel  ' : 'Ctrl+P  ';
-  const middleFill = Math.max(0, innerWidth - leftParts.length - rightHint.length);
+  // 6. Footer: mode pill, model, shortcut
+  const modeName = mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
+  const pill = ` ${modeName} `;
+  const pillFg = mode === 'chat' ? tokens.accentForeground : mode === 'plan' ? tokens.warning : tokens.info;
+  const pillBg = mode === 'chat' ? tokens.accent : tokens.backgroundElevated;
+  const meta = `  ${activeModelLabel}${activeAccountLabel ? ` · ${activeAccountLabel}` : ''}`;
+  const rightHint = isStreaming ? ' Esc ' : ' Ctrl+P ';
+  const gap = Math.max(0, innerWidth - pill.length - meta.length - rightHint.length);
+  const metaRoom = Math.max(0, innerWidth - pill.length - rightHint.length);
 
   lines.push({
     spans: [
       { text: glyphs.vertical, fg: borderColor, bg },
-      { text: '  ', fg: tokens.foreground, bg },
-      { text: modeBadgeText, fg: modeBadgeColor, bg, bold: true },
-      {
-        text: ` · ${activeModelLabel}${activeAccountLabel ? ` · ${activeAccountLabel}` : ''}`,
-        fg: tokens.foregroundMuted,
-        bg,
-      },
-      { text: ' '.repeat(middleFill), fg: tokens.foreground, bg },
+      { text: pill, fg: pillFg, bg: pillBg, bold: true },
+      { text: meta.slice(0, metaRoom), fg: tokens.foregroundMuted, bg },
+      { text: ' '.repeat(meta.length > metaRoom ? 0 : gap), fg: tokens.foreground, bg },
       { text: rightHint, fg: tokens.foregroundSubtle, bg },
       { text: glyphs.vertical, fg: borderColor, bg },
     ],

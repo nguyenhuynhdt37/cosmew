@@ -142,4 +142,8 @@
 
 ## Provider Connect command mapping supersession
 
+## Default visual language (2026-11-14)
+
+The default theme `futryn-default` uses the Cloudy Blue palette from the StudyNest design system in `/Users/huynh/codes/hoctap` (`docs/design-system/cloudy-blue.md`, accessed with the local tree on 2026-11-14). Daylight tokens follow that spec (`#F6FAFF`, `#3D4A5A`, `#356FA7`, white surfaces, sage success). The night variant is the same family, darkened for a dark terminal. Components still read `ThemeTokens` only. The chrome is a terminal reading of the StudyNest chat panel: editorial wordmark, suggestion pills, a slim session card, right-aligned user bubbles, and a Fyn transcript rail. No web CSS, font, or script is loaded.
+
 The older OpenCode-oriented slash/keyboard table above is historical. [Current Claude command audit, upstream revisions/doc hashes and explicit keyboard deviations](provider-connect-acceptance.md) are canonical for the Provider Connect rebuild. `/login`, `/model`, `/theme`, `/config`, `/resume` are primary; prior spellings remain aliases. Ctrl+M was replaced by Ctrl+L because ordinary terminals encode Ctrl+M as Enter. The native cell renderer remains in use; no exact OpenTUI compatibility claim is added.
