@@ -2082,7 +2082,7 @@ export class FutrynTuiApp {
     const leftText = this.statusBanner
       ? ` ${this.statusBanner}`
       : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
-    const rightText = this.statusBanner || this.overlay === 'connect' ? '' : `ctrl+p lệnh `;
+    const rightText = this.statusBanner || this.overlay === 'connect' ? '' : 'Ctrl+P';
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     drawSpansAt(
       rows - 1,
