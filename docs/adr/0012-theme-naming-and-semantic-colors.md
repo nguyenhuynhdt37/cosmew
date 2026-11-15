@@ -1,5 +1,7 @@
 # ADR 0012: Canonical theme names and semantic color
 
+Slash-command argument behavior is superseded by [ADR 0013](0013-canonical-slash-commands.md); the palette and IDs below remain current.
+
 Accepted 2026-11-15 after the user clarified that black/white refers to the main surfaces; interface components still need color. Supersedes the all-grayscale palette and display names in ADR 0011. The supported choices remain exactly three, with no new dependencies or subsystems.
 
 Appearance profile semantics version 3 uses `/theme` with **Auto**, **Dark**, and **Light**, and canonical IDs `auto`, `dark`, `light`. `/theme auto|dark|light`, `/themes` compatibility aliases, `themes set auto|dark|light` and `themes mode auto|dark|light` operate on the same selection. `system` remains an alias for Auto. The manifest and `AppearanceConfig` schema remain version 1; the schema default theme ID changes to `auto` while `mode: system` remains the internal representation. Old IDs `futryn-default`, `monochrome-dark`, `monochrome-light` remain accepted and migrate during initialization, preserving global/project scope and mode; user-owned theme files remain untouched. Profile-2 readers accept `auto`, `dark`, `light` as aliases, while readers predating profile 2 may fall back to their own default during downgrade.

@@ -1,3 +1,5 @@
+> Slash-command discovery and account continuation were updated by [ADR 0013](../adr/0013-canonical-slash-commands.md). Older command tables below are historical where they conflict.
+
 # Provider Connect and command rebuild
 
 Evidence date: **2026-11-14**. Scope: PA1/TUI1, [ADR 0007](../adr/0007-provider-connect-and-commands.md). **Implementation delivered; live-provider Product MVP acceptance remains pending.** The user chose to configure live credentials locally later. No credentials from other applications were accessed.
@@ -15,7 +17,7 @@ The existing CLI package exports a `futryn` executable. With that package linked
 2. Choose the method and a unique account name. API keys and OAuth codes are masked and never added to composer history. Environment mode accepts a variable **name**, not its value. No-auth skips the secret prompt. Keyring failure offers an actionable environment-mode alternative, with no plaintext fallback.
 3. OpenRouter additionally offers its official OAuth PKCE method. Open the displayed URL, authorize access to your OpenRouter API credits and paste the one-time code. On short terminals use PgUp/PgDn to view the wrapped URL. Esc cancels; expired/failed codes require a fresh authorization.
 4. Successful connection opens `/model`. Choose a cached/discovered model, use `Ctrl+R` for discovery, `Ctrl+A` for a manual ID and Tab/Shift+Tab to switch the provider account. Enter selects. Send a message to invoke the actual configured adapter.
-5. `/accounts` or `/logout` opens searchable accounts. Enter opens Switch, Add, Rename, Reconnect, Logout and Remove. Logout/removal requires an explicit confirmation; Cancel is selected initially. A failed deletion leaves the account fenced and available for retry.
+5. `/login` then Ctrl+A opens account management; `/logout` opens searchable accounts for sign-out. Enter opens Switch, Add, Rename, Reconnect, Logout and Remove. Logout/removal requires an explicit confirmation; Cancel is selected initially. A failed deletion leaves the account fenced and available for retry.
 6. Restart retains settings/accounts/models. `/resume` opens saved sessions. Account/model changes start fresh contexts; prior sessions are preserved.
 
 Custom endpoints collect ID, URL, protocol, auth requirement, discovery protocol or manual model ID. Root validates HTTPS/loopback policy and rejects URL credentials, query, fragment and remote cleartext HTTP before saving. Manual-only endpoints validate using an actual small generation request, which may incur provider charges. Discovery validates access to a catalog, not generation entitlement; OpenRouter separately checks authenticated `/key`.
@@ -32,7 +34,7 @@ Custom endpoints collect ID, URL, protocol, auth requirement, discovery protocol
 | `/permissions` | `/perm` | Existing pending approval queue; tool-policy editing explicitly Not implemented |
 | `/mcp` | — | Not implemented; separate MCP auth explained |
 | `/plugin` | `/plugins` | Not implemented; no plugin host enabled |
-| `/theme` | `/themes` | Existing picker and `/theme edit` customization; `/theme set <id>` |
+| `/theme` | `/themes` compatibility | Theme picker; custom editing is unavailable. |
 | `/resume` | `/sessions`, `/continue` | Session picker; `/resume <id>` resumes directly |
 | `/clear` | — | Fresh conversation context; previous session preserved |
 | `/compact` | — | Not implemented: no summarization/provenance backend; suggests clear/resume |

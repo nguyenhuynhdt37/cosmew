@@ -501,7 +501,7 @@ export class FutrynTuiApp {
       const accounts = this.client.listAccounts().filter(a => a.status !== 'logged-out');
       if (!accounts.length) { this.statusBanner = 'No connected accounts. Use /login.'; return; }
       const target = parsed.args ? (/^\d+$/.test(parsed.args) ? accounts[Number(parsed.args) - 1] : accounts.find(a => a.id === parsed.args || a.alias === parsed.args)) : null;
-      if (parsed.args && !target) { this.statusBanner = 'Account not found. Use /switch to choose.'; return; }
+      if (parsed.args && !target) { this.statusBanner = 'Account not found. Use /login to manage accounts.'; return; }
       const activeId = this.client.status().activeAccount?.id;
       if (target?.id === activeId) { this.statusBanner = `Already using ${target!.alias}.`; return; }
       if (!target && accounts.every(account => account.id === activeId)) { this.statusBanner = 'Only the current account is connected. Use /login to add another.'; return; }
@@ -533,26 +533,7 @@ export class FutrynTuiApp {
     }
 
     if (parsed.definition?.command === '/theme') {
-      if (parsed.args) {
-        try { await this.themeEngine.setTheme(parsed.args); this.statusBanner = `Applied theme ${parsed.args}.`; }
-        catch { this.statusBanner = 'Theme not found. Use /theme auto, /theme dark, or /theme light.'; }
-        return;
-      }
       this.openOverlay('themes');
-      return;
-    }
-    if (parsed.definition?.command === '/theme edit' || lower === '/editor' || lower === '/customize') {
-      this.statusBanner = 'Custom themes are unavailable. Use /theme for the Auto, Dark, and Light.';
-      return;
-    }
-    if (lower.startsWith('/theme set ')) {
-      const id = trimmed.slice('/theme set '.length).trim();
-      try {
-        await this.themeEngine.setTheme(id);
-        this.statusBanner = `Applied theme "${id}".`;
-      } catch {
-        this.statusBanner = `Theme "${id}" not found.`;
-      }
       return;
     }
     if (lower === '/models' || lower === '/model') {
@@ -588,17 +569,6 @@ export class FutrynTuiApp {
     }
     if (lower === '/sessions' || lower === '/resume' || lower === '/continue') {
       this.openOverlay('sessions');
-      return;
-    }
-    if (lower === '/new') {
-      try {
-        const created = this.client.createSession();
-        this.syncTranscriptFromActiveSession();
-        this.overlay = 'none';
-        this.statusBanner = `Started new session ${created.id.slice(0, 8)} (${created.selection.modelId}).`;
-      } catch {
-        this.statusBanner = 'Connect a provider account and select a model before starting a session (/login).';
-      }
       return;
     }
     if (lower === '/permissions' || lower === '/perm') {
@@ -864,6 +834,10 @@ export class FutrynTuiApp {
     }
     if (key === 'Ctrl+S' && this.overlay !== 'theme-editor') {
       this.openOverlay(this.overlay === 'sessions' ? 'none' : 'sessions');
+      return;
+    }
+    if (key === 'Ctrl+N' && this.overlay === 'none') {
+      await this.executeSlashCommand('/clear');
       return;
     }
     if (key === 'Ctrl+D' && this.overlay === 'none') {
@@ -1511,7 +1485,12 @@ export class FutrynTuiApp {
           next('actions');
         } else if (st.step === 'actions' && chosen) {
           if (chosen.id === 'switch') {
-            this.client.useAccount(st.accountId!); this.syncTranscriptFromActiveSession(); this.openOverlay('models');
+            if (this.client.activeSession()?.messages.length) {
+              st.providerLabel = this.client.listAccounts().find(account => account.id === st.accountId)?.alias;
+              st.pendingAction = 'switch'; st.switchOnly = true; next('confirm');
+            } else {
+              this.client.useAccount(st.accountId!); this.syncTranscriptFromActiveSession(); this.openOverlay('models');
+            }
           } else if (chosen.id === 'add') { st.accountId = undefined; next('method'); }
           else if (chosen.id === 'rename') next('rename');
           else if (chosen.id === 'reconnect') next('method');

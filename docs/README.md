@@ -1,5 +1,7 @@
 # Điều hướng đặc tả Hannes
 
+Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
+
 Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/futryn-tui-acceptance.md).
 
 Current provider-connect rebuild: [usage, command audit and acceptance](delivery/provider-connect-acceptance.md), [ADR 0007 and contract 1.1 migration](adr/0007-provider-connect-and-commands.md). These updates supersede older blanket OAuth/TUI/command limitations only for their stated scope.

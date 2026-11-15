@@ -11,26 +11,16 @@ export interface SlashCommandDef {
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
-  { command: '/switch', aliases: ['/account'], title: 'Switch Account', description: 'Choose an account and continue with an explicit context transfer', category: 'Providers & Models', arguments: 'optional' },
-  { command: '/usage', aliases: ['/cost'], title: 'Usage & Estimated Cost', description: 'Per-turn and session usage with coverage and pricing provenance', category: 'Navigation', duringRequest: true },
+  { command: '/usage', aliases: ['/cost', '/stats'], title: 'Usage & Estimated Cost', description: 'Per-turn and session usage with coverage and pricing provenance', category: 'Navigation', duringRequest: true },
   { command: '/context', aliases: [], title: 'Context Window', description: 'Model limits, output reserve, measured or estimated context', category: 'Navigation', duringRequest: true },
   { command: '/effort', aliases: ['/model effort'], title: 'Reasoning Effort', description: 'Set an effort advertised by the active provider/model', category: 'Providers & Models', arguments: 'optional' },
-  { command: '/theme set', aliases: ['/themes set'], title: 'Apply Theme', description: 'Choose auto, dark, or light', category: 'Appearance', arguments: 'required' },
   {
-    command: '/theme', duringRequest: true, arguments: 'optional',
+    command: '/theme', duringRequest: true,
     aliases: ['/themes'],
     title: 'Theme Picker',
     description: 'Choose Auto, Dark, or Light',
     category: 'Appearance',
     shortcut: 'Ctrl+T',
-  },
-  {
-    command: '/theme edit',
-    aliases: ['/editor', '/customize'],
-    title: 'Theme Editor',
-    description: 'Custom theme editing is unavailable',
-    unavailable: 'Custom themes are unavailable. Use /theme to choose Auto, Dark, or Light.',
-    category: 'Appearance',
   },
   {
     command: '/model', arguments: 'optional',
@@ -68,27 +58,12 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     description: 'Not implemented: summarization and provenance backend unavailable', category: 'Sessions',
   },
   {
-    command: '/accounts', arguments: 'optional',
-    aliases: [],
-    title: 'Manage Accounts',
-    description: 'Manage connected provider accounts, switch active account, or log out',
-    category: 'Providers & Models',
-  },
-  {
     command: '/resume', arguments: 'optional',
     aliases: ['/sessions', '/continue'],
     title: 'Session Picker',
     description: 'Browse, search, resume, or delete saved conversation sessions',
     category: 'Sessions',
     shortcut: 'Ctrl+S',
-  },
-  {
-    command: '/new',
-    aliases: [],
-    title: 'New Session',
-    description: 'Start a fresh conversation session with the current model selection',
-    category: 'Sessions',
-    shortcut: 'Ctrl+N',
   },
   {
     command: '/permissions',
@@ -109,7 +84,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     command: '/config',
     aliases: ['/settings'],
     title: 'Appearance & TUI Settings',
-    description: 'Configure dark/light/system mode, animation speed, veil, motion, and sidebar',
+    description: 'Configure Auto/Dark/Light appearance, motion, and sidebar',
     category: 'Appearance',
   },
   {
@@ -121,7 +96,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/clear',
-    aliases: [],
+    aliases: ['/new', '/reset'],
     title: 'Clear Conversation',
     description: 'Start a fresh conversation; previous sessions remain available via /resume',
     category: 'Sessions',
@@ -143,11 +118,33 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
 ];
 
+// Legacy FUTRYN-only commands remain parseable for existing users. They are
+// intentionally absent from the public discovery, autocomplete, and help list.
+const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
+  { command: '/switch', aliases: ['/account'], title: 'Switch Account', description: 'Switch accounts with an explicit context transfer', category: 'Providers & Models', arguments: 'optional' },
+  { command: '/theme set', aliases: ['/themes set'], title: 'Legacy Theme Command', description: 'Use /theme', category: 'Appearance', arguments: 'optional', unavailable: 'Use /theme to choose Auto, Dark, or Light.' },
+  {
+    command: '/theme edit',
+    aliases: ['/editor', '/customize'],
+    title: 'Theme Editor',
+    description: 'Custom theme editing is unavailable',
+    unavailable: 'Custom themes are unavailable. Use /theme to choose Auto, Dark, or Light.',
+    category: 'Appearance',
+  },
+  {
+    command: '/accounts', arguments: 'optional',
+    aliases: [],
+    title: 'Manage Accounts',
+    description: 'Manage connected provider accounts, switch active account, or log out',
+    category: 'Providers & Models',
+  },
+];
+
 
 export interface ParsedSlashCommand { definition?: SlashCommandDef; args: string; input: string; error?: string }
 export function parseSlashCommand(raw: string): ParsedSlashCommand {
   const input = raw.trim(); const lower = input.toLowerCase();
-  const entries = SLASH_COMMANDS.flatMap(definition => [definition.command, ...definition.aliases].map(name => ({name, definition})))
+  const entries = [...SLASH_COMMANDS, ...LEGACY_COMMANDS].flatMap(definition => [definition.command, ...definition.aliases].map(name => ({name, definition})))
     .sort((a, b) => b.name.length - a.name.length);
   const entry = entries.find(({name}) => lower === name || lower.startsWith(name + ' '));
   if (!entry) return { args: '', input, error: lower === '/usege' ? 'Unknown command /usege. Use /usage.' : `Unknown slash command "${input}". Type /help for commands.` };

@@ -134,7 +134,7 @@ export function reportRows(client: FutrynClient, kind: 'status' | 'usage' | 'con
     `Usage coverage: ${usage.reportedTurns}/${usage.turns + usage.historicalTurns} turns. /usage shows details.`,
     `Context: local estimate ~${count(context.estimateTokens)} / ${count(context.limitTokens)}`,
     `Output reserve: ${count(context.outputReserve)} · /context shows source and limitations.`,
-    '', '/switch chooses another account; continuing transfers the committed chat history.',
+    '', '/login manages provider accounts; /model selects the active model.',
     '/model selects a model · /effort <level> sets an advertised effort.',
     '', 'BACKEND CAPABILITIES',
     ...Object.entries(status.capabilities).map(([name, value]) => `${name}: ${value}`),

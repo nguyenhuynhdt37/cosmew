@@ -79,9 +79,12 @@ test('TUI: Auto, Dark and Light preview, cancel, apply and persist after restart
   expect(a.tui.computeFrameSnapshot().cells.flat().some(cell => cell.fg === '#195dbc')).toBe(true); a.close();
   const b = await x.launch(); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('light');
   expect(b.tui.computeFrameSnapshot().effectiveMode).toBe('light');
-  await b.tui.executeSlashCommand('/theme dark'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('dark');
-  await b.tui.executeSlashCommand('/themes light'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('light');
-  await b.tui.executeSlashCommand('/themes set auto'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('auto'); b.close();
+  await b.tui.executeSlashCommand('/theme dark'); expect(b.tui.getStatusBanner()).toContain('Usage: /theme');
+  expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('light');
+  await b.tui.executeSlashCommand('/theme set auto'); expect(b.tui.getStatusBanner()).toContain('Use /theme');
+  await b.tui.executeSlashCommand('/themes'); expect(b.tui.getActiveOverlay()).toBe('themes');
+  await b.tui.handleKey('ArrowDown'); await b.tui.handleKey('Enter');
+  expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('auto'); b.close();
 });
 
 test('TUI: CLI exposes only three appearances and rejects retired color themes', async () => {
@@ -305,7 +308,10 @@ test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persis
   });
   const wait = async (text:string, from = 0) => { const deadline = Date.now() + 5000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
-    await wait('FUTRYN'); terminal.write('/theme\r'); await wait('Auto'); await wait('Dark'); await wait('Light');
+    await wait('FUTRYN');
+    const commandMark = output.length; terminal.write('/theme'); await wait('Commands', commandMark);
+    expect(output.slice(commandMark)).not.toContain('/theme set'); expect(output.slice(commandMark)).not.toContain('/theme edit');
+    terminal.write('\r'); await wait('Auto'); await wait('Dark'); await wait('Light');
     const mark = output.length; terminal.write('\x1b[B\x1b[B\r'); await wait('Theme: Light.', mark);
     terminal.write('\x03'); expect(await child.exited).toBe(0);
     const saved = JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout);

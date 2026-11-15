@@ -49,9 +49,9 @@ const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
 Options: --json, --help, --project, --timeout-ms <100..300000> (provider add).
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
 variable NAME. Never pass a key as an argument. Default storage: ~/.hannes (0700).
-Canonical TUI commands: /login (/connect), /logout, /model (/models), /status,
-  /config (/settings), /permissions, /mcp, /plugin, /theme (/themes), /resume,
-  /usage (/cost), /context, /switch <index-or-alias>, /effort <level|auto|status>,
+Canonical TUI commands: /login (/connect), /logout, /model, /status,
+  /config, /permissions, /mcp, /plugin, /theme, /resume,
+  /usage (/cost), /context, /effort <level|auto|status>,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start FUTRYN: bun run futryn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
@@ -401,7 +401,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     await send(message.trim());
     return;
   }
-  output(app, 'Hannes · /login /logout /model /accounts /theme /status /new /exit. Ctrl-C cancels and exits.');
+  output(app, 'Hannes · /login /logout /model /theme /status /clear /exit. Ctrl-C cancels and exits.');
   if (!conversation) output(app, 'Chưa đăng nhập hoặc chưa chọn model. Gõ /login để bắt đầu.');
   const input = new ChatInput(signal);
   try {
@@ -497,24 +497,12 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           resetConversation();
           output(app, 'Model switched; started a fresh conversation.');
         } else if (text === '/model') {
-          output(app, 'Use /models, then /model <model-id>.');
-        } else if (text === '/theme' || text.startsWith('/theme set ') || (parsedCommand?.definition?.command === '/theme' && parsedCommand.args)) {
-          const arg = text.startsWith('/theme set ') ? text.slice(11).trim() : text.slice(6).trim();
-          const client = app.createFutrynClient(resolve('.'));
-          const engine = new ThemeEngine({ client });
+          output(app, 'Use /model in the FUTRYN TUI to choose, or /model <model-id>.');
+        } else if (text === '/theme') {
+          const engine = new ThemeEngine({ client: app.createFutrynClient(resolve('.')) });
           await engine.initialize();
-          if (arg) {
-            const updated = await engine.setTheme(arg, options.project ? 'project' : 'global');
-            output(app, { activeTheme: updated.theme, mode: updated.mode, wallpaper: updated.wallpaper });
-          } else {
-            output(
-              app,
-              {
-                activeTheme: engine.getActiveAppearance().theme,
-                themes: engine.listThemes('all').map(t => ({ id: t.id, name: t.name, category: t.category })),
-              },
-            );
-          }
+          output(app, { activeTheme: engine.getActiveAppearance().theme,
+            themes: engine.listThemes('all').map(t => ({ id: t.id, name: t.name, category: t.category })) });
         } else if (text.startsWith('/connect ')) {
           const [, provider, alias, env, model] = text.split(/\s+/);
           if (!provider || !alias || !env) fail();
@@ -529,7 +517,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           output(app, await app.createFutrynClient(resolve('.')).diagnose(signal));
         } else if (text === '/help' || text === '/?') {
           output(app, SLASH_COMMANDS.map(c => `${c.command}: ${c.description}`).join('\n'));
-        } else if (['/config', '/settings', '/theme', '/theme edit', '/permissions', '/resume'].includes(text)) {
+        } else if (['/config', '/settings', '/theme', '/permissions', '/resume'].includes(text)) {
           if (process.stdin.isTTY && process.stdout.isTTY) {
             await runInteractiveTui({ client: app.createFutrynClient(resolve('.')), initialCommand: text });
             resetConversation();

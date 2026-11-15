@@ -1,5 +1,7 @@
 # FUTRYN TUI1 — Acceptance Evidence
 
+> Slash-command interaction follows [ADR 0013](../adr/0013-canonical-slash-commands.md): `/theme` opens the picker without arguments. Prior direct `/theme auto|dark|light` forms in historical notes below are no longer supported.
+
 > Current appearance profile: [ADR 0012](../adr/0012-theme-naming-and-semantic-colors.md) supersedes the earlier monochrome-token and multicolor-catalog claims below. `/theme` offers Auto, Dark, and Light with colored semantic tokens; custom theme files remain preserved but cannot be applied.
 
 Trạng thái: **TUI1 implemented (headless + unit/E2E verified)**. Chưa có xác minh thủ công trên terminal thật (iTerm/Kitty/Windows Terminal) — `Needs verification`.

@@ -11,6 +11,7 @@ import { Redactor, redactModel } from '@hannes/security';
 import { deriveTokensFromTriplet, FutrynTuiApp } from '@hannes/tui';
 import { createInitialComposerState, getMatchingSlashCommands, renderPromptComposerLines } from '../../apps/tui/src/components/editor';
 import { reportRows, renderReportOverlay } from '../../apps/tui/src/screens/telemetry';
+import { filterPaletteCommands, renderHelpOverlay } from '../../apps/tui/src/screens/settings';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -34,13 +35,24 @@ test('every command alias resolves before arguments; selected slash rows beyond 
     const parsed = parseSlashCommand(alias + (definition.arguments === 'required' ? ' value' : ''));
     expect(parsed.error).toBeUndefined(); expect(parsed.definition?.command).toBe(definition.command);
   }
-  expect(acceptSlashSelection('/theme e', SLASH_COMMANDS.find(c => c.command === '/theme edit'))).toBe('/theme edit');
-  expect(acceptSlashSelection('/theme', SLASH_COMMANDS.find(c => c.command === '/theme edit'))).toBe('/theme edit');
+  expect(SLASH_COMMANDS.some(c => ['/theme edit', '/theme set', '/switch', '/accounts', '/new'].includes(c.command))).toBe(false);
+  expect(getMatchingSlashCommands('/').map(c => c.command)).not.toContain('/theme edit');
+  expect(parseSlashCommand('/theme edit').definition?.unavailable).toContain('unavailable');
+  expect(parseSlashCommand('/theme set dark').definition?.unavailable).toContain('Use /theme');
+  expect(parseSlashCommand('/stats').definition?.command).toBe('/usage');
+  expect(parseSlashCommand('/new').definition?.command).toBe('/clear');
+  expect(parseSlashCommand('/reset').definition?.command).toBe('/clear');
   expect(acceptSlashSelection('/model explicit argument', SLASH_COMMANDS.find(c => c.command === '/usage'))).toBe('/model explicit argument');
   expect(parseSlashCommand('/models Mixed-Case').input).toBe('/model Mixed-Case');
   expect(parseSlashCommand('/usage surprise').error).toContain('Usage:');
   expect(parseSlashCommand('/usege').error).toContain('/usage');
   const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
+  const themeMatches = getMatchingSlashCommands('/theme').map(command => command.command);
+  expect(themeMatches).toEqual(['/theme']);
+  expect(filterPaletteCommands('theme').map(command => command.command)).toEqual(['/theme']);
+  const help = renderHelpOverlay({width:120, height:80, tokens, borderStyle:'rounded'}).flatMap(row => row.spans.map(span => span.text)).join('\n');
+  expect(help).toContain('/theme');
+  for (const hidden of ['/theme set', '/theme edit', '/switch', '/accounts']) expect(help).not.toContain(hidden);
   const state = { ...createInitialComposerState(), value: '/', slashMenuOpen: true };
   expect(getMatchingSlashCommands('/themes')[0]?.command).toBe('/theme');
   expect(getMatchingSlashCommands('/model')[0]?.command).toBe('/model');
@@ -99,6 +111,34 @@ test('unknown usage stays unknown; old history is not backfilled with zero consu
   c.client.resumeSession(old);
   expect(c.client.status().lastUsage).toBeNull(); expect(c.client.usage().historicalTurns).toBe(1);
   expect(c.client.usage().inputTokens).toBeNull();
+});
+
+test('Ctrl+N and /new use the canonical /clear behavior and preserve the previous session', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Previous session');
+  const original = c.client.activeSession()!.id;
+  await c.tui.handleKey('Ctrl+N'); expect(c.tui.getTranscript()).toHaveLength(0);
+  expect(c.client.activeSession()).toBeNull(); expect(c.app.conversations.get(original)).toBeDefined();
+  await c.tui.submitPrompt('Next session');
+  expect(c.client.activeSession()!.id).not.toBe(original);
+  await c.tui.executeSlashCommand('/new'); expect(c.client.activeSession()).toBeNull();
+});
+
+test('/login account management switches with explicit context-transfer confirmation', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Context to transfer');
+  const original = c.client.activeSession()!.id;
+  const second = await c.app.accounts.add('usage', 'second', {kind:'none'});
+  await c.tui.executeSlashCommand('/login'); await c.tui.handleKey('Ctrl+A');
+  await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter'); // second account
+  await c.tui.handleKey('Enter'); // Switch account
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Your chat history');
+  await c.tui.handleKey('Enter'); // Cancel is default.
+  expect(c.client.activeSession()!.id).toBe(original);
+  await c.tui.executeSlashCommand('/login'); await c.tui.handleKey('Ctrl+A');
+  await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter'); await c.tui.handleKey('Enter');
+  await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter');
+  expect(c.client.activeSession()!.selection.accountId).toBe(second.id);
+  expect(c.client.activeSession()!.messages[0]?.content).toBe('Context to transfer');
+  expect(c.app.conversations.get(original)?.selection.accountId).toBe(c.account.id);
 });
 
 test('/switch confirms context transfer, creates a separate bound session, preserves source and revokes no accounts', async () => {
