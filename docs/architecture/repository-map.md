@@ -322,3 +322,10 @@ SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-sid
 - `tools/dispatcher.ts`: bounded automatic instruction reader sharing canonical paths, security policy, redaction and audit; never automatically prompts for a newly required grant.
 - `core/agent/engine.ts`: one transient user-context message per model request, loaded once per turn; no direct filesystem or SDK access.
 - CLI composition wires approval-gated loader instances per workspace; SDK and TUI `/context` expose metadata/diagnostics and include loaded bytes in local estimates. No persistence schema or package graph changes.
+
+## Task 02 Progressive Code Exploration (ADR 0020)
+
+- `core/agent/guidance.ts`: provider-neutral exploration guidance and the budget-exhausted notice.
+- `core/agent/engine.ts`: per-turn call budget shared by round-based and inline paths, paired `TOOL_BUDGET` refusals, `[unchanged]` reread notice; guidance sent via `ModelRequest.instructions`.
+- `models/adapter.ts`: `instructions` → AI-SDK `system`. `cli/subscriptions/{host,project-context}.ts`: guidance appended to Codex developer instructions; inline attempt cap from core.
+- Tests: `tests/end-to-end/progressive-exploration.test.ts`, Codex cases in `tests/end-to-end/subscriptions.test.ts`, scripted fixture models in `tests/fixtures.ts` and `tests/subscription-fixtures/runtime.ts`.

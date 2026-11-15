@@ -38,7 +38,7 @@ export class ProviderAdapter implements ModelPort {
     if (request.maxEstimatedCostUSD !== undefined) {
       const prices = this.info?.pricing; if (!prices) throw new HannesError('BUDGET');
       // Deliberately an estimate guard, not an exact tokenizer or provider billing ceiling.
-      const inputEstimate = Buffer.byteLength(JSON.stringify(request.messages)) + Buffer.byteLength(JSON.stringify(request.tools)) + request.messages.length * 16 + 1024;
+      const inputEstimate = Buffer.byteLength(JSON.stringify(request.messages)) + Buffer.byteLength(JSON.stringify(request.tools)) + Buffer.byteLength(request.instructions ?? '') + request.messages.length * 16 + 1024;
       const outputEstimate = Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens);
       if ((inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 > request.maxEstimatedCostUSD) throw new HannesError('BUDGET');
     }
@@ -72,7 +72,7 @@ export class ProviderAdapter implements ModelPort {
     }
     const controller = new AbortController();
     const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(p.timeoutMs)]);
-    return { model, messages: toModelMessages(request.messages), maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
+    return { model, ...(request.instructions ? { system: request.instructions } : {}), messages: toModelMessages(request.messages), maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
       ...(request.reasoningEffort ? { providerOptions: { openai: { reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true } } } : {}),
       maxRetries: 0, abortSignal, tools: request.tools.length ? tools : undefined,
       experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators, responseHeaders };

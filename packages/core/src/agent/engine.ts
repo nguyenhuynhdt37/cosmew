@@ -1,7 +1,27 @@
-import { HannesError, messageSchema, type ConversationStore, type ProjectContextPort, type Message, type ModelEvent, type ModelPort, type Selection, type ToolCall, type ToolPort, type TurnReceipt, type Usage } from '@hannes/contracts';
+import { HannesError, messageSchema, type ConversationStore, type ProjectContextPort, type Message, type ModelEvent, type ModelPort, type Selection, type ToolCall, type ToolPort, type ToolResult, type TurnReceipt, type Usage } from '@hannes/contracts';
+import { budgetExhaustedNotice, explorationGuidance } from './guidance';
 
-/** Tool rounds allowed in one user turn before the model must answer in text (ADR 0017). */
-export const MAX_TOOL_ROUNDS = 8;
+/**
+ * Request rounds that may offer tools in one user turn (ADR 0020, was 8 in ADR 0017). A model that
+ * issues one call per round needs a round per dependency hop; the round after the last one offers
+ * no tools, so the model has to answer.
+ */
+export const MAX_TOOL_ROUNDS = 16;
+/** Tool calls executed in one user turn, on the round-based and the inline path alike (ADR 0020). */
+export const MAX_TOOL_CALLS = 32;
+/** Inline runtimes get a few refused attempts past the budget before the turn fails closed. */
+export const MAX_INLINE_TOOL_ATTEMPTS = MAX_TOOL_CALLS + 4;
+
+const UNCHANGED = '[unchanged] This call returned exactly the same content as the identical call earlier in this turn. The content is not repeated; use the earlier result.';
+const BUDGET = `[tool budget] The limit of ${MAX_TOOL_CALLS} tool calls for this turn is reached, so this call was not run. Answer from the evidence gathered and say what is still missing.`;
+
+/** Key order must not make two equal inputs look different. */
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(k => JSON.stringify(k) + ':' + stable((value as Record<string, unknown>)[k])).join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+const toolMessage = (call: ToolCall, result: ToolResult): Message => ({ role: 'tool', content: result.status === 'ok' ? result.content || '(empty)' : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`, toolCallId: call.id, toolName: call.name });
 
 const add = (a: number | null | undefined, b: number | null | undefined) => (a == null || b == null ? null : a + b);
 
@@ -47,29 +67,49 @@ export class Conversation {
     /** True while round 0 offered tools and nothing has come back yet. */
     let rejectionCandidate = false;
     const inlineIds = new Set<string>();
+    /** Calls actually dispatched this turn; refused over-budget calls are not counted. */
+    let executed = 0;
+    /** Successful results of this turn by tool + arguments, to spot rereads of unchanged content. */
+    const seen = new Map<string, string>();
+    /** Every call goes through here: budget, the injected ToolPort (permission engine), reread check. */
+    const run = async (call: ToolCall, toolSignal?: AbortSignal): Promise<ToolResult> => {
+      if (executed >= MAX_TOOL_CALLS) return { callId: call.id, name: call.name, status: 'error', code: 'TOOL_BUDGET', content: BUDGET };
+      executed++;
+      const result = await this.tools!.invoke(call, toolSignal);
+      if (result.status !== 'ok') return result;
+      const key = call.name + '\0' + stable(call.input);
+      // The tool did run (and was permission-checked and audited); only the duplicate text is dropped.
+      if (seen.get(key) === result.content) return { ...result, content: UNCHANGED };
+      seen.set(key, result.content);
+      return result;
+    };
     try {
       signal?.throwIfAborted();
       const context = await this.projectContext?.load(signal);
       signal?.throwIfAborted();
       if (context && (!Number.isSafeInteger(context.budgetBytes) || context.budgetBytes < 0 || context.budgetBytes > 65536 || Buffer.byteLength(context.content) > context.budgetBytes)) throw new HannesError('BUDGET');
-      const instructions: Message[] = context?.content ? [messageSchema.parse({role:'user',content:context.content})] : [];
+      const projectMessages: Message[] = context?.content ? [messageSchema.parse({role:'user',content:context.content})] : [];
       revision = this.store.append(this.id, user, 'pending', receipt);
       for (let round = 0; ; round++) {
         // The last allowed round offers no tools, so the model has to answer in text.
-        const available = this.tools && round < MAX_TOOL_ROUNDS && this.messages.length + steps.length < 180 ? this.tools.descriptors() : [];
+        const available = this.tools && round < MAX_TOOL_ROUNDS && executed < MAX_TOOL_CALLS && this.messages.length + steps.length < 180 ? this.tools.descriptors() : [];
         const tools = available.map(d => ({ name: d.name, description: d.description, inputSchema: d.inputSchema }));
         const offerTools = tools.length > 0;
         rejectionCandidate = round === 0 && offerTools;
+        // Host guidance travels with the tools. Once tools are withdrawn mid-turn the model is told why.
+        const names = offerTools ? tools.map(t => t.name) : steps.length ? this.tools?.descriptors().map(d => d.name) ?? [] : [];
+        const guidance = names.length ? explorationGuidance(names, { rounds: MAX_TOOL_ROUNDS, calls: MAX_TOOL_CALLS }) : '';
+        const instructions = offerTools ? guidance : steps.length ? [guidance, budgetExhaustedNotice()].filter(Boolean).join('\n') : undefined;
         let text = ''; const calls: ToolCall[] = [];
         const before = receipt.usage; // totals of earlier rounds
         let terminal: Extract<ModelEvent, { type: 'completed' }> | undefined;
-        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...instructions, ...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools }, signal, this.model.inlineTools && this.tools ? async (call, toolSignal) => {
-          if (this.messages.length + steps.length > 196 || !available.some(d => d.name === call.name) || inlineIds.size >= 32 || inlineIds.has(call.id)) throw new HannesError('POLICY');
+        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...projectMessages, ...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools, ...(instructions ? { instructions } : {}) }, signal, this.model.inlineTools && this.tools ? async (call, toolSignal) => {
+          if (this.messages.length + steps.length > 196 || !available.some(d => d.name === call.name) || inlineIds.size >= MAX_INLINE_TOOL_ATTEMPTS || inlineIds.has(call.id)) throw new HannesError('POLICY');
           inlineIds.add(call.id);
           if (signal?.aborted) throw new HannesError('CANCELLED');
-          const result = await this.tools!.invoke(call, toolSignal ?? signal);
+          const result = await run(call, toolSignal ?? signal);
           if (signal?.aborted) throw new HannesError('CANCELLED');
-          steps.push({role: 'assistant', content: '', toolCalls: [call]}, {role: 'tool', content: result.status === 'ok' ? result.content || '(empty)' : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`, toolCallId: call.id, toolName: call.name});
+          steps.push({role: 'assistant', content: '', toolCalls: [call]}, toolMessage(call, result));
           return result;
         } : undefined)) {
           if (signal?.aborted) throw new HannesError('CANCELLED');
@@ -95,9 +135,9 @@ export class Conversation {
           steps.push({ role: 'assistant', content: text, toolCalls: calls });
           for (const call of calls) {
             signal?.throwIfAborted();
-            const result = await this.tools!.invoke(call, signal);
+            const result = await run(call, signal);
             yield { type: 'toolResult', result };
-            steps.push({ role: 'tool', content: result.status === 'ok' ? result.content || '(empty)' : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`, toolCallId: call.id, toolName: call.name });
+            steps.push(toolMessage(call, result));
           }
           continue;
         }

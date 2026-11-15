@@ -229,3 +229,7 @@ Remaining PA1 release gates: authenticated live provider/model tests; available 
 ## Task 01 authorized instruction loading
 
 2026-11-15: the user authorized only Project Context Loader ([ADR 0019](../adr/0019-project-context-loader.md), [delivery/evidence](project-context-loader.md)). It discovers approved-workspace AGENTS guidance and injects bounded transient user context through core ports. It does not advance RAG, LSP, MCP, memory, shell/write tools or any other task/phase.
+
+## Task 02 progressive code exploration
+
+2026-11-15: the user authorized only Task 02 ([ADR 0020](../adr/0020-progressive-code-exploration.md)). Shared exploration guidance for direct providers and Codex, a per-turn budget of 16 tool rounds and 32 executed calls, and an `[unchanged]` notice for identical rereads. Verified with deterministic fixture policies only; live model behavior is not verified.

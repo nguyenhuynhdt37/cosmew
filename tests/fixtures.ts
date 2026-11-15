@@ -8,6 +8,37 @@ export const memoryVault = (): CredentialVault & { values: Map<string, string> }
   async getRuntime(ref) { return this.values.get(ref.key); },
   async delete(ref) { if (ref.kind === 'keyring' || ref.kind === 'runtime') this.values.delete(ref.key); },
 });
+/** What a scripted fixture model sees: the request as it arrived on the wire, protocol-neutral. */
+export interface ScriptedView {
+  protocol: 'chat' | 'anthropic';
+  /** System/developer channel text. */
+  system: string;
+  /** Tool names offered in this request. */
+  tools: string[];
+  /** Tool results in order, each joined to its call through the wire call id. */
+  results: { callId: string; name: string; input: any; content: string }[];
+  /** Results whose id matches no assistant tool call, and calls that never got a result. */
+  orphanResults: number; unansweredCalls: number;
+}
+/** A scripted model answers with text or with tool calls, decided only from the view. */
+export type ScriptedReply = { text?: string; calls?: { name: string; input: unknown }[] };
+const blockText = (content: any): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('') : '';
+export function scriptedView(protocol: 'chat' | 'anthropic', body: any): ScriptedView {
+  const calls = new Map<string, { name: string; input: any }>(); const results: ScriptedView['results'] = []; let orphanResults = 0;
+  const result = (id: string, content: any) => { const call = calls.get(id); if (!call) orphanResults++; else results.push({ callId: id, ...call, content: blockText(content) }); };
+  for (const m of body.messages ?? []) {
+    if (protocol === 'chat') {
+      if (m.role === 'assistant') for (const c of m.tool_calls ?? []) calls.set(c.id, { name: c.function.name, input: JSON.parse(c.function.arguments) });
+      if (m.role === 'tool') result(m.tool_call_id, m.content);
+    } else if (Array.isArray(m.content)) for (const part of m.content) {
+      if (m.role === 'assistant' && part.type === 'tool_use') calls.set(part.id, { name: part.name, input: part.input });
+      if (m.role === 'user' && part.type === 'tool_result') result(part.tool_use_id, part.content);
+    }
+  }
+  const system = protocol === 'chat' ? (body.messages ?? []).filter((m: any) => m.role === 'system' || m.role === 'developer').map((m: any) => blockText(m.content)).join('\n') : blockText(body.system);
+  const tools = (body.tools ?? []).map((t: any) => protocol === 'chat' ? t.function.name : t.name);
+  return { protocol, system, tools, results, orphanResults, unansweredCalls: calls.size - new Set(results.map(r => r.callId)).size };
+}
 export function fixtureServer() {
   const requests: { path: string; body: any; authorization: string | null; apiKey: string | null }[] = [];
   let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let malformed = false; let dropped = false;
@@ -15,6 +46,8 @@ export function fixtureServer() {
   let rateLimitHeaders: Record<string, string> = {};
   /** Chat protocol: call this tool until a tool result comes back, then answer with that result. */
   let toolCall: { name: string; args: string } | undefined;
+  /** Chat and Anthropic protocols: a deterministic model that decides from the request it received. */
+  let script: ((view: ScriptedView) => ScriptedReply) | undefined;
   const sse = (items: unknown[], anthropic = false) => {
     const chunks = items.map(x => anthropic ? `event: ${(x as any).type}\ndata: ${JSON.stringify(x)}\n\n` : `data: ${JSON.stringify(x)}\n\n`);
     if (!anthropic) chunks.push('data: [DONE]\n\n');
@@ -42,6 +75,17 @@ export function fixtureServer() {
       return path.includes('streamGenerateContent') ? sse([response]) : Response.json(response);
     }
     if (path.includes('messages')) {
+      if (script && body.stream) {
+        const reply = script(scriptedView('anthropic', body)); let index = 0;
+        const blocks: unknown[] = [];
+        if (reply.text) blocks.push({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } }, { type: 'content_block_delta', index, delta: { type: 'text_delta', text: reply.text } }, { type: 'content_block_stop', index: index++ });
+        for (const call of reply.calls ?? []) blocks.push({ type: 'content_block_start', index, content_block: { type: 'tool_use', id: `toolu_${requests.length}_${index}`, name: call.name, input: {} } }, { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(call.input) } }, { type: 'content_block_stop', index: index++ });
+        return sse([
+          { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: modelName, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4, output_tokens: 0 } } },
+          ...blocks,
+          { type: 'message_delta', delta: { stop_reason: reply.calls?.length ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }, { type: 'message_stop' },
+        ], true);
+      }
       if (!body.stream) return Response.json({ id: 'msg_fixture', type: 'message', role: 'assistant', model: modelName, content: [{ type: 'text', text: 'Hello fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 4, output_tokens: 2 } });
       const events: unknown[] = [
         { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: modelName, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4, output_tokens: 0 } } },
@@ -77,6 +121,11 @@ export function fixtureServer() {
     const usage = includeUsage ? { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } : undefined;
     if (!body.stream) return Response.json({ id: 'fixture', object: 'chat.completion', created: 1234567890, model: modelName, choices: [{ index: 0, message: { role: 'assistant', content: 'Hello fixture' }, finish_reason: 'stop' }], usage });
     const base = { id: 'fixture', object: 'chat.completion.chunk', created: 1234567890, model: modelName };
+    if (script) {
+      const reply = script(scriptedView('chat', body));
+      const delta = { ...(reply.text ? { role: 'assistant', content: reply.text } : {}), ...(reply.calls?.length ? { tool_calls: reply.calls.map((call, index) => ({ index, id: `call_${requests.length}_${index}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.input) } })) } : {}) };
+      return sse([{ ...base, choices: [{ index: 0, delta, finish_reason: null }] }, { ...base, choices: [{ index: 0, delta: {}, finish_reason: reply.calls?.length ? 'tool_calls' : 'stop' }], usage }]);
+    }
     if (toolCall) {
       const results = (body.messages ?? []).filter((m: any) => m.role === 'tool');
       if (!results.length) return sse([
@@ -99,8 +148,8 @@ export function fixtureServer() {
     provider(protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat', overrides = {}) {
       return providerSchema.parse({ id: 'fixture', name: 'Fixture', protocol, baseURL: `http://127.0.0.1:${server.port}/${protocol === 'gemini' ? 'gemini' : 'v1'}`, auth: 'api-key', catalog: protocol === 'gemini' ? 'gemini' : protocol === 'anthropic' ? 'anthropic' : 'openai', metadataVersion: 1, timeoutMs: 1000, ...overrides });
     },
-    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string>; toolCall?: { name: string; args: string } | null }) {
-      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders; toolCall = options.toolCall === null ? undefined : options.toolCall ?? toolCall;
+    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string>; toolCall?: { name: string; args: string } | null; script?: ((view: ScriptedView) => ScriptedReply) | null }) {
+      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders; toolCall = options.toolCall === null ? undefined : options.toolCall ?? toolCall; script = options.script === null ? undefined : options.script ?? script;
     },
   };
 }

@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
 import { HannesError, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
 import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet } from '@hannes/tui';
 import { RuntimeProfile } from '@hannes/persistence';
@@ -351,14 +352,68 @@ test('Codex read outside the workspace is denied by the same dispatcher', async 
   expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]).toMatchObject({status: 'denied', code: 'DENIED'});
 });
 
-for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 'read-namespace', 'read-duplicate', 'read-repeat']) test(`Codex dynamic request fails closed: ${scenario}`, async () => {
+for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 'read-namespace', 'read-duplicate', 'read-runaway']) test(`Codex dynamic request fails closed: ${scenario}`, async () => {
   const c = await readContext(scenario);
   const events: ModelEvent[] = [];
   await expect((async () => { for await (const event of c.client.sendMessage('Inspect project')) events.push(event); })()).rejects.toBeInstanceOf(HannesError);
   expect(events.some(e => e.type === 'completed')).toBe(false);
-  expect(events.filter(e => e.type === 'toolResult').length).toBeLessThanOrEqual(32);
-  if (scenario === 'read-repeat') expect(events.filter(e => e.type === 'toolResult')).toHaveLength(32);
+  const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
+  expect(results.length).toBeLessThanOrEqual(MAX_INLINE_TOOL_ATTEMPTS);
+  if (scenario === 'read-runaway') {
+    // ADR 0020: 32 calls run, a few more are refused unexecuted, then the turn fails closed.
+    expect(results).toHaveLength(MAX_INLINE_TOOL_ATTEMPTS);
+    expect(results.slice(MAX_TOOL_CALLS).every(r => r.code === 'TOOL_BUDGET')).toBe(true);
+    expect((c.app.db.query("SELECT count(*) AS n FROM tool_audit WHERE phase='completed'").get() as {n: number}).n).toBe(MAX_TOOL_CALLS);
+  }
   expect(c.client.listPendingPermissions()).toHaveLength(0);
+});
+
+test('Codex tool budget: a model that stops after the refusal still completes; rereads return the unchanged notice', async () => {
+  const c = await readContext('read-repeat'); // 34 identical README reads, then it answers with the last result
+  const events: ModelEvent[] = [];
+  for await (const event of c.client.sendMessage('Inspect project')) events.push(event);
+  const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
+  expect(results).toHaveLength(34);
+  expect(results[0]!.content).toContain('banana inventory service');
+  expect(results.slice(1, MAX_TOOL_CALLS).every(r => r.status === 'ok' && r.content.startsWith('[unchanged]'))).toBe(true);
+  expect(results.slice(MAX_TOOL_CALLS).map(r => r.code)).toEqual(['TOOL_BUDGET', 'TOOL_BUDGET']);
+  expect((c.app.db.query("SELECT count(*) AS n FROM tool_audit WHERE phase='completed'").get() as {n: number}).n).toBe(MAX_TOOL_CALLS);
+  expect(events.at(-1)!.type).toBe('completed');
+});
+
+async function exploreContext(files: Record<string, string>) {
+  const c = await readContext('explore');
+  for (const [path, text] of Object.entries(files)) { mkdirSync(dirname(join(c.ws, path)), {recursive: true}); writeFileSync(join(c.ws, path), text); }
+  const targets = () => (c.app.db.query("SELECT tool, target FROM tool_audit WHERE phase='completed' ORDER BY rowid").all() as {tool: string; target: string}[]).map(r => `${r.tool} ${r.target}`);
+  return {...c, targets};
+}
+const exploreRepository = {
+  'src/routes.ts': "import { verifyToken } from './service';\nexport const login = (token: string) => verifyToken(token);\n",
+  'src/service.ts': "export function verifyToken(token: string) { return token === 'SERVICE_MARKER'; }\n",
+  'src/billing.ts': "export const invoice = 'UNRELATED_MARKER';\n",
+};
+
+test('Codex progressive exploration: each dynamic call is derived from the previous Hannes result', async () => {
+  const c = await exploreContext(exploreRepository);
+  await c.tui.submitPrompt('How does the login route check tokens?');
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.errorText).toBeUndefined();
+  expect(answer.content).toContain('verifyToken is defined in src/service.ts');
+  expect(answer.content).toContain('SERVICE_MARKER');
+  expect(c.targets()).toEqual(['glob .', 'read src/routes.ts', 'read src/service.ts']);
+  expect(answer.toolResults?.map(r => r.callId)).toEqual(answer.toolCalls?.map(call => call.id));
+  const saved = c.app.conversations.get(c.client.activeSession()!.id)!.messages;
+  expect(saved.map(m => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'tool', 'assistant', 'tool', 'assistant']);
+  expect(JSON.stringify(saved)).not.toContain('UNRELATED_MARKER');
+});
+
+test('Codex negative: a routes.ts that references another file is followed there instead', async () => {
+  const c = await exploreContext({...exploreRepository,
+    'src/routes.ts': "import { verifyToken } from './token-check';\nexport const login = (token: string) => verifyToken(token);\n",
+    'src/token-check.ts': "export function verifyToken(token: string) { return 'TOKEN_CHECK_MARKER' + token; }\n"});
+  await c.tui.submitPrompt('How does the login route check tokens?');
+  expect(c.tui.getTranscript().at(-1)!.content).toContain('verifyToken is defined in src/token-check.ts');
+  expect(c.targets()).toEqual(['glob .', 'read src/routes.ts', 'read src/token-check.ts']);
 });
 
 test('cancelling Codex while it awaits a read approval drains the pending tool', async () => {

@@ -114,6 +114,11 @@ export const requestSchema = z.strictObject({
   reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),
   tools: z.array(z.strictObject({ name: idSchema, description: z.string().max(2000), inputSchema: z.record(z.string(), z.unknown()) })).max(32).default([]),
+  /**
+   * Trusted host guidance (ADR 0020), never repository or user text. Adapters place it in the
+   * provider's system/developer channel; it is not stored with the conversation.
+   */
+  instructions: z.string().min(1).max(8000).optional(),
 });
 export type ModelRequest = z.infer<typeof requestSchema>;
 export type Usage = z.infer<typeof import('./telemetry').usageSchema>;

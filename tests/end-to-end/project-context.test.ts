@@ -23,7 +23,7 @@ test('captured requests contain one current user-scoped snapshot per turn; edits
  const c=await setup();writeFileSync(join(c.ws,'AGENTS.md'),'Architecture rule: TASK01_V1 Use injected ports.');c.client.setToolsEnabled(true);
  await send(c.client,'Explain the architecture');await send(c.client,'Where are the boundaries?');
  const first=c.server.requests.filter(r=>r.body).map(r=>r.body);
- for(const request of first) {expect(contextual(request)).toHaveLength(1);expect(contextual(request)[0].role).toBe('user');expect(request.messages.some((m:any)=>['system','developer'].includes(m.role))).toBe(false);expect(JSON.stringify(request).split('TASK01_V1')).toHaveLength(2);}
+ for(const request of first) {expect(contextual(request)).toHaveLength(1);expect(contextual(request)[0].role).toBe('user');expect(request.messages.filter((m:any)=>['system','developer'].includes(m.role)).some((m:any)=>JSON.stringify(m).includes('TASK01'))).toBe(false);expect(JSON.stringify(request).split('TASK01_V1')).toHaveLength(2);}
  const session=c.client.activeSession()!.id,hash=c.client.projectContext()!.sources[0]!.hash;
  expect(JSON.stringify(c.app.conversations.get(session)!.messages)).not.toContain('TASK01_V1');
  writeFileSync(join(c.ws,'AGENTS.md'),'Architecture rule: TASK01_V2 Use injected ports.');await send(c.client,'Recheck the architecture');

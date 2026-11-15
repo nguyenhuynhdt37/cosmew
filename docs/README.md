@@ -88,3 +88,5 @@ Commands/usage/context and continued multi-account chat: [usage and verification
 ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [usage and live evidence](delivery/subscription-auth.md). The bridge exposes only Hannes read/glob/grep after folder consent; native runtime tools remain denied.
 
 Task 01 Project Context Loader: [usage, module changes and deterministic acceptance](delivery/project-context-loader.md), [ADR 0019 and pinned Codex research](adr/0019-project-context-loader.md). Project instructions are approved-workspace user context, not system/developer authority.
+
+Task 02 Progressive Code Exploration: [ADR 0020 with audit, budget decision and deterministic acceptance](adr/0020-progressive-code-exploration.md). Shared guidance, 16 rounds / 32 calls per turn, unchanged-reread notice; no new tools.
