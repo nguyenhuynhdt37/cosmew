@@ -5,7 +5,7 @@ import { renderContextIndicator } from '../context-meter';
 import { renderTopHeaderBar } from '../header';
 import { renderFyn, type FynCompanion } from '../companion';
 import { renderPromptComposerLines, type ComposerState } from '../composer';
-import { renderTranscriptViewport, type TranscriptItem } from '../transcript';
+import { explorationRows, formatElapsed, reasoningTitle, renderTranscriptViewport, type TranscriptItem } from '../transcript';
 import { renderWelcomeScreen } from '../welcome';
 import type { ScreenMetrics } from '../../render/metrics';
 
@@ -25,6 +25,8 @@ export interface ChatScreenInput {
   transcript: TranscriptItem[];
   scrollOffset: number;
   isStreaming: boolean;
+  /** Start of the running turn (ms since epoch), for the status timer. */
+  turnStartedAt?: number | null;
   isPreviewing: boolean;
   /** The composer has focus (no overlay is open). */
   focused: boolean;
@@ -127,7 +129,9 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
       canvas.spans(framePad, contentLeft, headerSpans, contentWidth);
       transcriptStartRow = framePad + 2;
     }
-    const transcriptHeight = Math.max(0, (showMascot ? mascotRow : composerStartRow) - transcriptStartRow);
+    // While a turn runs, one status row sits right above the composer (beside Fyn when shown).
+    const statusRow = v.isStreaming && !showMascot ? composerStartRow - 1 : -1;
+    const transcriptHeight = Math.max(0, (showMascot ? mascotRow : statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
         items: v.transcript,
@@ -142,18 +146,35 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
     }
     if (showMascot) {
       canvas.block(mascotRow, contentLeft, mascotLines, 28);
-      if (v.isStreaming && contentWidth >= 44) {
-        const phases = ['·    ', '··   ', '···  ', ' ··· ', '  ···', '   ··'];
-        const pulse = phases[Math.floor(companionView.time * 5) % phases.length]!;
-        canvas.spans(mascotRow + 2, contentLeft + 28, [
-          { text: pulse, fg: tokens.accent },
-          { text: status.phase === 'reasoning' ? ' Thinking from provider' : status.phase === 'waiting' ? ' Waiting for provider' : companionView.state === 'streaming' ? ' Replying' : ' Preparing request', fg: tokens.foregroundMuted },
-        ], contentWidth - 28);
-        canvas.spans(mascotRow + 3, contentLeft + 28, [
-          { text: 'Esc to interrupt', fg: tokens.foregroundSubtle },
-        ], contentWidth - 28);
-      }
+      if (v.isStreaming && contentWidth >= 44) canvas.spans(mascotRow + 2, contentLeft + 28, turnStatusSpans(v, companionView.time), contentWidth - 28);
     }
+    if (statusRow > transcriptStartRow) canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);
   }
+}
+
+/**
+ * Live status of the running turn, after Codex's status indicator:
+ * `◦ Exploring (12s • Esc to interrupt)`. The label is the latest reasoning title when the
+ * provider sends one, otherwise what the turn is doing now.
+ */
+export function turnStatusSpans(v: Pick<ChatScreenInput, 'client' | 'status' | 'tokens' | 'transcript' | 'turnStartedAt'>, time: number): { text: string; fg: string; bold?: boolean }[] {
+  const { tokens } = v;
+  const turn = v.transcript.at(-1);
+  const waitingTool = turn?.toolCalls?.some(call => !turn.toolResults?.some(result => result.callId === call.id));
+  const pendingApproval = v.client.listPendingPermissions().length > 0;
+  const last = turn?.parts?.at(-1);
+  const label = pendingApproval ? 'Waiting for your approval'
+    : waitingTool ? (explorationRows(turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id)), []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring')
+    : last?.kind === 'reasoning' ? reasoningTitle(last.text) ?? 'Thinking'
+    : last?.kind === 'text' ? 'Replying'
+    : v.status.phase === 'waiting' ? 'Waiting for provider' : 'Working';
+  const elapsed = v.turnStartedAt ? formatElapsed(Date.now() - v.turnStartedAt) : '0s';
+  return [
+    { text: Math.floor(time * 2) % 2 ? '◦ ' : '• ', fg: tokens.accent },
+    { text: label, fg: tokens.foreground, bold: true },
+    { text: ` (${elapsed} • `, fg: tokens.foregroundSubtle },
+    { text: 'Esc', fg: tokens.foregroundMuted },
+    { text: ' to interrupt)', fg: tokens.foregroundSubtle },
+  ];
 }

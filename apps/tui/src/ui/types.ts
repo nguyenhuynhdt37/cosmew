@@ -4,6 +4,7 @@ export interface StyledSpan {
   fg: string;
   bg?: string;
   bold?: boolean;
+  italic?: boolean;
 }
 
 export interface RenderedBoxLine {

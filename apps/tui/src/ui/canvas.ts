@@ -32,7 +32,7 @@ export class Canvas {
       for (let i = 0; i < span.text.length; i++) {
         if (col >= limit) return;
         if (col >= 0) {
-          this.cells[row]![col] = { ch: printable(span.text[i]!), fg: span.fg, bg: span.bg ?? this.cells[row]![col]!.bg, bold: Boolean(span.bold) };
+          this.cells[row]![col] = { ch: printable(span.text[i]!), fg: span.fg, bg: span.bg ?? this.cells[row]![col]!.bg, bold: Boolean(span.bold), ...(span.italic ? { italic: true } : {}) };
         }
         col++;
       }

@@ -23,6 +23,8 @@ export interface FrameCell {
   fg: string;
   bg: string;
   bold: boolean;
+  /** Set only when true, so plain cells keep their shape. */
+  italic?: boolean;
   selected?: boolean;
 }
 

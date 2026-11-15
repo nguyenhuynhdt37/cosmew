@@ -13,7 +13,7 @@ export function renderAnsiDiff(cells: FrameCell[][], rows: number, cap: Terminal
         for (let x = 0; x < row.length; x++) {
           const a = row[x]!;
           const b = prevRow[x]!;
-          if (a.ch !== b.ch || a.fg !== b.fg || a.bg !== b.bg || a.bold !== b.bold || a.selected !== b.selected) {
+          if (a.ch !== b.ch || a.fg !== b.fg || a.bg !== b.bg || a.bold !== b.bold || Boolean(a.italic) !== Boolean(b.italic) || a.selected !== b.selected) {
             rowChanged = true;
             break;
           }
@@ -25,6 +25,7 @@ export function renderAnsiDiff(cells: FrameCell[][], rows: number, cap: Terminal
       let curFg = '';
       let curBg = '';
       let curBold = false;
+      let curItalic = false;
       let curSelected = false;
 
       for (let x = 0; x < row.length; x++) {
@@ -35,6 +36,10 @@ export function renderAnsiDiff(cells: FrameCell[][], rows: number, cap: Terminal
         if (cell.bold !== curBold) {
           out += cell.bold ? '\x1b[1m' : '\x1b[22m';
           curBold = cell.bold;
+        }
+        if (Boolean(cell.italic) !== curItalic) {
+          out += cell.italic ? '\x1b[3m' : '\x1b[23m';
+          curItalic = Boolean(cell.italic);
         }
         if (cell.fg !== curFg) {
           out += fgHex(cell.fg, cap);

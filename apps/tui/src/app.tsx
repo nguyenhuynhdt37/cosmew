@@ -322,7 +322,7 @@ export class FutrynTuiApp {
     drawChatScreen(canvas, {
       client: this.client, rows, metrics, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId,
       composer: this.chat.composer, transcript: this.chat.transcript, scrollOffset: this.chat.scrollOffset,
-      isStreaming: this.chat.isStreaming, isPreviewing: this.themeEngine.isPreviewing(),
+      isStreaming: this.chat.isStreaming, turnStartedAt: this.chat.turnStartedAt, isPreviewing: this.themeEngine.isPreviewing(),
       focused: this.overlay === 'none', workspaceAccess: this.workspaceAccess,
     });
 

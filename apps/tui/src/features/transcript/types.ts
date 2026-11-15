@@ -15,6 +15,26 @@ export interface TranscriptItem {
   durationMs?: number;
   reasoning?: string;
   reasoningExpanded?: boolean;
+  /**
+   * What happened in this turn, in arrival order (ADR 0021). Text and reasoning parts hold their
+   * own slice of the stream; a tools part names calls in `toolCalls`. Absent on old items, which
+   * render from the flat fields instead.
+   */
+  parts?: TranscriptPart[];
+}
+
+export type TranscriptPart =
+  | { kind: 'reasoning'; text: string }
+  | { kind: 'text'; text: string }
+  | { kind: 'tools'; callIds: string[] };
+
+/** One row under an `Explored` header, e.g. `Read routes.ts, service.ts`. */
+export interface ExplorationRow {
+  verb: string;
+  target: string;
+  /** Short outcome note such as `denied` or `partial`; none for a plain success. */
+  note?: string;
+  tone: 'ok' | 'muted' | 'error';
 }
 
 export interface ToolExecutionSummary {

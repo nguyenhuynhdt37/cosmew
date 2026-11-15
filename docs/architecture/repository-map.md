@@ -329,3 +329,9 @@ SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-sid
 - `core/agent/engine.ts`: per-turn call budget shared by round-based and inline paths, paired `TOOL_BUDGET` refusals, `[unchanged]` reread notice; guidance sent via `ModelRequest.instructions`.
 - `models/adapter.ts`: `instructions` → AI-SDK `system`. `cli/subscriptions/{host,project-context}.ts`: guidance appended to Codex developer instructions; inline attempt cap from core.
 - Tests: `tests/end-to-end/progressive-exploration.test.ts`, Codex cases in `tests/end-to-end/subscriptions.test.ts`, scripted fixture models in `tests/fixtures.ts` and `tests/subscription-fixtures/runtime.ts`.
+
+## TUI activity presentation (ADR 0021)
+
+- `features/transcript/{types,logic,view}.ts`: ordered `parts`, `explorationRows` grouping, `renderExplorationGroup`, inline reasoning, stored-session rebuild.
+- `features/chat/{controller,view}.ts`: parts appended per event, `turnStartedAt`, `turnStatusSpans` status row.
+- `ui/types.ts`, `ui/canvas.ts`, `render/ansi-diff.ts`, `types.ts`: optional italic cells.

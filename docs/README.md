@@ -90,3 +90,5 @@ ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [us
 Task 01 Project Context Loader: [usage, module changes and deterministic acceptance](delivery/project-context-loader.md), [ADR 0019 and pinned Codex research](adr/0019-project-context-loader.md). Project instructions are approved-workspace user context, not system/developer authority.
 
 Task 02 Progressive Code Exploration: [ADR 0020 with audit, budget decision and deterministic acceptance](adr/0020-progressive-code-exploration.md). Shared guidance, 16 rounds / 32 calls per turn, unchanged-reread notice; no new tools.
+
+Codex-style activity presentation: [ADR 0021](adr/0021-codex-style-activity-presentation.md) (ordered transcript parts, Explored groups, inline thinking, status row; TUI only).

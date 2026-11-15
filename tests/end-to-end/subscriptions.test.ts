@@ -464,7 +464,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: approve project, login Ch
     await wait('Sign in to another account'); terminal.write('\r'); await wait('Choose your provider'); terminal.write('\r');
     await wait('Sign in to OpenAI'); terminal.write('\r'); await wait('runtime-model'); terminal.write('\r'); await wait('Ask anything');
     terminal.write('Read README.md and summarize the project\r');
-    await wait('banana inventory service'); await wait('✓ read README.md'); await wait('Completed turn');
+    await wait('banana inventory service'); await wait('└ Read README.md'); await wait('Completed turn');
     terminal.write('\x03');
     expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
     expect(output).not.toContain('fixture-runtime-secret');

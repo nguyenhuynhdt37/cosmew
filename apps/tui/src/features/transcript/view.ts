@@ -1,8 +1,7 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { highlightCodeLine, toolSummary, wrapTextToWidth } from './logic';
-import { renderToolExecutionCard } from './tool-card';
-import type { TranscriptItem } from './types';
+import { explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
+import type { TranscriptItem, TranscriptPart } from './types';
 
 export function renderMarkdownBody(options: {
   content: string;
@@ -108,37 +107,25 @@ export function renderTranscriptMessages(options: {
       continue;
     }
 
-    if (item.reasoning) {
-      lines.push({ spans: [{ text: `  ${item.reasoningExpanded ? '▾' : '▸'} Thinking · from provider · Ctrl+R`, fg: tokens.foregroundSubtle, bg }] });
-      if (item.reasoningExpanded) {
-        for (const line of renderMarkdownBody({ content: item.reasoning, width: innerWidth - 4, tokens, bg, syntaxHighlighting })) {
-          lines.push({ spans: [{ text: '  ', fg: tokens.foregroundSubtle, bg }, ...line.spans.map(span => ({ ...span, fg: tokens.foregroundMuted }))] });
+    const parts = transcriptParts(item);
+    let previous: TranscriptPart['kind'] | undefined;
+    for (const part of parts) {
+      // Reasoning and exploration stay compact; answer text gets air around it.
+      if (previous && (part.kind === 'text' || previous === 'text')) lines.push({ spans: [] });
+      if (part.kind === 'reasoning') {
+        if (item.reasoningExpanded === false) continue; // Ctrl+R hides thinking
+        lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
+      } else if (part.kind === 'tools') {
+        const calls = part.callIds.map(id => item.toolCalls?.find(call => call.id === id)).filter((call): call is ToolCall => Boolean(call));
+        if (calls.length) lines.push(...renderExplorationGroup({ calls, results: item.toolResults, width: innerWidth, tokens, bg, live: Boolean(item.streaming) }));
+      } else {
+        const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 4), tokens, bg, syntaxHighlighting });
+        for (const [row, bLine] of body.entries()) {
+          if (bLine.spans.length === 0) { lines.push({ spans: [] }); continue; }
+          lines.push({ spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.accent, bg }, ...bLine.spans] });
         }
       }
-    }
-    // Tool use happens before the answer, so its cards come first.
-    if (item.toolCalls && item.toolCalls.length > 0) {
-      for (const call of item.toolCalls) {
-        lines.push(...renderToolExecutionCard({ width, summary: toolSummary(call, item.toolResults), tokens, borderStyle: options.borderStyle }));
-      }
-    }
-    if (item.content || item.streaming) {
-      const body = renderMarkdownBody({
-        content: item.content || '▍',
-        width: Math.max(8, innerWidth - 4),
-        tokens,
-        bg,
-        syntaxHighlighting,
-      });
-      for (const [row, bLine] of body.entries()) {
-        if (bLine.spans.length === 0) {
-          lines.push({ spans: [] });
-          continue;
-        }
-        lines.push({
-          spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.accent, bg }, ...bLine.spans],
-        });
-      }
+      previous = part.kind;
     }
 
     if (item.errorText) {
@@ -217,4 +204,49 @@ export function renderTranscriptViewport(options: {
   }
 
   return { lines: result, totalLines, clampedOffset };
+}
+
+/** Thinking as Codex prints summaries, but inline: dim italic, `• ` on the first row. */
+function renderReasoningPart(text: string, width: number, tokens: ThemeTokens, bg: string, syntaxHighlighting: boolean): RenderedBoxLine[] {
+  // Summary titles (`**Title**`) feed the status line; inline they read as plain words.
+  const body = renderMarkdownBody({ content: text.trim().replace(/\*\*([^*\n]+)\*\*/g, '$1'), width: Math.max(8, width - 4), tokens, bg, syntaxHighlighting });
+  let first = true;
+  return body.map(line => {
+    if (!line.spans.length) return { spans: [] };
+    const prefix = { text: first ? '• ' : '  ', fg: tokens.foregroundSubtle, bg };
+    first = false;
+    return { spans: [prefix, ...line.spans.map(span => ({ ...span, fg: tokens.foregroundMuted, bg, bold: false, italic: true }))] };
+  });
+}
+
+/**
+ * One group of read/glob/grep calls, the way Codex shows exploration:
+ *
+ *   • Explored
+ *     └ Search verifyToken in src
+ *       Read routes.ts, service.ts
+ */
+export function renderExplorationGroup(options: { calls: ToolCall[]; results: ToolResult[] | undefined; width: number; tokens: ThemeTokens; bg: string; live: boolean }): RenderedBoxLine[] {
+  const { calls, results, width, tokens, bg } = options;
+  const active = options.live && explorationActive(calls, results);
+  const lines: RenderedBoxLine[] = [{ spans: [
+    { text: active ? '◦' : '•', fg: active ? tokens.accent : tokens.foregroundSubtle, bg },
+    { text: active ? ' Exploring' : ' Explored', fg: tokens.foreground, bg, bold: true },
+  ] }];
+  explorationRows(calls, results).forEach((row, index) => {
+    const lead = index === 0 ? '  └ ' : '    ';
+    const indent = ' '.repeat(lead.length + row.verb.length + 1);
+    const note = row.note ? ` (${row.note})` : '';
+    const wrapped = wrapTextToWidth(row.target + note, Math.max(8, width - indent.length));
+    wrapped.forEach((text, wrapIndex) => {
+      const noteStart = wrapIndex === wrapped.length - 1 && note ? Math.max(0, text.length - note.length) : text.length;
+      lines.push({ spans: [
+        { text: wrapIndex === 0 ? lead : indent, fg: tokens.foregroundSubtle, bg },
+        ...(wrapIndex === 0 ? [{ text: row.verb + ' ', fg: tokens.accent, bg }] : []),
+        { text: text.slice(0, noteStart), fg: tokens.foreground, bg },
+        ...(noteStart < text.length ? [{ text: text.slice(noteStart), fg: row.tone === 'error' ? tokens.error : tokens.foregroundSubtle, bg }] : []),
+      ] });
+    });
+  });
+  return lines;
 }

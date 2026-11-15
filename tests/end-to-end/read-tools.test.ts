@@ -39,7 +39,8 @@ test('model reads a workspace file through the tool loop; result returns to the 
   expect(answer.content).toContain('banana');                       // the model saw the tool result
   expect(answer.toolCalls?.[0]?.name).toBe('read');
   expect(answer.toolResults?.[0]?.status).toBe('ok');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('✓ read notes.txt');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('• Explored');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('└ Read notes.txt');
   expect(toolRequests(c.server).map(r => r.body.tools.map((t: any) => t.function.name)).at(0)).toEqual(['read', 'glob', 'grep']);
   // Resume: the stored turn keeps the tool call and result, and the transcript folds them into one card.
   const resumed = c.app.createFutrynClient(c.ws); resumed.resumeSession(c.client.activeSession()!.id);

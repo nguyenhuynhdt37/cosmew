@@ -6,7 +6,7 @@ import {
   applyFileReferenceSelection, createInitialComposerState, getMatchingSlashCommands, navigateComposerHistory,
   recordComposerHistory, updateComposerValue, type ComposerState,
 } from '../composer';
-import { messagesToTranscript, type TranscriptItem } from '../transcript';
+import { appendStreamPart, appendToolPart, messagesToTranscript, type TranscriptItem } from '../transcript';
 
 /**
  * The main screen: prompt composer, transcript and the streaming turn. Owns their state so
@@ -19,6 +19,8 @@ export class ChatController {
   scrollOffset = -1;
   showReasoning = true;
   isStreaming = false;
+  /** Start of the running turn, for the status line timer; null when idle. */
+  turnStartedAt: number | null = null;
   readonly companion = new FynCompanion();
   private activeAbortController: AbortController | null = null;
   private turnTask: Promise<void> | null = null;
@@ -86,6 +88,7 @@ export class ChatController {
     this.activeAbortController = abortController;
     let completed = false;
     const startTime = Date.now();
+    this.turnStartedAt = startTime;
 
     try {
       for await (const event of this.host.client.sendMessage(trimmed, {
@@ -94,8 +97,10 @@ export class ChatController {
         if (event.type === 'textDelta') {
           this.companion.transition('streaming');
           assistantItem.content += event.text;
+          appendStreamPart(assistantItem, 'text', event.text);
         } else if (event.type === 'reasoningDelta') {
           assistantItem.reasoning = (assistantItem.reasoning ?? '') + event.text;
+          appendStreamPart(assistantItem, 'reasoning', event.text);
           assistantItem.reasoningExpanded = this.showReasoning;
           this.companion.transition('thinking');
         } else if (event.type === 'usage') {
@@ -104,6 +109,7 @@ export class ChatController {
           const calls: ToolCall[] = assistantItem.toolCalls ?? [];
           calls.push(event.call);
           assistantItem.toolCalls = calls;
+          appendToolPart(assistantItem, event.call.id);
         } else if (event.type === 'toolResult') {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
         } else if (event.type === 'completed') {
@@ -144,6 +150,7 @@ export class ChatController {
       }
     } finally {
       this.isStreaming = false;
+      this.turnStartedAt = null;
       this.activeAbortController = null;
     }
   }
