@@ -175,7 +175,13 @@ export interface RuntimeApproval {
   kind: 'secret' | 'edit' | 'execute' | 'network' | 'other'; label: string;
   /** SHA-256 of the complete, unclipped request; a session grant binds to exactly this request. */
   fingerprint: string;
+  /**
+   * The exact, unclipped command/path/URL from a structured field, for project rules (ADR 0028).
+   * Null when the request carries only a display title or an oversized value: rules never apply then.
+   */
+  ruleTarget: string | null;
 }
+const structured = (value: unknown): string | null => typeof value === 'string' && value.length > 0 && value.length <= 65536 ? value : null;
 const fingerprint = (method: string, params: unknown) => createHash('sha256').update(method + '\0' + (JSON.stringify(params) ?? 'null')).digest('hex');
 const clip = (value: unknown) => String(value ?? '').replace(/[\x00-\x1f\x7f]+/g, ' ').trim().slice(0, 300) || 'runtime tool';
 /** Classify a runtime->client permission request; null means it is not a permission request. */
@@ -186,14 +192,15 @@ export function classifyRuntimeApproval(method: string, params: any): RuntimeApp
     const kind = ({ read: 'secret', search: 'secret', edit: 'edit', delete: 'edit', move: 'edit', execute: 'execute', fetch: 'network' } as Record<string, RuntimeApproval['kind']>)[call.kind] ?? 'other';
     // Prefer the raw command/path over a display title so project rules (`Bash(npm test:*)`) can match.
     const raw = call.rawInput && typeof call.rawInput === 'object' ? call.rawInput.command ?? call.rawInput.path ?? call.rawInput.file_path ?? call.rawInput.target_file : undefined;
-    return { kind, label: clip(raw ?? call.title ?? call.kind), fingerprint: fingerprint(method, { kind: call.kind, title: call.title, rawInput: call.rawInput, locations: call.locations }) };
+    return { kind, label: clip(raw ?? call.title ?? call.kind), ruleTarget: kind === 'other' ? null : structured(raw), fingerprint: fingerprint(method, { kind: call.kind, title: call.title, rawInput: call.rawInput, locations: call.locations }) };
   }
-  if (method === 'item/commandExecution/requestApproval') return { kind: 'execute', label: clip(params?.command ?? params?.reason), fingerprint: fingerprint(method, params) };
-  if (method === 'item/fileChange/requestApproval') return { kind: 'edit', label: clip(params?.reason ?? 'apply file changes'), fingerprint: fingerprint(method, params) };
+  if (method === 'item/commandExecution/requestApproval') return { kind: 'execute', label: clip(params?.command ?? params?.reason), ruleTarget: structured(params?.command), fingerprint: fingerprint(method, params) };
+  // Codex sends no paths with a file-change approval, so no Edit rule can vouch for it.
+  if (method === 'item/fileChange/requestApproval') return { kind: 'edit', label: clip(params?.reason ?? 'apply file changes'), ruleTarget: null, fingerprint: fingerprint(method, params) };
   if (method === 'permission.request') {
     const request = params?.permissionRequest ?? params ?? {};
     const kind = ({ shell: 'execute', write: 'edit', read: 'secret', url: 'network' } as Record<string, RuntimeApproval['kind']>)[request.kind] ?? 'other';
-    return { kind, label: clip(request.fullCommandText ?? request.fileName ?? request.path ?? request.url ?? request.intention ?? request.kind), fingerprint: fingerprint(method, request) };
+    return { kind, label: clip(request.fullCommandText ?? request.fileName ?? request.path ?? request.url ?? request.intention ?? request.kind), ruleTarget: kind === 'execute' ? structured(request.fullCommandText) : kind === 'edit' || kind === 'secret' ? structured(request.fileName ?? request.path) : kind === 'network' ? structured(request.url) : null, fingerprint: fingerprint(method, request) };
   }
   return null;
 }

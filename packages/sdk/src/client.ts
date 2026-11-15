@@ -937,15 +937,18 @@ export class FutrynClient {
    * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
    * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
    */
-  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string; diffPreview?: string; kind?: PermissionKind }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
+  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string; diffPreview?: string; kind?: PermissionKind;
+    /** Exact structured command/path for project rules; null skips rules (display-only request). Defaults to `target`. */
+    ruleTarget?: string | null }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
-    const { kind: explicitKind, ...prompt } = input;
+    const { kind: explicitKind, ruleTarget, ...prompt } = input;
     const kind: PermissionKind = explicitKind ?? ({ 'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'execute', 'network.connect': 'network' } as Record<string, PermissionKind>)[input.capability] ?? 'other';
     // Project rules first (deny > ask > allow), then the session mode.
     const tool: PermissionRuleTool = ({ 'process.execute': 'Bash', 'fs.write': 'Edit', 'fs.read': 'Read', 'network.connect': 'WebFetch' } as Record<string, PermissionRuleTool>)[input.capability] ?? 'Tool';
-    const target = tool === 'Tool' ? input.action : input.target;
-    const ruled = permissionRuleDecision(this.permissionRules(), { tool, target: tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(target) : target });
+    // Rules judge only structured targets (a real command or real paths), never display labels.
+    const target = ruleTarget === null || (tool === 'Tool' && ruleTarget === undefined) ? null : ruleTarget ?? input.target;
+    const ruled = target === null ? undefined : permissionRuleDecision(this.permissionRules(), { tool, target: tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(target) : target });
     const decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
     if (decision !== 'ask') {
       this.emitReactiveEvent(decision === 'allow' ? 'done' : 'error', `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${ruled ? 'project rule' : `${this.permissionModeValue} mode`}: ${input.action}`);

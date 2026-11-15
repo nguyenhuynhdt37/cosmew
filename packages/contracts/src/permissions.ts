@@ -92,8 +92,10 @@ export function permissionRuleMatches(rule: string, request: PermissionRuleReque
     return target === pattern;
   }
   if (request.tool === 'WebFetch') {
-    const domain = pattern.startsWith('domain:') ? pattern.slice(7) : pattern;
-    let host = target; try { host = new URL(target).hostname; } catch { /* already a host */ }
+    const domain = (pattern.startsWith('domain:') ? pattern.slice(7) : pattern).toLowerCase();
+    let host: string;
+    try { host = new URL(target).hostname.toLowerCase(); }
+    catch { if (!/^[a-z0-9.-]+$/i.test(target)) return false; host = target.toLowerCase(); } // only a bare host is a host
     return host === domain || host.endsWith('.' + domain);
   }
   if (request.tool === 'Tool') return target === pattern || target.startsWith(pattern + ' ') || target.startsWith(pattern + ':');
@@ -107,20 +109,37 @@ export function permissionRuleMatches(rule: string, request: PermissionRuleReque
 export function permissionRuleDecision(rules: PermissionRuleSet | undefined, request: PermissionRuleRequest): PermissionRuleEffect | undefined {
   if (!rules) return undefined;
   const bash = request.tool === 'Bash';
+  const paths = request.tool === 'Read' || request.tool === 'Edit';
+  // Paths are judged normalised: `src/../../.ssh/key` is not under `src/**`.
+  const rawPaths = paths ? request.target.split(', ').filter(Boolean) : [];
+  const normalPaths = rawPaths.map(normalizeRulePath);
   // Chained commands are judged per sub-command: `npm test && rm -rf ~` must not ride on `Bash(npm test:*)`.
-  const targets = request.tool === 'Read' || request.tool === 'Edit' ? request.target.split(', ').filter(Boolean)
+  const targets = paths ? [...rawPaths, ...normalPaths.filter((p): p is string => p !== null)]
     : bash ? [request.target, ...shellSegments(request.target)] : [request.target];
   const any = (list: string[]) => targets.some(target => list.some(rule => permissionRuleMatches(rule, { tool: request.tool, target })));
   if (any(rules.deny)) return 'deny';
   if (any(rules.ask)) return 'ask';
-  // Substitutions and redirects cannot be checked by prefix; they never auto-allow.
-  if (bash && /\$\(|`|[<>]/.test(request.target)) return undefined;
-  const allowTargets = bash ? shellSegments(request.target) : targets;
+  // Substitutions, redirects and control characters cannot be checked by prefix; they never auto-allow.
+  if (bash && /\$\(|`|[<>]|[\u0000-\u0008\u000b-\u001f\u007f]/.test(request.target)) return undefined;
+  // A path that escapes the workspace (or is absolute outside it) is never allowed by a rule.
+  if (paths && normalPaths.some(path => path === null)) return undefined;
+  const allowTargets = bash ? shellSegments(request.target) : paths ? normalPaths as string[] : targets;
   if (allowTargets.length && allowTargets.every(target => rules.allow.some(rule => permissionRuleMatches(rule, { tool: request.tool, target })))) return 'allow';
   return undefined;
 }
 
-/** Sub-commands of a shell line split on `;`, `&&`, `||`, `|`, `&` and newlines. */
+/** Sub-commands of a shell line split on `;`, `&&`, `||`, `|`, `&` and line breaks. */
 export function shellSegments(command: string): string[] {
-  return command.split(/\|\||&&|[;|&\n]/).map(part => part.trim()).filter(Boolean);
+  return command.split(/\|\||&&|[;|&\n\r]/).map(part => part.trim()).filter(Boolean);
+}
+
+/** Workspace-relative POSIX path with `.`/`..` resolved; null when absolute or escaping the root. */
+export function normalizeRulePath(path: string): string | null {
+  if (/[\u0000-\u001f\u007f]/.test(path) || path.startsWith('/') || path.startsWith('~') || /^[a-z]:[\\/]/i.test(path)) return null;
+  const out: string[] = [];
+  for (const part of path.replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') { if (!out.length) return null; out.pop(); } else out.push(part);
+  }
+  return out.join('/') || null;
 }

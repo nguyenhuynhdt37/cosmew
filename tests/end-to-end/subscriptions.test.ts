@@ -815,3 +815,43 @@ test('Bash allow rules never cover chained, substituted or redirected commands',
   expect(ask('npm test && rm -rf ~')).toBeNull(); // such a rule could never apply
   expect(ask('ls > out.txt')).toBeNull();
 });
+
+test('rules judge the exact structured target: no clipping, traversal, fake hosts or display labels', async () => {
+  const { permissionRuleDecision: d, normalizeRulePath } = await import('@hannes/contracts');
+  const { classifyRuntimeApproval } = await import('@hannes/security');
+  const rules = { allow: ['Bash(npm test:*)', 'Read(src/**)', 'Edit(src/**)', 'WebFetch(domain:x.ai)', 'Tool(safe)'], ask: [], deny: [] };
+  // 1. Runtime label is clipped/cleaned for display; the rule target keeps newlines and the full length.
+  const hidden = 'npm test ' + 'a'.repeat(400) + '; rm -rf ~';
+  const multi = classifyRuntimeApproval('session/request_permission', { toolCall: { kind: 'execute', title: 'Run', rawInput: { command: 'npm test\nrm -rf ~' } } })!;
+  expect(multi.label).toBe('npm test rm -rf ~');
+  expect(multi.ruleTarget).toBe('npm test\nrm -rf ~');
+  expect(d(rules, { tool: 'Bash', target: multi.ruleTarget! })).toBeUndefined();
+  expect(d(rules, { tool: 'Bash', target: classifyRuntimeApproval('item/commandExecution/requestApproval', { command: hidden })!.ruleTarget! })).toBeUndefined();
+  expect(d(rules, { tool: 'Bash', target: 'npm test\r rm -rf ~' })).toBeUndefined();
+  expect(d(rules, { tool: 'Bash', target: 'npm test \u0000x' })).toBeUndefined();
+  // Display-only requests carry no rule target at all.
+  expect(classifyRuntimeApproval('session/request_permission', { toolCall: { kind: 'other', title: 'safe' } })!.ruleTarget).toBeNull();
+  expect(classifyRuntimeApproval('item/fileChange/requestApproval', { reason: 'src/a.ts' })!.ruleTarget).toBeNull();
+  // 2. Traversal and absolute paths never match an allow glob.
+  expect(normalizeRulePath('src/./a/../b.ts')).toBe('src/b.ts');
+  for (const path of ['src/../../.ssh/id_rsa', '/etc/passwd', '~/.aws/credentials', 'src/../../x', 'C:\\x'])
+    expect(d(rules, { tool: 'Read', target: path })).toBeUndefined();
+  expect(d(rules, { tool: 'Read', target: 'src/a/../b.ts' })).toBe('allow');
+  expect(d({ allow: [], ask: [], deny: ['Read(.ssh/**)'] }, { tool: 'Read', target: 'src/../.ssh/id_rsa' })).toBe('deny'); // deny sees through ..
+  // 3. A string that is not a URL must be a bare host to count as one.
+  expect(d(rules, { tool: 'WebFetch', target: 'evil.com/x.ai' })).toBeUndefined();
+  expect(d(rules, { tool: 'WebFetch', target: 'evil.com#.x.ai' })).toBeUndefined();
+  expect(d(rules, { tool: 'WebFetch', target: 'https://x.ai@evil.com/' })).toBeUndefined();
+  expect(d(rules, { tool: 'WebFetch', target: 'https://docs.x.ai/a' })).toBe('allow');
+  // 4. The SDK never applies a rule to a display label.
+  const c = await context();
+  c.client.addPermissionRule('allow', 'Tool(safe)');
+  c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+  const pending = c.client.requestPermission({ capability: 'extension.service', action: 'safe', target: 'safe', reason: 'r' });
+  expect(c.client.listPendingPermissions()).toHaveLength(1);
+  c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId); expect(await pending).toBe('deny');
+  const unlabeled = c.client.requestPermission({ capability: 'process.execute', action: 'grok: npm test', target: 'npm test', reason: 'r', ruleTarget: null });
+  expect(c.client.listPendingPermissions()).toHaveLength(1);
+  c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId); expect(await unlabeled).toBe('deny');
+  expect(await c.client.requestPermission({ capability: 'process.execute', action: 'run', target: 'npm test', reason: 'r' })).toBe('once');
+});
