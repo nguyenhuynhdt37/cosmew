@@ -5,11 +5,13 @@ export const providerPresets: readonly Provider[] = [
   { id: 'anthropic', name: 'Claude', protocol: 'anthropic', baseURL: 'https://api.anthropic.com/v1', auth: 'api-key', catalog: 'anthropic', metadataVersion: 1, timeoutMs: 60000 },
   { id: 'gemini', name: 'Google', protocol: 'gemini', baseURL: 'https://generativelanguage.googleapis.com/v1beta', auth: 'api-key', catalog: 'gemini', metadataVersion: 1, timeoutMs: 60000 },
   { streamUsage: true, id: 'openrouter', name: 'OpenRouter', protocol: 'chat', baseURL: 'https://openrouter.ai/api/v1', auth: 'api-key', catalog: 'openai', metadataVersion: 1, timeoutMs: 60000 },
+  { streamUsage: true, id: 'xai', name: 'xAI Grok', protocol: 'chat', baseURL: 'https://api.x.ai/v1', auth: 'api-key', catalog: 'openai', metadataVersion: 1, timeoutMs: 60000, family: 'xai' },
   { streamUsage: true, id: 'ollama', name: 'Ollama local', protocol: 'chat', baseURL: 'http://127.0.0.1:11434/v1', auth: 'none', catalog: 'ollama', metadataVersion: 1, timeoutMs: 120000 },
   { id: 'chatgpt', name: 'ChatGPT subscription · Codex', protocol: 'responses', baseURL: 'https://chatgpt.com', auth: 'api-key', catalog: 'manual', metadataVersion: 1, timeoutMs: 300000, runtime: 'codex', family: 'openai' },
   { id: 'github-copilot', name: 'GitHub Copilot', protocol: 'chat', baseURL: 'https://api.githubcopilot.com', auth: 'api-key', catalog: 'manual', metadataVersion: 1, timeoutMs: 300000, runtime: 'copilot' },
   { id: 'google-subscription', name: 'Google AI subscription · Gemini CLI', protocol: 'gemini', baseURL: 'https://cloudcode-pa.googleapis.com', auth: 'api-key', catalog: 'manual', metadataVersion: 1, timeoutMs: 300000, runtime: 'gemini-cli', family: 'gemini' },
   { id: 'qwen-subscription', name: 'Qwen', protocol: 'chat', baseURL: 'https://api.qwen.ai', auth: 'api-key', catalog: 'manual', metadataVersion: 1, timeoutMs: 300000, runtime: 'qwen-code' },
+  { id: 'grok-subscription', name: 'SuperGrok subscription · Grok Build', protocol: 'chat', baseURL: 'https://api.x.ai', auth: 'api-key', catalog: 'manual', metadataVersion: 1, timeoutMs: 300000, runtime: 'grok-build', family: 'xai' },
 ];
 export class ProviderRegistry {
   constructor(private readonly store: SettingsStore) {}
@@ -36,7 +38,7 @@ export class ProviderRegistry {
 export class AuthMethodRegistry {
   methods(provider: Provider): import('@hannes/contracts').AuthMethod[] {
     if (provider.runtime) return [
-      { id: 'subscription-browser', name: ({ codex: 'Sign in with ChatGPT', copilot: 'Sign in with GitHub', 'gemini-cli': 'Sign in with Google', 'qwen-code': 'Sign in with Qwen' })[provider.runtime], description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.', autoComplete: true },
+      { id: 'subscription-browser', name: ({ codex: 'Sign in with ChatGPT', copilot: 'Sign in with GitHub', 'gemini-cli': 'Sign in with Google', 'qwen-code': 'Sign in with Qwen', 'grok-build': 'Sign in with Grok' })[provider.runtime], description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.', autoComplete: true },
       ...(provider.runtime === 'codex' ? [{ id: 'subscription-device' as const, name: 'Sign in with device code', description: 'Official Codex device-code flow.', autoComplete: true, advanced: true }] : []),
     ];
     const methods: import('@hannes/contracts').AuthMethod[] = provider.auth === 'none'

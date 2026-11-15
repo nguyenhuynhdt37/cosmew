@@ -130,7 +130,7 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
   let providerId =
     str(options, 'provider') ??
     existing?.providerId ??
-    (await ask('Provider ID (openai, anthropic, gemini, openrouter, ollama or configured gateway)'));
+    (await ask('Provider ID (openai, anthropic, gemini, xai, openrouter, ollama or configured gateway)'));
   if (existing && existing.providerId !== providerId) throw new HannesError('POLICY');
   let provider = app.registry.list().find(p => p.id === providerId);
   if (!provider) {

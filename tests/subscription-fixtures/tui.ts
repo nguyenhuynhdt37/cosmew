@@ -4,6 +4,7 @@ import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { runInteractiveTui } from '@hannes/tui';
 import { memoryVault } from '../fixtures';
 const app = startup(process.env.FUTRYN_TEST_HOME!, { vault: memoryVault(), subscriptions: {
+  nativeRuntimeTools: process.env.FUTRYN_TEST_NATIVE === '1',
   openURL: async () => {},
   resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, process.env.FUTRYN_TEST_SCENARIO ?? 'normal'] }),
 } });

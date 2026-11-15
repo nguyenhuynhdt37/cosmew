@@ -1,4 +1,4 @@
-import type { Message, ToolCall, ToolResult, Usage } from '@hannes/contracts';
+import type { Message, RuntimeActivity, ToolCall, ToolResult, Usage } from '@hannes/contracts';
 
 export interface TranscriptItem {
   id: string;
@@ -26,12 +26,15 @@ export interface TranscriptItem {
    * render from the flat fields instead.
    */
   parts?: TranscriptPart[];
+  /** A runtime's own tools (ADR 0027), by id; display only, never persisted as tool calls. */
+  activities?: RuntimeActivity[];
 }
 
 export type TranscriptPart =
   | { kind: 'reasoning'; text: string }
   | { kind: 'text'; text: string }
-  | { kind: 'tools'; callIds: string[] };
+  | { kind: 'tools'; callIds: string[] }
+  | { kind: 'activity'; id: string };
 
 /** One row under an `Explored` header, e.g. `Read routes.ts, service.ts`. */
 export interface ExplorationRow {

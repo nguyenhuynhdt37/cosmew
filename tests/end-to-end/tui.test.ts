@@ -326,7 +326,7 @@ test('short terminal keeps the draft and slash chooser visible while reconnectin
     expect(frame.plainText).toContain('Commands');
     expect(frame.plainText).toContain('/model');
     expect(a.tui.getComposerState().value).toBe('/mo');
-    expect(frame.plainLines.at(-2)).toContain('Chat');
+    expect(frame.plainLines.at(-2)).toContain('Ask');
     await a.tui.handleKey('Escape');
     expect(a.tui.getComposerState().value).toBe('/mo');
   } finally { a.close(); }

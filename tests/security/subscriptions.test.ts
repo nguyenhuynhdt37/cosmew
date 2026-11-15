@@ -74,3 +74,14 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1')('native vault protects stru
   expect(redactor.text('fixture-native-runtime-token fixture-native-refresh')).toBe('[REDACTED] [REDACTED]');
   await vault.delete(ref); expect(await vault.getRuntime(ref)).toBeUndefined();
 });
+
+test('runtime credential files redact their tokens but not short labels like "chatgpt" or "User"', async () => {
+  const redactor = new Redactor();
+  const vault = new SecureVault(redactor) as unknown as { registerRuntimeSecrets(value: unknown): void };
+  vault.registerRuntimeSecrets({ version: 1, files: {
+    'auth.json': JSON.stringify({ auth_mode: 'chatgpt', role: 'User', tokens: { access_token: 'eyJfixture-access-token-0123456789' } }),
+    'config.json': '// User settings belong in settings.json.\n{"authTokens":{"x":"fixture-copilot-token-abcdef"}}',
+  } });
+  expect(redactor.text('/Users/huynh mode-chatgpt.txt')).toBe('/Users/huynh mode-chatgpt.txt');
+  expect(redactor.text('eyJfixture-access-token-0123456789 fixture-copilot-token-abcdef')).toBe('[REDACTED] [REDACTED]');
+});

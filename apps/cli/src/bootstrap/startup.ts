@@ -39,7 +39,7 @@ import {
   ToolAuditStore,
   openPrivateDatabase,
 } from '@hannes/persistence';
-import { SubscriptionHost, type SubscriptionHostOptions } from '../subscriptions/host';
+import { SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions } from '../subscriptions/host';
 import { FutrynClient } from '@hannes/sdk';
 import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, SessionGrants, redactModel, terminalText, validateEndpoint } from '@hannes/security';
 
@@ -277,7 +277,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
@@ -293,7 +293,9 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return new Conversation(
       selection,
       redactModel(registry.get(account.providerId).runtime
-        ? new SubscriptionAdapter(selection.modelId, (request, signal, executeTool) => subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot), codexReads)
+        ? new SubscriptionAdapter(selection.modelId, (request, signal, executeTool) => subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot,
+            // Full-access native tools only after this session's workspace consent (ADR 0027).
+            workspaceRoot && tools?.descriptors().length ? workspaceRoot : undefined, approve), codexReads)
         : new ProviderAdapter(transport(account), selection.modelId, info), redactor),
       conversations,
       existingSession,
@@ -405,6 +407,13 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           : { capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
         : Promise.resolve('deny'),
     });
+    /** Native runtime tools ask through the same prompt and permission mode as Hannes tools (ADR 0027). */
+    const RUNTIME_CAPABILITY = { secret: 'fs.read', edit: 'fs.write', execute: 'process.execute', network: 'network.connect', other: 'extension.service' } as const;
+    const runtimeApprover: RuntimeApprover = async (request, signal) => {
+      if (!client?.toolsEnabled()) return false;
+      const decision = await client.requestPermission({ capability: RUNTIME_CAPABILITY[request.kind], kind: request.kind, action: `${request.runtime}: ${request.label}`.slice(0, 200), target: request.label.slice(0, 1024) || request.kind, reason: `The ${request.runtime} runtime wants to ${request.kind === 'secret' ? 'read a sensitive file' : request.kind === 'edit' ? 'change files' : request.kind === 'execute' ? 'run a command' : request.kind === 'network' ? 'use the network' : 'use a tool'} in this project.`, riskLevel: request.kind === 'execute' || request.kind === 'edit' ? 'high' : 'medium', scopeKey: `runtime:${request.runtime}:${request.kind}:${request.fingerprint}` }, signal);
+      return decision !== 'deny';
+    };
     const toolPort: ToolPort = {
       descriptors: () => (client?.toolsEnabled() ? tools().descriptors() : []),
       invoke: async (call, signal): Promise<ToolResult> => client?.toolsEnabled()
@@ -502,12 +511,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
         const messages = committedMessages(record.messages);
-        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext);
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext);
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -519,7 +528,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        }, toolPort, resolve(workspaceRoot), projectContext);
+        }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -536,7 +545,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          }, toolPort, resolve(workspaceRoot), projectContext);
+          }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);

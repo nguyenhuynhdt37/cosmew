@@ -24,7 +24,7 @@ test('chat clicks toggle tool details; wheel/page scrolling is bounded and long 
   const header=viewport.disclosures.find(hit=>hit.key.startsWith('tools:'))!;
   const mouse=`${viewport.top+header.row}:${viewport.left+1}`;
   await tui.handleKey(`MouseDown:${mouse}`);await tui.handleKey(`MouseUp:${mouse}`);
-  let snapshot=tui.computeFrameSnapshot();expect(snapshot.plainText).toContain('▾ Completed');expect(snapshot.plainText).toContain('"limit":10');
+  let snapshot=tui.computeFrameSnapshot();expect(snapshot.plainText).toContain('⏺ Read({');expect(snapshot.plainText).toContain('"limit":10');
   viewport=snapshot.transcriptViewport!;
   await tui.handleKey(`MouseDown:${mouse}`);await tui.handleKey(`MouseUp:${mouse}`);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('"limit":10');

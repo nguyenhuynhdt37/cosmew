@@ -20,7 +20,7 @@ async function make(codex=false, enabled=true, real=false){
     // Explicit research-only injection; production's mandatory cleanup gate stays closed.
     const candidate=new SeatbeltRuntime({workspaceRoot:root,stateDirectory:state,extraExecutables:['rg']});expect(candidate.probeIsolation()).toEqual({ok:true});
     return {id:candidate.id,label:'OS isolation acceptance only',availability:()=>({ok:true as const}),shutdown:()=>candidate.shutdown(),run:async(request,signal)=>{runs++;return candidate.run(request,signal);}} satisfies CommandRuntime;
-  }}:{}),subscriptions:{openURL:async()=>{},resolveCommand:r=>({command:process.execPath,prefix:[resolve('tests/subscription-fixtures/runtime.ts'),r,'exec-command']})}});
+  }}:{}),subscriptions:{nativeRuntimeTools:false,openURL:async()=>{},resolveCommand:r=>({command:process.execPath,prefix:[resolve('tests/subscription-fixtures/runtime.ts'),r,'exec-command']})}});
   cleanup.push(async()=>{await app.shutdownCommands();await app.subscriptions.shutdown();app.db.close();});
   const client=app.createFutrynClient(ws);
   if(codex){const challenge=await client.beginProviderAuth('chatgpt','subscription-device');await client.connectAccount({providerId:'chatgpt',alias:'fixture',credential:{kind:'keyring',key:crypto.randomUUID()},authChallengeId:challenge.id});}
@@ -35,7 +35,7 @@ for(const codex of [false,true])test(`${codex?'Codex dynamic bridge':'direct API
  expect(c.tui.computeFrameSnapshot().plainText).toContain('Command: rg -n marker source.ts');
  await c.tui.handleKey('1');await turn;expect(c.runs()).toBe(1);
  const answer=c.tui.getTranscript().at(-1)!;expect(answer.toolResults?.[0]).toMatchObject({name:'exec_command',status:'ok',exitCode:0});expect(answer.toolResults?.[0]?.callId).toBe(answer.toolCalls?.[0]?.id);expect(answer.toolResults?.[0]?.content).not.toContain('\x1b');
- expect(c.tui.computeFrameSnapshot().plainText).toContain('Ran rg -n marker source.ts');
+ expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');
  const id=c.client.activeSession()!.id;const saved=c.app.conversations.get(id)!;expect(saved.messages.find(m=>m.role==='tool')?.content).toStartWith('Exit code: 0\nWall time:');
  const resumed=c.app.createFutrynClient(c.ws);resumed.resumeSession(id);const transcript=messagesToTranscript(resumed.activeSession()!.messages,{idPrefix:"resume"});const item=transcript.at(-1)!;
  expect(commandSummary(item.toolCalls![0]!,item.toolResults![0],{live:false}).state).toBe('ran');

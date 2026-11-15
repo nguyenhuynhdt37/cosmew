@@ -194,6 +194,15 @@ export function appendToolPart(item: TranscriptItem, callId: string): void {
   else parts.push({ kind: 'tools', callIds: [callId] });
 }
 
+/** A runtime activity update: same id updates in place, a new id gets its own timeline slot. */
+export function applyActivity(item: TranscriptItem, activity: import('@hannes/contracts').RuntimeActivity): void {
+  const list = item.activities ??= [];
+  const index = list.findIndex(entry => entry.id === activity.id);
+  if (index >= 0) { list[index] = activity; return; }
+  list.push(activity);
+  (item.parts ??= []).push({ kind: 'activity', id: activity.id });
+}
+
 /** The timeline to draw: recorded parts, or the old flat layout for items without them. */
 export function transcriptParts(item: TranscriptItem): TranscriptPart[] {
   if (item.parts?.length) return item.parts;

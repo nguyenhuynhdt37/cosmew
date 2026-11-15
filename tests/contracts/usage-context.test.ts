@@ -282,7 +282,7 @@ test('Responses HTTP transport forwards an advertised effort and streams the pro
     expect(c.tui.getTranscript().at(-1)!.reasoning).toBe('Provider HTTP summary');
     expect(c.tui.getTranscript().at(-1)!.content).toBe('Hello fixture');
     expect(phases).toEqual(expect.arrayContaining(['thinking', 'waiting', 'reasoning', 'streaming', 'done']));
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('▸ Thinking');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('✻ Thought');
     expect(c.tui.computeFrameSnapshot().plainText).not.toContain('Provider HTTP summary');
     await c.tui.handleKey('Ctrl+R');
     expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
@@ -519,7 +519,7 @@ test('thinking arrives incrementally before the answer and an explicit collapse 
   while (!c.tui.getTranscript().at(-1)?.reasoning && Date.now() < deadline) await Bun.sleep(5);
   expect(c.tui.getTranscript().at(-1)?.reasoning).toBe('Provider HTTP ');
   expect(c.tui.getTranscript().at(-1)?.content).toBe('');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('▸ Thinking');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('✻ Thinking…');
   await c.tui.handleKey('Ctrl+R');
   expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP');
   await c.tui.handleKey('Ctrl+R');

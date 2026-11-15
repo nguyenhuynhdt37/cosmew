@@ -67,10 +67,10 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     shortcut: 'Ctrl+S',
   },
   {
-    command: '/permissions',
+    command: '/permissions', arguments: 'optional',
     aliases: ['/perm'],
-    title: 'Permission Requests',
-    description: 'Inspect and resolve pending security permission prompts (Allow once / Session / Deny)',
+    title: 'Permissions',
+    description: 'Pending prompts; /permissions default|acceptEdits|auto|plan|bypassPermissions sets the mode (Shift+Tab cycles)',
     category: 'Workspace & Security',
   },
   {

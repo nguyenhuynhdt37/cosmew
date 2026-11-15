@@ -1,3 +1,4 @@
+import { PERMISSION_MODE_HINTS } from '@hannes/contracts';
 import { HannesError, type ToolCall } from '@hannes/contracts';
 import { acceptSlashSelection } from '@hannes/sdk';
 import type { TuiHost } from '../../core/feature';
@@ -6,7 +7,7 @@ import {
   applyFileReferenceSelection, createInitialComposerState, getMatchingSlashCommands, navigateComposerHistory,
   recordComposerHistory, updateComposerValue, type ComposerState,
 } from '../composer';
-import { appendStreamPart, appendToolPart, messagesToTranscript, type TranscriptItem } from '../transcript';
+import { appendStreamPart, appendToolPart, applyActivity, messagesToTranscript, type TranscriptItem } from '../transcript';
 
 /**
  * The main screen: prompt composer, transcript and the streaming turn. Owns their state so
@@ -120,6 +121,9 @@ export class ChatController {
           calls.push(event.call);
           assistantItem.toolCalls = calls;
           appendToolPart(assistantItem, event.call.id);
+        } else if (event.type === 'activity') {
+          assistantItem.awaitingModel = false;
+          applyActivity(assistantItem, event.activity);
         } else if (event.type === 'toolResult') {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
           assistantItem.awaitingModel = Boolean(assistantItem.toolCalls?.length) && assistantItem.toolCalls!.every(call => assistantItem.toolResults!.some(result => result.callId === call.id));
@@ -201,8 +205,8 @@ export class ChatController {
       return;
     }
     if (key === 'Shift+Tab') {
-      const nextMode = this.host.client.cycleMode();
-      this.banner = `View mode: ${nextMode.toUpperCase()}. Tool permission modes: Not implemented; no permissions changed.`;
+      const next = this.host.client.cyclePermissionMode();
+      this.banner = `Permission mode: ${next}. ${PERMISSION_MODE_HINTS[next]}`;
       return;
     }
 

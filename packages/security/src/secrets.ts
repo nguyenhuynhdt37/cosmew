@@ -62,8 +62,11 @@ export class SecureVault implements CredentialVault {
   }
   private registerRuntimeSecrets(value: unknown): void {
     if (typeof value === 'string') {
-      this.redactor.register(value);
-      try { this.registerRuntimeSecrets(JSON.parse(value)); } catch { /* opaque string */ }
+      // Tokens and keys are long opaque strings. Short labels in the same files ("chatgpt",
+      // "User", plan names) are not secrets, and registering them blanked ordinary words on screen.
+      if (value.length >= 12 && !/\s/.test(value)) this.redactor.register(value);
+      // Whole credential documents (Copilot prefixes comment lines) are parsed for nested tokens.
+      try { this.registerRuntimeSecrets(JSON.parse(value.replace(/^(?:\/\/[^\n]*\n)*/, ''))); } catch { /* opaque string */ }
     } else if (value && typeof value === 'object') for (const v of Object.values(value)) this.registerRuntimeSecrets(v);
   }
   async getRuntime(ref: Extract<CredentialRef, {kind: 'runtime'}>): Promise<string | undefined> {
@@ -93,6 +96,10 @@ export function redactModel(model: import('@hannes/contracts').ModelPort, redact
       for await (const event of model.stream(request, signal, executeTool)) {
         if (event.type === 'textDelta') { const text = filter.push(event.text); if (text) yield { type: 'textDelta', text: terminalText(text) }; }
         else if (event.type === 'reasoningDelta') { const text = reasoning.push(event.text); if (text) yield { type: 'reasoningDelta', text: terminalText(text) }; }
+        else if (event.type === 'activity') {
+          const clean = (value: string, max: number) => terminalText(redactor.text(value)).slice(0, max);
+          yield { type: 'activity', activity: { ...event.activity, name: clean(event.activity.name, 40), label: clean(event.activity.label, 400), ...(event.activity.output !== undefined ? { output: clean(event.activity.output, 4000) } : {}) } };
+        }
         else if (event.type === 'completed') { const summary = reasoning.finish(); if (summary) yield { type: 'reasoningDelta', text: terminalText(summary) }; const text = filter.finish(); if (text) yield { type: 'textDelta', text: terminalText(text) }; yield event; }
         else yield event;
       }

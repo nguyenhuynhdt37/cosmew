@@ -22,6 +22,10 @@ import {
   type PermissionPromptRequest,
   type PermissionPromptResolution,
   type PermissionResolutionScope,
+  type PermissionMode,
+  type PermissionKind,
+  PERMISSION_MODES,
+  permissionModeDecision,
   type Provider,
   type Selection,
   type SessionRecord,
@@ -125,6 +129,8 @@ export interface FutrynBackendPorts {
 export class FutrynClient {
   private currentSession: { id: string; selection: Selection; messages: Message[] } | null = null;
   private currentMode: AgentMode = 'chat';
+  /** Session permission mode (ADR 0027); never persisted, every session starts in `default`. */
+  private permissionModeValue: PermissionMode = 'default';
   private lastUsage: Usage | null = null;
   private sending = false;
   private streamingText = '';
@@ -188,6 +194,17 @@ export class FutrynClient {
     this.currentMode = mode;
     this.notifyStateChange();
     return this.currentMode;
+  }
+
+  permissionMode(): PermissionMode { return this.permissionModeValue; }
+  setPermissionMode(mode: PermissionMode): PermissionMode {
+    if (!PERMISSION_MODES.includes(mode)) throw new HannesError('INVALID_INPUT');
+    this.permissionModeValue = mode; this.notifyStateChange(); return mode;
+  }
+  /** Shift+Tab order, as in Claude Code. */
+  cyclePermissionMode(): PermissionMode {
+    const order: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
+    return this.setPermissionMode(order[(order.indexOf(this.permissionModeValue) + 1) % order.length]!);
   }
 
   cycleMode(): AgentMode {
@@ -265,6 +282,7 @@ export class FutrynClient {
     return {
       workspace: this.ports.workspace,
       mode: this.currentMode,
+      permissionMode: this.permissionModeValue,
       providers: state.providers,
       accounts: state.accounts,
       activeAccount,
@@ -880,8 +898,17 @@ export class FutrynClient {
    * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
    * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
    */
-  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string; diffPreview?: string }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
+  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string; diffPreview?: string; kind?: PermissionKind }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
+    // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
+    const { kind: explicitKind, ...prompt } = input;
+    const kind: PermissionKind = explicitKind ?? ({ 'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'execute', 'network.connect': 'network' } as Record<string, PermissionKind>)[input.capability] ?? 'other';
+    const decision = permissionModeDecision(this.permissionModeValue, kind);
+    if (decision !== 'ask') {
+      this.emitReactiveEvent(decision === 'allow' ? 'done' : 'error', `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${this.permissionModeValue} mode: ${input.action}`);
+      return Promise.resolve(decision === 'allow' ? 'once' : 'deny');
+    }
+    input = prompt;
     const request = this.enqueuePermissionRequest(input);
     if (request.status === 'approved_session') return Promise.resolve('session');
     return new Promise(resolve => {

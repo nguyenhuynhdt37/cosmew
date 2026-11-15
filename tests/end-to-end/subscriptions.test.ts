@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
@@ -13,11 +13,11 @@ import { providerPresets } from '@hannes/models';
 import { memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
-const ids = { codex: 'chatgpt', copilot: 'github-copilot', 'gemini-cli': 'google-subscription', 'qwen-code': 'qwen-subscription' };
-async function context(scenario = 'normal') {
+const ids = { codex: 'chatgpt', copilot: 'github-copilot', 'gemini-cli': 'google-subscription', 'qwen-code': 'qwen-subscription', 'grok-build': 'grok-subscription' };
+async function context(scenario = 'normal', nativeRuntimeTools = false) {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-subscriptions-'));
   const vault = memoryVault();
-  const app = startup(dir, { vault, subscriptions: { openURL: async () => {}, resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, scenario] }) } });
+  const app = startup(dir, { vault, subscriptions: { nativeRuntimeTools, openURL: async () => {}, resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, scenario] }) } });
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
   cleanup.push(async () => { await app.subscriptions.shutdown(); app.db.close(); });
   const client = app.createFutrynClient(dir);
@@ -48,7 +48,7 @@ for (const runtime of Object.keys(ids) as SubscriptionRuntime[]) {
     const b = await connect(c, runtime, runtime + '-work' as SubscriptionRuntime);
     expect(a.id).not.toBe(b.id); expect(a.credential).not.toEqual(b.credential);
     expect(c.vault.values.size).toBe(2);
-    const restarted = startup(c.dir, { vault: c.vault, subscriptions: { openURL: async () => {}, resolveCommand: r => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), r, 'normal'] }) } });
+    const restarted = startup(c.dir, { vault: c.vault, subscriptions: { nativeRuntimeTools: false, openURL: async () => {}, resolveCommand: r => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), r, 'normal'] }) } });
     try {
       expect(restarted.createFutrynClient().status().activeAccount?.id).toBe(b.id);
       expect((await restarted.discoverModels(b)).models).toHaveLength(2);
@@ -186,7 +186,7 @@ test('two clients cannot race rotating credentials for the same account', async 
   const c = await context('long-stream'); const account = await connect(c, 'codex');
   const iterator = c.client.sendMessage('Hold account lease')[Symbol.asyncIterator]();
   await iterator.next();
-  const other = startup(c.dir, { vault: c.vault, subscriptions: { openURL: async () => {}, resolveCommand: r => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), r, 'normal'] }) } });
+  const other = startup(c.dir, { vault: c.vault, subscriptions: { nativeRuntimeTools: false, openURL: async () => {}, resolveCommand: r => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), r, 'normal'] }) } });
   try { await expect(other.discoverModels(account)).rejects.toMatchObject({ code: 'POLICY' }); }
   finally { await other.subscriptions.shutdown(); other.db.close(); await c.client.logoutAccount(account.id); await expect(iterator.return!()).rejects.toMatchObject({ code: 'POLICY' }); }
   expect(c.vault.values.size).toBe(0);
@@ -240,7 +240,7 @@ for (const runtime of ['codex', 'copilot'] as const) test(`${runtime}: official 
   expect(limits.items[0]?.usedPercent).toBe(25);
 });
 
-for (const runtime of ['gemini-cli', 'qwen-code'] as const) test(`${runtime}: ACP thought chunks stream separately before the answer`, async () => {
+for (const runtime of ['gemini-cli', 'qwen-code', 'grok-build'] as const) test(`${runtime}: ACP thought chunks stream separately before the answer`, async () => {
   const c = await context('thought-stream'); await connect(c, runtime);
   let reasoning = ''; let answer = ''; let thoughtBeforeAnswer = false;
   for await (const event of c.client.sendMessage('Show available provider thinking')) {
@@ -464,7 +464,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: approve project, login Ch
     await wait('Sign in to another account'); terminal.write('\r'); await wait('Choose your provider'); terminal.write('\r');
     await wait('Sign in to OpenAI'); terminal.write('\r'); await wait('runtime-model'); terminal.write('\r'); await wait('Ask anything');
     terminal.write('Read README.md and summarize the project\r');
-    await wait('banana inventory service'); await wait('Completed · 1 tool · Read README.md'); await wait('Completed turn');
+    await wait('banana inventory service'); await wait('⏺ Read(README.md)'); await wait('Completed turn');
     terminal.write('\x03');
     expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
     expect(output).not.toContain('fixture-runtime-secret');
@@ -628,4 +628,77 @@ test('Codex native file-change requests stay denied while the Hannes patch tool 
  const c=await readContext('native-write-attempt');
  await expect((async()=>{for await(const _event of c.client.sendMessage('Try native write')){}})()).rejects.toMatchObject({code:'POLICY'});
  expect(c.client.listPendingPermissions()).toEqual([]);expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
+});
+
+/** ADR 0027: native runtime tools run in the consented workspace and every request they make
+ * goes through the Hannes prompt, answered by the session permission mode. Fixture evidence only. */
+for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native tools ask Hannes and follow the permission mode`, async () => {
+  const c = await context('native-tool', true);
+  await connect(c, runtime);
+  const ws = mkdtempSync(join(tmpdir(), 'futryn-native-ws-'));
+  cleanup.push(() => rmSync(ws, { recursive: true, force: true }));
+  const client = c.app.createFutrynClient(ws);
+  client.setToolsEnabled(true);
+  const run = async () => { let text = ''; for await (const e of client.sendMessage('Create native-proof.txt')) if (e.type === 'textDelta') text += e.text; return text; };
+  const proof = join(ws, 'native-proof.txt');
+
+  // default: the request becomes a Hannes prompt; dismissing it denies and nothing runs.
+  const first = run();
+  const end = Date.now() + 4000;
+  while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
+  const prompt = client.listPendingPermissions()[0]!;
+  expect(prompt.capability).toBe('process.execute');
+  expect(prompt.action).toContain('touch native-proof.txt');
+  client.dismissPermissionDialog(prompt.approvalId);
+  expect(await first).toBe('native:denied');
+  expect(existsSync(proof)).toBe(false);
+
+  // plan: refused without a prompt.
+  client.setPermissionMode('plan');
+  expect(await run()).toBe('native:denied');
+  expect(client.listPendingPermissions()).toHaveLength(0);
+  expect(existsSync(proof)).toBe(false);
+
+  // auto: approved without a prompt; the runtime works in the real workspace, not its profile.
+  client.setPermissionMode('auto');
+  expect(await run()).toBe('native:allowed');
+  expect(readFileSync(proof, 'utf8')).toBe('native\n');
+
+  // Without workspace consent the same account stays chat-only: the attempt fails closed.
+  client.setToolsEnabled(false);
+  await expect((async () => { for await (const _e of client.sendMessage('again')) { /* drain */ } })()).rejects.toBeDefined();
+});
+
+test('permission modes only answer ask decisions and Shift+Tab cycles them like Claude Code', async () => {
+  const { permissionModeDecision } = await import('@hannes/contracts');
+  expect(permissionModeDecision('default', 'edit')).toBe('ask');
+  expect(permissionModeDecision('acceptEdits', 'edit')).toBe('allow');
+  expect(permissionModeDecision('acceptEdits', 'execute')).toBe('ask');
+  expect(permissionModeDecision('auto', 'execute')).toBe('allow');
+  expect(permissionModeDecision('auto', 'secret')).toBe('ask');
+  expect(permissionModeDecision('auto', 'network')).toBe('ask');
+  expect(permissionModeDecision('plan', 'edit')).toBe('deny');
+  expect(permissionModeDecision('plan', 'execute')).toBe('deny');
+  expect(permissionModeDecision('plan', 'secret')).toBe('ask');
+  expect(permissionModeDecision('bypassPermissions', 'secret')).toBe('allow');
+  const c = await context();
+  const tui = new FutrynTuiApp({ client: c.client, cols: 100, rows: 30 }); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  const seen = [];
+  for (let i = 0; i < 5; i++) { await tui.handleKey('Shift+Tab'); seen.push(c.client.permissionMode()); }
+  expect(seen).toEqual(['acceptEdits', 'auto', 'plan', 'bypassPermissions', 'default']);
+  await tui.executeSlashCommand('/permissions bypass');
+  expect(c.client.permissionMode()).toBe('bypassPermissions');
+});
+
+test('runtime session grants bind to the complete request, not a clipped or generic label', async () => {
+  const { classifyRuntimeApproval } = await import('@hannes/security');
+  const prefix = 'echo ' + 'x'.repeat(400);
+  const a = classifyRuntimeApproval('item/commandExecution/requestApproval', { itemId: 'i1', command: prefix + ' safe' })!;
+  const b = classifyRuntimeApproval('item/commandExecution/requestApproval', { itemId: 'i1', command: prefix + '; rm -rf ~' })!;
+  expect(a.label).toBe(b.label); // display is clipped …
+  expect(a.fingerprint).not.toBe(b.fingerprint); // … but the grant scope is not.
+  const edit1 = classifyRuntimeApproval('item/fileChange/requestApproval', { threadId: 't', turnId: 'u', itemId: 'f1' })!;
+  const edit2 = classifyRuntimeApproval('item/fileChange/requestApproval', { threadId: 't', turnId: 'u', itemId: 'f2' })!;
+  expect(edit1.label).toBe(edit2.label);
+  expect(edit1.fingerprint).not.toBe(edit2.fingerprint);
 });

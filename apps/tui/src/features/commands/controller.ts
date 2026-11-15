@@ -1,5 +1,6 @@
 import { parseSlashCommand } from '@hannes/sdk';
 import type { TuiHost } from '../../core/feature';
+import { PERMISSION_MODES, PERMISSION_MODE_HINTS, type PermissionMode } from '@hannes/contracts';
 import { OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage } from './logic';
 
 /** Parses and dispatches slash commands. Holds no state of its own. */
@@ -23,6 +24,13 @@ export class CommandRouter {
     if (parsed.definition?.unavailable) { host.setBanner(parsed.definition.unavailable); return; }
     if (command === '/usage' || command === '/context') { host.openOverlay(command.slice(1) as 'usage' | 'context'); return; }
     if (command === '/effort') { this.effort(parsed.args); return; }
+    if (command === '/permissions' && parsed.args) {
+      const mode = PERMISSION_MODES.find(m => m.toLowerCase() === parsed.args.trim().toLowerCase() || (m === 'bypassPermissions' && parsed.args.trim().toLowerCase() === 'bypass'));
+      if (!mode) { host.setBanner(`Permission modes: ${PERMISSION_MODES.join(', ')}.`); return; }
+      client.setPermissionMode(mode as PermissionMode);
+      host.setBanner(`Permission mode: ${mode}. ${PERMISSION_MODE_HINTS[mode]}`);
+      return;
+    }
     if (command === '/switch') { host.features.accounts.beginSwitch(parsed.args); return; }
 
     if (lower.startsWith('/model ')) {

@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, PermissionMode, ThemeTokens } from '@hannes/contracts';
 import type { AgentMode } from '@hannes/sdk';
 import { getBorderGlyphs } from '../../theme/theme';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
@@ -9,10 +9,15 @@ import type { ComposerState } from './types';
  * Prompt composer as a soft card: rounded frame, one text row, pill footer.
  * Mode reads Chat / Plan / Review. Focus tints the border with the accent token.
  */
+/** Chip text for each permission mode; Shift+Tab cycles them. */
+export const PERMISSION_LABELS: Record<PermissionMode, string> = { default: 'Ask', acceptEdits: 'Accept edits', auto: 'Auto', plan: 'Plan', bypassPermissions: 'Bypass' };
+
 export function renderPromptComposerLines(options: {
   width: number;
   state: ComposerState;
   mode: AgentMode;
+  /** Shown instead of the view mode once known (ADR 0027). */
+  permissionMode?: PermissionMode;
   activeModelLabel: string;
   activeAccountLabel: string;
   isStreaming: boolean;
@@ -29,6 +34,7 @@ export function renderPromptComposerLines(options: {
     width,
     state,
     mode,
+    permissionMode,
     activeModelLabel,
     activeAccountLabel,
     isStreaming,
@@ -188,8 +194,12 @@ export function renderPromptComposerLines(options: {
     fg: borderColor, bg,
   }] });
 
-  const modeName = mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
-  const modeColor = mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
+  const modeName = permissionMode ? PERMISSION_LABELS[permissionMode] : mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
+  const modeColor = permissionMode === 'bypassPermissions' ? tokens.error
+    : permissionMode === 'auto' || permissionMode === 'acceptEdits' ? tokens.warning
+    : permissionMode === 'plan' ? tokens.info
+    : permissionMode ? tokens.accent
+    : mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
   const modeChip = ` ${modeName} `;
   const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
   const shortHints: StyledSpan[] = [

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.10' as const;
+export const CONTRACT_VERSION = '1.11' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
 export const modelIdSchema = z.string().min(1).max(200).regex(/^[\w~./:@+-]+$/);
-export const subscriptionRuntimeSchema = z.enum(['codex', 'copilot', 'gemini-cli', 'qwen-code']);
+export const subscriptionRuntimeSchema = z.enum(['codex', 'copilot', 'gemini-cli', 'qwen-code', 'grok-build']);
 export type SubscriptionRuntime = z.infer<typeof subscriptionRuntimeSchema>;
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
 export const providerSchema = z.strictObject({
@@ -131,7 +131,19 @@ export type ModelEvent =
   | { type: 'context'; context: import('./telemetry').ContextMeasurement }
   | { type: 'toolCallComplete'; call: ToolCall }
   | { type: 'toolResult'; result: import('./tools').ToolResult }
+  /** A runtime's own tool (ADR 0027): display only, never a Hannes tool call or result. Same `id` updates in place. */
+  | { type: 'activity'; activity: RuntimeActivity }
   | { type: 'completed'; finishReason: string; usage: Usage };
+export interface RuntimeActivity {
+  id: string;
+  /** Claude-style tool label: Bash, Read, Update, Search, List, Web or the runtime's own name. */
+  name: string;
+  /** Command, path or query; already redacted and clipped. */
+  label: string;
+  status: 'running' | 'completed' | 'failed' | 'denied';
+  /** First lines of output the runtime reported, when it reported any. */
+  output?: string;
+}
 export type InlineToolExecutor = (call: ToolCall, signal?: AbortSignal) => Promise<import('./tools').ToolResult>;
 export interface ModelPort {
   readonly inlineTools?: boolean;

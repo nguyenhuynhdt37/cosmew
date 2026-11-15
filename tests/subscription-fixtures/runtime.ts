@@ -1,13 +1,17 @@
 /** Deterministic CI wire fixture, never a production export or vendor evidence. */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 const runtime = process.argv[2]!;
 const scenario = process.argv[3]!;
 const copilot = runtime === 'copilot';
-const profile = process.env.CODEX_HOME ?? process.env.COPILOT_HOME ?? process.env.QWEN_HOME ?? process.env.GEMINI_CLI_HOME!;
-if (!profile || !process.cwd().startsWith(profile)) process.exit(11);
-if (process.env.OPENAI_API_KEY || process.env.GITHUB_TOKEN || process.env.NODE_OPTIONS || process.env.COPILOT_ALLOW_ALL !== 'false') process.exit(12);
-const credential = runtime === 'codex' ? 'auth.json' : copilot ? 'config.json' : runtime === 'gemini-cli' ? '.gemini/oauth_creds.json' : 'oauth_creds.json';
+const profile = process.env.CODEX_HOME ?? process.env.COPILOT_HOME ?? process.env.QWEN_HOME ?? process.env.GROK_HOME ?? process.env.GEMINI_CLI_HOME!;
+// Native-tool mode (ADR 0027) runs in the consented workspace; chat-only mode stays in the profile.
+const nativeMode = (() => { try { return runtime === 'grok-build' ? readFileSync(join(profile, 'config.toml'), 'utf8').includes('profile = "off"') : runtime === 'codex' ? readFileSync(join(profile, 'config.toml'), 'utf8').includes('danger-full-access') : false; } catch { return false; } })();
+if (!profile || process.cwd().startsWith(profile) === nativeMode) process.exit(11);
+if (process.env.OPENAI_API_KEY || process.env.GITHUB_TOKEN || process.env.NODE_OPTIONS || (!nativeMode && process.env.COPILOT_ALLOW_ALL !== 'false')) process.exit(12);
+const grok = runtime === 'grok-build';
+if (grok && ((process.env.HOME === profile) === nativeMode || process.env.XAI_API_KEY || process.env.GROK_DISABLE_AUTOUPDATER !== '1' || process.argv.at(-1) !== 'stdio' || !process.argv.includes('--no-leader'))) process.exit(13);
+const credential = runtime === 'codex' || grok ? 'auth.json' : copilot ? 'config.json' : runtime === 'gemini-cli' ? '.gemini/oauth_creds.json' : 'oauth_creds.json';
 const save = () => {
   if (scenario === 'missing-creds') return;
   const path = join(profile, credential); mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -20,7 +24,7 @@ if (copilot && process.argv.includes('login')) {
   process.stdout.write('https://github.com/login/device\nDevice code: ABCD-1234\n');
   setTimeout(() => { save(); process.exit(scenario === 'reject' ? 1 : 0); }, scenario === 'slow-auth' ? 20000 : 30);
 } else {
-  let input = Buffer.alloc(0); let session = 'fixture-session'; let permissionReply = false; let dynamicTools: any[] = []; let reads = 0; let projectInstructions = '';
+  let nativePrompt: unknown; let input = Buffer.alloc(0); let session = 'fixture-session'; let permissionReply = false; let dynamicTools: any[] = []; let reads = 0; let projectInstructions = '';
   function send(value: unknown) {
     const body = JSON.stringify(value);
     const text = copilot ? `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}` : body + '\n';
@@ -90,6 +94,18 @@ if (copilot && process.argv.includes('login')) {
       event('item/agentMessage/delta', {delta: result?.contentItems?.[0]?.text ?? 'Read denied'});
       event('turn/completed', {turn: {status: 'completed'}}); return;
     }
+    if (message.id === 'native-perm') {
+      const allowed = message.result?.outcome?.optionId === 'allow' || message.result?.decision === 'accept';
+      if (allowed) {
+        if (runtime === 'codex') event('item/started', { item: { type: 'commandExecution', id: 'i1', command: 'touch native-proof.txt' } });
+        else event('session/update', { sessionId: session, update: { sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'execute', title: 'Run touch native-proof.txt' } });
+        writeFileSync(join(process.cwd(), 'native-proof.txt'), 'native\n');
+      }
+      const text = `native:${allowed ? 'allowed' : 'denied'}`;
+      if (runtime === 'codex') answer(text);
+      else { event('session/update', { sessionId: session, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } }); send({ id: nativePrompt, result: { stopReason: 'end_turn' } }); }
+      return;
+    }
     if (message.id === 'denied-tool') {
       permissionReply = message.error?.code === -32601 || message.result?.decision === 'decline' || message.result?.kind === 'denied-by-rules' || message.result?.outcome?.outcome === 'cancelled';
       if (!permissionReply) process.exit(23);
@@ -99,14 +115,14 @@ if (copilot && process.argv.includes('login')) {
     const p = message.params ?? {};
     let result: any = {};
     switch (message.method) {
-      case 'initialize': result = runtime === 'codex' ? { userAgent: 'fixture-runtime/1' } : { protocolVersion: 1, authMethods: [{ id: runtime === 'gemini-cli' ? 'oauth-personal' : 'qwen-oauth' }] }; break;
+      case 'initialize': result = runtime === 'codex' ? { userAgent: 'fixture-runtime/1' } : { protocolVersion: 1, authMethods: [{ id: runtime === 'gemini-cli' ? 'oauth-personal' : grok ? 'grok.com' : 'qwen-oauth' }] }; break;
       case 'ping': result = { protocolVersion: 3, message: p.message }; break;
       case 'account/login/start':
         result = { type: p.type, loginId: 'fixture-login', authUrl: 'https://auth.openai.com/fixture', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'ABCD-1234' };
         setTimeout(() => { save(); event('account/login/completed', { loginId: 'fixture-login', success: scenario !== 'reject' }); }, scenario === 'slow-auth' ? 20000 : 30); break;
       case 'authenticate':
         if (valid()) break;
-        event('_authenticate/update', { _meta: { authUri: runtime === 'gemini-cli' ? 'https://accounts.google.com/fixture' : 'https://chat.qwen.ai/authorize?user_code=ABCD-1234' } });
+        event('_authenticate/update', { _meta: { authUri: runtime === 'gemini-cli' ? 'https://accounts.google.com/fixture' : grok ? 'https://auth.x.ai/oauth2/fixture' : 'https://chat.qwen.ai/authorize?user_code=ABCD-1234' } });
         await Bun.sleep(scenario === 'slow-auth' ? 20000 : 30);
         if (scenario === 'reject') { send({ id: message.id, error: { code: -32000, message: 'RAW fixture-runtime-secret forbidden' } }); return; }
         save(); break;
@@ -115,12 +131,23 @@ if (copilot && process.argv.includes('login')) {
       case 'model/list': result = { data: [{ id: scenario === 'catalog-slug' ? 'catalog-entry-id' : 'runtime-model', model: 'runtime-model', displayName: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: [{reasoningEffort: 'low', description: 'Low'}, {reasoningEffort: 'high', description: 'High'}], defaultReasoningEffort: 'low' } : {}) }, { id: 'runtime-alt', model: 'runtime-alt', displayName: 'Alternate' }, ...(scenario === 'catalog-slug' ? [{id: 'hidden', model: 'hidden', hidden: true}] : [])], nextCursor: null }; break;
       case 'models.list': result = { models: [{ id: 'runtime-model', name: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low', capabilities: { limits: { max_context_window_tokens: 32000, max_output_tokens: 8000 } } } : {}) }, { id: 'runtime-alt', name: 'Alternate' }] }; break;
       case 'session/new': {
+        if (grok) {
+          const toml = readFileSync(join(profile, 'config.toml'), 'utf8');
+          if (nativeMode ? (realpathSync(String(p.cwd)) !== process.cwd() || toml.includes('deny = ["*"]') || !toml.includes('Read(~/.ssh/**)') || process.argv.includes('--always-approve')) : (!toml.includes('deny = ["*"]') || !toml.includes('backend_tools = false') || !toml.includes('disable_web_search = true'))) process.exit(24);
+          // Grok Build 1.0.77 reports models in `_meta.modelState` (initialize probe, 2026-11-15).
+          result = { sessionId: session, _meta: { modelState: { currentModelId: 'runtime-model', availableModels: [{ modelId: 'runtime-model', name: 'Runtime model' }, { modelId: 'runtime-alt', name: 'Alternate' }] } } }; break;
+        }
         const settingsFile = runtime === 'gemini-cli' ? '.gemini/settings.json' : 'settings.json';
         const config = JSON.parse(readFileSync(join(profile, settingsFile), 'utf8'));
         if (runtime === 'gemini-cli' ? config.tools.core.length !== 0 : config.permissions.deny[0] !== '*') process.exit(24);
         result = { sessionId: session, models: { availableModels: [{ modelId: 'runtime-model', name: 'Runtime model' }, { modelId: 'runtime-alt', name: 'Alternate' }] } }; break;
       }
       case 'thread/start':
+        if (nativeMode) {
+          // Native Codex asks Hannes for every untrusted action and never receives Hannes dynamic tools.
+          if (p.approvalPolicy !== 'untrusted' || p.sandbox !== 'danger-full-access' || realpathSync(String(p.cwd)) !== process.cwd() || p.dynamicTools) process.exit(71);
+          result = { thread: { id: session } }; break;
+        }
         if (p.approvalPolicy !== 'never' || p.sandbox !== 'read-only' || !p.ephemeral) process.exit(25);
         if (!readFileSync(join(profile, 'config.toml'), 'utf8').includes('shell_tool = false')) process.exit(26);
         dynamicTools = p.dynamicTools ?? [];
@@ -182,6 +209,17 @@ if (copilot && process.argv.includes('login')) {
         if (runtime === 'codex' && (scenario.startsWith('read-') || scenario === 'exec-command') && dynamicTools.length) {
           if (!dynamicTools.map((t: any) => t.name).join(',').startsWith('read,glob,grep')) process.exit(48);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); requestRead(); return;
+        }
+        if (scenario === 'native-tool') {
+          if (!nativeMode) process.exit(70);
+          if (runtime === 'codex') {
+            send({ id: message.id, result: { turn: { id: 'fixture-turn' } } });
+            send({ id: 'native-perm', method: 'item/commandExecution/requestApproval', params: { threadId: session, turnId: 'fixture-turn', itemId: 'i1', command: 'touch native-proof.txt' } });
+          } else {
+            nativePrompt = message.id;
+            send({ id: 'native-perm', method: 'session/request_permission', params: { sessionId: session, toolCall: { toolCallId: 't1', kind: 'execute', title: 'Run touch native-proof.txt' }, options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }] } });
+          }
+          return;
         }
         if ((scenario === 'tool-attempt'||scenario === 'native-write-attempt')) {
           send({ id: 'denied-tool', method: copilot ? 'permission.request' : runtime === 'codex' ? scenario==='native-write-attempt'?'item/fileChange/requestApproval':'item/commandExecution/requestApproval' : 'session/request_permission', params: {} });
