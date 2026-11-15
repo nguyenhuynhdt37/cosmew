@@ -25,8 +25,8 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
           const button = Number(match[1]); const col = Number(match[2]) - 1; const row = Number(match[3]) - 1;
           const released = str[termIdx] === 'm';
           if (col >= 0 && row >= 0) {
-            if (button === 64 && !released) keys.push('PageUp');
-            else if (button === 65 && !released) keys.push('PageDown');
+            if (button === 64 && !released) keys.push('WheelUp');
+            else if (button === 65 && !released) keys.push('WheelDown');
             else if (released && (button === 0 || button === 3 || button === 35)) keys.push(`MouseUp:${row}:${col}`);
             else if (button === 0) keys.push(`MouseDown:${row}:${col}`);
             else if (button === 32) keys.push(`MouseDrag:${row}:${col}`);

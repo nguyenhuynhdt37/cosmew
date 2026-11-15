@@ -166,6 +166,7 @@ export class FutrynTuiApp {
     const animate = !config.reducedMotion && !this.themeEngine.wallpaperEngine.isPaused(config);
     this.chat.companion.tick(deltaSeconds, animate, config.speed);
     if (animate) this.animationTimeSeconds += deltaSeconds;
+    this.textSelection.step(deltaSeconds);
     this.advanceStartupGate();
   }
 
@@ -200,13 +201,35 @@ export class FutrynTuiApp {
 
   public async handleKey(key: string): Promise<void> {
     if (this.gate.active && await this.gate.handleKey(key)) return;
+    if (['WheelUp', 'WheelDown', 'PageUp', 'PageDown'].includes(key) && this.textSelection.frame) {
+      const amount = key.startsWith('Wheel') ? 2 : Math.max(1, this.rows - 8);
+      if (this.textSelection.scroll(key === 'WheelUp' || key === 'PageUp' ? -amount : amount)) return;
+    }
     const mouse = /^(MouseDown|MouseDrag|MouseUp):(\d+):(\d+)$/.exec(key);
     if (mouse) {
       const point = {row:Number(mouse[2]), col:Number(mouse[3])};
       if (mouse[1] === 'MouseDown') { this.textSelection.clear(); this.textSelection.begin(this.computeFrameSnapshot(), point); }
       else if (mouse[1] === 'MouseDrag') this.textSelection.move(point);
       else {
+        const clickFrame = this.textSelection.frame;
+        const wasSelection = this.textSelection.active();
         this.textSelection.release(point);
+        if (!wasSelection && !this.textSelection.frame && this.overlay === 'none' && !this.gate.active) {
+          const viewport = clickFrame?.transcriptViewport;
+          const hit = viewport && point.row >= viewport.top && point.row < viewport.top + viewport.height && point.col >= viewport.left && point.col < viewport.left + viewport.width
+            ? viewport.disclosures.find(hit => hit.row === viewport.offset + point.row - viewport.top) : undefined;
+          const item = hit && this.chat.transcript.find(item => item.id === hit.itemId);
+          if (item && hit && viewport) {
+            this.chat.scrollOffset = viewport.offset;
+            const expanded = new Set(item.expandedActivities);
+            const collapsed = new Set(item.collapsedActivities);
+            const wasExpanded = !collapsed.has(hit.key) && (expanded.has(hit.key) || hit.key.startsWith('reasoning:') && item.reasoningExpanded === true);
+            if (wasExpanded) { expanded.delete(hit.key); collapsed.add(hit.key); }
+            else { expanded.add(hit.key); collapsed.delete(hit.key); }
+            item.expandedActivities = [...expanded];
+            item.collapsedActivities = [...collapsed];
+          }
+        }
         const sequence = this.textSelection.copySequence();
         if (sequence) this.clipboardSequence = sequence;
       }
@@ -282,7 +305,7 @@ export class FutrynTuiApp {
 
     // Route to active overlay if open
     if (this.overlay !== 'none') {
-      await this.features.get(this.overlay)?.handleKey(this.overlay, key);
+      await this.features.get(this.overlay)?.handleKey(this.overlay, key === 'WheelUp' ? 'PageUp' : key === 'WheelDown' ? 'PageDown' : key);
       return;
     }
 
@@ -319,12 +342,18 @@ export class FutrynTuiApp {
       });
     }
 
-    drawChatScreen(canvas, {
+    const transcriptViewport = drawChatScreen(canvas, {
       client: this.client, rows, metrics, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId,
       composer: this.chat.composer, transcript: this.chat.transcript, scrollOffset: this.chat.scrollOffset,
       isStreaming: this.chat.isStreaming, turnStartedAt: this.chat.turnStartedAt, isPreviewing: this.themeEngine.isPreviewing(),
       focused: this.overlay === 'none', workspaceAccess: this.workspaceAccess,
     });
+
+    if (transcriptViewport) {
+      this.chat.viewportOffset = transcriptViewport.offset;
+      this.chat.viewportHeight = transcriptViewport.height;
+      this.chat.viewportMaxOffset = Math.max(0, transcriptViewport.lines.length - transcriptViewport.height);
+    }
 
     // 6. Draw Collapsible Sidebar if enabled & terminal is wide enough
     if (metrics.showSidebar) {
@@ -388,6 +417,7 @@ export class FutrynTuiApp {
 
     const plainLines = canvas.cells.map(row => row.map(c => c.ch).join(''));
     return {
+      ...(transcriptViewport && this.overlay === 'none' && !this.gate.active ? {transcriptViewport} : {}),
       cols,
       rows,
       cells: canvas.cells,

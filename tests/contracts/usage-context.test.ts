@@ -282,6 +282,9 @@ test('Responses HTTP transport forwards an advertised effort and streams the pro
     expect(c.tui.getTranscript().at(-1)!.reasoning).toBe('Provider HTTP summary');
     expect(c.tui.getTranscript().at(-1)!.content).toBe('Hello fixture');
     expect(phases).toEqual(expect.arrayContaining(['thinking', 'waiting', 'reasoning', 'streaming', 'done']));
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('▸ Thinking');
+    expect(c.tui.computeFrameSnapshot().plainText).not.toContain('Provider HTTP summary');
+    await c.tui.handleKey('Ctrl+R');
     expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
     await c.tui.handleKey('Ctrl+R'); expect(c.tui.computeFrameSnapshot().plainText).not.toContain('Provider HTTP summary');
     await c.tui.handleKey('Ctrl+R'); expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP summary');
@@ -516,6 +519,8 @@ test('thinking arrives incrementally before the answer and an explicit collapse 
   while (!c.tui.getTranscript().at(-1)?.reasoning && Date.now() < deadline) await Bun.sleep(5);
   expect(c.tui.getTranscript().at(-1)?.reasoning).toBe('Provider HTTP ');
   expect(c.tui.getTranscript().at(-1)?.content).toBe('');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('▸ Thinking');
+  await c.tui.handleKey('Ctrl+R');
   expect(c.tui.computeFrameSnapshot().plainText).toContain('Provider HTTP');
   await c.tui.handleKey('Ctrl+R');
   await task;
@@ -540,7 +545,7 @@ test.skipIf(process.platform === 'win32')('actual PTY streams thinking before th
   const wait = async (text: string, from = 0) => { const deadline = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5); expect(output.slice(from)).toContain(text); };
   try {
     await wait('Trust this folder?'); terminal.write('\x1b[A\r');
-    await wait('/ 128k tokens'); terminal.write('Stream reasoning and answer\r');
+    await wait('/ 128k tokens'); terminal.write('\x12'); terminal.write('Stream reasoning and answer\r');
     await wait('Provider HTTP'); expect(output).not.toContain('Hello fixture');
     await wait('Hello fixture'); await wait('Completed turn');
     const mark = output.length; terminal.write('/model alternate-model\r');

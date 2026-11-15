@@ -322,7 +322,7 @@ test('permission approvals bind the full target, expire, reject forged scopes an
 test('terminal keyboard decoding and multiline composer preserve navigation and cancellation conventions', async () => {
   expect(parseRawTerminalKey('\x1b[A\x1b[B\x1b[Z\x03\x1b\r\n')).toEqual(['ArrowUp', 'ArrowDown', 'Shift+Tab', 'Ctrl+C', 'Alt+Enter', 'Ctrl+J']);
   expect(parseRawTerminalKey('\x1b[200~text\x1b[201~')).toEqual(['t', 'e', 'x', 't']);
-  expect(parseRawTerminalKey('\x1b[<64;20;10M\x1b[<65;20;10M\x1b[<0;20;10M\x1b[<35;20;10m')).toEqual(['PageUp', 'PageDown', 'MouseDown:9:19', 'MouseUp:9:19']);
+  expect(parseRawTerminalKey('\x1b[<64;20;10M\x1b[<65;20;10M\x1b[<0;20;10M\x1b[<35;20;10m')).toEqual(['WheelUp', 'WheelDown', 'MouseDown:9:19', 'MouseUp:9:19']);
   const { tui } = await setup();
   await type(tui, 'First'); await tui.handleKey('Alt+Enter'); await type(tui, 'Second');
   expect(tui.getComposerState().value).toBe('First\nSecond');

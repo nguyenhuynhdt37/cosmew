@@ -54,5 +54,6 @@ export function renderAnsiDiff(cells: FrameCell[][], rows: number, cap: Terminal
       out += '\x1b[0m';
     }
 
-    return out;
+    // The composer draws its own caret. Never leave the hardware cursor at the right edge.
+    return out ? `\x1b[?25l${out}\x1b[1;1H` : '';
 }

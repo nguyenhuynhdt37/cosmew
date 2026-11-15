@@ -1,6 +1,6 @@
 import type { BorderStyle, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { commandSummary, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
+import { commandSummary, reasoningTitle, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
 
 export function renderMarkdownBody(options: {
@@ -45,37 +45,43 @@ export function renderMarkdownBody(options: {
       continue;
     }
 
-    const wrapped = wrapTextToWidth(raw, Math.max(8, contentWidth - 2));
-    for (const line of wrapped) {
-      const text = line.slice(0, contentWidth);
-      if (text.length === 0) {
-        rendered.push({ spans: [] });
-        continue;
-      }
-      if (/^#{1,4}\s+/.test(text)) {
-        rendered.push({
-          spans: [{ text, fg: tokens.markdownHeading, bg, bold: true }],
-        });
-      } else if (text.includes('`') && syntaxHighlighting) {
-        const parts = text.split(/(`[^`]+`)/g);
-        const spans: StyledSpan[] = [];
-        for (const part of parts) {
-          if (part.startsWith('`') && part.endsWith('`') && part.length >= 2) {
-            spans.push({ text: part, fg: tokens.markdownCode, bg: tokens.backgroundElevated });
-          } else if (part.length > 0) {
-            spans.push({ text: part, fg: tokens.foreground, bg });
-          }
-        }
-        rendered.push({ spans });
-      } else {
-        rendered.push({
-          spans: [{ text, fg: tokens.foreground, bg }],
-        });
-      }
+    const heading=/^#{1,6}\s+/.test(raw);
+    const source=heading?raw.replace(/^#{1,6}\s+/,''):raw.replace(/^(\s*)[-*] /,'$1• ');
+    const spans=inlineMarkdown(source,tokens,bg,heading);
+    const plain=spans.map(span=>span.text).join('');let offset=0;
+    for(const line of wrapTextToWidth(plain,Math.max(8,contentWidth-2))){
+      if(!line){rendered.push({spans:[]});continue;}
+      const start=plain.indexOf(line,offset),end=start+line.length;let position=0;
+      rendered.push({spans:spans.flatMap(span=>{
+        const from=Math.max(start,position),to=Math.min(end,position+span.text.length);position+=span.text.length;
+        return to>from?[{...span,text:span.text.slice(from-(position-span.text.length),to-(position-span.text.length))}]:[];
+      })});offset=end;
     }
   }
 
   return rendered;
+}
+
+
+/** Display Markdown as terminal spans; local links retain their relative label and line number. */
+function inlineMarkdown(text:string,tokens:ThemeTokens,bg:string,heading=false):StyledSpan[]{
+  const spans:StyledSpan[]=[];const pattern=/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\))/g;let offset=0;
+  for(const match of text.matchAll(pattern)){
+    if(match.index!>offset)spans.push({text:text.slice(offset,match.index),fg:tokens.foreground,bg,bold:heading});
+    const value=match[0];
+    if(value.startsWith('`'))spans.push({text:value.slice(1,-1),fg:tokens.markdownCode,bg:tokens.backgroundElevated});
+    else if(value.startsWith('**'))spans.push({text:value.slice(2,-2),fg:tokens.foreground,bg,bold:true});
+    else{
+      const link=/^\[([^\]]+)\]\(([^)]+)\)$/.exec(value)!;
+      const label=link[1]!.replace(/[`*]/g,''),target=link[2]!;
+      const line=/(?::(\d+)|#L(\d+))$/.exec(target);
+      const shown=/^https?:\/\//.test(target)?label===target?label:`${label} (${target})`:label+(line&&!/:\d+$/.test(label)?':'+(line[1]??line[2]):'');
+      spans.push({text:shown,fg:tokens.markdownCode,bg,bold:heading});
+    }
+    offset=match.index!+value.length;
+  }
+  if(offset<text.length)spans.push({text:text.slice(offset),fg:tokens.foreground,bg,bold:heading});
+  return spans;
 }
 
 export function renderTranscriptMessages(options: {
@@ -85,6 +91,7 @@ export function renderTranscriptMessages(options: {
   borderStyle: BorderStyle;
   syntaxHighlighting?: boolean;
   /** True for a command still waiting for the user's decision (no process exists yet). */
+  compactActivities?: boolean;
   awaitingApproval?: (call: ToolCall) => boolean;
 }): RenderedBoxLine[] {
   const { items, width, tokens, syntaxHighlighting = true } = options;
@@ -109,16 +116,56 @@ export function renderTranscriptMessages(options: {
       continue;
     }
 
-    const parts = transcriptParts(item);
+    // Compact adjacent tool-only rounds for display; the recorded timeline is untouched.
+    const parts:TranscriptPart[]=[];
+    for(const part of transcriptParts(item)){
+      const last=parts.at(-1);
+      if(part.kind==='tools'&&last?.kind==='tools')last.callIds.push(...part.callIds);
+      else parts.push(part.kind==='tools'?{...part,callIds:[...part.callIds]}:part);
+    }
     let previous: TranscriptPart['kind'] | undefined;
-    for (const part of parts) {
+    for (const [partIndex, part] of parts.entries()) {
+      if (part.kind === 'reasoning' && !options.compactActivities && item.reasoningExpanded === false) continue;
+      const key = `${part.kind}:${part.kind === 'tools' ? part.callIds[0] : partIndex}`;
+      const expanded = !item.collapsedActivities?.includes(key) && Boolean(item.expandedActivities?.includes(key) || part.kind === 'reasoning' && item.reasoningExpanded === true);
+      const disclosure = { itemId: item.id, key };
       // Reasoning and exploration stay compact; answer text gets air around it.
       if (previous && (part.kind === 'text' || previous === 'text' || part.kind==='tools' && previous==='tools')) lines.push({ spans: [] });
       if (part.kind === 'reasoning') {
-        if (item.reasoningExpanded === false) continue; // Ctrl+R hides thinking
-        lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
+        if (options.compactActivities) {
+          const title = reasoningTitle(part.text);
+          lines.push({disclosure, spans: [{text: `${expanded ? '▾' : '▸'} Thinking${title ? ` · ${title}` : ''}`.slice(0, innerWidth), fg: tokens.foregroundMuted, bg, italic: true}]});
+          if (expanded) lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
+        } else if (item.reasoningExpanded !== false) lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
       } else if (part.kind === 'tools') {
         const calls = part.callIds.map(id => item.toolCalls?.find(call => call.id === id)).filter((call): call is ToolCall => Boolean(call));
+        if (options.compactActivities) {
+          const completed = calls.filter(call => item.toolResults?.some(result => result.callId === call.id)).length;
+          const failed = calls.filter(call => item.toolResults?.some(result => result.callId === call.id && result.status !== 'ok')).length;
+          const rows = explorationRows(calls.filter(call => call.name !== 'exec_command' && call.name !== 'apply_patch'), item.toolResults, {live: Boolean(item.streaming)});
+          const summary = [
+            ...rows.map(row => `${row.verb} ${row.target}${row.note ? ` (${row.note})` : ''}`),
+            ...calls.filter(call => call.name === 'exec_command').map(call => {
+              const result = item.toolResults?.find(result => result.callId === call.id);
+              const summary = commandSummary(call, result, {live: Boolean(item.streaming), awaiting: !result && Boolean(options.awaitingApproval?.(call))});
+              const verb = {ran:'Ran', failed:'Failed', pending:'Command pending', awaiting:'Waiting for approval', stopped:'Stopped'}[summary.state];
+              return `${verb} ${summary.command}${summary.note ? ` (${summary.note})` : ''}`;
+            }),
+            ...calls.filter(call => call.name === 'apply_patch').map(() => 'apply_patch'),
+          ].join(' · ');
+          const label = completed < calls.length ? item.streaming ? 'Running' : 'Stopped' : failed ? 'Finished with errors' : 'Completed';
+          lines.push({disclosure, spans: [{text: `${expanded ? '▾' : '▸'} ${label} · ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}${summary ? ` · ${summary}` : ''}`.slice(0, innerWidth), fg: failed ? tokens.error : tokens.foregroundMuted, bg}]});
+          if (!expanded) { previous = part.kind; continue; }
+          for (const call of calls) {
+            const result = item.toolResults?.find(result => result.callId === call.id);
+            for (const text of wrapTextToWidth(`${call.name} ${JSON.stringify(call.input)}`, Math.max(8, innerWidth - 4))) lines.push({spans:[{text: `    ${text}`, fg: tokens.foregroundMuted, bg}]});
+            lines.push({spans:[{text:`    → ${result?.status ?? (item.streaming ? 'pending' : 'stopped')}${result?.code ? ` (${result.code})` : ''}`, fg: result && result.status !== 'ok' ? tokens.error : tokens.foregroundSubtle, bg}]});
+            if (call.name === 'exec_command') lines.push(...renderCommandCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming),awaiting:!result && Boolean(options.awaitingApproval?.(call))}));
+            if (call.name === 'apply_patch') lines.push(...renderPatchCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming)}));
+          }
+          previous = part.kind;
+          continue;
+        }
         // Reads/searches group under "Explored"; every command gets its own cell, in order.
         let run: ToolCall[] = [];
         const flush = () => { if (run.length) lines.push(...renderExplorationGroup({ calls: run, results: item.toolResults, width: innerWidth, tokens, bg, live: Boolean(item.streaming) })); run = []; };
@@ -134,7 +181,7 @@ export function renderTranscriptMessages(options: {
         const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 4), tokens, bg, syntaxHighlighting });
         for (const [row, bLine] of body.entries()) {
           if (bLine.spans.length === 0) { lines.push({ spans: [] }); continue; }
-          lines.push({ spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.accent, bg }, ...bLine.spans] });
+          lines.push({ spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.foregroundSubtle, bg }, ...bLine.spans] });
         }
       }
       previous = part.kind;
@@ -185,8 +232,9 @@ export function renderTranscriptViewport(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
   syntaxHighlighting: boolean;
+  compactActivities?: boolean;
   awaitingApproval?: (call: ToolCall) => boolean;
-}): { lines: RenderedBoxLine[]; totalLines: number; clampedOffset: number } {
+}): { lines: RenderedBoxLine[]; allLines: RenderedBoxLine[]; totalLines: number; clampedOffset: number } {
   const { items, width, height, scrollOffset, tokens, borderStyle, syntaxHighlighting } = options;
   const contentWidth = Math.max(16, width - 2);
   const allLines = renderTranscriptMessages({
@@ -196,6 +244,7 @@ export function renderTranscriptViewport(options: {
     borderStyle,
     syntaxHighlighting,
     awaitingApproval: options.awaitingApproval,
+    compactActivities: options.compactActivities,
   });
 
   const totalLines = allLines.length;
@@ -222,7 +271,7 @@ export function renderTranscriptViewport(options: {
     });
   }
 
-  return { lines: result, totalLines, clampedOffset };
+  return { lines: result, allLines, totalLines, clampedOffset };
 }
 
 /** Thinking as Codex prints summaries, but inline: dim italic, `• ` on the first row. */
@@ -263,7 +312,7 @@ export function renderExplorationGroup(options: { calls: ToolCall[]; results: To
       const noteStart = wrapIndex === wrapped.length - 1 && note ? Math.max(0, text.length - note.length) : text.length;
       lines.push({ spans: [
         { text: wrapIndex === 0 ? lead : indent, fg: tokens.foregroundSubtle, bg },
-        ...(wrapIndex === 0 ? [{ text: row.verb + ' ', fg: tokens.accent, bg }] : []),
+        ...(wrapIndex === 0 ? [{ text: row.verb + ' ', fg: tokens.foregroundMuted, bg }] : []),
         { text: text.slice(0, noteStart), fg: tokens.foreground, bg },
         ...(noteStart < text.length ? [{ text: text.slice(noteStart), fg: row.tone === 'error' ? tokens.error : tokens.foregroundSubtle, bg }] : []),
       ] });

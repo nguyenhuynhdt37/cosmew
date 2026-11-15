@@ -1,6 +1,7 @@
 import type { ThemeManifest, ThemeTokens, AppearanceConfig } from '@hannes/contracts';
 import type { FutrynClient, ReactiveAgentEvent } from '@hannes/sdk';
 import type { Canvas } from '../../ui';
+import type { TranscriptViewport } from '../../types';
 import { renderContextIndicator } from '../context-meter';
 import { renderTopHeaderBar } from '../header';
 import { renderFyn, type FynCompanion } from '../companion';
@@ -34,7 +35,8 @@ export interface ChatScreenInput {
 }
 
 /** Welcome card or live conversation, with the composer docked at the bottom. */
-export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
+export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptViewport | undefined {
+  let viewport: TranscriptViewport | undefined;
   const { rows, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId } = v;
   const { mainWidth, colWidth } = v.metrics;
 
@@ -109,8 +111,8 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
     }
   } else {
     const composerStartRow = Math.max(framePad + 1, rows - 1 - framePad - composerLines.length);
-    const mascotLines = rows >= 34 && contentWidth >= 28 && composerStartRow >= framePad + 10
-      ? renderFyn({ ...companionView, tokens, width: 28, scale: 5 })
+    const mascotLines = rows >= 24 && contentWidth >= 28 && composerStartRow >= framePad + 10
+      ? renderFyn({ ...companionView, tokens, width: 24, compact: true })
       : [];
     const mascotRow = composerStartRow - mascotLines.length;
     const showMascot = mascotLines.length > 0 && mascotRow >= framePad;
@@ -135,6 +137,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
         items: v.transcript,
+        compactActivities: true,
         width: contentWidth,
         height: transcriptHeight,
         scrollOffset: v.scrollOffset,
@@ -148,14 +151,17 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
         },
       });
       canvas.block(transcriptStartRow, contentLeft, vp.lines, contentWidth);
+      viewport = {top: transcriptStartRow, left: contentLeft, width: contentWidth, height: transcriptHeight, offset: vp.clampedOffset, lines: vp.allLines,
+        disclosures: vp.allLines.flatMap((line, row) => line.disclosure ? [{row, ...line.disclosure}] : [])};
     }
     if (showMascot) {
       canvas.block(mascotRow, contentLeft, mascotLines, 28);
-      if (v.isStreaming && contentWidth >= 44) canvas.spans(mascotRow + 2, contentLeft + 28, turnStatusSpans(v, companionView.time), contentWidth - 28);
+      if (v.isStreaming && contentWidth >= 44) canvas.spans(mascotRow + 1, contentLeft + 24, turnStatusSpans(v, companionView.time), contentWidth - 24);
     }
     if (statusRow > transcriptStartRow) canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);
   }
+  return viewport;
 }
 
 /**

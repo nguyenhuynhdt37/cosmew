@@ -280,7 +280,7 @@ test('TUI: responsive full-screen width utilizes full terminal cols without 88-c
   }
 });
 
-test('chat resize keeps the composer usable and shows complete Fyn art or its status fallback', async () => {
+test('chat resize keeps the composer usable and shows compact Fyn or its status fallback', async () => {
   const x = context(); await configure(x);
   const a = await x.launch(100, 30);
   try {
@@ -291,12 +291,11 @@ test('chat resize keeps the composer usable and shows complete Fyn art or its st
       expect(frame.plainLines).toHaveLength(rows!);
       expect(frame.plainLines.every(line => line.length === cols)).toBe(true);
       expect(frame.plainText).toContain('Ask anything');
-      if (rows! >= 34) {
+      if (rows! >= 24) {
         const labelRow = frame.plainLines.findIndex(line => line.includes('Fyn ·'));
-        expect(labelRow).toBeGreaterThanOrEqual(5);
-        // All five art rows precede the label, above the input frame.
-        const art = frame.plainLines.slice(labelRow - 5, labelRow);
-        expect(art.every(line => /[▀▄]/.test(line))).toBe(true);
+        expect(labelRow).toBeGreaterThanOrEqual(2);
+        expect(frame.plainLines[labelRow - 2]).toContain('/\\_/\\');
+        expect(frame.plainLines[labelRow - 1]).toMatch(/\([o-]\.[o-]\)/);
       }
     }
   } finally { a.close(); }

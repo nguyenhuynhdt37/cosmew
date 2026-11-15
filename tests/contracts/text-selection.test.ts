@@ -64,3 +64,34 @@ test('native clipboard bridge uses stdin, handles failure and bounds a stuck wri
   expect(killed).toBe(true);
   expect(await writeMacClipboard('x'.repeat(65537), () => { throw new Error('must not launch'); })).toBe(false);
 });
+
+test('selection scrolls a frozen transcript across screens, excludes chrome, and autoscrolls at its edges', () => {
+  const base = frame();
+  const lines = Array.from({length: 100}, (_, row) => ({spans:[{text:`line ${row} ${row === 40 ? '\x1bsecret' : ''}`,fg:tokens.foreground}]}));
+  base.transcriptViewport = {top:1,left:2,width:16,height:4,offset:0,lines,disclosures:[]};
+  const selection = new TextSelection();
+  selection.begin(base,{row:1,col:2});
+  selection.move({row:4,col:8});
+  expect(selection.scroll(40)).toBe(true);
+  expect(selection.view(tokens).plainLines[1]).toContain('line 40');
+  selection.release({row:4,col:8});
+  const copied = selection.text();
+  expect(copied).toContain('line 0\nline 1');
+  expect(copied).toContain('line 40  secret');
+  expect(copied).toContain('line 43');
+  expect(copied).not.toContain('Hello world');
+  expect(copied).not.toContain('status footer');
+  expect(copied).not.toContain('\x1b');
+  expect(base.transcriptViewport.offset).toBe(0);
+  expect(selection.copySequence()).not.toBeNull();
+  expect(selection.view(tokens).cells[1]![2]!.selected).toBe(true);
+  selection.clear();
+  selection.begin(base,{row:1,col:2});
+  selection.move({row:5,col:8});
+  const before = selection.text();
+  selection.step(0.08);
+  expect(selection.text().length).toBeGreaterThan(before.length);
+  selection.scroll(1000); selection.release({row:4,col:8});
+  expect(selection.text()).toContain('line 99');
+  expect(selection.text()).not.toContain('undefined');
+});

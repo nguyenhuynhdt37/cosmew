@@ -86,7 +86,7 @@ test('stored conversations rebuild the same order, so resumed sessions look alik
   ];
   const [, answer] = messagesToTranscript(messages, { idPrefix: 's' });
   expect(answer!.parts).toEqual([{ kind: 'text', text: 'Looking first.' }, { kind: 'tools', callIds: ['1'] }, {kind:'tools',callIds:['2']}, { kind: 'text', text: 'Could not read routes.' }]);
-  expect(plain(answer!)).toEqual(['• Looking first.', '', '• Explored', '  └ List **/routes.*', '', '• Explored', '  └ Read routes.ts (denied)', '', '• Could not read routes.']);
+  expect(plain(answer!)).toEqual(['• Looking first.', '', '• Explored', '  └ List **/routes.*', '    Read routes.ts (denied)', '', '• Could not read routes.']);
   // Plain chats keep the flat layout.
   expect(messagesToTranscript([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }], { idPrefix: 's' })[1]!.parts).toBeUndefined();
 });
@@ -121,17 +121,17 @@ test('live frame: exploration appears while the turn runs, with a status line; i
   const end = Date.now() + 4000;
   while (!tui.getTranscript().at(-1)?.toolResults?.length && Date.now() < end) await Bun.sleep(5);
   const live = tui.computeFrameSnapshot().plainText;
-  expect(live).toContain('└ Read notes.txt');
+  expect(live).toContain('Read notes.txt');
   expect(live).toContain('◦ Waiting for model…');
-  expect(live).toContain('• Explored'); // the call finished; the model is being asked again
+  expect(live).toContain('▸ Completed · 1 tool'); // the call finished; the model is being asked again
   expect(live).toMatch(/[•◦] Waiting for model \(\d+s • Esc to interrupt\)/);
   while((tui.getTranscript().at(-1)?.toolResults?.length??0)<2&&Date.now()<end)await Bun.sleep(5);
   expect(tui.getTranscript().at(-1)?.parts?.filter(part=>part.kind==='tools')).toHaveLength(2);
   const next=tui.computeFrameSnapshot().plainText;
-  expect(next).toContain('Read second.txt');expect(next).toContain('Waiting for model…');
+  expect(next).toContain('notes.txt, second.txt');expect(next).toContain('Waiting for model…');
   await turn;
   const done = tui.computeFrameSnapshot().plainText;
-  expect(done).toContain('• Explored');
+  expect(done).toContain('▸ Completed · 2 tools');
   expect(done).toContain('• Notes say hello.');
   expect(done).not.toContain('Esc to interrupt)');
 });
@@ -148,7 +148,7 @@ test('consecutive completed rounds stay separate when the model sends no text or
   {role:'assistant',content:'done'}];
  const item=messagesToTranscript(messages,{idPrefix:'x'})[1]!;
  expect(item.parts?.filter(p=>p.kind==='tools')).toHaveLength(2);
- expect(plain(item)).toEqual(['• Explored','  └ Read a.ts','','• Explored','  └ Read b.ts','','• done']);
+ expect(plain(item)).toEqual(['• Explored','  └ Read a.ts, b.ts','','• done']);
 });
 test('patch activity uses actual changed paths and never appears as Explored',()=>{
  const c=call('p','apply_patch',{patch:'*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch'});

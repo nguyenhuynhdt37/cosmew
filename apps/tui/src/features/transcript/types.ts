@@ -17,6 +17,9 @@ export interface TranscriptItem {
   durationMs?: number;
   reasoning?: string;
   reasoningExpanded?: boolean;
+  /** Local presentation state; never sent to the model. */
+  expandedActivities?: string[];
+  collapsedActivities?: string[];
   /**
    * What happened in this turn, in arrival order (ADR 0021). Text and reasoning parts hold their
    * own slice of the stream; a tools part names calls in `toolCalls`. Absent on old items, which

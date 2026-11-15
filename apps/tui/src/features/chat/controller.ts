@@ -17,7 +17,10 @@ export class ChatController {
   transcript: TranscriptItem[] = [];
   /** -1 follows the newest message. */
   scrollOffset = -1;
-  showReasoning = true;
+  viewportOffset = 0;
+  viewportHeight = 1;
+  viewportMaxOffset = 0;
+  showReasoning = false;
   isStreaming = false;
   /** Start of the running turn, for the status line timer; null when idle. */
   turnStartedAt: number | null = null;
@@ -185,7 +188,11 @@ export class ChatController {
     // Main screen key handling
     if (key === 'Ctrl+R') {
       this.showReasoning = !this.showReasoning;
-      for (const item of this.transcript) item.reasoningExpanded = this.showReasoning;
+      for (const item of this.transcript) {
+        item.reasoningExpanded = this.showReasoning;
+        item.expandedActivities = item.expandedActivities?.filter(key => !key.startsWith('reasoning:'));
+        item.collapsedActivities = item.collapsedActivities?.filter(key => !key.startsWith('reasoning:'));
+      }
       return;
     }
     if (key === 'Alt+Enter' || key === 'Ctrl+J') {
@@ -219,12 +226,11 @@ export class ChatController {
       return;
     }
 
-    if (key === 'PageUp') {
-      this.scrollOffset = Math.max(0, (this.scrollOffset < 0 ? 10 : this.scrollOffset) - 5);
-      return;
-    }
-    if (key === 'PageDown') {
-      this.scrollOffset = -1;
+    if (['PageUp', 'PageDown', 'WheelUp', 'WheelDown'].includes(key)) {
+      const amount = key.startsWith('Wheel') ? 2 : Math.max(1, this.viewportHeight - 2);
+      const next = this.viewportOffset + (key === 'PageUp' || key === 'WheelUp' ? -amount : amount);
+      this.scrollOffset = next >= this.viewportMaxOffset ? -1 : Math.max(0, next);
+      this.viewportOffset = this.scrollOffset < 0 ? this.viewportMaxOffset : this.scrollOffset;
       return;
     }
 

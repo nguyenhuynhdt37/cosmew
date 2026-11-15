@@ -1,5 +1,6 @@
 import type { FutrynClient } from '@hannes/sdk';
 import type { ThemeEngine } from './theme/theme';
+import type { RenderedBoxLine } from './ui/types';
 
 export type ActiveOverlay =
   | 'none'
@@ -28,7 +29,18 @@ export interface FrameCell {
   selected?: boolean;
 }
 
+export interface TranscriptViewport {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  offset: number;
+  lines: RenderedBoxLine[];
+  disclosures: { row: number; itemId: string; key: string }[];
+}
+
 export interface FrameSnapshot {
+  transcriptViewport?: TranscriptViewport;
   cols: number;
   rows: number;
   cells: FrameCell[][];

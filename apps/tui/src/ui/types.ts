@@ -9,4 +9,5 @@ export interface StyledSpan {
 
 export interface RenderedBoxLine {
   spans: StyledSpan[];
+  disclosure?: { itemId: string; key: string };
 }
