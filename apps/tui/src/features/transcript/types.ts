@@ -11,6 +11,8 @@ export interface TranscriptItem {
   /** Results matched to `toolCalls` by call id; a call without a result is still running. */
   toolResults?: ToolResult[];
   streaming?: boolean;
+  /** Live wait indicator, not provider reasoning or a claim that a tool has started. */
+  awaitingModel?: boolean;
   errorText?: string;
   durationMs?: number;
   reasoning?: string;

@@ -85,8 +85,8 @@ test('stored conversations rebuild the same order, so resumed sessions look alik
     { role: 'assistant', content: 'Could not read routes.' },
   ];
   const [, answer] = messagesToTranscript(messages, { idPrefix: 's' });
-  expect(answer!.parts).toEqual([{ kind: 'text', text: 'Looking first.' }, { kind: 'tools', callIds: ['1', '2'] }, { kind: 'text', text: 'Could not read routes.' }]);
-  expect(plain(answer!)).toEqual(['• Looking first.', '', '• Explored', '  └ List **/routes.*', '    Read routes.ts (denied)', '', '• Could not read routes.']);
+  expect(answer!.parts).toEqual([{ kind: 'text', text: 'Looking first.' }, { kind: 'tools', callIds: ['1'] }, {kind:'tools',callIds:['2']}, { kind: 'text', text: 'Could not read routes.' }]);
+  expect(plain(answer!)).toEqual(['• Looking first.', '', '• Explored', '  └ List **/routes.*', '', '• Explored', '  └ Read routes.ts (denied)', '', '• Could not read routes.']);
   // Plain chats keep the flat layout.
   expect(messagesToTranscript([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }], { idPrefix: 's' })[1]!.parts).toBeUndefined();
 });
@@ -104,10 +104,12 @@ test('live frame: exploration appears while the turn runs, with a status line; i
   const home = mkdtempSync(join(tmpdir(), 'futryn-activity-home-')); const ws = mkdtempSync(join(tmpdir(), 'futryn-activity-ws-'));
   cleanup.push(() => rmSync(home, { recursive: true, force: true }), () => rmSync(ws, { recursive: true, force: true }));
   writeFileSync(join(ws, 'notes.txt'), 'hello\n');
+  writeFileSync(join(ws, 'second.txt'), 'next step\n');
   const server = fixtureServer(); cleanup.push(() => server.server.stop(true));
   // The first reply asks for a read and slows the next request, leaving a window to look at the frame mid-turn.
   server.set({ script: (view: ScriptedView) => {
-    if (view.results.length) return { text: 'Notes say hello.' };
+    if (view.results.length > 1) return { text: 'Notes say hello.' };
+    if (view.results.length === 1) return {calls:[{name:'read',input:{path:'second.txt'}}]};
     server.set({ delay: 500 });
     return { calls: [{ name: 'read', input: { path: 'notes.txt' } }] };
   } });
@@ -120,11 +122,63 @@ test('live frame: exploration appears while the turn runs, with a status line; i
   while (!tui.getTranscript().at(-1)?.toolResults?.length && Date.now() < end) await Bun.sleep(5);
   const live = tui.computeFrameSnapshot().plainText;
   expect(live).toContain('└ Read notes.txt');
+  expect(live).toContain('◦ Waiting for model…');
   expect(live).toContain('• Explored'); // the call finished; the model is being asked again
-  expect(live).toMatch(/[•◦] (Working|Waiting for provider) \(\d+s • Esc to interrupt\)/);
+  expect(live).toMatch(/[•◦] Waiting for model \(\d+s • Esc to interrupt\)/);
+  while((tui.getTranscript().at(-1)?.toolResults?.length??0)<2&&Date.now()<end)await Bun.sleep(5);
+  expect(tui.getTranscript().at(-1)?.parts?.filter(part=>part.kind==='tools')).toHaveLength(2);
+  const next=tui.computeFrameSnapshot().plainText;
+  expect(next).toContain('Read second.txt');expect(next).toContain('Waiting for model…');
   await turn;
   const done = tui.computeFrameSnapshot().plainText;
   expect(done).toContain('• Explored');
   expect(done).toContain('• Notes say hello.');
   expect(done).not.toContain('Esc to interrupt)');
+});
+
+test('a pending model continuation appears below completed tools without inventing reasoning',()=>{
+ const item:TranscriptItem={id:'a',role:'assistant',content:'',streaming:true,awaitingModel:true,toolCalls:[call('r','read',{path:'src/a.ts'})],toolResults:[ok('r','read')],parts:[{kind:'tools',callIds:['r']}]};
+ expect(plain(item)).toEqual(['• Explored','  └ Read a.ts','','◦ Waiting for model…']);
+ expect(item.reasoning).toBeUndefined();item.streaming=false;expect(plain(item)).not.toContain('◦ Waiting for model…');
+});
+test('consecutive completed rounds stay separate when the model sends no text or summary',()=>{
+ const messages:Message[]=[{role:'user',content:'inspect'},
+  {role:'assistant',content:'',toolCalls:[call('a','read',{path:'a.ts'})]},{role:'tool',toolCallId:'a',toolName:'read',content:'a'},
+  {role:'assistant',content:'',toolCalls:[call('b','read',{path:'b.ts'})]},{role:'tool',toolCallId:'b',toolName:'read',content:'b'},
+  {role:'assistant',content:'done'}];
+ const item=messagesToTranscript(messages,{idPrefix:'x'})[1]!;
+ expect(item.parts?.filter(p=>p.kind==='tools')).toHaveLength(2);
+ expect(plain(item)).toEqual(['• Explored','  └ Read a.ts','','• Explored','  └ Read b.ts','','• done']);
+});
+test('patch activity uses actual changed paths and never appears as Explored',()=>{
+ const c=call('p','apply_patch',{patch:'*** Begin Patch\n*** Update File: src/a.ts\n@@\n-old\n+new\n*** End Patch'});
+ const item:TranscriptItem={id:'a',role:'assistant',content:'',streaming:true,toolCalls:[c],parts:[{kind:'tools',callIds:['p']}]};
+ expect(plain(item).join('\n')).toContain('Patch pending');expect(plain(item).join('\n')).toContain('src/a.ts');
+ item.toolResults=[ok('p','apply_patch',JSON.stringify({status:'applied',changes:[{path:'src/a.ts',action:'update'}],remaining:[]}))];item.streaming=false;
+ expect(plain(item)).toEqual(['• Patched','  └ Updated src/a.ts']);
+ expect(plain(item).join('\n')).not.toContain('Explored');
+ item.toolResults=[{...item.toolResults[0]!,status:'error',code:'PARTIAL_APPLY',content:JSON.stringify({status:'partial',changes:[{path:'src/a.ts',action:'update'}],remaining:['src/b.ts'],failureCode:'STALE_CONTENT'})}];
+ expect(plain(item).join('\n')).toContain('Patch partially applied');expect(plain(item).join('\n')).toContain('Not applied: src/b.ts');
+});
+test('a cancelled read with no result is shown as stopped rather than explored',()=>{
+ const item:TranscriptItem={id:'a',role:'assistant',content:'',streaming:false,toolCalls:[call('r','read',{path:'a.ts'})],parts:[{kind:'tools',callIds:['r']}]};
+ expect(plain(item)).toEqual(['• Exploration stopped','  └ Read a.ts (stopped)']);
+});
+
+test('interrupted patch receipts render on resume at EOF and stay before the next user turn',()=>{
+ const patch=call('p','apply_patch',{patch:'*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch'});
+ const messages:Message[]=[{role:'user',content:'write a'},{role:'assistant',content:'',toolCalls:[patch]},{role:'tool',toolName:'apply_patch',toolCallId:'p',content:JSON.stringify({status:'applied',changes:[{path:'a.ts',action:'add'}]})}];
+ expect(messagesToTranscript(messages,{idPrefix:'resume'})).toHaveLength(2);
+ const items=messagesToTranscript([...messages,{role:'user',content:'continue'},{role:'assistant',content:'next answer'}],{idPrefix:'resume'});
+ expect(items.map(item=>item.role)).toEqual(['user','assistant','user','assistant']);expect(plain(items[1]!)).toEqual(['• Patched','  └ Added a.ts']);expect(items[3]!.toolCalls).toBeUndefined();
+});
+test('malformed patch receipts and pending/stopped/denied calls never invent file changes',()=>{
+ const item:TranscriptItem={id:'p',role:'assistant',content:'',streaming:false,toolCalls:[call('p','apply_patch',{patch:'*** Begin Patch\n*** Delete File: a.ts\n*** End Patch'})]};
+ expect(plain(item).join('\n')).toContain('Patch stopped');
+ item.toolResults=[{callId:'p',name:'apply_patch',status:'denied',content:'no'}];expect(plain(item).join('\n')).toContain('Patch denied');expect(plain(item).join('\n')).not.toContain('Deleted');
+ item.toolResults=[{callId:'p',name:'apply_patch',status:'denied',content:JSON.stringify({changes:[{path:'a.ts',action:'delete'}],createdDirectories:['forged']})}];expect(plain(item).join('\n')).not.toContain('Deleted');expect(plain(item).join('\n')).not.toContain('Created directory');
+ item.toolResults=[ok('p','apply_patch','{broken')];expect(plain(item).join('\n')).toContain('Patch completed');expect(plain(item).join('\n')).not.toContain('Deleted');
+ item.toolResults=[ok('p','apply_patch',JSON.stringify({changes:'untrusted'}))];expect(plain(item).join('\n')).not.toContain('Patched');
+ item.toolResults=[{callId:'p',name:'apply_patch',status:'error',code:'PARTIAL_APPLY',content:JSON.stringify({status:'partial',changes:[],createdDirectories:['src'],remaining:['src/a.ts'],failureCode:'WRITE_FAILED'})}];
+ expect(plain(item).join('\n')).toContain('Created directory src');expect(plain(item).join('\n')).toContain('Not applied: src/a.ts');
 });

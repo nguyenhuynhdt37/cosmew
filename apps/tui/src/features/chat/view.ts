@@ -173,8 +173,10 @@ export function turnStatusSpans(v: Pick<ChatScreenInput, 'client' | 'status' | '
     : waitingTool ? (() => {
       const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
       if (running.some(call => call.name === 'exec_command')) return 'Command pending';
+      if (running.some(call => call.name === 'apply_patch')) return 'Patch pending';
       return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
     })()
+    : turn?.awaitingModel ? 'Waiting for model'
     : last?.kind === 'reasoning' ? reasoningTitle(last.text) ?? 'Thinking'
     : last?.kind === 'text' ? 'Replying'
     : v.status.phase === 'waiting' ? 'Waiting for provider' : 'Working';

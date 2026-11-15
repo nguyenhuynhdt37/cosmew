@@ -123,6 +123,7 @@ function rawToolTarget(call: ToolCall): string {
   const str = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : undefined);
   if (call.name === 'read') return str('path') ?? '';
   if (call.name === 'glob') return `${str('pattern') ?? '**/*'}${str('path') ? ` in ${str('path')}` : ''}`;
+  if (call.name === 'apply_patch') return [...(str('patch') ?? '').slice(0,65536).matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm)].map(match => match[1]!).filter((path,index,all) => all.indexOf(path)===index).join(', ').slice(0,1024);
   if (call.name === 'grep') return `"${str('pattern') ?? ''}"${str('path') ? ` in ${str('path')}` : ''}${str('glob') ? ` (${str('glob')})` : ''}`;
   return '';
 }
@@ -155,9 +156,14 @@ export function messagesToTranscript(messages: Message[], meta: { idPrefix: stri
   let calls: ToolCall[] = []; let results: ToolResult[] = []; let preface = '';
   // Stored turns keep the call/text order, so a resumed session shows the same timeline.
   let parts: TranscriptItem = { id: '', role: 'assistant', content: '' };
+  const flush = (idx: number) => {
+    items.push({id:`${meta.idPrefix}-tools-${idx}`,role:'assistant',content:preface.trimEnd(),modelId:meta.modelId,accountAlias:meta.accountAlias,toolCalls:calls,toolResults:results,parts:parts.parts});
+    calls=[];results=[];preface='';parts={id:'',role:'assistant',content:''};
+  };
   messages.forEach((m, idx) => {
-    if (m.role === 'tool') { results.push(storedResult(m)); return; }
-    if (m.role === 'assistant' && m.toolCalls) {
+    if (m.role === 'tool') { results.push(storedResult(m)); parts.toolResults=results; return; }
+    if (m.role !== 'assistant' && calls.length) flush(idx);
+    if (m.role === 'assistant' && m.toolCalls?.length) {
       calls.push(...m.toolCalls); if (m.content) { preface += m.content + '\n\n'; appendStreamPart(parts, 'text', m.content); }
       for (const call of m.toolCalls) appendToolPart(parts, call.id);
       return;
@@ -167,6 +173,7 @@ export function messagesToTranscript(messages: Message[], meta: { idPrefix: stri
     items.push({ id: `${meta.idPrefix}-${idx}`, role: m.role, content: m.role === 'assistant' ? preface + m.content : m.content, modelId: meta.modelId, accountAlias: meta.accountAlias, ...tools, ...(m.role === 'assistant' && calls.length ? { parts: parts.parts } : {}) });
     if (m.role === 'assistant') { calls = []; results = []; preface = ''; parts = { id: '', role: 'assistant', content: '' }; }
   });
+  if(calls.length)flush(messages.length);
   return items;
 }
 
@@ -179,11 +186,11 @@ export function appendStreamPart(item: TranscriptItem, kind: 'text' | 'reasoning
   else parts.push({ kind, text });
 }
 
-/** Consecutive tool calls share one exploration group until text or reasoning arrives. */
+/** A pending batch shares one group. A completed batch fences the next model/tool round. */
 export function appendToolPart(item: TranscriptItem, callId: string): void {
   const parts = item.parts ??= [];
   const last = parts.at(-1);
-  if (last?.kind === 'tools') last.callIds.push(callId);
+  if (last?.kind === 'tools' && !last.callIds.every(id => item.toolResults?.some(result => result.callId===id))) last.callIds.push(callId);
   else parts.push({ kind: 'tools', callIds: [callId] });
 }
 
@@ -208,7 +215,7 @@ export function explorationActive(calls: ToolCall[], results: ToolResult[] | und
  * Rows of one exploration group. Adjacent successful reads collapse into one `Read a, b` row;
  * a search, a listing or any read with a notable outcome gets its own row.
  */
-export function explorationRows(calls: ToolCall[], results: ToolResult[] | undefined): ExplorationRow[] {
+export function explorationRows(calls: ToolCall[], results: ToolResult[] | undefined, context?: {live: boolean}): ExplorationRow[] {
   const rows: ExplorationRow[] = [];
   const reads = calls.filter(call => call.name === 'read').map(call => toolTarget(call));
   // File names like Codex, but the full path when two different files share a name.
@@ -217,7 +224,7 @@ export function explorationRows(calls: ToolCall[], results: ToolResult[] | undef
   for (const call of calls) {
     const result = results?.find(r => r.callId === call.id);
     const unchanged = result?.status === 'ok' && result.content.startsWith('[unchanged]');
-    const note = !result ? undefined
+    const note = !result ? context?.live === false ? 'stopped' : undefined
       : result.status === 'denied' ? 'denied'
       : result.status === 'error' ? (result.code === 'TOOL_BUDGET' ? 'over budget' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' '))
       : unchanged ? 'unchanged' : result.truncated ? 'partial' : undefined;

@@ -77,6 +77,7 @@ export class ChatController {
       modelId: status.selection?.modelId,
       accountAlias: status.activeAccount?.alias,
       streaming: true,
+      awaitingModel: true,
       toolCalls: [],
     };
     this.transcript = [...this.transcript, userItem, assistantItem];
@@ -94,11 +95,16 @@ export class ChatController {
       for await (const event of this.host.client.sendMessage(trimmed, {
         signal: abortController.signal,
       })) {
-        if (event.type === 'textDelta') {
+        if (event.type === 'started') {
+          assistantItem.awaitingModel = true;
+          this.companion.transition('thinking');
+        } else if (event.type === 'textDelta') {
+          assistantItem.awaitingModel = false;
           this.companion.transition('streaming');
           assistantItem.content += event.text;
           appendStreamPart(assistantItem, 'text', event.text);
         } else if (event.type === 'reasoningDelta') {
+          assistantItem.awaitingModel = false;
           assistantItem.reasoning = (assistantItem.reasoning ?? '') + event.text;
           appendStreamPart(assistantItem, 'reasoning', event.text);
           assistantItem.reasoningExpanded = this.showReasoning;
@@ -106,12 +112,15 @@ export class ChatController {
         } else if (event.type === 'usage') {
           assistantItem.usage = event.usage;
         } else if (event.type === 'toolCallComplete') {
+          assistantItem.awaitingModel = false;
           const calls: ToolCall[] = assistantItem.toolCalls ?? [];
           calls.push(event.call);
           assistantItem.toolCalls = calls;
           appendToolPart(assistantItem, event.call.id);
         } else if (event.type === 'toolResult') {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
+          assistantItem.awaitingModel = Boolean(assistantItem.toolCalls?.length) && assistantItem.toolCalls!.every(call => assistantItem.toolResults!.some(result => result.callId === call.id));
+          if(assistantItem.awaitingModel)this.companion.transition('thinking');
         } else if (event.type === 'completed') {
           completed = true;
           assistantItem.usage = event.usage;
@@ -149,6 +158,7 @@ export class ChatController {
         this.banner = assistantItem.errorText;
       }
     } finally {
+      assistantItem.awaitingModel = false;
       this.isStreaming = false;
       this.turnStartedAt = null;
       this.activeAbortController = null;

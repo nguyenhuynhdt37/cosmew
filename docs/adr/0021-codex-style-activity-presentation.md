@@ -32,3 +32,9 @@ Limits: one revision; the behavior of the installed Codex 0.167.0 binary was not
 `tests/contracts/transcript-activity.test.ts`: ordering, grouping/notes, hidden thinking, wrapping, control bytes, resumed order, elapsed/title helpers, and a live fixture frame mid-turn (`└ Read notes.txt` plus a status line with elapsed time) that settles to `• Explored` without the status line. Existing tool tests now expect `└ Read …`. Golden overlay frames are unchanged (they contain no tool or reasoning turns).
 
 2026-11-15: `bun run lint` passed; `bun test tests` **301 pass, 5 skip, 0 fail** (306 tests, 28 files). Not verified: appearance in a real terminal with a live reasoning model; italic support varies by terminal (unsupported terminals show normal text).
+
+## Live continuation follow-up (2026-11-15)
+
+User reported that tool/model continuation was not visible. TUI now shows a live `Waiting for model…` row after completed tool batches, clears it on actual provider output/end, and keeps separate groups for later model rounds even without text/reasoning between calls. Provider reasoning is shown only when supplied. Patch proposals/results get their own pending/stopped/denied/completed/partial cells with actual receipt paths and created directories; incomplete exploration is never labelled successful. Resumed interrupted tool-only turns flush before the next user turn and at EOF. No core, provider, permission or execution behavior changes. Focused tests cover the timeline, two real fixture read/continuation rounds, patch outcomes and interrupted resume.
+
+Follow-up verification: focused activity/patch tests 21 pass; full suite 385 pass, 5 skip, 0 fail; typecheck/lint pass. Subagent review checked grouping, resume and truthful patch states; denied receipt payloads cannot render completed file effects. Interactive live-provider appearance remains separate acceptance.

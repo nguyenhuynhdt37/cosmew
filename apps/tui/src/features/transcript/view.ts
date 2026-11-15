@@ -1,6 +1,6 @@
 import type { BorderStyle, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { commandSummary, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
+import { commandSummary, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
 
 export function renderMarkdownBody(options: {
@@ -113,7 +113,7 @@ export function renderTranscriptMessages(options: {
     let previous: TranscriptPart['kind'] | undefined;
     for (const part of parts) {
       // Reasoning and exploration stay compact; answer text gets air around it.
-      if (previous && (part.kind === 'text' || previous === 'text')) lines.push({ spans: [] });
+      if (previous && (part.kind === 'text' || previous === 'text' || part.kind==='tools' && previous==='tools')) lines.push({ spans: [] });
       if (part.kind === 'reasoning') {
         if (item.reasoningExpanded === false) continue; // Ctrl+R hides thinking
         lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
@@ -123,9 +123,10 @@ export function renderTranscriptMessages(options: {
         let run: ToolCall[] = [];
         const flush = () => { if (run.length) lines.push(...renderExplorationGroup({ calls: run, results: item.toolResults, width: innerWidth, tokens, bg, live: Boolean(item.streaming) })); run = []; };
         for (const call of calls) {
-          if (call.name !== 'exec_command') { run.push(call); continue; }
+          if (call.name !== 'exec_command' && call.name !== 'apply_patch') { run.push(call); continue; }
           flush();
           const result = item.toolResults?.find(r => r.callId === call.id);
+          if(call.name==='apply_patch'){lines.push(...renderPatchCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming)}));continue;}
           lines.push(...renderCommandCell({ call, result, width: innerWidth, tokens, bg, live: Boolean(item.streaming), awaiting: !result && Boolean(options.awaitingApproval?.(call)) }));
         }
         flush();
@@ -137,6 +138,11 @@ export function renderTranscriptMessages(options: {
         }
       }
       previous = part.kind;
+    }
+
+    if (item.streaming && item.awaitingModel) {
+      if(parts.length)lines.push({spans:[]});
+      lines.push({spans:[{text:'◦ ',fg:tokens.accent,bg},{text:'Waiting for model…',fg:tokens.foregroundMuted,bg}]});
     }
 
     if (item.errorText) {
@@ -241,12 +247,14 @@ function renderReasoningPart(text: string, width: number, tokens: ThemeTokens, b
  */
 export function renderExplorationGroup(options: { calls: ToolCall[]; results: ToolResult[] | undefined; width: number; tokens: ThemeTokens; bg: string; live: boolean }): RenderedBoxLine[] {
   const { calls, results, width, tokens, bg } = options;
-  const active = options.live && explorationActive(calls, results);
+  const incomplete=explorationActive(calls,results);
+  const active = options.live && incomplete;
+  const stopped = !options.live && incomplete;
   const lines: RenderedBoxLine[] = [{ spans: [
     { text: active ? '◦' : '•', fg: active ? tokens.accent : tokens.foregroundSubtle, bg },
-    { text: active ? ' Exploring' : ' Explored', fg: tokens.foreground, bg, bold: true },
+    { text: active ? ' Exploring' : stopped ? ' Exploration stopped' : ' Explored', fg: tokens.foreground, bg, bold: true },
   ] }];
-  explorationRows(calls, results).forEach((row, index) => {
+  explorationRows(calls, results, {live:options.live}).forEach((row, index) => {
     const lead = index === 0 ? '  └ ' : '    ';
     const indent = ' '.repeat(lead.length + row.verb.length + 1);
     const note = row.note ? ` (${row.note})` : '';
@@ -290,5 +298,32 @@ export function renderCommandCell(options: { call: ToolCall; result: ToolResult 
     { text: index === 0 ? '  └ ' : '    ', fg: tokens.foregroundSubtle, bg },
     { text: row.text.slice(0, Math.max(4, width - 4)), fg: row.fg, bg },
   ] }));
+  return lines;
+}
+
+/** Patch proposals are not exploration, and only returned receipts describe actual writes. */
+function renderPatchCell(options:{call:ToolCall;result:ToolResult|undefined;width:number;tokens:ThemeTokens;bg:string;live:boolean}):RenderedBoxLine[]{
+  const {call,result,width,tokens,bg,live}=options;
+  let receipt:{status?:string;changes?:{path?:unknown;action?:unknown}[];remaining?:unknown[];createdDirectories?:unknown[];failureCode?:unknown}|undefined;
+  try{const parsed=result?JSON.parse(result.content):undefined;if(parsed&&typeof parsed==='object')receipt=parsed;}catch{/* verification/denial messages are plain text */}
+  const partial=result?.status==='error'&&result.code==='PARTIAL_APPLY';
+  const effectsAllowed=result?.status==='ok'||partial;
+  const changes=effectsAllowed&&Array.isArray(receipt?.changes)?receipt.changes.filter(change=>change&&typeof change.path==='string'&&['add','update','delete'].includes(String(change.action))).slice(0,64):[];
+  const title=!result?live?'Patch pending':'Patch stopped':result.status==='denied'?'Patch denied':partial?'Patch partially applied':result.status==='error'?'Patch failed':changes.length?'Patched':'Patch completed';
+  const color=result?.status==='error'||result?.status==='denied'?tokens.error:!result?tokens.foregroundMuted:tokens.foreground;
+  const clean=(value:string)=>value.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').slice(0,1024);
+  const details:string[]=[];
+  if(effectsAllowed&&Array.isArray(receipt?.createdDirectories))for(const path of receipt.createdDirectories.slice(0,64))if(typeof path==='string')details.push('Created directory '+clean(path));
+  for(const change of changes){
+    if(change&&typeof change.path==='string'&&['add','update','delete'].includes(String(change.action)))details.push(`${{add:'Added',update:'Updated',delete:'Deleted'}[change.action as 'add'|'update'|'delete']} ${clean(change.path)}`);
+  }
+  if(partial&&Array.isArray(receipt?.remaining))for(const path of receipt.remaining.slice(0,64))if(typeof path==='string')details.push('Not applied: '+clean(path));
+  if(!details.length){
+    if(result?.status==='ok'&&Array.isArray(receipt?.changes)&&receipt.changes.length===0)details.push('No changes');
+    else if(toolTarget(call))details.push(toolTarget(call));
+  }
+  if(result?.status==='error')details.push(clean(String(receipt?.failureCode??result.code??'error')).toLowerCase().replaceAll('_',' '));
+  const lines:RenderedBoxLine[]=[{spans:[{text:!result&&live?'◦':'•',fg:!result&&live?tokens.accent:color,bg},{text:' '+title,fg:color,bg,bold:true}]}];
+  details.forEach((detail,index)=>wrapTextToWidth(detail,Math.max(8,width-4)).forEach((text,row)=>lines.push({spans:[{text:index===0&&row===0?'  └ ':'    ',fg:tokens.foregroundSubtle,bg},{text,fg:tokens.foregroundMuted,bg}]})));
   return lines;
 }
