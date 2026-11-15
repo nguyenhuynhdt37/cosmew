@@ -151,10 +151,18 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
   private async signOutAccount(id: string): Promise<void> {
     const { host } = this;
     const alias = host.client.listAccounts().find(account => account.id === id)?.alias ?? 'account';
+    const wasActive = host.client.status().activeAccount?.id === id;
     await host.client.logoutAccount(id);
     host.syncTranscript();
     host.openOverlay('none');
     host.setBanner(`Signed out of ${alias}.`);
+    if (wasActive) {
+      const next = host.client.listAccounts().find(a => a.status !== 'logged-out' && a.status !== 'invalid');
+      if (next) {
+        const switched = await this.continueWithAccount(next.id);
+        if (switched) host.setBanner(`Signed out of ${alias}. Using ${next.alias} with ${host.client.status().selection!.modelId}. New chat ready.`);
+      }
+    }
   }
 
   // ---- keys ----------------------------------------------------------------------------
@@ -164,21 +172,22 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
     const { client } = host;
     const st = this.state;
     if (st.authChallenge && (key === 'PageDown' || key === 'PageUp')) { st.scrollOffset = Math.max(0, Math.min(40, (st.scrollOffset ?? 0) + (key === 'PageDown' ? 1 : -1))); return; }
-    if (st.step === 'busy' && st.pendingAction === 'switch') {
+    if (st.step === 'busy' && this.switchAbort) {
       if (key === 'Escape' || key === 'Ctrl+C') { this.switchAbort?.abort(); st.statusMessage = 'Cancelling account switch…'; }
       return;
     }
     if (st.step === 'busy') {
       if (key === 'Escape' || key === 'Ctrl+C') {
         this.authAbort?.abort();
-        this.state = { ...st, secretDraft: '', step: 'method', selectedIndex: 0, statusMessage: 'Authentication cancelled; cleaning up credentials. Wait before reconnecting.' };
+        host.openOverlay('none');
+        host.setBanner('Authentication cancelled. Current account and history preserved.');
       }
       return;
     }
     if (key === 'Escape') {
       this.state.secretDraft = '';
       if (st.authChallenge) await client.cancelProviderAuth(st.authChallenge.id);
-      if (st.step === 'provider' || st.step === 'accounts' || ((st.logoutOnly || st.switchOnly) && st.step === 'confirm')) host.openOverlay('none');
+      if (st.pendingAction === 'switch' || st.step === 'provider' || st.step === 'accounts' || ((st.logoutOnly || st.switchOnly) && st.step === 'confirm')) host.openOverlay('none');
       else if (st.step === 'actions' || st.step === 'confirm' || st.step === 'rename') this.state = { ...st, step: 'accounts', query: '', selectedIndex: 0, secretDraft: '' };
       else this.state = createInitialConnectProviderState();
       return;
@@ -230,9 +239,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         if (st.method === 'subscription-browser' || st.method === 'subscription-device') {
           this.startProviderSignIn(st);
         } else if (st.method === 'openrouter-oauth') {
-          const challenge = await client.beginProviderAuth(st.providerId!, st.method);
-          next('oauth'); this.state.authChallenge = challenge;
-          if (challenge.autoComplete) this.startConnectionAuthentication(this.state);
+          this.startProviderSignIn(st);
         } else if (st.method === 'none') this.startConnectionAuthentication(st);
         else next(st.method === 'env' ? 'env' : 'secret');
       } else if (st.step === 'secret' || st.step === 'env' || st.step === 'oauth') {
@@ -281,7 +288,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         client.renameAccount(st.accountId!, st.draft.trim()); next('accounts'); this.state.query = ''; this.state.statusMessage = 'Account renamed.';
       } else if (st.step === 'confirm' && chosen) {
         if (chosen.id === 'confirm' && st.switchOnly) { await this.continueWithAccount(st.accountId!); return; }
-        if (chosen.id === 'confirm' && st.logoutOnly) { await this.signOutAccount(st.accountId!); return; }
+        if (chosen.id === 'confirm' && (st.logoutOnly || st.pendingAction === 'logout')) { await this.signOutAccount(st.accountId!); return; }
         if (chosen.id === 'cancel' && (st.logoutOnly || st.switchOnly)) { host.openOverlay('none'); return; }
         if (chosen.id === 'confirm') {
           await client.logoutAccount(st.accountId!, true);
@@ -304,7 +311,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
   // ---- background authentication -------------------------------------------------------
 
   private startProviderSignIn(st: ConnectProviderState): void {
-    if (this.authAbort) return;
+    if (this.authAbort) { st.statusMessage = 'Previous authentication is still cancelling. Please wait.'; return; }
     const { host } = this;
     const controller = new AbortController();
     this.authAbort = controller;
@@ -317,7 +324,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         }
         this.authAbort = null;
         this.state = { ...st, step: 'oauth', authChallenge: challenge };
-        await this.authenticate(this.state);
+        if (challenge.autoComplete) await this.authenticate(this.state);
       } catch (error) {
         if (host.overlay === 'connect' && this.state === starting) this.state = { ...st, step: 'method', statusMessage: this.describe(error, st.providerId) };
       } finally { if (this.authAbort === controller) this.authAbort = null; }

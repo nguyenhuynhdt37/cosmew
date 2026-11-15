@@ -608,3 +608,50 @@ test('closing discovery and reopening the model picker ignores the old result', 
   expect(text).not.toContain('undefined');
   expect(c.client.status().activeAccount?.id).toBe(c.account.id);
 });
+
+for (const fallback of ['available', 'retired-model', 'rejected', 'cancelled'] as const) test(`logout active account: ${fallback} fallback is coherent and never transfers chat history`, async () => {
+  const c = await setup(); await send(c.client, 'Private source history');
+  const source = c.client.activeSession()!.id;
+  const second = await c.app.accounts.add('usage', 'fallback', {kind: 'none'});
+  if (fallback === 'retired-model') c.app.settings.update(s => { s.accounts.find(a => a.id === second.id)!.defaultModel = 'retired'; });
+  if (fallback === 'rejected') c.server.set({status: 401});
+  if (fallback === 'cancelled') c.server.set({delay: 200});
+  await c.tui.executeSlashCommand('/logout first');
+  await c.tui.handleKey('ArrowDown');
+  const logout = c.tui.handleKey('Enter');
+  if (fallback === 'cancelled') { await Bun.sleep(20); await c.tui.handleKey('Escape'); }
+  await logout;
+  expect(c.app.conversations.get(source)?.messages).toHaveLength(2);
+  expect(c.client.activeSession()).toBeNull();
+  if (fallback === 'available' || fallback === 'retired-model') {
+    expect(c.client.status().selection).toEqual({accountId: second.id, modelId: 'fixture-model'});
+    await send(c.client, 'New account hello');
+    expect(JSON.stringify(c.server.requests.filter(r => r.body).at(-1)!.body)).not.toContain('Private source history');
+  } else {
+    expect(c.client.status().activeAccount).toBeNull();
+    expect(c.client.status().selection).toBeNull();
+  }
+});
+
+test('logout of an inactive account preserves the current model and conversation', async () => {
+  const c = await setup(); await send(c.client, 'Keep current chat');
+  await c.app.accounts.add('usage', 'inactive', {kind: 'none'});
+  const session = c.client.activeSession()!.id;
+  await c.tui.executeSlashCommand('/logout inactive');
+  await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter');
+  expect(c.client.activeSession()!.id).toBe(session);
+  expect(c.client.status().activeAccount?.id).toBe(c.account.id);
+});
+
+test('cancelled reconnect of the current account clears the unusable selection but retains durable history', async () => {
+  const c = await setup(); await send(c.client, 'Retain on disk');
+  const session = c.client.activeSession()!.id;
+  c.server.set({delay: 150}); const abort = new AbortController();
+  const reconnect = c.client.connectAccount({providerId: 'usage', alias: 'first', credential: {kind: 'none'}, reauthenticateAccountId: c.account.id}, abort.signal).then(() => null, error => error);
+  await Bun.sleep(20); abort.abort();
+  expect(await reconnect).toMatchObject({code: 'CANCELLED'});
+  expect(c.client.status().activeAccount).toBeNull();
+  expect(c.client.status().selection).toBeNull();
+  expect(c.client.activeSession()).toBeNull();
+  expect(c.app.conversations.get(session)?.messages).toHaveLength(2);
+});

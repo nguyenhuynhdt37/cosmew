@@ -8,6 +8,7 @@ import { RuntimeProfile } from '@hannes/persistence';
 import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { SubscriptionRpc } from '../../apps/cli/src/subscriptions/rpc';
+import { providerPresets } from '@hannes/models';
 import { memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -259,3 +260,41 @@ test('Codex catalog selects the runnable model slug and excludes hidden entries 
   for await (const _event of c.client.sendMessage('First login')) { /* real fixture runtime */ }
   expect(c.client.usage().last?.outcome).toBe('completed');
 });
+
+for (const runtime of Object.keys(ids) as SubscriptionRuntime[]) for (const key of ['Escape', 'Ctrl+C']) test(`${runtime}: ${key} cancels sign-in recovery started by switch`, async () => {
+  const c = await context('slow-auth');
+  c.app.registry.add(providerPresets.find(p => p.id === ids[runtime])!);
+  const expired = await c.app.accounts.add(ids[runtime], 'expired', {kind: 'runtime', runtime, key: crypto.randomUUID()});
+  await c.app.accounts.logout(expired.id);
+  const tui = new FutrynTuiApp({client: c.client, cols: 100, rows: 30}); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  await tui.executeSlashCommand('/switch expired'); await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Sign in to expired');
+  await tui.handleKey('Enter');
+  await Bun.sleep(30); // Authentication is deliberately unfinished in the real fixture process.
+  await tui.handleKey(key);
+  expect(tui.getActiveOverlay()).toBe('none');
+  await tui.shutdown();
+  expect(c.app.accounts.get(expired.id).status).toBe('logged-out');
+  expect(c.vault.values.size).toBe(0);
+  expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
+  expect(c.client.status().selection).toBeNull();
+});
+
+test.skipIf(process.platform === 'win32')('actual PTY: Esc cancels redirected subscription sign-in and returns to the account chooser', async () => {
+  const c = await context('slow-auth'); let output = '';
+  const terminal = new Bun.Terminal({cols: 100, rows: 30, data(_t, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
+  const child = Bun.spawn([process.execPath, resolve('tests/subscription-fixtures/tui.ts')], {terminal, env: {...process.env, FUTRYN_TEST_HOME: c.dir, FUTRYN_TEST_SCENARIO: 'slow-auth', NO_COLOR: '1'}});
+  const wait = async (text: string, offset = 0) => { const deadline = Date.now() + 4000; while (!output.slice(offset).includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output.slice(offset)).toContain(text); };
+  try {
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
+    await wait('Sign in to another account'); terminal.write('\r'); await wait('Choose your provider');
+    terminal.write('\r'); await wait('Sign in to OpenAI'); terminal.write('\r');
+    await wait('ABCD-1234');
+    const mark = output.length; terminal.write('\x1b');
+    await wait('Sign in to another account', mark);
+    terminal.write('\x03');
+    expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
+    expect(c.app.accounts.list()).toHaveLength(0);
+    expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
+  } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
+}, 15000);

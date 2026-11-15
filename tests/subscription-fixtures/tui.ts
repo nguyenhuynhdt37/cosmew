@@ -5,7 +5,7 @@ import { runInteractiveTui } from '@hannes/tui';
 import { memoryVault } from '../fixtures';
 const app = startup(process.env.FUTRYN_TEST_HOME!, { vault: memoryVault(), subscriptions: {
   openURL: async () => {},
-  resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, 'normal'] }),
+  resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, process.env.FUTRYN_TEST_SCENARIO ?? 'normal'] }),
 } });
 try { await runInteractiveTui({ client: app.createFutrynClient(process.env.FUTRYN_TEST_HOME!) }); }
 finally { await app.subscriptions.shutdown(); app.db.close(); }

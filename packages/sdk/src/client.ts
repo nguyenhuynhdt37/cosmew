@@ -353,6 +353,10 @@ export class FutrynClient {
       // Failed cleanup is surfaced so the account remains retryable via /logout.
       if (account) await this.ports.logoutAccount(account.id, !input.reauthenticateAccountId);
       else if (runtimeCredential) await this.ports.discardSubscriptionCredential?.(runtimeCredential);
+      if (account && this.currentSession?.selection.accountId === account.id) {
+        this.clearSessionAuthorization(); this.currentSession = null; this.lastUsage = null;
+      }
+      this.notifyStateChange();
       throw error;
     }
   }
@@ -678,8 +682,9 @@ export class FutrynClient {
     const catalog = await this.ports.discoverModels(target, signal);
     if (this.sending || this.currentSession !== source || this.status().activeAccount?.id !== initialActiveId || JSON.stringify(this.status().selection) !== initialSelection) throw new HannesError('POLICY');
     if (signal?.aborted) throw new HannesError('CANCELLED');
+    if (catalog.stale) throw new HannesError('TRANSPORT');
     const previousId = source?.selection.modelId ?? this.status().selection?.modelId;
-    const model = modelId ? catalog.models.find(m => m.id === modelId) : catalog.models.find(m => m.id === previousId) ?? catalog.models.find(m => m.id === target.defaultModel);
+    const model = modelId ? catalog.models.find(m => m.id === modelId) : catalog.models.find(m => m.id === previousId) ?? catalog.models.find(m => m.id === target.defaultModel) ?? (!source ? catalog.models[0] : undefined);
     if (!model) throw new HannesError('NOT_FOUND');
     const selection = { accountId: target.id, modelId: model.id };
     if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new HannesError('UNSUPPORTED');

@@ -105,7 +105,8 @@ test('registry-driven /login → env auth → model → HTTP chat → account li
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
   expect(() => app.accounts.get('office')).toThrow();
   expect(tui.client.cachedModels(officeId)).toHaveLength(0);
-  expect(tui.client.status().activeAccount).toBeNull();
+  expect(tui.client.status().activeAccount?.alias).toBe('personal');
+  expect(tui.client.status().selection?.modelId).toBe('second-model');
   expect(app.accounts.list().map(a => a.alias)).toEqual(['personal']);
 });
 
@@ -127,7 +128,7 @@ test('no-auth login needs no secret, failures roll back, expiry is actionable, c
   expect(tui.computeFrameSnapshot().plainText).toContain('validating');
   await tui.handleKey('Escape');
   await waitFor(() => app.accounts.list().length === 1);
-  expect(tui.getActiveOverlay()).toBe('connect');
+  expect(tui.getActiveOverlay()).toBe('none');
   expect(app.accounts.list()).toHaveLength(1);
 });
 
@@ -275,6 +276,7 @@ test('registered OpenRouter OAuth integrates hidden code → real HTTP exchange 
   await tui.executeSlashCommand('/login'); await type(tui, 'openrouter'); await tui.handleKey('Enter');
   expect(tui.computeFrameSnapshot().plainText).toContain('OpenRouter OAuth');
   await tui.handleKey('ArrowDown'); await tui.handleKey('Enter');
+  await waitFor(() => tui.computeFrameSnapshot().plainText.includes('code_challenge='));
   const frame = tui.computeFrameSnapshot().plainText;
   const compact = frame.replace(/\s/g, '');
   challenge = /code_challenge=([^&]+)&/.exec(compact)![1]!;
