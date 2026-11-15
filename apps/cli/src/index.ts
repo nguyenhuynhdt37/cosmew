@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
@@ -38,11 +37,10 @@ const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
     [--account <id-or-alias>] [--offline] [--capability streaming|tools|vision|reasoning]
     models sync-metadata: explicitly fetch advisory https://models.dev/api.json
   model doctor [--generate] [--account <id-or-alias>]
-  themes list [--tab featured|colors|live|my-themes|all] [--query <q>] [--json]
-  themes get [<theme-id>] | set <theme-id> [--project] | mode <dark|light|system> [--project]
-  themes wallpaper <preset-id|off> [--project] | animation [--speed <n>] [--motion smooth|grid]
+  themes list [--json] | get | set <dark|light|system> [--project]
+  themes mode <dark|light|system> [--project] | animation [--speed <n>] [--motion smooth|grid]
     [--cell-size <1..4>] [--veil <0..0.95>] [--enabled true|false] [--reduced-motion true|false]
-  themes import <file.json> [--css <file.css>] [--id <custom-id>] | export [<theme-id>]
+  themes export [<theme-id>]
   themes remove <custom-theme-id> | reset [--project]
   hannes tui
   hannes [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
@@ -317,32 +315,8 @@ async function handleThemesCli(app: Application, action: string | undefined, arg
   }
 
   if (sub === 'import') {
-    const filePath = argument ?? fail();
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(readFileSync(resolve(filePath), 'utf8'));
-    } catch {
-      throw new HannesError('INVALID_INPUT');
-    }
-    let externalCss: string | undefined;
-    if (str(options, 'css')) {
-      try {
-        externalCss = readFileSync(resolve(str(options, 'css')!), 'utf8');
-      } catch {
-        throw new HannesError('INVALID_INPUT');
-      }
-    }
-    const res = await engine.importTheme(parsedJson, {
-      externalCss,
-      suggestedId: str(options, 'id'),
-      save: true,
-    });
-    if (!res.report.compatible || !res.manifest) {
-      output(app, { imported: false, report: res.report }, !!options.json);
-      throw new HannesError('INVALID_INPUT');
-    }
-    output(app, { imported: true, manifest: res.manifest, report: res.report }, !!options.json);
-    return;
+    output(app, 'Custom themes are unavailable. Choose system, dark, or light.');
+    throw new HannesError('UNSUPPORTED');
   }
 
   if (sub === 'export') {

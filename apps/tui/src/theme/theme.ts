@@ -34,20 +34,9 @@ import { WALLPAPER_SCENES, WallpaperEngine } from './wallpaper';
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
 
-const FEATURED_THEME_IDS = new Set<string>([
-  'futryn-default',
-  'opencode',
-  'sunset-cloud',
-  'sakura',
-  'terminal',
-  'night-sea',
-  'old-paper',
-  'moonlit',
-  'futryn-spark',
-  'sakura-dusk',
-  'neon-rain',
-  'koi-pond',
-]);
+const FEATURED_THEME_IDS = new Set(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+const MODE_THEME_IDS: Record<ThemeMode, string> = { system: 'futryn-default', dark: 'monochrome-dark', light: 'monochrome-light' };
+const THEME_MODES: Record<string, ThemeMode> = { 'futryn-default': 'system', 'monochrome-dark': 'dark', 'monochrome-light': 'light' };
 
 export function detectTerminalColorCapability(
   env: Record<string, string | undefined> = process.env,
@@ -205,6 +194,7 @@ export class ThemeEngine {
   private readonly client?: FutrynClient;
   private readonly env: Record<string, string | undefined>;
   private systemDarkPreference: boolean;
+  private readonly fixedSystemPreference: boolean;
   private readonly builtInMap = new Map<string, ThemeManifest>();
   private readonly customMap = new Map<string, ThemeManifest>();
   private committedAppearance: AppearanceConfig = defaultAppearance();
@@ -221,6 +211,7 @@ export class ThemeEngine {
   public constructor(options: ThemeEngineOptions = {}) {
     this.client = options.client;
     this.env = options.env ?? process.env;
+    this.fixedSystemPreference = options.systemDarkPreference !== undefined;
     this.systemDarkPreference = options.systemDarkPreference ?? this.detectSystemDark();
     this.colorCapability = detectTerminalColorCapability(this.env);
 
@@ -240,6 +231,13 @@ export class ThemeEngine {
     }
     const modeEnv = (this.env.FUTRYN_THEME_MODE ?? '').toLowerCase();
     if (modeEnv === 'light') return false;
+    if (modeEnv === 'dark') return true;
+    if (process.platform === 'darwin') {
+      try {
+        const result = Bun.spawnSync({ cmd: ['/usr/bin/defaults', 'read', '-g', 'AppleInterfaceStyle'], stdout: 'pipe', stderr: 'ignore' });
+        return result.exitCode === 0 && new TextDecoder().decode(result.stdout).trim().toLowerCase() === 'dark';
+      } catch { return true; }
+    }
     return true;
   }
 
@@ -283,27 +281,28 @@ export class ThemeEngine {
       }
     }
 
-    const resolvedId = this.normalizeThemeId(this.committedAppearance.theme);
-    if (!this.hasTheme(resolvedId)) {
-      this.warnings.push(
-        `Configured theme "${this.committedAppearance.theme}" was not found; recovered with "futryn-default".`,
-      );
-      this.committedAppearance = {
-        ...this.committedAppearance,
-        theme: 'futryn-default',
-      };
-      if (this.client) {
-        try {
-          this.client.updateAppearance({ theme: 'futryn-default' }, 'global');
-        } catch {
-          // Ignore persistence error during recovery
-        }
+    // Preserve user-owned theme files, but migrate every active selection to the
+    // monochrome palette. Correct global and project overrides independently.
+    const migrate = (appearance: AppearanceConfig): PartialAppearanceConfig | null => {
+      const id = this.normalizeThemeId(appearance.theme);
+      const desired = this.builtInMap.has(id) && THEME_MODES[id] === appearance.mode ? id : MODE_THEME_IDS[appearance.mode];
+      return appearance.theme !== desired || appearance.wallpaper !== null ? { theme: desired, wallpaper: null } : null;
+    };
+    if (this.client) {
+      try {
+        const global = this.client.getAppearance(false);
+        const globalPatch = migrate(global);
+        if (globalPatch) this.client.updateAppearance(globalPatch, 'global');
+        const current = this.client.getAppearance(true);
+        const projectPatch = migrate(current);
+        if (projectPatch) this.client.updateAppearance(projectPatch, 'project');
+        this.committedAppearance = appearanceSchema.parse(this.client.getAppearance(true));
+      } catch {
+        this.warnings.push('Could not save monochrome appearance; using it for this session.');
+        this.committedAppearance = { ...this.committedAppearance, theme: MODE_THEME_IDS[this.committedAppearance.mode], wallpaper: null };
       }
-    } else if (resolvedId !== this.committedAppearance.theme) {
-      this.committedAppearance = {
-        ...this.committedAppearance,
-        theme: resolvedId,
-      };
+    } else {
+      this.committedAppearance = { ...this.committedAppearance, theme: MODE_THEME_IDS[this.committedAppearance.mode], wallpaper: null };
     }
 
     this.notify();
@@ -328,13 +327,15 @@ export class ThemeEngine {
 
   public normalizeThemeId(id: string): string {
     const clean = id.trim().toLowerCase();
-    if (clean === 'clawd') return 'futryn-spark';
+    if (clean === 'system' || clean === 'auto') return 'futryn-default';
+    if (clean === 'dark') return 'monochrome-dark';
+    if (clean === 'light') return 'monochrome-light';
     return clean;
   }
 
   public hasTheme(id: string): boolean {
     const norm = this.normalizeThemeId(id);
-    return this.builtInMap.has(norm) || this.customMap.has(norm);
+    return this.builtInMap.has(norm);
   }
 
   public getTheme(id: string): ThemeManifest | undefined {
@@ -349,14 +350,13 @@ export class ThemeEngine {
     const all: ThemeManifest[] = [
       ...BUILTIN_COLOR_THEMES,
       ...BUILTIN_LIVE_THEMES,
-      ...[...this.customMap.values()].sort((a, b) => a.name.localeCompare(b.name)),
     ];
 
     let filtered = all;
     if (tab === 'featured') {
       filtered = all.filter(t => FEATURED_THEME_IDS.has(t.id));
     } else if (tab === 'colors') {
-      filtered = all.filter(t => t.category === 'colors');
+      filtered = all;
     } else if (tab === 'live') {
       filtered = all.filter(t => t.category === 'live');
     } else if (tab === 'my-themes') {
@@ -400,6 +400,12 @@ export class ThemeEngine {
     return this.systemDarkPreference ? 'dark' : 'light';
   }
 
+  public refreshSystemPreference(): void {
+    if (this.fixedSystemPreference) return;
+    const next = this.detectSystemDark();
+    if (next !== this.systemDarkPreference) this.setSystemDarkPreference(next);
+  }
+
   public setSystemDarkPreference(isDark: boolean): void {
     this.systemDarkPreference = isDark;
     this.notify();
@@ -424,15 +430,6 @@ export class ThemeEngine {
   }
 
   public getActiveWallpaperPresetId(): string | null {
-    const app = this.getActiveAppearance();
-    if (!app.animations.enabled) return null;
-    if (app.wallpaper !== undefined && app.wallpaper !== null) {
-      return app.wallpaper === 'clawd' ? 'futryn-spark' : app.wallpaper;
-    }
-    const manifest = this.getActiveThemeManifest();
-    if (manifest.wallpaper) {
-      return manifest.wallpaper === 'clawd' ? 'futryn-spark' : manifest.wallpaper;
-    }
     return null;
   }
 
@@ -452,7 +449,9 @@ export class ThemeEngine {
     if (!manifest) {
       throw new HannesError('NOT_FOUND');
     }
+    if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
     this.previewThemeId = manifest.id;
+    this.previewMode = THEME_MODES[manifest.id] ?? 'system';
     this.previewDraft = null;
     if (manifest.wallpaper) {
       this.previewWallpaper = manifest.wallpaper;
@@ -465,11 +464,8 @@ export class ThemeEngine {
     return manifest;
   }
 
-  public previewDraftManifest(manifest: ThemeManifest): void {
-    const validated = themeManifestSchema.parse(manifest);
-    this.previewDraft = validated;
-    this.previewThemeId = validated.id;
-    this.notify();
+  public previewDraftManifest(_manifest: ThemeManifest): void {
+    throw new HannesError('UNSUPPORTED');
   }
 
   public cancelPreview(): AppearanceConfig {
@@ -509,13 +505,17 @@ export class ThemeEngine {
     scope: 'global' | 'project' = 'global',
   ): Promise<AppearanceConfig> {
     const normalizedPatch: PartialAppearanceConfig = { ...patch };
+    if (normalizedPatch.wallpaper != null) throw new HannesError('UNSUPPORTED');
+    if (normalizedPatch.mode && normalizedPatch.theme === undefined) normalizedPatch.theme = MODE_THEME_IDS[normalizedPatch.mode];
     if (normalizedPatch.theme !== undefined) {
       const normId = this.normalizeThemeId(normalizedPatch.theme);
       const manifest = this.getTheme(normId);
       if (!manifest) {
         throw new HannesError('NOT_FOUND');
       }
+      if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
       normalizedPatch.theme = manifest.id;
+      normalizedPatch.mode = THEME_MODES[manifest.id] ?? 'system';
       if (manifest.wallpaper && normalizedPatch.wallpaper === undefined) {
         normalizedPatch.wallpaper = manifest.wallpaper;
         normalizedPatch.animations = {
@@ -549,6 +549,7 @@ export class ThemeEngine {
     if (!manifest) {
       throw new HannesError('NOT_FOUND');
     }
+    if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
     const patch: PartialAppearanceConfig = {
       theme: manifest.id,
     };
@@ -573,12 +574,7 @@ export class ThemeEngine {
     enabled = wallpaper !== null,
     scope: 'global' | 'project' = 'global',
   ): Promise<AppearanceConfig> {
-    if (wallpaper !== null) {
-      const scene = this.wallpaperEngine.getPreset(wallpaper);
-      if (!scene) {
-        throw new HannesError('INVALID_INPUT');
-      }
-    }
+    if (wallpaper !== null) throw new HannesError('UNSUPPORTED');
     return this.updateAppearance(
       {
         wallpaper: wallpaper === 'clawd' ? 'futryn-spark' : wallpaper,

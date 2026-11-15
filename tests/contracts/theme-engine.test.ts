@@ -99,188 +99,72 @@ function createTestClient(
 }
 
 describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
-  test('provides all 15 built-in color themes and 12 live wallpaper themes with 30 valid semantic tokens', () => {
-    expect(BUILTIN_COLOR_THEMES.length).toBe(15);
-    expect(BUILTIN_LIVE_THEMES.length).toBe(12);
-    expect(ALL_BUILTIN_THEMES.length).toBe(27);
-
-    const requiredColorIds = [
-      'sunset-cloud',
-      'sakura',
-      'terminal',
-      'night-sea',
-      'old-paper',
-      'futryn-default',
-      'opencode',
-      'catppuccin',
-      'tokyo-night',
-      'dracula',
-      'nord',
-      'gruvbox',
-      'rose-pine',
-      'kanagawa',
-      'one-dark',
-    ];
-    for (const id of requiredColorIds) {
-      const found = BUILTIN_COLOR_THEMES.find(t => t.id === id);
-      expect(found).toBeDefined();
-    }
-
-    const requiredLiveIds = [
-      'moonlit',
-      'futryn-spark',
-      'cloud-drift',
-      'honu-lagoon',
-      'koi-pond',
-      'jellyfish',
-      'lantern-night',
-      'fireflies',
-      'neon-rain',
-      'sakura-dusk',
-      'snow-cabin',
-      'star-voyage',
-    ];
-    for (const id of requiredLiveIds) {
-      const found = BUILTIN_LIVE_THEMES.find(t => t.id === id);
-      expect(found).toBeDefined();
-      expect(found?.wallpaper).toBe(id);
-    }
-
+  test('offers exactly three monochrome appearances with complete readable tokens', () => {
+    expect(BUILTIN_COLOR_THEMES.map(theme => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+    expect(BUILTIN_LIVE_THEMES).toHaveLength(0);
+    expect(ALL_BUILTIN_THEMES).toHaveLength(3);
     for (const manifest of ALL_BUILTIN_THEMES) {
-      const parsed = themeManifestSchema.safeParse(manifest);
-      expect(parsed.success).toBe(true);
-      for (const key of THEME_TOKEN_KEYS) {
-        expect(manifest.dark[key]).toMatch(/^#[0-9a-f]{6}$/);
-        expect(manifest.light[key]).toMatch(/^#[0-9a-f]{6}$/);
+      expect(themeManifestSchema.safeParse(manifest).success).toBe(true);
+      for (const tokens of [manifest.dark, manifest.light]) {
+        for (const key of THEME_TOKEN_KEYS) expect(tokens[key]).toMatch(/^#([0-9a-f]{2})\1\1$/);
+        expect(contrastRatio(tokens.background, tokens.foreground)).toBeGreaterThan(4.5);
       }
-      expect(contrastRatio(manifest.dark.background, manifest.dark.foreground)).toBeGreaterThan(4.5);
-      expect(contrastRatio(manifest.light.background, manifest.light.foreground)).toBeGreaterThan(4.5);
-
-      const swatches = getThemeMiniSwatches(manifest, 'dark');
-      expect(swatches.background).toBe(manifest.dark.background);
-      expect(swatches.accent).toBe(manifest.dark.accent);
+      expect(getThemeMiniSwatches(manifest, 'dark').background).toBe(manifest.dark.background);
     }
   });
 
-  test('supports live switching, preview/cancel restoration, and global & project persistence', async () => {
+  test('preview, cancel and project/global persistence follow dark, light and system', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'futryn-theme-test-'));
     try {
-      const settingsStore = new MemorySettingsStore();
-      const customStore = new FileCustomThemeStore(dir);
-
-      const clientA = createTestClient(settingsStore, customStore, '/workspace/proj-a');
-      const engine = new ThemeEngine({ client: clientA });
+      const settings = new MemorySettingsStore(); const custom = new FileCustomThemeStore(dir);
+      const client = createTestClient(settings, custom); const engine = new ThemeEngine({client, systemDarkPreference:true});
       await engine.initialize();
-
       expect(engine.getActiveAppearance().theme).toBe('futryn-default');
-
-      // Switch to Sakura globally
-      await engine.setTheme('sakura');
-      expect(engine.getActiveAppearance().theme).toBe('sakura');
-      expect(engine.getActiveTokens().accent).toBe('#f07199');
-
-      // Preview Terminal theme without committing
-      engine.previewTheme('terminal');
-      expect(engine.isPreviewing()).toBe(true);
-      expect(engine.getActiveAppearance().theme).toBe('terminal');
-      expect(engine.getActiveTokens().accent).toBe('#39e87a');
-
-      // Cancel preview restores Sakura
-      engine.cancelPreview();
-      expect(engine.isPreviewing()).toBe(false);
-      expect(engine.getActiveAppearance().theme).toBe('sakura');
-      expect(engine.getActiveTokens().accent).toBe('#f07199');
-
-      // Preview Night Sea and commit
-      engine.previewTheme('night-sea');
-      await engine.commitPreview();
-      expect(engine.isPreviewing()).toBe(false);
-      expect(engine.getActiveAppearance().theme).toBe('night-sea');
-
-      // Verify restart persistence with a new ThemeEngine instance
-      const restarted = new ThemeEngine({ client: clientA });
-      await restarted.initialize();
-      expect(restarted.getActiveAppearance().theme).toBe('night-sea');
-
-      // Project-scoped override
-      await restarted.setTheme('old-paper', 'project');
-      expect(restarted.getActiveAppearance().theme).toBe('old-paper');
-
-      // Global project still uses night-sea
-      const clientB = createTestClient(settingsStore, customStore, '/workspace/proj-b');
-      const otherProjectEngine = new ThemeEngine({ client: clientB });
-      await otherProjectEngine.initialize();
-      expect(otherProjectEngine.getActiveAppearance().theme).toBe('night-sea');
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+      engine.previewTheme('monochrome-light');
+      expect(engine.getActiveTokens().background).toBe('#ffffff');
+      engine.cancelPreview(); expect(engine.getActiveTokens().background).toBe('#000000');
+      await engine.setTheme('dark'); expect(engine.getActiveAppearance().mode).toBe('dark');
+      await engine.setTheme('light', 'project'); expect(engine.getActiveTokens().background).toBe('#ffffff');
+      const restarted = new ThemeEngine({client, systemDarkPreference:true}); await restarted.initialize();
+      expect(restarted.getActiveAppearance().theme).toBe('monochrome-light');
+      const other = new ThemeEngine({client:createTestClient(settings, custom, '/workspace/proj-b'), systemDarkPreference:true}); await other.initialize();
+      expect(other.getActiveAppearance().theme).toBe('monochrome-dark');
+      await other.setMode('system'); expect(other.getActiveTokens().background).toBe('#000000');
+      other.setSystemDarkPreference(false); expect(other.getActiveTokens().background).toBe('#ffffff');
+      expect(other.getActiveAppearance().theme).toBe('futryn-default');
+    } finally { await rm(dir, {recursive:true, force:true}); }
   });
 
-  test('supports dark, light, and system modes dynamically', async () => {
-    const engine = new ThemeEngine({ systemDarkPreference: true });
-    await engine.initialize();
-    await engine.setTheme('sunset-cloud');
-
-    await engine.setMode('system');
+  test('system mode reacts to a changed terminal/system preference', async () => {
+    const env: Record<string, string> = { FUTRYN_THEME_MODE: 'dark' };
+    const engine = new ThemeEngine({env}); await engine.initialize();
     expect(engine.getEffectiveMode()).toBe('dark');
-    const darkBg = engine.getActiveTokens().background;
-
-    engine.setSystemDarkPreference(false);
+    env.FUTRYN_THEME_MODE = 'light'; engine.refreshSystemPreference();
     expect(engine.getEffectiveMode()).toBe('light');
-    const lightBg = engine.getActiveTokens().background;
-    expect(lightBg).not.toBe(darkBg);
-
-    await engine.setMode('dark');
+    await engine.setMode('dark'); env.FUTRYN_THEME_MODE = 'light'; engine.refreshSystemPreference();
     expect(engine.getEffectiveMode()).toBe('dark');
   });
 
-  test('supports Theme Editor operations while keeping built-in themes immutable', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'futryn-editor-test-'));
+  test('migrates old global and project appearances while retaining user theme files', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'futryn-theme-migration-'));
     try {
-      const settingsStore = new MemorySettingsStore();
-      const customStore = new FileCustomThemeStore(dir);
-      const client = createTestClient(settingsStore, customStore);
-      const engine = new ThemeEngine({ client });
-      await engine.initialize();
-
-      // Cannot overwrite or delete built-in theme
-      await expect(engine.removeCustomTheme('sakura')).rejects.toThrow();
-      await expect(
-        engine.updateCustomThemeToken('sakura', 'dark', 'accent', '#ff00ff'),
-      ).rejects.toThrow();
-
-      // Duplicate built-in theme into custom theme
-      const custom = await engine.duplicateTheme('sakura', 'my-sakura', 'My Sakura Custom');
-      expect(custom.id).toBe('my-sakura');
-      expect(custom.builtIn).toBe(false);
-      expect(custom.category).toBe('custom');
-
-      // Update token on custom theme
-      const edited = await engine.updateCustomThemeToken('my-sakura', 'dark', 'accent', '#ff3399');
-      expect(edited.dark.accent).toBe('#ff3399');
-
-      // Reset single token back to Sakura base
-      const resetToken = await engine.resetCustomThemeToken('my-sakura', 'dark', 'accent', 'sakura');
-      expect(resetToken.dark.accent).toBe('#f07199');
-
-      // Rename custom theme
-      const renamed = await engine.renameCustomTheme('my-sakura', 'Sakura Pro');
-      expect(renamed.name).toBe('Sakura Pro');
-
-      // Export & remove
-      const exported = engine.exportTheme('my-sakura');
-      expect(exported.name).toBe('Sakura Pro');
-
-      await engine.setTheme('my-sakura');
-      expect(engine.getActiveAppearance().theme).toBe('my-sakura');
-
-      // Removing active custom theme falls back to futryn-default safely
-      await engine.removeCustomTheme('my-sakura');
-      expect(engine.getActiveAppearance().theme).toBe('futryn-default');
-      expect(engine.listThemes('my-themes').length).toBe(0);
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+      const settings = new MemorySettingsStore({ ...emptySettings(),
+        appearance: { ...defaultAppearance(), theme:'sakura', mode:'dark', wallpaper:'sakura-dusk' },
+        projectAppearances: { '/workspace/proj-a': { theme:'old-custom', mode:'light', wallpaper:'neon-rain' } },
+      });
+      const custom = new FileCustomThemeStore(dir);
+      custom.save(themeManifestSchema.parse({ ...BUILTIN_COLOR_THEMES[0]!, id:'old-custom', builtIn:false, category:'custom', dark:{...BUILTIN_COLOR_THEMES[0]!.dark, accent:'#ff0000'} }));
+      const engine = new ThemeEngine({client:createTestClient(settings, custom), systemDarkPreference:true}); await engine.initialize();
+      expect(engine.getActiveAppearance().theme).toBe('monochrome-light');
+      expect(engine.getActiveWallpaperPresetId()).toBeNull();
+      expect(settings.read().appearance?.theme).toBe('monochrome-dark');
+      expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('monochrome-light');
+      expect(custom.loadAll().themes.some(theme => theme.id === 'old-custom')).toBe(true);
+      expect(engine.listThemes('all').map(theme => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+      await expect(engine.setTheme('old-custom')).rejects.toThrow();
+      await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
+      expect(engine.getActiveTokens().accent).toBe('#111111');
+    } finally { await rm(dir, {recursive:true, force:true}); }
   });
 
   test('imports FUTRYN, OpenCode, and Claude Desktop Themes formats with CompatibilityReport and rejects executable content', async () => {

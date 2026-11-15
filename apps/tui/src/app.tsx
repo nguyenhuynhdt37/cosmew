@@ -4,7 +4,6 @@ import {
   providerSchema,
   type Provider,
   THEME_TOKEN_KEYS,
-  WALLPAPER_PRESET_IDS,
   type ToolCall,
 } from '@hannes/contracts';
 import { acceptSlashSelection, parseSlashCommand, type FutrynClient } from '@hannes/sdk';
@@ -47,7 +46,6 @@ import {
   type SessionPickerState,
 } from './screens/sessions';
 import {
-  THEME_PICKER_TABS,
   createInitialCommandPaletteState,
   createInitialConnectProviderState,
   createInitialModelPickerState,
@@ -443,13 +441,9 @@ export class FutrynTuiApp {
     if (['status', 'usage', 'context'].includes(target)) { this.reportOffset = 0; this.reportDetails = false; }
     if (target === 'themes') {
       const currentTheme = this.themeEngine.getCommittedAppearance().theme;
-      const list = this.themeEngine.listThemes(this.themePickerState.tab, this.themePickerState.query);
-      const idx = list.findIndex(t => t.id === currentTheme);
-      this.themePickerState = {
-        ...this.themePickerState,
-        selectedIndex: idx >= 0 ? idx : 0,
-        statusMessage: undefined,
-      };
+      const list = this.themeEngine.listThemes('all');
+      const idx = list.findIndex(theme => theme.id === currentTheme);
+      this.themePickerState = { ...createInitialThemePickerState(), selectedIndex: Math.max(0, idx) };
     } else if (target === 'theme-editor') {
       const currentTheme = this.themeEngine.getActiveAppearance().theme;
       this.themeEditorState = createInitialThemeEditorState(
@@ -548,7 +542,7 @@ export class FutrynTuiApp {
       return;
     }
     if (parsed.definition?.command === '/theme edit' || lower === '/editor' || lower === '/customize') {
-      this.openOverlay('theme-editor');
+      this.statusBanner = 'Custom themes are unavailable. Use /theme for the three monochrome appearances.';
       return;
     }
     if (lower.startsWith('/theme set ')) {
@@ -1112,115 +1106,22 @@ export class FutrynTuiApp {
   }
 
   private async handleThemesOverlayKey(key: string): Promise<void> {
-    const list = this.themeEngine.listThemes(this.themePickerState.tab, this.themePickerState.query);
+    const list = this.themeEngine.listThemes('all');
     if (key === 'Escape') {
-      this.themeEngine.cancelPreview();
-      this.overlay = 'none';
-      this.statusBanner = `Restored theme "${this.themeEngine.getActiveAppearance().theme}".`;
-      return;
-    }
-    if (key === 'Tab' || key === 'Shift+Tab') {
-      const dir = key === 'Tab' ? 1 : -1;
-      const curIdx = THEME_PICKER_TABS.findIndex(t => t.id === this.themePickerState.tab);
-      const nextIdx = (curIdx + dir + THEME_PICKER_TABS.length) % THEME_PICKER_TABS.length;
-      const nextTab = THEME_PICKER_TABS[nextIdx]!.id;
-      this.themePickerState = {
-        ...this.themePickerState,
-        tab: nextTab,
-        selectedIndex: 0,
-      };
-      const nextList = this.themeEngine.listThemes(nextTab, this.themePickerState.query);
-      if (nextList[0]) {
-        this.themeEngine.previewTheme(nextList[0].id);
-      }
-      return;
+      this.themeEngine.cancelPreview(); this.overlay = 'none'; return;
     }
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-      if (list.length === 0) return;
+      if (!list.length) return;
       const delta = key === 'ArrowDown' ? 1 : -1;
-      const nextIdx = (this.themePickerState.selectedIndex + delta + list.length) % list.length;
-      this.themePickerState = {
-        ...this.themePickerState,
-        selectedIndex: nextIdx,
-      };
-      const selected = list[nextIdx];
-      if (selected) {
-        this.themeEngine.previewTheme(selected.id);
-      }
+      const selectedIndex = (this.themePickerState.selectedIndex + delta + list.length) % list.length;
+      this.themePickerState = { ...this.themePickerState, selectedIndex };
+      this.themeEngine.previewTheme(list[selectedIndex]!.id);
       return;
     }
     if (key === 'Enter') {
       const selected = list[this.themePickerState.selectedIndex];
-      if (selected) {
-        await this.themeEngine.setTheme(selected.id);
-        this.statusBanner = `Applied and saved theme "${selected.name}" (${selected.id}).`;
-      } else if (this.themeEngine.isPreviewing()) {
-        await this.themeEngine.commitPreview();
-      }
+      if (selected) { await this.themeEngine.setTheme(selected.id); this.statusBanner = `Appearance: ${selected.name}.`; }
       this.overlay = 'none';
-      return;
-    }
-    if (key === 'Ctrl+W') {
-      const active = this.themeEngine.getActiveAppearance();
-      const nextEnabled = !active.animations.enabled;
-      const fallbackWall = active.wallpaper ?? 'sakura-dusk';
-      await this.themeEngine.setWallpaper(nextEnabled ? fallbackWall : active.wallpaper, nextEnabled);
-      this.themePickerState.statusMessage = `Live wallpaper ${nextEnabled ? `enabled (${fallbackWall})` : 'disabled'}.`;
-      return;
-    }
-    if (key === 'Ctrl+G') {
-      const cur = this.themeEngine.getActiveAppearance().animations.motion;
-      const next = cur === 'smooth' ? 'grid' : 'smooth';
-      await this.themeEngine.updateAnimation({ motion: next });
-      this.themePickerState.statusMessage = `Motion mode set to ${next.toUpperCase()}.`;
-      return;
-    }
-    if (key === '+' || key === '=' || key === ']') {
-      const cur = this.themeEngine.getActiveAppearance().animations.speed;
-      const next = Math.min(16, Number((cur + 0.25).toFixed(2)));
-      await this.themeEngine.updateAnimation({ speed: next });
-      this.themePickerState.statusMessage = `Animation speed increased to ${next.toFixed(2)}x.`;
-      return;
-    }
-    if (key === '-' || key === '[') {
-      const cur = this.themeEngine.getActiveAppearance().animations.speed;
-      const next = Math.max(0.1, Number((cur - 0.25).toFixed(2)));
-      await this.themeEngine.updateAnimation({ speed: next });
-      this.themePickerState.statusMessage = `Animation speed decreased to ${next.toFixed(2)}x.`;
-      return;
-    }
-    if (key === 'Ctrl+E') {
-      const selected = list[this.themePickerState.selectedIndex];
-      const targetId = selected?.id ?? this.themeEngine.getActiveAppearance().theme;
-      this.themeEngine.cancelPreview();
-      this.themeEditorState = createInitialThemeEditorState(targetId, this.themeEngine.getEffectiveMode());
-      this.overlay = 'theme-editor';
-      return;
-    }
-    if (key === 'Backspace') {
-      const nextQ = this.themePickerState.query.slice(0, -1);
-      this.themePickerState = {
-        ...this.themePickerState,
-        query: nextQ,
-        selectedIndex: 0,
-      };
-      const filtered = this.themeEngine.listThemes(this.themePickerState.tab, nextQ);
-      if (filtered[0]) {
-        this.themeEngine.previewTheme(filtered[0].id);
-      }
-      return;
-    }
-    if (key.length === 1 && /^[a-zA-Z0-9 -]$/.test(key)) {
-      const nextQ = this.themePickerState.query + key;
-      this.themePickerState = {
-        ...this.themePickerState,
-        query: nextQ,
-        selectedIndex: 0,
-      };
-      const filtered = this.themeEngine.listThemes(this.themePickerState.tab, nextQ);
-      if (filtered[0]) {
-        this.themeEngine.previewTheme(filtered[0].id);
-      }
     }
   }
 
@@ -1930,13 +1831,9 @@ export class FutrynTuiApp {
         await this.themeEngine.setMode(next);
         break;
       }
-      case 2: { // Wallpaper preset
-        const options: (string | null)[] = [null, ...WALLPAPER_PRESET_IDS];
-        const curIdx = Math.max(0, options.indexOf(app.wallpaper));
-        const nextWall = options[(curIdx + dir + options.length) % options.length] ?? null;
-        await this.themeEngine.setWallpaper(nextWall, nextWall !== null);
+      case 2: // Monochrome appearance has no wallpaper.
+        this.statusBanner = 'Wallpaper is unavailable in monochrome appearance.';
         break;
-      }
       case 3: // Animations enabled
         await this.themeEngine.updateAnimation({ enabled: !app.animations.enabled });
         break;
@@ -2221,13 +2118,13 @@ export class FutrynTuiApp {
 
     // 7. Draw Active Overlay on top of center viewport if open
     if (this.overlay !== 'none') {
-      if (['connect', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay)) {
+      if (['connect', 'themes', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay)) {
         // A modal backdrop must cover the wider composer and sidebar too.
         for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
       }
       const reportSummary = (this.overlay === 'effort' || ['status', 'usage', 'context'].includes(this.overlay) && !this.reportDetails);
-      const overlayWidth = this.overlay === 'models' ? Math.min(cols - 2, 76) : this.overlay === 'connect' ? Math.min(cols - 2, 68) : reportSummary ? Math.min(cols - 2, 58) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
-      const overlayHeight = Math.min(rows - 2, this.overlay === 'models' ? Math.max(9, Math.min(8, this.client.cachedModels(this.pendingSwitchAccountId ?? undefined).length) + 5) : Math.max(12, Math.floor(rows * 0.82)));
+      const overlayWidth = this.overlay === 'themes' ? Math.min(cols - 2, 52) : this.overlay === 'models' ? Math.min(cols - 2, 76) : this.overlay === 'connect' ? Math.min(cols - 2, 68) : reportSummary ? Math.min(cols - 2, 58) : Math.min(cols - 2, Math.max(44, Math.floor(cols * 0.86)));
+      const overlayHeight = Math.min(rows - 2, this.overlay === 'themes' ? 9 : this.overlay === 'models' ? Math.max(9, Math.min(8, this.client.cachedModels(this.pendingSwitchAccountId ?? undefined).length) + 5) : Math.max(12, Math.floor(rows * 0.82)));
       let overlayLines: RenderedBoxLine[] = [];
 
       switch (this.overlay) {
@@ -2473,6 +2370,7 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
   let timer: ReturnType<typeof setInterval> | null = null;
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSystemCheck = Date.now();
   let stopUpdates: (() => void) | null = null;
   const inputDecoder = new TerminalInputDecoder();
 
@@ -2561,7 +2459,12 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
       process.on('SIGINT', onSignal);
       process.on('SIGTERM', onSignal);
       timer = setInterval(() => {
-        try { app.stepAnimation(0.08); renderNow(false); }
+        try {
+          if (app.themeEngine.getCommittedAppearance().mode === 'system' && Date.now() - lastSystemCheck >= 5000) {
+            lastSystemCheck = Date.now(); app.themeEngine.refreshSystemPreference();
+          }
+          app.stepAnimation(0.08); renderNow(false);
+        }
         catch { finish(new HannesError('INVALID_INPUT')); }
       }, 80);
     });

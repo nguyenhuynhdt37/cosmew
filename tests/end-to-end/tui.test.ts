@@ -59,77 +59,43 @@ async function type(tui: FutrynTuiApp, text: string) {
   for (const ch of text) await tui.handleKey(ch);
 }
 
-test('TUI: welcome screen → /themes preview/cancel/apply → persistence across restart', async () => {
-  const x = context();
-  const a = await x.launch();
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('FUTRYN');
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · ready');
-
-  await type(a.tui, '/themes');
-  await a.tui.handleKey('Enter');
-  expect(a.tui.getActiveOverlay()).toBe('themes');
-
-  // Preview (ArrowDown) rồi Esc phải khôi phục theme gốc.
-  const original = a.tui.computeFrameSnapshot().activeThemeId;
-  await a.tui.handleKey('ArrowDown');
-  const previewing = a.tui.computeFrameSnapshot();
-  expect(previewing.isPreviewing).toBe(true);
-  expect(previewing.activeThemeId).not.toBe(original);
-  await a.tui.handleKey('Escape');
-  const restored = a.tui.computeFrameSnapshot();
-  expect(restored.isPreviewing).toBe(false);
-  expect(restored.activeThemeId).toBe(original);
-
-  // Tìm "sakura dusk", Enter để áp dụng (kèm live wallpaper).
-  await a.tui.handleKey('Ctrl+T');
-  await type(a.tui, 'sakura dusk');
-  await a.tui.handleKey('Enter');
-  const applied = a.tui.computeFrameSnapshot();
-  expect(applied.activeThemeId).toBe('sakura-dusk');
-  expect(applied.activeWallpaperId).toBe('sakura-dusk');
-  a.close();
-
-  // Restart: theme + wallpaper phải còn nguyên.
-  const b = await x.launch();
-  const after = b.tui.computeFrameSnapshot();
-  expect(after.activeThemeId).toBe('sakura-dusk');
-  expect(after.activeWallpaperId).toBe('sakura-dusk');
-  b.close();
+test('TUI: three monochrome modes preview, cancel, apply and persist after restart', async () => {
+  const x = context(); const a = await x.launch();
+  await type(a.tui, '/theme'); await a.tui.handleKey('Enter');
+  const menu = a.tui.computeFrameSnapshot().plainText;
+  expect(menu).toContain('System default'); expect(menu).toContain('White on black'); expect(menu).toContain('Black on white');
+  expect(menu).not.toContain('Sakura');
+  a.tui.resize(24, 14);
+  const compactMenu = a.tui.computeFrameSnapshot().plainText;
+  expect(compactMenu).toContain('Enter'); expect(compactMenu).toContain('Esc');
+  a.tui.resize(120, 36);
+  const gray = (color:string) => /^#([0-9a-f]{2})\1\1$/i.test(color);
+  expect(a.tui.computeFrameSnapshot().cells.flat().every(cell => gray(cell.fg) && gray(cell.bg))).toBe(true);
+  await a.tui.handleKey('ArrowDown'); expect(a.tui.computeFrameSnapshot().isPreviewing).toBe(true);
+  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-dark');
+  await a.tui.handleKey('Escape'); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('futryn-default');
+  await a.tui.handleKey('Ctrl+T'); await a.tui.handleKey('ArrowUp'); await a.tui.handleKey('Enter');
+  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light');
+  expect(a.tui.computeFrameSnapshot().activeWallpaperId).toBeNull();
+  expect(a.tui.computeFrameSnapshot().cells.flat().every(cell => gray(cell.fg) && gray(cell.bg))).toBe(true); a.close();
+  const b = await x.launch(); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light');
+  expect(b.tui.computeFrameSnapshot().effectiveMode).toBe('light'); b.close();
 });
 
-test('TUI: CLI themes commands share the same persisted state; malformed import is rejected safely', async () => {
+test('TUI: CLI exposes only three appearances and rejects retired color themes', async () => {
   const x = context();
-  expect((await x.cli(['themes', 'set', 'terminal', '--json'])).code).toBe(0);
-  expect((await x.cli(['themes', 'mode', 'dark'])).code).toBe(0);
-  expect((await x.cli(['themes', 'wallpaper', 'neon-rain'])).code).toBe(0);
-  expect((await x.cli(['themes', 'animation', '--speed', '2.5', '--motion', 'grid'])).code).toBe(0);
+  expect((await x.cli(['themes', 'set', 'dark'])).code).toBe(0);
   const listed = JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout);
-  expect(listed.activeTheme).toBe('terminal');
-  expect(listed.animations.speed).toBe(2.5);
-  expect(listed.animations.motion).toBe('grid');
-
-  const bad = join(x.dir, 'bad.json');
-  writeFileSync(bad, '{ not json');
-  expect((await x.cli(['themes', 'import', bad])).code).toBe(1);
-  const unknown = join(x.dir, 'unknown.json');
-  writeFileSync(unknown, JSON.stringify({ random: 1 }));
-  expect((await x.cli(['themes', 'import', unknown])).code).toBe(1);
-
-  const good = join(x.dir, 'good.json');
-  writeFileSync(
-    good,
-    JSON.stringify({ id: 'cd-aurora', name: 'Aurora', bg: '#111622', text: '#e5ecf6', accent: '#6be5b8' }),
-  );
-  expect((await x.cli(['themes', 'import', good])).code).toBe(0);
-  expect((await x.cli(['themes', 'set', 'cd-aurora'])).code).toBe(0);
-
-  // App vẫn khởi động bình thường sau khi import lỗi, và thấy theme tùy chỉnh.
-  const a = await x.launch();
-  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('cd-aurora');
-  a.close();
-  expect((await x.cli(['themes', 'remove', 'sakura'])).code).toBe(1);
-  expect((await x.cli(['themes', 'remove', 'cd-aurora'])).code).toBe(0);
-  expect(JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout).activeTheme).toBe('futryn-default');
+  expect(listed.themes.map((theme: {id:string}) => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+  expect(listed.mode).toBe('dark');
+  expect((await x.cli(['themes', 'set', 'sakura'])).code).toBe(1);
+  expect((await x.cli(['themes', 'wallpaper', 'neon-rain'])).code).toBe(1);
+  const file = join(x.dir, 'old-theme.json'); writeFileSync(file, JSON.stringify({id:'old', bg:'#ff0000'}));
+  expect((await x.cli(['themes', 'import', file])).code).toBe(1);
+  expect((await x.cli(['themes', 'mode', 'light'])).code).toBe(0);
+  const a = await x.launch(); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light'); a.close();
+  expect((await x.cli(['themes', 'set', 'system'])).code).toBe(0);
+  expect(JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout).mode).toBe('system');
 });
 
 test('TUI: real provider/model/chat workflow against fixture server, transcript, sessions, /new and /clear', async () => {
@@ -328,3 +294,19 @@ test('chat resize keeps the composer usable and shows complete Fyn art or its st
     }
   } finally { a.close(); }
 });
+
+test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persists the monochrome light mode', async () => {
+  const x = context(); let output = '';
+  const terminal = new Bun.Terminal({cols:80, rows:24, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
+  const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
+    terminal, env: {...process.env, HANNES_HOME:x.dir, COLORTERM:'truecolor', FUTRYN_THEME_MODE:'dark'},
+  });
+  const wait = async (text:string, from = 0) => { const deadline = Date.now() + 5000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
+  try {
+    await wait('FUTRYN'); terminal.write('/theme\r'); await wait('White on black'); await wait('Black on white');
+    const mark = output.length; terminal.write('\x1b[B\x1b[B\r'); await wait('Appearance: Black on white.', mark);
+    terminal.write('\x03'); expect(await child.exited).toBe(0);
+    const saved = JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout);
+    expect(saved.mode).toBe('light'); expect(saved.activeTheme).toBe('monochrome-light');
+  } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
+}, 15000);

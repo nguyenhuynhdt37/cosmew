@@ -30,3 +30,7 @@ Acceptance: power-loss giữa intent/effect/result; concurrent resume; migration
 ## PA1/TUI1 schema 2 usage receipts
 
 [ADR 0009](../adr/0009-command-telemetry-and-account-continuation.md) adds transactional `turn_receipts(conversation, revision, data)` and migrates SQLite `user_version` 0/1 to 2. Newer versions are rejected. Turn outcome, times, selection IDs, nullable usage, price provenance and optional context/quota measurements are stored; prompts, credential material and reasoning text are excluded from receipts. Pending messages and initial receipts, and completed/interrupted messages and final receipts, are atomic pairs. Intermediate reported usage/context is persisted without asserting successful completion. Unclean exits can leave pending/unfinalized receipts; the UI does not report these as completed. No fabricated history backfill. Account continuation copies only committed messages into a new session, retaining the original and clearing session permission grants.
+
+## TUI appearance profile 2
+
+[ADR 0011](../adr/0011-monochrome-appearance.md) replaces the previous selectable multicolor catalog with system, dark and light monochrome appearances. Schema-1 settings remain readable: retired theme/wallpaper selections migrate separately for global and current project while preserving the selected mode and unrelated settings. Existing custom-theme files are retained without being offered as active choices. No SQLite or settings schema migration is required.

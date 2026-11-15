@@ -7,10 +7,9 @@ import {
   type ThemeTokenKey,
   type ThemeTokens,
 } from '@hannes/contracts';
-import { SLASH_COMMANDS, type RenderedBoxLine, type StyledSpan } from '../components/editor';
+import { SLASH_COMMANDS, type RenderedBoxLine } from '../components/editor';
 import {
   getBorderGlyphs,
-  getThemeMiniSwatches,
   type ThemeEngine,
   type ThemePickerTab,
 } from '../theme/theme';
@@ -45,184 +44,35 @@ export function renderThemePickerOverlay(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
-  const { width, height, engine, state, tokens, borderStyle } = options;
-  const innerWidth = Math.max(36, width - 2);
-  const glyphs = getBorderGlyphs(borderStyle);
-  const bg = tokens.overlayBackground;
-  const lines: RenderedBoxLine[] = [];
-
-  const committed = engine.getCommittedAppearance();
-  const active = engine.getActiveAppearance();
-  const mode = engine.getEffectiveMode();
-  const themes = engine.listThemes(state.tab, state.query);
-
-  const title = ' THEME PICKER (/theme) ';
-  const rightMeta = ` Active: ${committed.theme} (${mode}) ${engine.isPreviewing() ? '· PREVIEWING ' : ''}`;
-  const topFill = Math.max(0, innerWidth - title.length - rightMeta.length);
-
-  lines.push({
-    spans: [
-      { text: glyphs.topLeft, fg: tokens.borderFocused, bg },
-      { text: title, fg: tokens.accent, bg, bold: true },
-      { text: glyphs.horizontal.repeat(topFill), fg: tokens.borderFocused, bg },
-      { text: rightMeta.slice(0, Math.max(0, innerWidth - title.length)), fg: tokens.foregroundMuted, bg },
-      { text: glyphs.topRight, fg: tokens.borderFocused, bg },
-    ],
-  });
-
-  // Tabs bar + Search filter
-  const tabSpans: StyledSpan[] = [{ text: glyphs.vertical, fg: tokens.borderFocused, bg }];
-  let usedCols = 0;
-  for (const t of THEME_PICKER_TABS) {
-    const isTab = state.tab === t.id;
-    const count = engine.listThemes(t.id, state.query).length;
-    const label = ` ${isTab ? '▸' : ' '} ${t.label} (${count}) `;
-    tabSpans.push({
-      text: label,
-      fg: isTab ? tokens.accentForeground : tokens.foregroundMuted,
-      bg: isTab ? tokens.accent : tokens.backgroundElevated,
-      bold: isTab,
-    });
-    tabSpans.push({ text: ' ', fg: tokens.foreground, bg: tokens.backgroundElevated });
-    usedCols += label.length + 1;
+  const { width, height, engine, state, tokens } = options;
+  const themes = engine.listThemes('all');
+  const active = engine.getCommittedAppearance();
+  const line = (parts: StyledSpanInput[]): RenderedBoxLine => {
+    const spans = parts.map(part => ({ ...part, bg: part.bg ?? tokens.overlayBackground }));
+    const used = spans.reduce((sum, span) => sum + span.text.length, 0);
+    if (used < width) spans.push({ text: ' '.repeat(width - used), fg: tokens.foreground, bg: tokens.overlayBackground });
+    return { spans };
+  };
+  const lines: RenderedBoxLine[] = [
+    line([{ text: '  Appearance', fg: tokens.accent, bold: true }]),
+    line([{ text: width < 34 ? '  Choose appearance' : '  Choose a monochrome appearance', fg: tokens.foregroundMuted }]),
+    line([]),
+  ];
+  for (const [index, theme] of themes.entries()) {
+    const selected = index === state.selectedIndex;
+    const activeMark = active.theme === theme.id ? ' ●' : '';
+    const marker = selected ? '  › ' : '    ';
+    const label = `${marker}${theme.name}${activeMark}`.slice(0, Math.max(0, width));
+    lines.push(line([{ text: label.padEnd(width), fg: selected ? tokens.selectionForeground : tokens.foreground,
+      bg: selected ? tokens.selection : tokens.overlayBackground, bold: selected }]));
   }
-  const searchPart = `Search: ${state.query}█`;
-  const searchPad = Math.max(0, innerWidth - usedCols - searchPart.length - 1);
-  tabSpans.push({
-    text: `${' '.repeat(searchPad)}${searchPart} `.slice(0, Math.max(0, innerWidth - usedCols)),
-    fg: tokens.foreground,
-    bg: tokens.backgroundElevated,
-  });
-  tabSpans.push({ text: glyphs.vertical, fg: tokens.borderFocused, bg });
-  lines.push({ spans: tabSpans });
-
-  // Live animation controls bar
-  const anim = active.animations;
-  const wallLabel = engine.getActiveWallpaperPresetId() ?? 'off';
-  const animBar = ` Wallpaper: ${wallLabel} (${anim.enabled ? 'ON' : 'OFF'}) │ Motion: ${anim.motion.toUpperCase()} │ Speed: ${anim.speed.toFixed(2)}x │ Cell: ${anim.cellSize}x │ Veil: ${Math.round(anim.veil * 100)}% `;
-  lines.push({
-    spans: [
-      { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-      {
-        text: animBar.slice(0, innerWidth).padEnd(innerWidth, ' '),
-        fg: tokens.info,
-        bg,
-      },
-      { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-    ],
-  });
-
-  lines.push({
-    spans: [
-      { text: `${glyphs.vertical}${glyphs.horizontal.repeat(innerWidth)}${glyphs.vertical}`, fg: tokens.border, bg },
-    ],
-  });
-
-  const maxListRows = Math.max(4, height - 8);
-  if (themes.length === 0) {
-    const msg =
-      state.tab === 'my-themes' && !state.query
-        ? ' No custom themes yet. Press Ctrl+E to open Theme Editor or duplicate a theme.'
-        : ` No themes matching "${state.query}" in ${state.tab}.`;
-    lines.push({
-      spans: [
-        { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-        { text: msg.slice(0, innerWidth).padEnd(innerWidth, ' '), fg: tokens.foregroundMuted, bg },
-        { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-      ],
-    });
-  } else {
-    const clampedIdx = Math.max(0, Math.min(themes.length - 1, state.selectedIndex));
-    const startIdx = Math.max(
-      0,
-      Math.min(clampedIdx - Math.floor(maxListRows / 2), Math.max(0, themes.length - maxListRows)),
-    );
-    const visible = themes.slice(startIdx, startIdx + maxListRows);
-
-    visible.forEach((manifest, i) => {
-      const absIdx = startIdx + i;
-      const isSelected = absIdx === clampedIdx;
-      const isCommitted = manifest.id === committed.theme;
-      const rowBg = isSelected ? tokens.selection : bg;
-      const rowFg = isSelected ? tokens.selectionForeground : tokens.foreground;
-      const swatches = getThemeMiniSwatches(manifest, mode);
-
-      const indicator = isCommitted ? '●' : isSelected ? '▸' : ' ';
-      const nameCol = ` ${indicator} ${manifest.name.slice(0, 18).padEnd(18, ' ')} `;
-      const catBadge = `[${manifest.category.toUpperCase().slice(0, 6).padEnd(6, ' ')}] `;
-      const swatchLen = 10; // 5 x '██'
-      const descWidth = Math.max(
-        0,
-        innerWidth - nameCol.length - swatchLen - 2 - catBadge.length,
-      );
-      const descCol = ` ${manifest.description.slice(0, descWidth - 1)}`.padEnd(descWidth, ' ');
-
-      lines.push({
-        spans: [
-          { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-          {
-            text: nameCol,
-            fg: isCommitted ? tokens.accent : rowFg,
-            bg: rowBg,
-            bold: isSelected || isCommitted,
-          },
-          { text: '██', fg: swatches.background, bg: rowBg },
-          { text: '██', fg: swatches.panel, bg: rowBg },
-          { text: '██', fg: swatches.accent, bg: rowBg },
-          { text: '██', fg: swatches.foreground, bg: rowBg },
-          { text: '██', fg: swatches.success, bg: rowBg },
-          { text: '  ', fg: rowFg, bg: rowBg },
-          { text: catBadge, fg: manifest.wallpaper ? tokens.info : tokens.foregroundSubtle, bg: rowBg },
-          { text: descCol, fg: isSelected ? rowFg : tokens.foregroundMuted, bg: rowBg },
-          { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-        ],
-      });
-    });
-  }
-
-  while (lines.length < height - 2) {
-    lines.push({
-      spans: [
-        { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-        { text: ' '.repeat(innerWidth), fg: tokens.foreground, bg },
-        { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-      ],
-    });
-  }
-
-  const selectedTheme = themes[Math.max(0, Math.min(themes.length - 1, state.selectedIndex))];
-  const statusLine =
-    state.statusMessage ??
-    (selectedTheme
-      ? ` ${selectedTheme.name} (${selectedTheme.id}) · ${selectedTheme.attribution ?? 'FUTRYN Built-in'}${selectedTheme.wallpaper ? ` · Live Wallpaper: ${selectedTheme.wallpaper}` : ''}`
-      : ' Select a theme to preview and apply.');
-
-  lines.push({
-    spans: [
-      { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-      {
-        text: statusLine.slice(0, innerWidth).padEnd(innerWidth, ' '),
-        fg: tokens.accent,
-        bg: tokens.backgroundElevated,
-      },
-      { text: glyphs.vertical, fg: tokens.borderFocused, bg },
-    ],
-  });
-
-  const footer =
-    ' ↑/↓ Preview · Enter Apply · Esc Cancel & Restore · Tab Category · Ctrl+W Wallpaper · +/- Speed · Ctrl+G Motion · Ctrl+E Edit ';
-  const footerFill = Math.max(0, innerWidth - footer.length);
-  lines.push({
-    spans: [
-      { text: glyphs.bottomLeft, fg: tokens.borderFocused, bg },
-      { text: footer.slice(0, innerWidth), fg: tokens.foregroundSubtle, bg },
-      { text: glyphs.horizontal.repeat(footerFill), fg: tokens.borderFocused, bg },
-      { text: glyphs.bottomRight, fg: tokens.borderFocused, bg },
-    ],
-  });
-
-  return lines;
+  while (lines.length < Math.max(0, height - 2)) lines.push(line([]));
+  const footer = width < 38 ? '↑↓  Enter  Esc' : '↑↓ Preview   Enter Apply   Esc Cancel';
+  lines.push(line([{ text: `  ${state.statusMessage ?? footer}`.slice(0, width), fg: tokens.foregroundMuted }]));
+  return lines.slice(0, height);
 }
+
+type StyledSpanInput = { text: string; fg: string; bg?: string; bold?: boolean };
 
 // ============================================================================
 // THEME EDITOR OVERLAY (/theme edit)
@@ -691,7 +541,7 @@ export function renderSettingsOverlay(options: {
   const rows = [
     { label: 'Active Theme', value: `${appearance.theme} (Press Enter to open /theme)` },
     { label: 'Color Mode', value: `${appearance.mode.toUpperCase()} (resolved: ${effectiveMode})` },
-    { label: 'Live ASCII Wallpaper', value: appearance.wallpaper ?? 'none (cycle presets with ←/→)' },
+    { label: 'Wallpaper', value: 'Unavailable in monochrome mode' },
     { label: 'Animations Enabled', value: appearance.animations.enabled ? 'ENABLED' : 'DISABLED' },
     { label: 'Motion Mode', value: appearance.animations.motion.toUpperCase() },
     { label: 'Animation Speed', value: `${appearance.animations.speed.toFixed(2)}x` },

@@ -1,5 +1,7 @@
 # FUTRYN TUI1 — Acceptance Evidence
 
+> Current appearance profile: [ADR 0011](../adr/0011-monochrome-appearance.md) supersedes the older multicolor and wallpaper catalog claims below. `/theme` now offers system, white on black, and black on white; custom theme files are preserved but cannot be applied.
+
 Trạng thái: **TUI1 implemented (headless + unit/E2E verified)**. Chưa có xác minh thủ công trên terminal thật (iTerm/Kitty/Windows Terminal) — `Needs verification`.
 
 ## Phạm vi đã triển khai
@@ -30,3 +32,12 @@ Trạng thái: **TUI1 implemented (headless + unit/E2E verified)**. Chưa có x�
 ## Provider Connect and commands follow-up
 
 [Current acceptance and reproducible tests](provider-connect-acceptance.md) include registry search/auth/account dialogs, custom endpoints, model/session boundaries, official OpenRouter headless PKCE, full actual PTY login/chat/restart/logout and native keyring rotation/deletion. [ADR 0007](../adr/0007-provider-connect-and-commands.md) records contract 1.1/schema-1 compatibility. Manual terminal-emulator visual review and live vendor generation remain pending.
+
+
+## Monochrome appearance profile (2026-11-15)
+
+The picker offers exactly three appearances with live preview, keyboard navigation, Enter apply and Esc cancel. Every theme token and rendered fixture cell uses grayscale. Old built-in themes and live wallpaper choices have been removed; active legacy global/project settings migrate without deleting custom files. CLI aliases `themes set dark|light|system` and `themes mode` persist the same state; retired theme/import/wallpaper requests report errors. System detection and fallback limitations are recorded in ADR 0011.
+
+Verification includes palette/schema/contrast checks, preview/cancel, per-project and global migration, retained custom files, system preference changes, grayscale framebuffer cells, restart persistence, CLI diagnostics and a real Bun.Terminal keyboard/PTY test. Visual QA inspected rendered fixture picker frames in both dark and light modes; this is not manual testing of every terminal emulator.
+
+Observed on this host: `bun run typecheck` and `bun run lint` pass; full opt-in suite **159 pass, 0 fail** across 15 files; separate integration **40 pass**, end-to-end **74 pass**. After the compact-terminal footer adjustment, the focused TUI suite passed **10 tests**, including the real PTY mode-switch/restart test. No live provider credentials were used for this appearance change.
