@@ -56,6 +56,6 @@ test('write approval uses colored proposed code and keeps denial selected',async
  const request={approvalId:'00000000-0000-4000-8000-000000000001',capability:'fs.write' as const,action:'Update src/a.ts',target:'src/a.ts',riskLevel:'high' as const,reason:'Review changes',scopeHash:'fixture-hash',createdAt:'2026-11-15T00:00:00Z',expiresAt:'2026-11-15T01:00:00Z',status:'pending' as const,diffPreview:diff};
  const rendered=renderPermissionDialogOverlay({width:100,height:28,requests:[request],state,tokens,borderStyle:'rounded'});
  expect(plain(rendered)).toContain('proposed changes (not applied)');expect(plain(rendered)).toContain('+ new();');expect(plain(rendered)).toContain('- old();');
- expect(plain(rendered)).toContain('› [3] Deny');expect(state.selectedAction).toBe('deny');
+ expect(plain(rendered)).toContain('› [3] No');expect(state.selectedAction).toBe('deny');
  const colors=new Set(rendered.flatMap(line=>line.spans.map(span=>span.bg)));expect(colors.size).toBeGreaterThan(2);
 });

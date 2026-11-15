@@ -58,3 +58,69 @@ export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
   plan: 'Read-only: edits and commands are refused.',
   bypassPermissions: 'Every request is approved without asking. Hard blocks (outside workspace, .git, Hannes state) still apply.',
 };
+
+/**
+ * Project permission rules (ADR 0028), written like Claude Code's: `Bash`, `Bash(npm test:*)`,
+ * `Read(src/**)`, `Edit(**\/*.ts)`, `WebFetch(domain:example.com)`, `Tool(name)`. They answer only
+ * requests that would otherwise ask; hard denies (outside workspace, `.git`, Hannes state) stay.
+ */
+export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool'] as const;
+export type PermissionRuleTool = typeof PERMISSION_RULE_TOOLS[number];
+export const permissionRuleSchema = z.string().max(520).regex(/^(Bash|Read|Edit|WebFetch|Tool)(\([^()\n\u0000-\u001f]{1,500}\))?$/);
+export const permissionRuleSetSchema = z.strictObject({
+  allow: z.array(permissionRuleSchema).max(200),
+  ask: z.array(permissionRuleSchema).max(200),
+  deny: z.array(permissionRuleSchema).max(200),
+});
+export type PermissionRuleSet = z.infer<typeof permissionRuleSetSchema>;
+export type PermissionRuleEffect = keyof PermissionRuleSet;
+export interface PermissionRuleRequest { tool: PermissionRuleTool; target: string }
+
+const globSource = (pattern: string) => pattern.replace(/^\.\//, '').split(/(\*\*\/|\*\*|\*|\?)/).map(part =>
+  part === '**/' ? '(?:.*/)?' : part === '**' ? '.*' : part === '*' ? '[^/]*' : part === '?' ? '[^/]' : part.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('');
+
+/** Does one rule cover one target? Paths compare workspace-relative with `/` separators. */
+export function permissionRuleMatches(rule: string, request: PermissionRuleRequest): boolean {
+  const parsed = /^(\w+)(?:\((.*)\))?$/.exec(rule);
+  if (!parsed || parsed[1] !== request.tool) return false;
+  const pattern = parsed[2];
+  if (pattern === undefined) return true;
+  const target = request.target.trim();
+  if (request.tool === 'Bash') {
+    if (pattern.endsWith(':*')) return target === pattern.slice(0, -2) || target.startsWith(pattern.slice(0, -2) + ' ');
+    if (pattern.includes('*')) return new RegExp('^' + pattern.split('*').map(p => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$').test(target);
+    return target === pattern;
+  }
+  if (request.tool === 'WebFetch') {
+    const domain = pattern.startsWith('domain:') ? pattern.slice(7) : pattern;
+    let host = target; try { host = new URL(target).hostname; } catch { /* already a host */ }
+    return host === domain || host.endsWith('.' + domain);
+  }
+  if (request.tool === 'Tool') return target === pattern || target.startsWith(pattern + ' ') || target.startsWith(pattern + ':');
+  return new RegExp('^' + globSource(pattern) + '$').test(target.replace(/^\.\//, ''));
+}
+
+/**
+ * Rule decision for one request, Claude order: deny beats ask beats allow. A request naming several
+ * paths (a patch) is denied or asked if any path matches, and allowed only if every path is allowed.
+ */
+export function permissionRuleDecision(rules: PermissionRuleSet | undefined, request: PermissionRuleRequest): PermissionRuleEffect | undefined {
+  if (!rules) return undefined;
+  const bash = request.tool === 'Bash';
+  // Chained commands are judged per sub-command: `npm test && rm -rf ~` must not ride on `Bash(npm test:*)`.
+  const targets = request.tool === 'Read' || request.tool === 'Edit' ? request.target.split(', ').filter(Boolean)
+    : bash ? [request.target, ...shellSegments(request.target)] : [request.target];
+  const any = (list: string[]) => targets.some(target => list.some(rule => permissionRuleMatches(rule, { tool: request.tool, target })));
+  if (any(rules.deny)) return 'deny';
+  if (any(rules.ask)) return 'ask';
+  // Substitutions and redirects cannot be checked by prefix; they never auto-allow.
+  if (bash && /\$\(|`|[<>]/.test(request.target)) return undefined;
+  const allowTargets = bash ? shellSegments(request.target) : targets;
+  if (allowTargets.length && allowTargets.every(target => rules.allow.some(rule => permissionRuleMatches(rule, { tool: request.tool, target })))) return 'allow';
+  return undefined;
+}
+
+/** Sub-commands of a shell line split on `;`, `&&`, `||`, `|`, `&` and newlines. */
+export function shellSegments(command: string): string[] {
+  return command.split(/\|\||&&|[;|&\n]/).map(part => part.trim()).filter(Boolean);
+}

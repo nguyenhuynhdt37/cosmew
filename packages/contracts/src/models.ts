@@ -1,3 +1,4 @@
+import { permissionRuleSetSchema } from './permissions';
 import { z } from 'zod';
 
 export const CONTRACT_VERSION = '1.11' as const;
@@ -339,6 +340,8 @@ export const settingsSchema = z.strictObject({
   reasoningPreferences: z.record(z.string(), z.string().min(1).max(40)).optional(),
   appearance: appearanceSchema.optional(),
   projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
+  /** Project permission rules by workspace path (ADR 0028); optional, so older files still load. */
+  projectPermissionRules: z.record(z.string(), permissionRuleSetSchema).optional(),
 }).superRefine((settings, ctx) => {
   const unique = (values: string[]) => new Set(values).size === values.length;
   const validAccount = (id: string) => settings.accounts.some(a => a.id === id && a.status !== 'logged-out');

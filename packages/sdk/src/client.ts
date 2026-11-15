@@ -26,6 +26,11 @@ import {
   type PermissionKind,
   PERMISSION_MODES,
   permissionModeDecision,
+  permissionRuleDecision,
+  permissionRuleSchema,
+  type PermissionRuleEffect,
+  type PermissionRuleSet,
+  type PermissionRuleTool,
   type Provider,
   type Selection,
   type SessionRecord,
@@ -201,7 +206,41 @@ export class FutrynClient {
     if (!PERMISSION_MODES.includes(mode)) throw new HannesError('INVALID_INPUT');
     this.permissionModeValue = mode; this.notifyStateChange(); return mode;
   }
-  /** Shift+Tab order, as in Claude Code. */
+  /** Rules saved for this workspace (ADR 0028). */
+  permissionRules(): PermissionRuleSet {
+    const saved = this.ports.settings.read().projectPermissionRules?.[this.ports.workspace];
+    return { allow: [...saved?.allow ?? []], ask: [...saved?.ask ?? []], deny: [...saved?.deny ?? []] };
+  }
+  addPermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
+    const parsed = permissionRuleSchema.safeParse(rule.trim());
+    if (!parsed.success) throw new HannesError('INVALID_INPUT');
+    this.ports.settings.update(settings => {
+      const all = settings.projectPermissionRules ??= {};
+      const set = all[this.ports.workspace] ??= { allow: [], ask: [], deny: [] };
+      // One rule lives in one list; adding it elsewhere moves it.
+      for (const key of ['allow', 'ask', 'deny'] as const) set[key] = set[key].filter(entry => entry !== parsed.data);
+      if (set[effect].length >= 200) throw new HannesError('POLICY');
+      set[effect].push(parsed.data);
+    });
+    this.notifyStateChange();
+    return this.permissionRules();
+  }
+  removePermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
+    this.ports.settings.update(settings => {
+      const set = settings.projectPermissionRules?.[this.ports.workspace];
+      if (set) set[effect] = set[effect].filter(entry => entry !== rule);
+    });
+    this.notifyStateChange();
+    return this.permissionRules();
+  }
+
+  /** Shift+Tab order, as in Claude Code: default → acceptEdits → auto → plan → bypassPermissions. */
+  /** Rule paths are workspace-relative; runtimes may report absolute ones. */
+  private workspaceRelative(target: string): string {
+    const root = this.ports.workspace.replace(/\/+$/, '');
+    return target.split(', ').map(path => path.startsWith(root + '/') ? path.slice(root.length + 1) : path).join(', ');
+  }
+
   cyclePermissionMode(): PermissionMode {
     const order: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
     return this.setPermissionMode(order[(order.indexOf(this.permissionModeValue) + 1) % order.length]!);
@@ -903,9 +942,13 @@ export class FutrynClient {
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
     const { kind: explicitKind, ...prompt } = input;
     const kind: PermissionKind = explicitKind ?? ({ 'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'execute', 'network.connect': 'network' } as Record<string, PermissionKind>)[input.capability] ?? 'other';
-    const decision = permissionModeDecision(this.permissionModeValue, kind);
+    // Project rules first (deny > ask > allow), then the session mode.
+    const tool: PermissionRuleTool = ({ 'process.execute': 'Bash', 'fs.write': 'Edit', 'fs.read': 'Read', 'network.connect': 'WebFetch' } as Record<string, PermissionRuleTool>)[input.capability] ?? 'Tool';
+    const target = tool === 'Tool' ? input.action : input.target;
+    const ruled = permissionRuleDecision(this.permissionRules(), { tool, target: tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(target) : target });
+    const decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
     if (decision !== 'ask') {
-      this.emitReactiveEvent(decision === 'allow' ? 'done' : 'error', `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${this.permissionModeValue} mode: ${input.action}`);
+      this.emitReactiveEvent(decision === 'allow' ? 'done' : 'error', `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${ruled ? 'project rule' : `${this.permissionModeValue} mode`}: ${input.action}`);
       return Promise.resolve(decision === 'allow' ? 'once' : 'deny');
     }
     input = prompt;

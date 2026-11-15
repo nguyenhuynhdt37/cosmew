@@ -670,12 +670,14 @@ test('empty permissions is a compact manager with no grant actions or transcript
   const c = await setup(); await c.tui.submitPrompt('Visible private transcript');
   await c.tui.executeSlashCommand('/permissions');
   const frame = c.tui.computeFrameSnapshot();
-  expect(frame.plainText).toContain('No requests waiting');
-  expect(frame.plainText).not.toContain('Allow once');
+  expect(frame.plainText).toContain('Add a new rule');
+  expect(frame.plainText).not.toContain('[1] Yes');
   expect(frame.plainText).not.toContain('Visible private transcript');
-  expect(frame.plainLines.filter(line => line.includes('│')).length).toBeLessThan(12);
+  expect(frame.plainLines.filter(line => line.includes('│')).length).toBeLessThan(22);
+  // Digits are not decisions here, and Escape leaves any half-typed rule unsaved.
   for (const key of ['1','2','3','Enter']) await c.tui.handleKey(key);
   expect(c.client.listPermissions()).toHaveLength(0);
+  await c.tui.handleKey('Escape'); expect(c.client.permissionRules()).toEqual({ allow: [], ask: [], deny: [] });
   await c.tui.handleKey('Escape'); expect(c.tui.getActiveOverlay()).toBe('none');
 });
 
@@ -710,7 +712,7 @@ test('slash command drafts do not add model context and permission dialogs fit t
     const frame = c.tui.computeFrameSnapshot();
     expect(frame.plainLines).toHaveLength(height!);
     expect(frame.plainLines.every(line => line.length <= width!)).toBe(true);
-    expect(frame.plainText).toContain('Deny');
+    expect(frame.plainText).toContain('No');
     for (let i=0;i<80;i++) await c.tui.handleKey('PageDown');
     const bottom = c.tui.computeFrameSnapshot().plainText;
     await c.tui.handleKey('PageUp');

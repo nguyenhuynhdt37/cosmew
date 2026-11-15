@@ -1,7 +1,7 @@
 import type { FutrynClient } from '@hannes/sdk';
-import type { BorderStyle, PermissionPromptRequest, ThemeTokens } from '@hannes/contracts';
+import { PERMISSION_MODE_HINTS, PERMISSION_MODES, type BorderStyle, type PermissionMode, type PermissionPromptRequest, type PermissionRuleSet, type ThemeTokens } from '@hannes/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
-import type { PermissionDialogState } from './types';
+import { PERMISSION_RULE_TABS, suggestedRule, type PermissionDialogState, type PermissionRulesState } from './types';
 import { parseUnifiedDiff, renderDiffCodeLine } from '../diff/code-lines';
 
 export function renderPermissionDialogOverlay(options: {
@@ -51,7 +51,12 @@ export function renderPermissionDialogOverlay(options: {
     const resolved = requests.filter(r => r.status !== 'pending');
     if (resolved.length) wrap(`Recent decisions: ${resolved.slice(0, 3).map(r => r.status).join(', ')}`);
   }
-  const actionRows = request ? 3 : 0;
+  const rule = request ? suggestedRule(request) : null;
+  const actions = request ? ([['once', '[1] Yes'], ['session', '[2] Yes, for this session'], ['deny', '[3] No'], ...(rule ? [['rule', `[4] Yes, and don't ask again for ${rule}`]] : [])] as const) : [];
+  // Tiny terminals keep at least two body rows: show only the selected choice (←/→ changes it).
+  const compact = actions.length > 0 && height - 2 - actions.length < 2;
+  const shownActions = compact ? actions.filter(([action]) => action === state.selectedAction).slice(0, 1) : actions;
+  const actionRows = shownActions.length;
   const capacity = Math.max(0, height - 2 - actionRows);
   const offset = Math.max(0, Math.min(state.scrollOffset ?? 0, Math.max(0, body.length - capacity)));
   // Remember the visible origin, so PageUp responds immediately after reaching the end.
@@ -62,7 +67,7 @@ export function renderPermissionDialogOverlay(options: {
   }
   modal.fillTo(height - 1 - actionRows);
   if (request) {
-    for (const [action, label] of [['once', '[1] Allow once'], ['session', '[2] Allow this session'], ['deny', '[3] Deny']] as const) {
+    for (const [action, label] of shownActions) {
       modal.text(`${state.selectedAction === action ? ' ›' : '  '} ${label}`, {fg: state.selectedAction === action ? tokens.foreground : tokens.foregroundMuted, bg: state.selectedAction === action ? tokens.selection : modal.bg, bold: state.selectedAction === action});
     }
   }
@@ -71,4 +76,75 @@ export function renderPermissionDialogOverlay(options: {
     ? width < 55 ? ' Esc Deny · Enter Apply ' : ' ←/→ Choose · Enter Apply · Esc Deny '
     : grants.length ? ' Ctrl+X Revoke · Esc Close ' : ' Esc Close ';
   return modal.bottom(scrolling ? (width < 55 ? ' PgUp/PgDn · Esc ' : ' PgUp/PgDn Scroll · ' + footer.trim()) : footer).lines;
+}
+
+const TAB_LABELS = { allow: 'Allow', ask: 'Ask', deny: 'Deny', mode: 'Mode' } as const;
+const TAB_HELP = {
+  allow: 'Hannes will not ask before using these.',
+  ask: 'Hannes always asks first, even in auto or bypass mode.',
+  deny: 'Hannes refuses these without asking.',
+  mode: 'How requests without a rule are answered. Shift+Tab cycles.',
+} as const;
+
+/**
+ * `/permissions` with nothing waiting, Claude Code style: Allow / Ask / Deny rule lists for this
+ * project and the session mode. Rules: Bash(npm test:*), Read(src/**), Edit(**\/*.ts), WebFetch(domain:x).
+ */
+export function renderPermissionRulesOverlay(options: {
+  width: number; height: number; rules: PermissionRuleSet; mode: PermissionMode; grants: string[];
+  state: PermissionRulesState; tokens: ThemeTokens; borderStyle: BorderStyle;
+}): RenderedBoxLine[] {
+  const { width, height, rules, mode, state, tokens, borderStyle } = options;
+  const modal = new Modal({ width, height, minInner: 1, tokens, borderStyle, borderColor: tokens.borderFocused });
+  modal.top(' Permissions ');
+  // Tab strip: the active tab is bold accent and underlined by a rule on the next row.
+  const tabs: RenderedBoxLine['spans'] = [{ text: ' ', fg: tokens.foreground, bg: modal.bg }];
+  let underline = ' ';
+  for (const tab of PERMISSION_RULE_TABS) {
+    const label = ` ${TAB_LABELS[tab]}${tab === 'mode' ? '' : ` ${rules[tab].length}`} `;
+    const active = tab === state.tab;
+    tabs.push({ text: label, fg: active ? tokens.accentForeground : tokens.foregroundMuted, bg: active ? tokens.accent : modal.bg, bold: active }, { text: ' ', fg: tokens.foreground, bg: modal.bg });
+    underline += (active ? '─'.repeat(label.length) : ' '.repeat(label.length)) + ' ';
+  }
+  const used = tabs.reduce((sum, span) => sum + span.text.length, 0);
+  modal.spans([...tabs, { text: ' '.repeat(Math.max(0, modal.innerWidth - used)), fg: tokens.foreground, bg: modal.bg }]);
+  modal.text(underline, { fg: tokens.accent });
+  modal.text(' ' + TAB_HELP[state.tab], { fg: tokens.foregroundMuted });
+  modal.text('');
+  const row = (selected: boolean, text: string, fg = tokens.foreground) => modal.text(`${selected ? ' › ' : '   '}${text}`.slice(0, modal.innerWidth), { fg: selected ? tokens.foreground : fg, bg: selected ? tokens.selection : modal.bg, bold: selected });
+  if (state.tab === 'mode') {
+    PERMISSION_MODES.forEach((entry, index) => {
+      row(index === state.selectedIndex, `${entry === mode ? '●' : '○'} ${entry}`, entry === mode ? tokens.accent : tokens.foregroundMuted);
+      if (index === state.selectedIndex) modal.text(`     ${PERMISSION_MODE_HINTS[entry]}`.slice(0, modal.innerWidth), { fg: tokens.foregroundSubtle });
+    });
+  } else {
+    const list = rules[state.tab];
+    if (state.input !== null) {
+      modal.text(' New rule:', { fg: tokens.foregroundMuted });
+      const shown = state.input.slice(-Math.max(1, modal.innerWidth - 5));
+      modal.spans([{ text: ' > ', fg: tokens.accent, bg: modal.bg, bold: true }, { text: shown, fg: tokens.foreground, bg: modal.bg }, { text: '▌', fg: tokens.accent, bg: modal.bg }, { text: ' '.repeat(Math.max(0, modal.innerWidth - 4 - shown.length)), fg: tokens.foreground, bg: modal.bg }]);
+      modal.text(' e.g. Bash(npm test:*)  Read(src/**)  Edit(**/*.ts)  WebFetch(domain:docs.x.ai)'.slice(0, modal.innerWidth), { fg: tokens.foregroundSubtle });
+      if (state.error) modal.text(' ' + state.error, { fg: tokens.error });
+    } else {
+      row(state.selectedIndex === 0, '+ Add a new rule…', tokens.accent);
+      const capacity = Math.max(1, height - 10);
+      const start = Math.max(0, Math.min(state.selectedIndex - 1 - capacity + 1, list.length - capacity));
+      list.slice(start, start + capacity).forEach((rule, offset) => row(state.selectedIndex === start + offset + 1, rule));
+      if (!list.length) modal.text('   No rules yet.', { fg: tokens.foregroundSubtle });
+      if (state.tab === 'allow') {
+        // Session grants ("Yes, for this session") live only in memory; Ctrl+X revokes them all.
+        modal.text('');
+        if (options.grants.length) {
+          modal.text(` Allowed this session (${options.grants.length}, Ctrl+X revokes):`, { fg: tokens.foregroundMuted });
+          for (const grant of options.grants.slice(0, 4)) modal.text(`   ${JSON.stringify(grant)}`, { fg: tokens.foregroundSubtle });
+        } else modal.text(' No file or command access remembered for this session.', { fg: tokens.foregroundSubtle });
+      }
+    }
+  }
+  modal.fillTo(height - 2);
+  modal.text(' Rules are saved for this project.', { fg: tokens.foregroundSubtle });
+  const footer = state.input !== null ? ' Enter Save · Esc Cancel '
+    : state.tab === 'mode' ? ' ←/→ Tab · ↑/↓ Select · Enter Use · Esc Close '
+    : ' ←/→ Tab · ↑/↓ Select · Enter Add · Del Remove · Esc Close ';
+  return modal.bottom(width < 60 ? ' ←/→ · ↑/↓ · Enter · Esc ' : footer).lines;
 }

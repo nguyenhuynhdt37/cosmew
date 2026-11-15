@@ -98,7 +98,7 @@ if (copilot && process.argv.includes('login')) {
       const allowed = message.result?.outcome?.optionId === 'allow' || message.result?.decision === 'accept';
       if (allowed) {
         if (runtime === 'codex') event('item/started', { item: { type: 'commandExecution', id: 'i1', command: 'touch native-proof.txt' } });
-        else event('session/update', { sessionId: session, update: { sessionUpdate: 'tool_call', toolCallId: 't1', kind: 'execute', title: 'Run touch native-proof.txt' } });
+        else event('session/update', { sessionId: session, update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'run_terminal_command', rawInput: { command: 'touch native-proof.txt' } } });
         writeFileSync(join(process.cwd(), 'native-proof.txt'), 'native\n');
       }
       const text = `native:${allowed ? 'allowed' : 'denied'}`;
@@ -217,7 +217,7 @@ if (copilot && process.argv.includes('login')) {
             send({ id: 'native-perm', method: 'item/commandExecution/requestApproval', params: { threadId: session, turnId: 'fixture-turn', itemId: 'i1', command: 'touch native-proof.txt' } });
           } else {
             nativePrompt = message.id;
-            send({ id: 'native-perm', method: 'session/request_permission', params: { sessionId: session, toolCall: { toolCallId: 't1', kind: 'execute', title: 'Run touch native-proof.txt' }, options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }] } });
+            send({ id: 'native-perm', method: 'session/request_permission', params: { sessionId: session, toolCall: { toolCallId: 't1', kind: 'execute', title: 'Run touch native-proof.txt', rawInput: { command: 'touch native-proof.txt' } }, options: [{ optionId: 'allow', kind: 'allow_once', name: 'Allow' }, { optionId: 'reject', kind: 'reject_once', name: 'Reject' }] } });
           }
           return;
         }
