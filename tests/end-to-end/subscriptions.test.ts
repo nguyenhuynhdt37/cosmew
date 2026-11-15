@@ -589,10 +589,26 @@ for (const scenario of ['usage-cancel','usage-fail']) test(`Codex usage: ${scena
   try {
     for await (const event of c.client.sendMessage('hello',{signal:controller.signal})) {
       events.push(event);
-      if (scenario === 'usage-cancel' && event.type === 'usage') controller.abort();
+      // Quota-only usage can arrive first; cancel after the measurement this test asserts.
+      if (scenario === 'usage-cancel' && event.type === 'usage' && event.usage.inputTokens === 100) controller.abort();
     }
   } catch (error) {caught=error;}
   expect(caught).toBeInstanceOf(HannesError);
   expect(events.some(e => e.type === 'completed')).toBe(false);
   expect(c.client.usage().last).toMatchObject({outcome:scenario === 'usage-cancel' ? 'cancelled' : 'failed',usage:{inputTokens:100,outputTokens:20}});
+});
+
+for(const name of ['read','glob','grep'] as const)test(`Codex migrated ${name} handler keeps exposure, audit and persisted pairing consistent`,async()=>{
+ const c=await readContext(name==='read'?'read-file':'read-'+name);
+ await c.tui.submitPrompt('Inspect the workspace');
+ const answer=c.tui.getTranscript().at(-1)!;
+ const call=answer.toolCalls!.find(call=>call.name===name)!;
+ const result=answer.toolResults!.find(result=>result.callId===call.id)!;
+ expect(result).toMatchObject({name,status:'ok'});
+ const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
+ const stored=saved.find(m=>m.role==='tool'&&m.toolCallId===call.id)!;
+ expect(stored.toolName).toBe(name);expect(stored.content).toBe(result.content);
+ const audit=c.app.db.query('SELECT tool, phase FROM tool_audit WHERE call_id = ? ORDER BY rowid').all(call.id) as {tool:string;phase:string}[];
+ expect(audit.map(r=>r.phase)).toEqual(['requested','decided','completed']);
+ expect(audit.every(r=>r.tool===name)).toBe(true);
 });

@@ -1,5 +1,7 @@
 # Điều hướng đặc tả Hannes
 
+Current tool execution architecture: [ADR 0024](adr/0024-tool-execution-architecture.md). Registry/router/handlers/orchestrator/runtimes share the existing ToolPort boundary; production exec_command remains closed.
+
 Task 03B: [decision](adr/0023-process-supervision.md), [native research](delivery/process-supervision-research.md), [acceptance and limitations](delivery/process-supervision-acceptance.md). Production exec_command remains CLOSED.
 
 Task 03A exec_command foundation: [ADR 0022](adr/0022-sandboxed-exec-command-foundation.md), [OS evidence, module list and closed security gate](delivery/exec-command-foundation.md). Command execution is not production-enabled.

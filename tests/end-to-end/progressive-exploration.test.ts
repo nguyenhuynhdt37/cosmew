@@ -216,3 +216,17 @@ test('no tools, no guidance: a chat without folder consent is sent unchanged', a
   expect((await ask(c.client, 'hello')).answer).toBe('plain');
   expect(c.views()[0]).toMatchObject({ system: '', tools: [] });
 });
+
+for (const protocol of ['chat','anthropic'] as const) test(`${protocol}: migrated registry routes all exposed tools and persists exact call/result pairs`,async()=>{
+ const calls=[{name:'glob',input:{pattern:'*.txt'}},{name:'grep',input:{pattern:'MIGRATION_MARKER'}},{name:'read',input:{path:'notes.txt'}}];
+ const c=await make(view=>view.results.length ? {text:view.results.map(r=>r.name+':'+r.content).join('\n')} : {calls}, {'notes.txt':'MIGRATION_MARKER'},protocol);
+ const {events,answer}=await ask(c.client,'Inspect the project');
+ expect(answer).toContain('MIGRATION_MARKER');
+ const results=events.flatMap(e=>e.type==='toolResult'?[e.result]:[]);
+ expect(results.map(r=>r.name)).toEqual(calls.map(c=>c.name));
+ expect(results.every(r=>r.status==='ok')).toBe(true);
+ for(const view of c.views()){expect(view.tools).toEqual(['read','glob','grep']);expect(view.orphanResults).toBe(0);expect(view.unansweredCalls).toBe(0);}
+ const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
+ expect(saved.filter(m=>m.role==='tool').map(m=>m.toolCallId)).toEqual(results.map(r=>r.callId));
+ const completed=c.audit().filter(r=>r.phase==='completed');expect(completed.map(r=>r.tool)).toEqual(calls.map(c=>c.name));
+});
