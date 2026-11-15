@@ -4,6 +4,9 @@ import { join, relative, resolve } from 'node:path';
 import {
   HannesError,
   type Account,
+  type ProjectContextPort,
+  type ProjectContextOptions,
+  type ProjectContextReport,
   type CredentialVault,
   type DiffLine,
   type Message,
@@ -15,7 +18,7 @@ import {
 } from '@hannes/contracts';
 import { Conversation } from '@hannes/core';
 import { ToolDispatcher } from '@hannes/tools';
-import { WorkspaceRoot } from '@hannes/workspace';
+import { WorkspaceRoot, ProjectContextLoader } from '@hannes/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -252,7 +255,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
@@ -274,6 +277,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       existingSession,
       modelTools,
       runtime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
+      projectContext,
     );
   };
 
@@ -338,7 +342,13 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     }
   };
 
-  const createFutrynClient = (workspaceRoot = resolve('.')): FutrynClient => {
+  const createFutrynClient = (workspaceRoot = resolve('.'), contextOptions: ProjectContextOptions = {}): FutrynClient => {
+    const envBudget = process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
+    if (contextOptions.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) throw new HannesError('INVALID_INPUT');
+    const options = {...contextOptions,maxBytes:contextOptions.maxBytes ?? (envBudget === undefined ? 32768 : Number(envBudget))};
+    if (![options.maxBytes,options.maxFileBytes ?? 16384].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new HannesError('INVALID_INPUT');
+    let projectReport: ProjectContextReport | null = null;
+    let contextLoader: ProjectContextLoader | undefined;
     const activeConvMap = new Map<string, Conversation>();
     // Read-only workspace tools (ADR 0017). Offered only while the client allows them, i.e. after
     // the TUI obtained folder consent; approvals go through the client's permission dialog.
@@ -351,7 +361,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       workspace: workspaceTree(),
       grants,
       stateDirectory: realpathSync.native(resolve(directory)),
-      redact: text => redactor.text(text),
+      redact: (text,incomplete) => incomplete ? redactor.stream().push(text) : redactor.text(text),
       audit: record => toolAudit.append(record),
       approve: (request, signal) => client
         ? client.requestPermission({ capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
@@ -364,7 +374,20 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         : { callId: call.id, name: call.name, status: 'denied', code: 'TOOLS_DISABLED', content: 'Workspace tools are not enabled for this session.' },
     };
 
+    const projectContext: ProjectContextPort = {load: async signal => {
+      if (!client?.toolsEnabled()) return null;
+      contextLoader ??= new ProjectContextLoader(workspaceTree(),{read:(path,budget,readSignal) => {
+        if (!client?.toolsEnabled()) return Promise.resolve({status:'denied',code:'WORKSPACE_NOT_APPROVED'});
+        return tools().readInstruction(path,budget,readSignal);
+      }},options);
+      const snapshot = await contextLoader.load(signal);
+      if (!client.toolsEnabled()) return null;
+      const {content: _content,...report} = snapshot; projectReport = report;
+      return snapshot;
+    }};
+
     client = new FutrynClient({
+      getProjectContext: () => client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null,
       toolGrants: { list: () => grants.list().map(grant => workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),
       settings,
@@ -441,12 +464,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
         const messages = committedMessages(record.messages);
-        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot));
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot));
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext);
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -458,7 +481,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        }, toolPort, resolve(workspaceRoot));
+        }, toolPort, resolve(workspaceRoot), projectContext);
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -475,7 +498,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          }, toolPort, resolve(workspaceRoot));
+          }, toolPort, resolve(workspaceRoot), projectContext);
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);

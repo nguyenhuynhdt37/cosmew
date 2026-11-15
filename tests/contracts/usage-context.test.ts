@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { HannesError, type ModelPort } from '@hannes/contracts';
 import { providerPresets } from '@hannes/models';
 import { Conversation } from '@hannes/core';
@@ -536,7 +536,7 @@ test.skipIf(process.platform === 'win32')('actual PTY streams thinking before th
   c.server.set({reasoning:true, streamDelay: 80});
   let output = '';
   const terminal = new Bun.Terminal({cols:100, rows:30, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
-  const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], {terminal, env:{...process.env, HANNES_HOME:c.dir, NO_COLOR:'1'}});
+  const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {cwd:c.dir, terminal, env:{...process.env, HANNES_HOME:c.dir, NO_COLOR:'1'}});
   const wait = async (text: string, from = 0) => { const deadline = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5); expect(output.slice(from)).toContain(text); };
   try {
     await wait('Trust this folder?'); terminal.write('\x1b[A\r');

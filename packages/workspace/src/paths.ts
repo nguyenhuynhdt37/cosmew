@@ -12,7 +12,7 @@ export interface ResolvedPath {
 
 /** A denial the dispatcher reports to the model without revealing paths outside the root. */
 export class WorkspaceDenied extends HannesError {
-  constructor(readonly reason: 'outside-workspace' | 'not-found' | 'invalid-path') {
+  constructor(readonly reason: 'outside-workspace' | 'not-found' | 'invalid-path' | 'inaccessible') {
     super(reason === 'not-found' ? 'NOT_FOUND' : reason === 'invalid-path' ? 'INVALID_INPUT' : 'POLICY');
   }
 }
@@ -38,7 +38,7 @@ export class WorkspaceRoot {
     const lexical = resolve(this.root, input);
     if (!inside(this.root, lexical)) throw new WorkspaceDenied('outside-workspace');
     let absolute: string;
-    try { absolute = realpathSync.native(lexical); } catch { throw new WorkspaceDenied('not-found'); }
+    try { absolute = realpathSync.native(lexical); } catch (error) { throw new WorkspaceDenied(['ENOENT', 'ENOTDIR'].includes((error as {code?:string}).code ?? '') ? 'not-found' : 'inaccessible'); }
     if (!inside(this.root, absolute)) throw new WorkspaceDenied('outside-workspace');
     const stat = statSync(absolute);
     if (!stat.isFile() && !stat.isDirectory()) throw new WorkspaceDenied('invalid-path');
@@ -57,7 +57,7 @@ export class WorkspaceRoot {
    */
   readBytes(file: ResolvedPath, maxBytes: number): { bytes: Uint8Array; size: number } {
     let fd: number;
-    try { fd = openSync(file.absolute, constants.O_RDONLY | constants.O_NOFOLLOW); } catch { throw new WorkspaceDenied('not-found'); }
+    try { fd = openSync(file.absolute, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) { throw new WorkspaceDenied(['ENOENT', 'ENOTDIR'].includes((error as {code?:string}).code ?? '') ? 'not-found' : 'inaccessible'); }
     try {
       const opened = fstatSync(fd);
       let again: string;

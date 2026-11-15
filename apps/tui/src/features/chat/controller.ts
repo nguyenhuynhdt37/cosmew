@@ -121,6 +121,8 @@ export class ChatController {
         (assistantItem.usage?.inputTokens ?? 0) + (assistantItem.usage?.outputTokens ?? 0);
       this.banner = assistantItem.usage?.inputTokens == null || assistantItem.usage?.outputTokens == null
         ? 'Completed turn · token usage not reported.' : `Completed turn (${totalTok} tokens).`;
+      const notes = this.host.client.projectContext()?.diagnostics.length ?? 0;
+      if (notes) this.banner += ` Project context: ${notes} note(s); /context.`;
       this.companion.transition('done');
     } catch (err) {
       this.companion.transition(abortController.signal.aborted || (err instanceof HannesError && err.code === 'CANCELLED') ? 'cancelled' : 'error');

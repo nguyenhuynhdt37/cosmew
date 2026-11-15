@@ -9,6 +9,7 @@ import {
   permissionPromptResolutionSchema,
   permissionPromptRequestSchema,
   type Account,
+  type ProjectContextReport,
   type Integration,
   type ProviderAuthChallenge,
   type ProviderAuthProgress,
@@ -69,6 +70,7 @@ export interface ConnectAccountInput {
 
 export interface FutrynBackendPorts {
   workspace: string;
+  getProjectContext?(): ProjectContextReport | null;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -166,6 +168,9 @@ export class FutrynClient {
 
   /** Revoke every session tool grant; the next read asks again. */
   revokeToolGrants(): void { this.ports.toolGrants?.clear(); this.notifyStateChange(); }
+
+  /** Last authorized instruction snapshot metadata; instruction contents are not exposed here. */
+  projectContext(): ProjectContextReport | null { return this.ports.getProjectContext?.() ?? null; }
 
   workspace(): string {
     return this.ports.workspace;
@@ -643,7 +648,9 @@ export class FutrynClient {
     const requestDraft = /^[\/!]/.test(trimmedDraft) ? '' : trimmedDraft;
     const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(pending ? this.streamingSteps : []), ...(pending && this.streamingText ? [{ role: 'assistant', content: this.streamingText }] : []), ...(requestDraft ? [{ role: 'user', content: requestDraft }] : [])];
     const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
-    const estimate = components.length ? Math.ceil(bytes / 4) + components.length * 16 + 64 : 0;
+    const instructionBytes = this.projectContext()?.usedBytes ?? 0;
+    const messageCount = components.length + (instructionBytes ? 1 : 0);
+    const estimate = messageCount ? Math.ceil((bytes + instructionBytes) / 4) + messageCount * 16 + 64 : 0;
     const runtime = !!status.activeProvider?.runtime;
     const latest = this.usage().last;
     const observation = record?.turns?.findLast(turn => turn.context && turn.context.source !== 'estimate');
@@ -655,7 +662,7 @@ export class FutrynClient {
       estimatedPercent: limit && !runtime ? Math.round(estimate / limit * 1000) / 10 : null,
       measuredCurrentHistory: observation?.requestId === latest?.requestId && !requestDraft.trim() && (!this.sending || latest?.outcome === 'pending') && last?.usedTokens != null && last.limitTokens != null,
       lastMeasured: last, metadataSource: status.activeModel?.metadataSource ?? null,
-      metadataAt: status.activeModel?.metadataFetchedAt ?? null, messages: components.length };
+      metadataAt: status.activeModel?.metadataFetchedAt ?? null, projectInstructionBytes: instructionBytes, messages: messageCount };
   }
 
   private effort(accountId: string, model: ModelInfo): string | null {

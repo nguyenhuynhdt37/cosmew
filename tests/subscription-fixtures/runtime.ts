@@ -87,6 +87,12 @@ if (copilot && process.argv.includes('login')) {
         result = { sessionId: session }; break;
       case 'turn/start': case 'session.send': case 'session/prompt': {
         if (!valid()) { send({ id: message.id, error: { code: -32000, message: 'Expired secret' } }); return; }
+        if (runtime === 'codex' && scenario === 'read-project-instructions') {
+          const prompt = p.input[0].text as string;
+          const history = JSON.parse(prompt.slice(prompt.indexOf('\n')+1));
+          const matches = prompt.match(/RULE_TASK01_NATIVE_V[12]/g) ?? [];
+          if (matches.length !== 1 || history[0].role !== 'user' || !history[0].content.startsWith('Project instructions (user/project-scoped context') || projectInstructions.includes('RULE_TASK01_NATIVE')) process.exit(50);
+        }
         if (runtime === 'codex' && scenario.startsWith('read-') && dynamicTools.length) {
           if (dynamicTools.map((t: any) => t.name).join(',') !== 'read,glob,grep') process.exit(48);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); requestRead(); return;

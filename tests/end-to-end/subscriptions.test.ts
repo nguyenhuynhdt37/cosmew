@@ -474,3 +474,12 @@ test.skipIf(process.platform === 'win32')('actual PTY: pending read permission d
     expect(await Promise.race([child.exited,Bun.sleep(4000).then(()=>-1)])).toBe(0);
   } finally {child.kill('SIGKILL');await child.exited;terminal.close();}
 },15000);
+
+test('Task 01 context reaches Codex as one current user message, never developer instructions',async()=>{
+ const c=await readContext('read-project-instructions');writeFileSync(join(c.ws,'AGENTS.md'),'RULE_TASK01_NATIVE_V1');
+ await c.tui.submitPrompt('Explain the project');expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]?.status).toBe('ok');
+ const hash=c.client.projectContext()!.sources[0]!.hash;
+ writeFileSync(join(c.ws,'AGENTS.md'),'RULE_TASK01_NATIVE_V2');
+ await c.tui.submitPrompt('Explain the updated project');expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]?.status).toBe('ok');
+ expect(c.client.projectContext()!.sources[0]!.hash).not.toBe(hash);
+});

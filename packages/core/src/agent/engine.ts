@@ -1,4 +1,4 @@
-import { HannesError, messageSchema, type ConversationStore, type Message, type ModelEvent, type ModelPort, type Selection, type ToolCall, type ToolPort, type TurnReceipt, type Usage } from '@hannes/contracts';
+import { HannesError, messageSchema, type ConversationStore, type ProjectContextPort, type Message, type ModelEvent, type ModelPort, type Selection, type ToolCall, type ToolPort, type TurnReceipt, type Usage } from '@hannes/contracts';
 
 /** Tool rounds allowed in one user turn before the model must answer in text (ADR 0017). */
 export const MAX_TOOL_ROUNDS = 8;
@@ -24,6 +24,7 @@ export class Conversation {
     private readonly tools?: ToolPort,
     /** Called when the provider rejects the tool definitions themselves (ADR 0017). */
     private readonly onToolsRejected?: () => void,
+    private readonly projectContext?: ProjectContextPort,
   ) {
     if (existing) {
       this.id = existing.id;
@@ -48,6 +49,10 @@ export class Conversation {
     const inlineIds = new Set<string>();
     try {
       signal?.throwIfAborted();
+      const context = await this.projectContext?.load(signal);
+      signal?.throwIfAborted();
+      if (context && (!Number.isSafeInteger(context.budgetBytes) || context.budgetBytes < 0 || context.budgetBytes > 65536 || Buffer.byteLength(context.content) > context.budgetBytes)) throw new HannesError('BUDGET');
+      const instructions: Message[] = context?.content ? [messageSchema.parse({role:'user',content:context.content})] : [];
       revision = this.store.append(this.id, user, 'pending', receipt);
       for (let round = 0; ; round++) {
         // The last allowed round offers no tools, so the model has to answer in text.
@@ -58,7 +63,7 @@ export class Conversation {
         let text = ''; const calls: ToolCall[] = [];
         const before = receipt.usage; // totals of earlier rounds
         let terminal: Extract<ModelEvent, { type: 'completed' }> | undefined;
-        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools }, signal, this.model.inlineTools && this.tools ? async (call, toolSignal) => {
+        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...instructions, ...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools }, signal, this.model.inlineTools && this.tools ? async (call, toolSignal) => {
           if (this.messages.length + steps.length > 196 || !available.some(d => d.name === call.name) || inlineIds.size >= 32 || inlineIds.has(call.id)) throw new HannesError('POLICY');
           inlineIds.add(call.id);
           if (signal?.aborted) throw new HannesError('CANCELLED');

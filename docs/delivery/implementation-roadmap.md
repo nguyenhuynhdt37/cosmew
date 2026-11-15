@@ -225,3 +225,7 @@ Tham chiếu [test strategy](test-strategy.md), [threat model](threat-model.md),
 2026-11-14: the user explicitly authorized leaving Phase 0 for Provider & Authentication. [Audit/plan](provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md) define contracts/tooling, provider adapters/catalogs, secure multi-account credentials, router, core conversation and CLI tests. These are implemented with evidence in the [acceptance report](provider-auth-acceptance.md). This does not mark the original Phase 1 (which also requires general tools/permission/runtime behavior) or later phases complete.
 
 Remaining PA1 release gates: authenticated live provider/model tests; available local daemon/gateway checks; provider-specific capability evidence; full budget/token-count routing and option policy; independently enforceable delegated-agent/auth integration before any subscription workflow; Linux/Windows native store verification. Full Product MVP acceptance remains pending. Other phase scopes are unchanged.
+
+## Task 01 authorized instruction loading
+
+2026-11-15: the user authorized only Project Context Loader ([ADR 0019](../adr/0019-project-context-loader.md), [delivery/evidence](project-context-loader.md)). It discovers approved-workspace AGENTS guidance and injects bounded transient user context through core ports. It does not advance RAG, LSP, MCP, memory, shell/write tools or any other task/phase.

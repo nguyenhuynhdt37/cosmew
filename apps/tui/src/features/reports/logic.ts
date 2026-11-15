@@ -51,6 +51,7 @@ export function limitRows(limits: AccountLimits[]): string[] {
 
 export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', details = false): string[] {
   const status = client.status(); const usage = client.usage(); const context = client.context(draft);
+  const project = client.projectContext();
   const limits = kind === 'usage' ? limitRows(client.limits()) : [];
   if (!details) {
     const short = (value: number | null | undefined) => value == null ? '—' : value >= 10000 ? `${(value / 1000).toLocaleString('en-US', {maximumFractionDigits: 1})}k` : value.toLocaleString('en-US');
@@ -75,6 +76,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       const filled = ratio == null ? 0 : Math.round(Math.min(100, ratio) / 100 * 16);
       return [
         field(display.measured ? 'Last measured' : 'Local estimate', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} tokens`),
+        ...(project ? [field('Project rules', `${project.sources.length} file(s) · ${project.usedBytes}/${project.budgetBytes} bytes`), ...(project.diagnostics.length ? [field('Rules warnings', project.diagnostics.map(d => d.code).join(', '))] : [])] : []),
         field('Last reported', context.lastMeasured?.usedTokens == null ? 'Not reported' : `${short(context.lastMeasured.usedTokens)} / ${short(context.lastMeasured.limitTokens)} tokens`),
         field('Window', context.limitTokens == null ? '—' : `${short(context.limitTokens)} tokens`),
         field('Output reserve', context.outputReserve == null ? 'Runtime default' : `${short(context.outputReserve)} tokens`),
@@ -133,6 +135,8 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     ...(context.runtimeHiddenContext ? ['Runtime may add hidden instructions, conversation wrappers and internal context.', 'Output reserve is not exposed by this runtime; a model ceiling is not a configured reserve.'] : []),
     `Metadata source: ${context.metadataSource ?? 'Unavailable'}`,
     `Metadata observed: ${context.metadataAt ?? 'Unknown'}`,
+    '', 'PROJECT INSTRUCTIONS · USER/PROJECT CONTEXT',
+    ...(project ? [`Root: ${project.root}`, `Working directory: ${project.workingDirectory ?? 'Unavailable'}`, `Budget: ${project.usedBytes}/${project.budgetBytes} bytes · fingerprint ${project.fingerprint}`, `Loaded: ${project.loadedAt}`, ...project.sources.map(source => `${source.path} · scope ${source.scope} · ${source.bytes} bytes${source.truncated ? ' · truncated' : ''} · sha256 ${source.hash}`), ...project.diagnostics.map(d => `Skipped/limited: ${d.path ?? '(loader)'} · ${d.code}`)] : ['Not loaded: folder consent or a conversational request is required.']),
     '', 'LAST PROVIDER/RUNTIME MEASUREMENT',
     `Used: ${count(context.lastMeasured?.usedTokens)} · Window: ${count(context.lastMeasured?.limitTokens)}`,
     `Measured at: ${context.lastMeasured?.measuredAt ?? 'Never'}`,

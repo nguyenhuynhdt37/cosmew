@@ -28,3 +28,5 @@ Dependencies của tools lên code-intel chỉ cho read/search; code-intel khôn
 Permission invariant: validate → normalize target → evaluate policy → persist intent/approval evidence → revalidate lease/target → execute → record outcome. Mọi đường thực thi, kể cả plugin/MCP/sidecar, phải đi qua cổng này. Kiểm tra trước UI confirmation không đủ nếu target thay đổi sau đó.
 
 DAG graph, public entry checks và side-effect enforcement sẽ thành checks ở phase triển khai. Phase 0 chỉ mô tả. ADR bắt buộc cho dependency edge mới, shared ownership, public type/version thay đổi, process boundary hay thay security model.
+
+Task 01 ([ADR 0019](../adr/0019-project-context-loader.md)) adds no package edges: workspace discovery receives an authorized-reader port from contracts; tools implements it with the existing workspace/security dependencies; core receives only ProjectContextPort. CLI composes these; SDK/TUI consume content-free reports. Core never imports workspace/tools/security/SDK implementations.

@@ -1,4 +1,4 @@
-import { HannesError, toolResultSchema, type ToolCall, type ToolDescriptor, type ToolPort, type ToolResult } from '@hannes/contracts';
+import { HannesError, toolResultSchema, type ToolCall, type ToolDescriptor, type ToolPort, type ToolResult, type ProjectInstructionReadResult } from '@hannes/contracts';
 import { evaluateRead, type SessionGrants } from '@hannes/security';
 import { WorkspaceDenied, type ResolvedPath, type WorkspaceRoot } from '@hannes/workspace';
 import type { z } from 'zod';
@@ -34,8 +34,8 @@ export interface ToolDispatcherOptions {
   grants: SessionGrants;
   /** Ask the user; must resolve to 'deny' when the prompt is dismissed or cancelled. */
   approve(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;
-  /** Secret redaction applied to every result before it leaves the dispatcher. */
-  redact(text: string): string;
+  /** Redact all outputs; incomplete prefixes must withhold any partial registered secret suffix. */
+  redact(text: string, incomplete?: boolean): string;
   audit?(record: ToolAuditRecord): void;
   stateDirectory?: string;
   /** Search deadline; defaults to 30 s. */
@@ -53,6 +53,49 @@ export class ToolDispatcher implements ToolPort {
   constructor(private readonly options: ToolDispatcherOptions) {}
 
   descriptors(): ToolDescriptor[] { return DESCRIPTORS; }
+
+  /** Automatic instruction reads share policy/audit but never prompt for newly required access. */
+  async readInstruction(path: string, maxBytes: number, signal?: AbortSignal): Promise<ProjectInstructionReadResult> {
+    signal?.throwIfAborted();
+    if (!/(^|\/)AGENTS(?:\.override)?\.md$/.test(path) || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 65536) return {status:'error',code:'INVALID_INPUT'};
+    const callId = crypto.randomUUID();
+    const audit = (record: Omit<ToolAuditRecord,'at'|'callId'|'tool'>) => this.options.audit?.({...record,at:new Date().toISOString(),callId,tool:'read'});
+    let requested = false;
+    const start = () => {if (!requested) {requested=true; audit({target:null,phase:'requested'});}};
+    const finish = (result: ProjectInstructionReadResult): ProjectInstructionReadResult => {
+      audit({target:result.status === 'ok' ? result.canonicalPath : null,phase:'completed',outcome:result.status === 'ok' ? 'ok' : result.status === 'denied' ? 'denied' : 'error',code:result.status === 'ok' ? undefined : result.code});
+      return result;
+    };
+    try {
+      const file = this.options.workspace.resolve(path);
+      start();
+      if (file.kind !== 'file') return finish({status:'error',code:'NOT_A_FILE'});
+      const gate = await this.authorize('read',file,audit,signal,false);
+      if (gate) return finish({status:'denied',code:gate.code ?? 'DENIED'});
+      signal?.throwIfAborted();
+      const current = evaluateRead(file.relative,file.absolute,{stateDirectory:this.options.stateDirectory});
+      if (current.effect === 'deny' || current.effect === 'ask' && !this.options.grants.has('fs.read',file.absolute)) {
+        audit({target:file.relative,phase:'decided',decision:'deny',reason:'revalidation'});
+        return finish({status:'denied',code:current.effect === 'ask' ? 'APPROVAL_REQUIRED' : 'DENIED'});
+      }
+      const {bytes,size} = this.options.workspace.readBytes(file,maxBytes);
+      if (bytes.includes(0)) return finish({status:'error',code:'BINARY_FILE'});
+      const truncated = size > bytes.byteLength;
+      let text: string;
+      try {text=new TextDecoder('utf-8',{fatal:true}).decode(bytes,{stream:truncated});}
+      catch {return finish({status:'error',code:'INVALID_UTF8'});}
+      const safe = this.options.redact(text,truncated);
+      const content = new TextDecoder().decode(Buffer.from(safe).subarray(0,maxBytes),{stream:true});
+      signal?.throwIfAborted();
+      return finish({status:'ok',content,canonicalPath:file.relative,fileBytes:size,truncated:truncated || Buffer.byteLength(safe)>maxBytes});
+    } catch (error) {
+      if (signal?.aborted || error instanceof HannesError && error.code === 'CANCELLED') throw new HannesError('CANCELLED');
+      if (error instanceof WorkspaceDenied && error.reason === 'not-found' && !requested) return {status:'missing',code:'NOT_FOUND'};
+      start();
+      if (error instanceof WorkspaceDenied && error.reason === 'outside-workspace') {audit({target:null,phase:'decided',decision:'deny',reason:error.reason}); return finish({status:'denied',code:'DENIED'});}
+      return finish({status:'error',code:'UNREADABLE'});
+    }
+  }
 
   async invoke(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
     const audit = (record: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) =>
@@ -101,6 +144,7 @@ export class ToolDispatcher implements ToolPort {
       if (error instanceof WorkspaceDenied) {
         // Never echo a path outside the workspace back to the model.
         if (error.reason === 'outside-workspace') { audit({ target: null, phase: 'decided', decision: 'deny', reason: error.reason }); return fail('DENIED', 'Access denied: the path is outside the approved workspace.', undefined, 'denied'); }
+        if (error.reason === 'inaccessible') return fail('UNREADABLE', 'File metadata is inaccessible.');
         if (error.reason === 'not-found') return fail('NOT_FOUND', 'No such file or directory in the workspace.');
         return fail('INVALID_INPUT', 'Invalid path.');
       }
@@ -117,11 +161,12 @@ export class ToolDispatcher implements ToolPort {
   }
 
   /** Policy + approval for one resolved target. Returns a denial result, or null to proceed. */
-  private async authorize(tool: string, file: ResolvedPath, audit: (r: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) => void, signal?: AbortSignal): Promise<Omit<ToolResult, 'callId' | 'name'> | null> {
+  private async authorize(tool: string, file: ResolvedPath, audit: (r: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) => void, signal?: AbortSignal, allowPrompt = true): Promise<Omit<ToolResult, 'callId' | 'name'> | null> {
     const decision = evaluateRead(file.relative, file.absolute, { stateDirectory: this.options.stateDirectory });
     audit({ target: file.relative, phase: 'decided', decision: decision.effect, reason: decision.reason });
     if (decision.effect === 'deny') return { status: 'denied', code: 'DENIED', content: `Access denied by policy (${decision.reason}).`, target: file.relative };
     if (decision.effect === 'allow' || this.options.grants.has('fs.read', file.absolute)) return null;
+    if (!allowPrompt) return {status:'denied',code:'APPROVAL_REQUIRED',content:'Automatic instruction loading requires an existing permission grant.',target:file.relative};
     const answer = await this.options.approve({ tool, capability: 'fs.read', target: file.relative, reason: decision.reason }, signal);
     signal?.throwIfAborted();
     audit({ target: file.relative, phase: 'decided', decision: answer, reason: 'user' });

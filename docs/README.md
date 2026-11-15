@@ -86,3 +86,5 @@ Current subscription and simplified login: [usage, prerequisites and evidence](d
 Commands/usage/context and continued multi-account chat: [usage and verification](delivery/commands-usage-context-acceptance.md), [ADR 0009](adr/0009-command-telemetry-and-account-continuation.md). This supersedes direct logout with a named confirmation and adds `/switch`, `/usage` (`/cost`) and `/context` within PA1/TUI1/SUB1.
 
 ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [usage and live evidence](delivery/subscription-auth.md). The bridge exposes only Hannes read/glob/grep after folder consent; native runtime tools remain denied.
+
+Task 01 Project Context Loader: [usage, module changes and deterministic acceptance](delivery/project-context-loader.md), [ADR 0019 and pinned Codex research](adr/0019-project-context-loader.md). Project instructions are approved-workspace user context, not system/developer authority.

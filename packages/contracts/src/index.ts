@@ -5,3 +5,4 @@ export * from './permissions';
 export * from './tools';
 
 export * from './telemetry';
+export * from './project-context';

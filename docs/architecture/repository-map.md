@@ -314,3 +314,11 @@ No package ownership/dependency edge changed. See [ADR 0007](../adr/0007-provide
 
 
 SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-side official runtime lifecycle and line UX; `packages/security/src/subscription-policy.ts` owns fixed recipes and denied capabilities; `packages/persistence/src/runtime-profile.ts` owns private temporary/profile writes; `packages/models/src/subscription.ts` adapts the injected transport to ModelPort. No new package edge. [ADR 0008](../adr/0008-subscription-runtime-auth.md).
+
+## Task 01 Project Context Loader (ADR 0019)
+
+- `contracts/project-context.ts`: injectable context/read ports and content-free provenance reports (contract 1.7).
+- `workspace/project-context.ts`: root-to-cwd discovery, overrides, aggregate UTF-8 budget, hashes and refresh. Reads only through the injected authorized reader.
+- `tools/dispatcher.ts`: bounded automatic instruction reader sharing canonical paths, security policy, redaction and audit; never automatically prompts for a newly required grant.
+- `core/agent/engine.ts`: one transient user-context message per model request, loaded once per turn; no direct filesystem or SDK access.
+- CLI composition wires approval-gated loader instances per workspace; SDK and TUI `/context` expose metadata/diagnostics and include loaded bytes in local estimates. No persistence schema or package graph changes.

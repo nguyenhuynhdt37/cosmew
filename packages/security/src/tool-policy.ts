@@ -22,8 +22,8 @@ export function evaluateRead(relativePath: string, absolutePath: string, context
   // file, so every comparison ignores case; callers also pass on-disk casing via realpath.native.
   const segments = relativePath.toLowerCase().split('/');
   const name = segments.at(-1) ?? '';
-  const absolute = absolutePath.toLowerCase();
-  const state = context.stateDirectory?.toLowerCase();
+  const absolute = absolutePath.replace(/\\/g, '/').toLowerCase();
+  const state = context.stateDirectory?.replace(/\\/g, '/').toLowerCase();
   // deny
   if (state && (absolute === state || absolute.startsWith(state + '/'))) {
     return { effect: 'deny', reason: 'hannes-state' };
