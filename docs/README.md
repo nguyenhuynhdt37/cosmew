@@ -1,6 +1,6 @@
 # Điều hướng đặc tả Hannes
 
-Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-verification.md). TUI feature modules and shared UI kit: [ADR 0015](adr/0015-tui-feature-modules.md). Provider limits in /usage: [ADR 0016](adr/0016-usage-provider-limits.md).
+Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-verification.md). TUI feature modules and shared UI kit: [ADR 0015](adr/0015-tui-feature-modules.md). Provider limits in /usage: [ADR 0016](adr/0016-usage-provider-limits.md). Proposed next slice, read-only tools and permission engine: [ADR 0017](adr/0017-read-only-tools-and-permission-engine.md) ([upstream comparison](delivery/tools-permissions-research.md)).
 
 Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
 
