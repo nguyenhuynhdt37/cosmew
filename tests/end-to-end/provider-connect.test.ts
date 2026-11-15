@@ -215,14 +215,18 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
   };
   const first = launch();
   try {
-    await waitFor(() => first.output().includes('FUTRYN'));
-    first.terminal.write('/login\r');
+    await waitFor(() => first.output().includes('Trust this folder?'));
+    first.terminal.write('\x1b[A\r');
+    await waitFor(() => first.output().includes('Sign in to another account'));
+    first.terminal.write('\r');
     await waitFor(() => first.output().includes('Connect a provider'));
     first.terminal.write('fixture\r');
     await waitFor(() => first.output().includes('Sign in to Fixture'));
     first.terminal.write('\r');
     await waitFor(() => first.output().includes('fixture-model'));
-    first.terminal.write('\rHello terminal\r');
+    first.terminal.write('\r');
+    await waitFor(() => first.output().includes('Ask anything'));
+    first.terminal.write('Hello terminal\r');
     await waitFor(() => first.output().includes('Hello fixture'));
     expect(server.requests.some(r => r.body?.messages?.some((m: any) => m.content === 'Hello terminal'))).toBe(true);
     first.terminal.write('\x03');
@@ -231,7 +235,9 @@ test.skipIf(process.platform === 'win32')('actual terminal: /login custom endpoi
   } finally { first.child.kill(); await first.child.exited; first.terminal.close(); }
   const second = launch();
   try {
-    await waitFor(() => second.output().includes('fixture'));
+    await waitFor(() => second.output().includes('Trust this folder?'));
+    second.terminal.write('\x1b[A\r');
+    await waitFor(() => second.output().includes('Ask anything'));
     second.terminal.write('/logout\r');
     await waitFor(() => second.output().includes('You will need to sign in again.'));
     second.terminal.write('\x1b[B\r');
@@ -326,8 +332,11 @@ test.skipIf(process.platform === 'win32')('terminal SIGTERM during login drains 
   const terminal = new Bun.Terminal({ cols: 100, rows: 28, data(_term, bytes) { output += Buffer.from(bytes).toString(); } });
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], { terminal, env: { ...process.env, HANNES_HOME: dir, NO_COLOR: '1' } });
   try {
-    await waitFor(() => output.includes('FUTRYN'));
-    terminal.write('/login\rfixture\r\r');
+    await waitFor(() => output.includes('Trust this folder?'));
+    terminal.write('\x1b[A\r');
+    await waitFor(() => output.includes('Sign in to another account'));
+    terminal.write('\r'); await waitFor(() => output.includes('Connect a provider'));
+    terminal.write('fixture\r\r');
     await waitFor(() => server.requests.length > 0);
     child.kill('SIGTERM');
     expect(await Promise.race([child.exited, Bun.sleep(3000).then(() => -1)])).toBe(130);

@@ -319,6 +319,13 @@ export class FutrynTuiApp {
   private cols: number;
   private rows: number;
   private overlay: ActiveOverlay = 'none';
+  private startupGate: 'off' | 'trust' | 'checking' | 'choose' | 'login' = 'off';
+  private startupIndex = 0;
+  private startupMessage = '';
+  private startupAbort: AbortController | null = null;
+  private startupTask: Promise<void> | null = null;
+  private startupInitialCommand?: string;
+
   private effortIndex = 0;
   private composer: ComposerState = createInitialComposerState();
   private transcript: TranscriptItem[] = [];
@@ -375,6 +382,85 @@ export class FutrynTuiApp {
     }
   }
 
+  /** Startup consent is scoped to this interactive session and never grants tool permissions. */
+  public startStartupGate(initialCommand?: string): void {
+    this.startupInitialCommand = initialCommand;
+    this.startupGate = 'trust';
+    this.startupIndex = 1; // Deny by default.
+  }
+
+  private beginStartupValidation(): void {
+    if (this.startupTask) return;
+    const account = this.client.status().activeAccount;
+    if (!account || account.status === 'logged-out') { this.startupGate = 'choose'; this.startupIndex = 0; return; }
+    const originalSelection = this.client.status().selection;
+    this.startupGate = 'checking'; this.startupMessage = '';
+    const abort = new AbortController(); this.startupAbort = abort;
+    const task = (async () => {
+      try {
+        // Generation proves access for providers whose model-list endpoint is public.
+        await this.client.diagnose(abort.signal, true);
+        if (abort.signal.aborted) return;
+        const current = this.client.status();
+        if (current.activeAccount?.id !== account.id || current.activeAccount.authGeneration !== account.authGeneration ||
+            current.selection?.accountId !== originalSelection?.accountId || current.selection?.modelId !== originalSelection?.modelId) {
+          this.startupMessage = 'Account or model changed during verification. Choose an account to check again.';
+          this.startupGate = 'choose'; this.startupIndex = 0; return;
+        }
+        if (!current.selection) {
+          this.startupGate = 'login'; this.openOverlay('models');
+          this.modelPickerState.statusMessage = 'Choose a model to continue.'; return;
+        }
+        this.startupGate = 'off';
+        const command = this.startupInitialCommand; this.startupInitialCommand = undefined;
+        if (command) await this.executeSlashCommand(command);
+      } catch (error) {
+        if (abort.signal.aborted) return;
+        const code = error instanceof HannesError ? error.code : 'PROTOCOL';
+        this.startupMessage = ['AUTH', 'FORBIDDEN'].includes(code)
+          ? 'Account access was rejected. Choose another or sign in again.'
+          : `Check failed (${code}). Check connection and retry, or choose another account.`;
+        const alternatives = this.client.listAccounts().filter(candidate => candidate.status !== 'logged-out');
+        const other = alternatives.findIndex(candidate => candidate.id !== account.id && candidate.status !== 'invalid');
+        this.startupGate = 'choose'; this.startupIndex = other < 0 ? alternatives.length : other;
+      } finally { this.startupAbort = null; this.startupTask = null; }
+    })();
+    this.startupTask = task;
+  }
+
+  private async handleStartupKey(key: string): Promise<boolean> {
+    if (this.startupGate === 'off') return false;
+    if (this.startupGate === 'login') {
+      if (this.overlay !== 'none') {
+        if (!['connect', 'models'].includes(this.overlay) || ['Ctrl+P', 'Ctrl+T', 'Ctrl+L', 'Ctrl+S', 'Ctrl+D', 'Ctrl+B', 'Ctrl+N'].includes(key)) return true;
+        return false;
+      }
+      const active = this.client.status().activeAccount;
+      if (active) this.beginStartupValidation();
+      else { this.startupGate = 'choose'; this.startupIndex = 0; }
+    }
+    if (key === 'Ctrl+C' || key === 'Escape') {
+      this.startupAbort?.abort(); this.exitRequested = true; return true;
+    }
+    if (this.startupGate === 'checking') return true;
+    const accounts = this.client.listAccounts().filter(account => account.status !== 'logged-out');
+    const count = this.startupGate === 'trust' ? 2 : accounts.length + 1;
+    if (key === 'ArrowDown' || key === 'ArrowUp') this.startupIndex = (this.startupIndex + (key === 'ArrowDown' ? 1 : -1) + count) % count;
+    if (key !== 'Enter') return true;
+    if (this.startupGate === 'trust') {
+      if (this.startupIndex !== 0) { this.exitRequested = true; return true; }
+      this.beginStartupValidation(); return true;
+    }
+    const selected = accounts[this.startupIndex];
+    if (selected) {
+      try { this.client.useAccount(selected.id); this.syncTranscriptFromActiveSession(); this.beginStartupValidation(); }
+      catch { this.startupMessage = 'Account is unavailable. Choose another or sign in again.'; }
+    } else {
+      this.startupGate = 'login'; this.openOverlay('connect');
+    }
+    return true;
+  }
+
   public isExitRequested(): boolean {
     return this.exitRequested;
   }
@@ -408,6 +494,14 @@ export class FutrynTuiApp {
     const animate = !config.reducedMotion && !this.themeEngine.wallpaperEngine.isPaused(config);
     this.companion.tick(deltaSeconds, animate, config.speed);
     if (animate) this.animationTimeSeconds += deltaSeconds;
+    this.advanceStartupGate();
+  }
+
+  public advanceStartupGate(): void {
+    if (this.startupGate === 'login' && this.overlay === 'none') {
+      if (this.client.status().activeAccount) this.beginStartupValidation();
+      else { this.startupGate = 'choose'; this.startupIndex = 0; }
+    }
   }
 
   private syncTranscriptFromActiveSession(): void {
@@ -647,12 +741,13 @@ export class FutrynTuiApp {
 
   public async shutdown(): Promise<void> {
     this.textSelection.clear(); this.clipboardSequence = '';
+    this.startupAbort?.abort();
     this.authAbort?.abort();
     this.switchAbort?.abort();
     this.activeAbortController?.abort();
     if (this.connectState.authChallenge) await this.client.cancelProviderAuth(this.connectState.authChallenge.id);
     this.connectState.secretDraft = '';
-    await Promise.allSettled([this.authTask, this.turnTask, this.switchTask]);
+    await Promise.allSettled([this.startupTask, this.authTask, this.turnTask, this.switchTask]);
   }
 
   public async submitPrompt(content: string): Promise<void> {
@@ -759,6 +854,7 @@ export class FutrynTuiApp {
   }
 
   public async handleKey(key: string): Promise<void> {
+    if (this.startupGate !== 'off' && await this.handleStartupKey(key)) return;
     const mouse = /^(MouseDown|MouseDrag|MouseUp):(\d+):(\d+)$/.exec(key);
     if (mouse) {
       const point = {row:Number(mouse[2]), col:Number(mouse[3])};
@@ -2235,10 +2331,47 @@ export class FutrynTuiApp {
       drawBoxBlock(Math.max(0, Math.min(startRow, rows - 1 - overlayLines.length)), startCol, overlayLines.slice(0, rows - 1), overlayWidth);
     }
 
+    if (this.startupGate !== 'off' && this.startupGate !== 'login') {
+      for (const row of cells) for (const cell of row) { cell.ch = ' '; cell.fg = tokens.foreground; cell.bg = tokens.background; cell.bold = false; }
+      const accounts = this.client.listAccounts().filter(account => account.status !== 'logged-out');
+      const w = Math.max(1, Math.min(cols - 2, 64));
+      const h = Math.max(1, Math.min(rows - 1, this.startupGate === 'trust' ? 10 : this.startupGate === 'checking' ? 7 : 10));
+      const content: { text:string; fg:string; bold?:boolean }[] = [];
+      const add = (text:string, fg = tokens.foreground, bold = false) => content.push({text, fg, bold});
+      if (this.startupGate === 'trust') {
+        add('Trust this folder?', tokens.accent, true);
+        const path = status.workspace.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
+        const available = Math.max(1, w - 4);
+        add(path.length > available ? '…' + path.slice(-(available - 1)) : path, tokens.foregroundMuted);
+        if (h >= 9) add('File references and diff can read this folder.');
+        add(w < 35 ? 'May incur cost.' : 'Account check sends a small, potentially billed request.', tokens.warning);
+        add(`${this.startupIndex === 0 ? '›' : ' '} Allow for this session`, this.startupIndex === 0 ? tokens.accent : tokens.foreground, this.startupIndex === 0);
+        add(`${this.startupIndex === 1 ? '›' : ' '} Exit`, this.startupIndex === 1 ? tokens.accent : tokens.foreground, this.startupIndex === 1);
+      } else if (this.startupGate === 'checking') {
+        add('Checking account…', tokens.accent, true); add(status.activeAccount?.alias ?? '', tokens.foregroundMuted);
+        add('Checking provider access and model…');
+      } else {
+        add('Choose an account', tokens.accent, true);
+        if (h >= 8) add(this.startupMessage || 'Select an account or sign in.', tokens.warning);
+        const choices = [...accounts.map(account => `${account.alias} · ${account.providerId}`), 'Sign in to another account'];
+        const room = Math.max(1, h - (h >= 8 ? 4 : 3));
+        const start = Math.max(0, Math.min(this.startupIndex - room + 1, choices.length - room));
+        for (const [offset, text] of choices.slice(start, start + room).entries()) {
+          const selected = start + offset === this.startupIndex;
+          add(`${selected ? '›' : ' '} ${text}`, selected ? tokens.accent : tokens.foreground, selected);
+        }
+      }
+      const footer = w >= 35 ? '↑↓ Choose · Enter Continue · Esc Exit' : '↑↓  Enter  Esc';
+      while (content.length < h - 1) add('');
+      content[h - 1] = {text:footer, fg:tokens.foregroundSubtle};
+      const x = Math.max(0, Math.floor((cols - w) / 2)); const y = Math.max(0, Math.floor((rows - h) / 2));
+      content.slice(0, h).forEach((row, i) => drawSpansAt(y + i, x, [{text:('  ' + row.text).slice(0, w).padEnd(w), fg:row.fg, bg:tokens.overlayBackground, bold:row.bold}], w));
+    }
+
     // 8. Dòng trạng thái mờ, không nền (thông báo tạm thời hoặc đường dẫn + model).
     const shortWs = status.workspace.split('/').slice(-2).join('/');
     const thinking = this.isStreaming ? '● ' : '';
-    const focusedDialog = ['connect', 'themes', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay);
+    const focusedDialog = this.startupGate !== 'off' || ['connect', 'themes', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay);
     const leftText = focusedDialog ? '' : this.statusBanner
       ? ` ${this.statusBanner}`
       : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
@@ -2330,13 +2463,12 @@ export class FutrynTuiApp {
 export async function runInteractiveTui(options: FutrynTuiOptions & { initialCommand?: string }): Promise<void> {
   const app = new FutrynTuiApp(options);
   await app.initialize();
-  if (options.initialCommand) {
-    await app.executeSlashCommand(options.initialCommand);
-  }
-
   const stdout = process.stdout;
   const stdin = process.stdin;
   const isTty = Boolean(stdout.isTTY && stdin.isTTY);
+
+  if (isTty) app.startStartupGate(options.initialCommand);
+  else if (options.initialCommand) await app.executeSlashCommand(options.initialCommand);
 
   if (!isTty) {
     // Non-TTY deterministic single-frame output and clean exit
@@ -2384,6 +2516,7 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
 
   const renderNow = (force = false) => {
     if (cleanedUp) return;
+    app.advanceStartupGate();
     const clipboard = app.takeClipboardSequence(); if (clipboard) stdout.write(clipboard);
     const ansi = app.renderAnsiFrame(force);
     if (ansi) stdout.write(ansi);

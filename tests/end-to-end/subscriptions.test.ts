@@ -142,12 +142,14 @@ for (const vendor of ['OpenAI', 'GitHub Copilot']) test.skipIf(process.platform 
   const child = Bun.spawn([process.execPath, resolve('tests/subscription-fixtures/tui.ts')], { terminal, env: { ...process.env, FUTRYN_TEST_HOME: c.dir, NO_COLOR: '1' } });
   const wait = async (text: string) => { const deadline = Date.now() + 4000; while (!output.includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output).toContain(text); };
   try {
-    await wait('FUTRYN'); terminal.write('/login\r'); await wait('Choose your provider');
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
+    await wait('Sign in to another account'); terminal.write('\r'); await wait('Choose your provider');
     if (vendor === 'GitHub Copilot') terminal.write('copilot');
     terminal.write('\r'); await wait(`Sign in to ${vendor}`);
     terminal.write('\r'); await wait('runtime-model');
     expect(output).not.toContain('Name this account'); expect(output).not.toContain('Enter API key');
-    terminal.write('\rHello from terminal\r'); await wait('Subscription fixture response');
+    terminal.write('\r'); await wait('Ask anything');
+    terminal.write('Hello from terminal\r'); await wait('Subscription fixture response');
     terminal.write('/logout\r'); await wait('You will need to sign in again.'); terminal.write('\x1b[B\r'); await wait('Signed out of');
     terminal.write('\x1b\x03');
     expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);

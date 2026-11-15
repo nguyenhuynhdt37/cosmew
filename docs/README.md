@@ -1,5 +1,7 @@
 # Điều hướng đặc tả Hannes
 
+Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-verification.md).
+
 Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
 
 Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/futryn-tui-acceptance.md).

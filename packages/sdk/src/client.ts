@@ -325,10 +325,11 @@ export class FutrynClient {
     }
   }
 
-  async diagnose(signal?: AbortSignal): Promise<string> {
-    const account = this.status().activeAccount;
+  async diagnose(signal?: AbortSignal, generate = false): Promise<string> {
+    const status = this.status(); const account = status.activeAccount;
     if (!account) return 'No active account. Use /login. Runtime and private settings loaded.';
-    const result = await this.ports.validateAccount(account, signal);
+    const target = generate && status.selection?.accountId === account.id ? { ...account, defaultModel: status.selection.modelId } : account;
+    const result = await this.ports.validateAccount(target, signal, generate);
     this.notifyStateChange();
     return `Connected: ${account.alias}; ${result.models} models; validated via ${result.validation}. Runtime and private settings loaded.`;
   }

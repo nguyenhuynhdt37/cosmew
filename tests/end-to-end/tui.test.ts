@@ -231,17 +231,19 @@ test('Fyn: provider stream, cancellation and failure never show a false completi
 });
 
 test.skipIf(process.platform === 'win32')('Fyn: actual PTY renders and exits cleanly without wallpaper', async () => {
-  const x = context();
+  const x = context(); await configure(x);
   expect((await x.cli(['themes', 'wallpaper', 'none'])).code).toBe(0);
   expect((await x.cli(['themes', 'animation', '--enabled', 'true'])).code).toBe(0);
   let output = '';
   const decoder = new TextDecoder();
   const terminal = new Bun.Terminal({ cols: 100, rows: 36, data(_terminal, data) { output += decoder.decode(data, { stream: true }); } });
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
-    terminal, env: { ...process.env, HANNES_HOME: x.dir, NO_COLOR: '1' },
+    terminal, env: { ...process.env, HANNES_HOME: x.dir, HANNES_TEST_KEY: 'fixture-e2e-sensitive-value', NO_COLOR: '1' },
   });
   try {
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 6000;
+    while (!output.includes('Trust this folder?') && Date.now() < deadline) await Bun.sleep(10);
+    expect(output).toContain('Trust this folder?'); terminal.write('\x1b[A\r');
     while (!output.includes('Fyn · ready') && Date.now() < deadline) await Bun.sleep(20);
     expect(output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).toContain('Fyn · ready');
     const before = output.length;
@@ -301,14 +303,15 @@ test('chat resize keeps the composer usable and shows complete Fyn art or its st
 });
 
 test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persists the light theme', async () => {
-  const x = context(); let output = '';
+  const x = context(); await configure(x); let output = '';
   const terminal = new Bun.Terminal({cols:80, rows:24, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
-    terminal, env: {...process.env, HANNES_HOME:x.dir, COLORTERM:'truecolor', FUTRYN_THEME_MODE:'dark'},
+    terminal, env: {...process.env, HANNES_HOME:x.dir, HANNES_TEST_KEY:'fixture-e2e-sensitive-value', COLORTERM:'truecolor', FUTRYN_THEME_MODE:'dark'},
   });
   const wait = async (text:string, from = 0) => { const deadline = Date.now() + 5000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
-    await wait('FUTRYN');
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
+    await wait('Ask anything');
     const commandMark = output.length; terminal.write('/theme'); await wait('Commands', commandMark);
     expect(output.slice(commandMark)).not.toContain('/theme set'); expect(output.slice(commandMark)).not.toContain('/theme edit');
     terminal.write('\r'); await wait('Auto'); await wait('Dark'); await wait('Light');

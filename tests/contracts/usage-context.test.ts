@@ -217,6 +217,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
   const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], { terminal, env: { ...process.env, HANNES_HOME: c.dir, NO_COLOR: '1' } });
   const wait = async (text: string, from = 0) => { const until = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < until) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
     await wait('FUTRYN'); await wait('/ 128k tokens');
     let effortMark = output.length; terminal.write('/effort\r'); await wait('Reasoning effort', effortMark);
     effortMark = output.length; terminal.write('\x1b[C\x1b[C'); await wait('[ high ]', effortMark);
@@ -530,6 +531,7 @@ test.skipIf(process.platform === 'win32')('actual PTY streams thinking before th
   const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], {terminal, env:{...process.env, HANNES_HOME:c.dir, NO_COLOR:'1'}});
   const wait = async (text: string, from = 0) => { const deadline = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5); expect(output.slice(from)).toContain(text); };
   try {
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
     await wait('/ 128k tokens'); terminal.write('Stream reasoning and answer\r');
     await wait('Provider HTTP'); expect(output).not.toContain('Hello fixture');
     await wait('Hello fixture'); await wait('Completed turn');

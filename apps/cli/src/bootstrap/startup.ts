@@ -288,7 +288,10 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const info = await transport(account).json('key', signal);
         if (!info || typeof info !== 'object' || !('data' in info) || !info.data || typeof info.data !== 'object') throw new HannesError('PROTOCOL');
       }
-      const res = await discoverModels(account, signal);
+      // An explicit generation probe validates the pinned model without replacing
+      // richer cached metadata with a less complete model-list response.
+      const cached = generate ? catalog(account).cached() : [];
+      const res = cached.length ? { models: cached, stale: false } : await discoverModels(account, signal);
       if (res.stale) throw new HannesError('TRANSPORT');
       const modelId = account.defaultModel ?? res.models[0]?.id;
       if ((generate || (p.catalog === 'manual' && !p.runtime)) && !modelId) throw new HannesError('NOT_FOUND');
