@@ -12,21 +12,21 @@ afterEach(async()=>{for(const fn of cleanup.splice(0).reverse())await fn();});
 async function make(codex=false, enabled=true, real=false){
   const dir=mkdtempSync(join(tmpdir(),'futryn-exec-home-')),ws=mkdtempSync(join(tmpdir(),'futryn-exec-project-'));
   cleanup.push(()=>rmSync(dir,{recursive:true,force:true}),()=>rmSync(ws,{recursive:true,force:true}));writeFileSync(join(ws,'source.ts'),'export const marker = 1;\n');
-  let runs=0;
-  const runtime:CommandRuntime={id:'fixture-policy',label:'deterministic test only',availability:()=>({ok:true}),run:async()=>{runs++;return {kind:'exited',exitCode:0,signal:null,output:'\x1b[31msource.ts:1:marker\x1b[0m\n',omittedBytes:0,durationMs:2};}};
+  let runs=0, factories=0, shutdowns=0;
+  const runtime:CommandRuntime={id:'fixture-policy',label:'deterministic test only',availability:()=>({ok:true}),shutdown:async()=>{shutdowns++;},run:async()=>{runs++;return {kind:'exited',exitCode:0,signal:null,output:'\x1b[31msource.ts:1:marker\x1b[0m\n',omittedBytes:0,durationMs:2};}};
   const server=fixtureServer();cleanup.push(()=>server.server.stop(true));
   const app=startup(dir,{vault:memoryVault(),...(enabled?{commands:(root:string,state:string)=>{
-    if(!real)return runtime;
+    factories++;if(!real)return runtime;
     // Explicit research-only injection; production's mandatory cleanup gate stays closed.
     const candidate=new SeatbeltRuntime({workspaceRoot:root,stateDirectory:state,extraExecutables:['rg']});expect(candidate.probeIsolation()).toEqual({ok:true});
-    return {id:candidate.id,label:'OS isolation acceptance only',availability:()=>({ok:true as const}),run:async(request,signal)=>{runs++;return candidate.run(request,signal);}} satisfies CommandRuntime;
+    return {id:candidate.id,label:'OS isolation acceptance only',availability:()=>({ok:true as const}),shutdown:()=>candidate.shutdown(),run:async(request,signal)=>{runs++;return candidate.run(request,signal);}} satisfies CommandRuntime;
   }}:{}),subscriptions:{openURL:async()=>{},resolveCommand:r=>({command:process.execPath,prefix:[resolve('tests/subscription-fixtures/runtime.ts'),r,'exec-command']})}});
-  cleanup.push(async()=>{await app.subscriptions.shutdown();app.db.close();});
+  cleanup.push(async()=>{await app.shutdownCommands();await app.subscriptions.shutdown();app.db.close();});
   const client=app.createFutrynClient(ws);
   if(codex){const challenge=await client.beginProviderAuth('chatgpt','subscription-device');await client.connectAccount({providerId:'chatgpt',alias:'fixture',credential:{kind:'keyring',key:crypto.randomUUID()},authChallengeId:challenge.id});}
   else{server.set({toolCall:{name:'exec_command',args:JSON.stringify({cmd:'rg -n marker source.ts'})}});app.registry.add(server.provider('chat',{id:'commands',auth:'none'}));await app.accounts.add('commands','fixture',{kind:'none'});await client.discoverModels();client.selectModel('fixture-model');}
   client.setToolsEnabled(true);const tui=new FutrynTuiApp({client,cols:100,rows:30});await tui.initialize();cleanup.push(()=>tui.shutdown());
-  return{app,client,tui,server,ws,runtime,runs:()=>runs};
+  return{app,client,tui,server,ws,runtime,runs:()=>runs,factories:()=>factories,shutdowns:()=>shutdowns};
 }
 async function pending(c:Awaited<ReturnType<typeof make>>){const end=Date.now()+4000;while(!c.client.listPendingPermissions().length&&Date.now()<end)await Bun.sleep(5);expect(c.client.listPendingPermissions()).toHaveLength(1);c.tui.advanceStartupGate();}
 for(const codex of [false,true])test(`${codex?'Codex dynamic bridge':'direct API'} fixture: exact approval, command pairing, sanitized output and persisted resume`,async()=>{
@@ -77,4 +77,15 @@ test('command status never calls an unstarted proposal running or invents succes
  expect(commandSummary(call,{callId:'c',name:'exec_command',status:'ok',content:'Exit code: 7\nWall time: 0.01 s\nOutput:\nerr',exitCode:outcome.exitCode},{live:false})).toMatchObject({state:'failed',note:'exit 7'});
  const item=messagesToTranscript([{role:'assistant',content:'',toolCalls:[call]},{role:'tool',toolName:'exec_command',toolCallId:'c',content:'Process ended by signal SIGKILL.\nWall time: 0.01 s\nOutput:\nExit code: 0'},{role:'assistant',content:'done'}],{idPrefix:'signal'}).at(-1)!;
  expect(commandSummary(call,item.toolResults![0],{live:false}).state).toBe('failed');
+});
+
+test('CLI reuses its client runtime and shuts down owned runtimes once',async()=>{
+ const c=await make();
+ for(let i=0;i<2;i++){
+  if(i)c.client.createSession();
+  const turn=c.tui.submitPrompt('Locate marker');await pending(c);await c.tui.handleKey('1');await turn;
+ }
+ expect(c.factories()).toBe(1);expect(c.runs()).toBe(2);
+ await Promise.all([c.app.shutdownCommands(),c.app.shutdownCommands()]);
+ expect(c.shutdowns()).toBe(1);
 });

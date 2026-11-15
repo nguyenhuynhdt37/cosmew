@@ -740,8 +740,8 @@ async function main() {
   } finally {
     process.removeListener('SIGINT', interrupt);
     process.removeListener('SIGTERM', interrupt);
-    await app.subscriptions.shutdown();
-    app.db.close();
+    try { await app.shutdownCommands(); }
+    finally { try { await app.subscriptions.shutdown(); } finally { app.db.close(); } }
   }
 }
 

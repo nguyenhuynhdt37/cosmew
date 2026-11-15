@@ -1,5 +1,7 @@
 # Implementation roadmap
 
+Task 03B: supervision hardening and adversarial OS evidence under [ADR 0023](../adr/0023-process-supervision.md); [acceptance](process-supervision-acceptance.md). Production gate remains CLOSED: detached/reparented processes and supervisor crash are not contained. No later task is enabled.
+
 Task 03A: bounded exec_command foundation and candidate OS tests under [ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md). **Gate closed**: detached descendant cleanup failed on macOS; Linux/Windows remain unsupported. Tool exposure is disabled; this is not production execution acceptance. See [evidence](exec-command-foundation.md).
 
 > Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.

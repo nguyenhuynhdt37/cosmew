@@ -6,6 +6,14 @@ export interface CommandRequest {
   maxOutputBytes: number;
 }
 
+export interface CommandLifecycle {
+  leader: 'not-started' | 'exited' | 'unconfirmed';
+  stopRequested: boolean;
+  output: 'closed' | 'cut-off';
+  /** No current backend can certify all descendants dead. */
+  descendants: 'not-started' | 'unconfirmed';
+}
+
 export interface CommandOutcome {
   kind: 'exited' | 'timeout' | 'cancelled' | 'spawn-failed';
   exitCode: number | null;
@@ -13,6 +21,7 @@ export interface CommandOutcome {
   output: string;
   omittedBytes: number;
   durationMs: number;
+  lifecycle?: CommandLifecycle;
   /** The sandbox wrapper itself failed (bad profile, missing binary); the command never ran. */
   sandboxFailed?: boolean;
 }
@@ -30,4 +39,6 @@ export interface CommandRuntime {
   readonly label: string;
   availability(): RuntimeAvailability;
   run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome>;
+  /** Close admission and settle owned runs; this does not certify descendant containment. */
+  shutdown?(): Promise<void>;
 }

@@ -223,6 +223,20 @@ const APPROVAL_REASONS: Record<string, string> = {
 };
 
 export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions; commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime } = {}) {
+  const commandRuntimes = new Set<CommandRuntime>();
+  let commandsClosed = false;
+  let commandShutdown: Promise<void> | undefined;
+  const shutdownCommands = () => {
+    if (commandShutdown) return commandShutdown;
+    commandsClosed = true;
+    const owned = [...commandRuntimes];
+    return commandShutdown = (async () => {
+      try {
+        const results = await Promise.allSettled(owned.map(runtime => Promise.resolve().then(() => runtime.shutdown?.())));
+        if (results.some(result => result.status === 'rejected')) throw new HannesError('TRANSPORT');
+      } finally { for (const runtime of owned) commandRuntimes.delete(runtime); }
+    })();
+  };
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
@@ -357,6 +371,15 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     if (![options.maxBytes,options.maxFileBytes ?? 16384].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new HannesError('INVALID_INPUT');
     let projectReport: ProjectContextReport | null = null;
     let contextLoader: ProjectContextLoader | undefined;
+    let commandRuntime: CommandRuntime | undefined;
+    const commands = () => {
+      if (commandsClosed) throw new HannesError('CANCELLED');
+      if (!commandRuntime) {
+        commandRuntime = (services.commands ?? ((root, state) => platformCommandRuntime({workspaceRoot:root,stateDirectory:state,extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
+        commandRuntimes.add(commandRuntime);
+      }
+      return commandRuntime;
+    };
     const activeConvMap = new Map<string, Conversation>();
     // Read-only workspace tools (ADR 0017). Offered only while the client allows them, i.e. after
     // the TUI obtained folder consent; approvals go through the client's permission dialog.
@@ -370,7 +393,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       grants,
       stateDirectory: realpathSync.native(resolve(directory)),
       // Sandboxed exec_command (ADR 0022): Seatbelt on macOS; other platforms fail closed.
-      commands: (services.commands ?? ((root, state) => platformCommandRuntime({ workspaceRoot: root, stateDirectory: state, extraExecutables: ['rg'] })))(workspaceTree().root, realpathSync.native(resolve(directory))),
+      commands: commands(),
       redact: (text,incomplete) => incomplete ? redactor.stream().push(text) : redactor.text(text),
       audit: record => toolAudit.append(record),
       approve: (request, signal) => client
@@ -546,6 +569,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     validateAccount,
     discoverModels,
     subscriptions,
+    shutdownCommands,
   };
 }
 

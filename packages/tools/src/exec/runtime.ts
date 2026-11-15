@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES } from '@hannes/security';
-import { runProcess } from './process';
+import { ProcessSupervisor } from './process';
 import type { CommandRequest, CommandOutcome, CommandRuntime, RuntimeAvailability } from '@hannes/contracts';
 
 /** Used on platforms without a tested sandbox: the tool is never offered and nothing runs. */
@@ -50,6 +50,7 @@ export interface SeatbeltOptions {
  * `bash --noprofile --norc` with a fixed environment, so project files cannot inject startup code.
  */
 export class SeatbeltRuntime implements CommandRuntime {
+  private readonly supervisor = new ProcessSupervisor();
   readonly id: string;
   readonly label = 'macOS Seatbelt · read-only · no network';
   private readonly profile: string;
@@ -113,7 +114,7 @@ export class SeatbeltRuntime implements CommandRuntime {
    * cannot contain a detached/reparented descendant. ADR 0022 records the real OS reproducer.
    */
   availability(): RuntimeAvailability {
-    return {ok:false, reason:'Task 03A security gate closed: detached descendants can escape process-tree cleanup. No production commands are enabled.'};
+    return {ok:false, reason:'Task 03B security gate closed: no enforceable descendant lifetime boundary has been verified. No production commands are enabled.'};
   }
 
   /** Isolation research only. This probe does not certify descendant cleanup or enable the tool. */
@@ -128,13 +129,15 @@ export class SeatbeltRuntime implements CommandRuntime {
   }
 
   async run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome> {
-    const outcome = await runProcess({ argv: this.argv(request.command), cwd: request.cwd, env: this.env(), timeoutMs: request.timeoutMs, maxOutputBytes: request.maxOutputBytes }, signal);
+    const outcome = await this.supervisor.run({ argv: this.argv(request.command), cwd: request.cwd, env: this.env(), timeoutMs: request.timeoutMs, maxOutputBytes: request.maxOutputBytes }, signal);
     const result = {...outcome, output:outcome.output.text(), omittedBytes:outcome.output.omittedBytes};
     // sandbox-exec reports its own failures (e.g. a rejected profile) on stderr with status 65.
     if (outcome.kind === 'exited' && outcome.exitCode === 65 && outcome.output.text().startsWith('sandbox-exec:')) return { ...result, sandboxFailed: true };
     if (outcome.kind === 'spawn-failed') return { ...result, sandboxFailed: true };
     return result;
   }
+
+  async shutdown(): Promise<void> { await this.supervisor.shutdown(); }
 }
 
 /** The runtime for this host: Seatbelt on macOS; every other platform fails closed for now. */

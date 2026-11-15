@@ -1,5 +1,7 @@
 # Model provider port
 
+Contract 1.9 ([ADR 0023](../adr/0023-process-supervision.md)) carries optional runtime lifecycle observations; provider requests/adapters are unchanged. Missing historical observations remain unknown. No command exposure is enabled.
+
 Contract 1.8 Task 03A adds execution result metadata and the injected runtime port only; see [tool contract and migration](tools-and-permissions.md) and [ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md). Provider adapters and request roles are unchanged. Production descriptors still exclude exec_command while its security gate is closed; injected fixtures cover future direct/Codex call-result pairing without enabling native runtime shell.
 
 **Original full-agent v1 proposal; partially implemented by PA1 as specified below.** `models` sở hữu chuyển đổi provider; core chỉ biết normalized request/stream/result. Không để AI SDK điều khiển loop/tool execution thay core. AI SDK cung cấp primitives; tool descriptors không có privileged execute callbacks truyền cho model layer.

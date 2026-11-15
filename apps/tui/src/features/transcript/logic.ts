@@ -279,8 +279,8 @@ export function commandSummary(call: ToolCall, result: ToolResult | undefined, c
   const shown = output.filter(line => line !== '(no output)');
   const preview = shown.slice(-PREVIEW_LINES);
   const hidden = Math.max(0, shown.length - preview.length);
-  if (result.status === 'error') return { state: 'failed', command, preview, hidden, note: result.code === 'TIMEOUT' ? 'timed out — process tree killed' : result.code === 'SANDBOX_UNAVAILABLE' || result.code === 'SANDBOX_FAILED' ? 'sandbox unavailable — not run' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' ') };
+  if (result.status === 'error') return { state: 'failed', command, preview, hidden, note: result.code === 'TIMEOUT' ? 'timed out — descendant termination unconfirmed' : result.code === 'SANDBOX_UNAVAILABLE' || result.code === 'SANDBOX_FAILED' ? 'sandbox unavailable — not run' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' ') };
   const exit = result.exitCode;
   if (exit === 0) return { state: 'ran', command, preview, hidden };
-  return { state: 'failed', command, preview, hidden, note: exit === null || exit === undefined ? 'ended by signal' : `exit ${exit}` };
+  return { state: 'failed', command, preview, hidden, note: exit === null || exit === undefined ? 'exit status unavailable' : `exit ${exit}` };
 }

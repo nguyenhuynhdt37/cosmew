@@ -1,5 +1,7 @@
 # Bản đồ repository và ownership
 
+Task 03B: tools-private ProcessSupervisor owns run cancellation and bounded collectors; CLI caches runtimes per client and awaits shutdown before database close. Contracts expose optional lifecycle/shutdown; TUI reports descendant termination as unconfirmed. See [ADR 0023](../adr/0023-process-supervision.md). No new package edges.
+
 Task 03A foundation ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md), [acceptance](../delivery/exec-command-foundation.md)): `contracts/command-runtime.ts` owns the serializable execution port; `tools/exec/{command,output,process,runtime}.ts` owns strict schema, bounded capture, private process lifecycle and experimental Seatbelt policy. `security/tool-policy.ts` owns exact command approval; CLI composes it; SDK binds/revokes approvals and TUI renders pending/results. Production exec_command is disabled because detached cleanup acceptance failed. No other placeholders are activated.
 
 > Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.

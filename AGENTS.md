@@ -1,5 +1,7 @@
 # Quy tắc cho coding agents
 
+**Task 03B — Reliable Process Supervision** (người dùng cho phép 2026-11-15, [ADR 0023](docs/adr/0023-process-supervision.md)): khảo sát containment native, sửa ownership/shutdown/drainage và thông báo lifecycle, thêm adversarial OS tests. Giữ gate exec_command đóng trừ khi boundary thực sự được chứng minh; không coi killpg/enumeration là containment, không kill process ngoài run sở hữu, không mở PTY/write_stdin/write/MCP hay task khác.
+
 **Task 03A — exec_command foundation** (người dùng cho phép và yêu cầu tiếp tục phần Claude, 2026-11-15, [ADR 0022](docs/adr/0022-sandboxed-exec-command-foundation.md)): cho phép khung lệnh một lần chỉ đọc, không mạng, qua process.execute/approval/audit và OS sandbox thật; ngoại lệ shell chỉ có hiệu lực khi security gate đạt. Gate hiện đóng do tiến trình detached thoát cleanup; không bật tool production. Không PTY/write_stdin/write/apply_patch/MCP/plugin hay code-intel.
 
 Repository đang ở **Provider & Authentication (PA1)** và **FUTRYN Terminal UI & Advanced Theme Engine (TUI1)** implementation slice, được người dùng cho phép ngày 2026-11-14. Cho phép implementation, manifests, dependencies đã đánh giá, tooling và executable tests trong `contracts`, `models`, `security`, `persistence`, `core`, `packages/sdk`, `apps/tui`, `apps/cli` và tests/docs liên quan. Các subsystem khác (tool shell, tool ghi file, MCP, plugin host, subagent ngoài) vẫn mang trạng thái `Not implemented`; giữ placeholders rỗng và không thêm package ngoài phạm vi này.
