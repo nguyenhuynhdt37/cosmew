@@ -51,11 +51,13 @@ export function renderWelcomeScreen(options: {
   lines.push(center('FUTRYN', tokens.accent, true));
   lines.push(center(manifest.greeting ?? 'Quiet desk. Clear answers.', tokens.foregroundMuted));
   if (!status.activeAccount) {
-    lines.push(pills(['/login', '/model', '/theme']));
+    lines.push(center('Connect a provider to start', tokens.foregroundMuted));
+    lines.push(pills(['/login', '/help']));
   } else if (!status.selection) {
-    lines.push(pills(['/model', '/theme']));
+    lines.push(center('Choose a model to start', tokens.foregroundMuted));
+    lines.push(pills(['/model', '/help']));
   } else {
-    lines.push(center(status.selection.modelId, tokens.foregroundSubtle));
+    lines.push(center(`${status.selection.modelId} · ${status.activeAccount.alias}`, tokens.foregroundSubtle));
   }
 
   return lines;
@@ -194,7 +196,9 @@ export function renderTopHeaderBar(options: {
     status.selection?.modelId ?? '',
   ].filter(Boolean);
   const room = Math.max(0, width - leftLen);
-  const rightText = room > 0 ? ` ${bits.join(' · ')} `.slice(0, room) : '';
+  const metadata = bits.join(' · ');
+  const clipped = metadata.length > Math.max(0, room - 2) && room > 3 ? metadata.slice(0, room - 3) + '…' : metadata;
+  const rightText = room > 0 ? ` ${clipped} `.slice(0, room) : '';
   const padLen = Math.max(0, room - rightText.length);
 
   return [

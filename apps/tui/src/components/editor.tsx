@@ -39,7 +39,7 @@ export function getMatchingSlashCommands(input: string): SlashCommandDef[] {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith('/')) return [];
   const q = trimmed.toLowerCase();
-  const ranked = (item: SlashCommandDef) => [item.command, ...item.aliases].some(name => name.toLowerCase() === q) ? 0 : [item.command, ...item.aliases].some(name => name.toLowerCase().startsWith(q)) ? 1 : 2;
+  const ranked = (item: SlashCommandDef) => item.command.toLowerCase() === q ? 0 : item.command.toLowerCase().startsWith(q) ? 1 : item.aliases.some(name => name.toLowerCase() === q) ? 2 : item.aliases.some(name => name.toLowerCase().startsWith(q)) ? 3 : 4;
   return SLASH_COMMANDS.filter(
     item =>
       item.command.toLowerCase().startsWith(q) ||
@@ -179,6 +179,7 @@ export function renderPromptComposerLines(options: {
   maxHeight?: number;
   telemetryLabel?: string;
   contextLine?: RenderedBoxLine;
+  placeholder?: string;
 }): RenderedBoxLine[] {
   const {
     width,
@@ -205,7 +206,7 @@ export function renderPromptComposerLines(options: {
   // 1. Autocomplete Popup Menu (Slash commands or @file mentions)
   const popupItems: { label: string; hint: string }[] = [];
   let popupHeader = '';
-  const popupLimit = Math.min(5, Math.max(0, (options.maxHeight ?? 20) - 8));
+  const popupLimit = Math.min(5, Math.max(0, (options.maxHeight ?? 20) - 7 - (options.contextLine ? 1 : 0)));
   if (state.slashMenuOpen) {
     const allMatches = getMatchingSlashCommands(state.value);
     const start = Math.max(0, Math.min(state.slashSelectedIndex - popupLimit + 1, allMatches.length - popupLimit));
@@ -246,7 +247,7 @@ export function renderPromptComposerLines(options: {
       const rowBg = isSelected ? tokens.selection : tokens.overlayBackground;
       const rowFg = isSelected ? tokens.selectionForeground : tokens.foreground;
       const marker = isSelected ? '▸ ' : '  ';
-      const labelWidth = Math.min(20, Math.max(1, innerWidth - 2));
+      const labelWidth = Math.min(14, Math.max(1, innerWidth - 2));
       const labelCol = `${marker}${item.label}`.slice(0, labelWidth).padEnd(labelWidth, ' ');
       const hintMax = Math.max(0, innerWidth - labelCol.length - 2);
       const hintCol = fill(item.hint, hintMax);
@@ -289,7 +290,7 @@ export function renderPromptComposerLines(options: {
   // 3. Text input. One row until the draft wraps. The prompt mark stays on the first line.
   const lead = '  › ';
   const textCols = Math.max(1, innerWidth - lead.length);
-  const placeholder = isStreaming ? 'Replying…' : 'Ask anything…';
+  const placeholder = isStreaming ? 'Replying…' : options.placeholder && options.placeholder.length <= textCols - 1 ? options.placeholder : 'Ask anything…';
 
   const pushInputRow = (body: StyledSpan[], prefix: string) => {
     const used = body.reduce((sum, span) => sum + span.text.length, 0);
@@ -360,15 +361,19 @@ export function renderPromptComposerLines(options: {
   ];
   const hintLenOf = (parts: StyledSpan[]) => parts.reduce((sum, span) => sum + span.text.length, 0);
   const roomFor = (hintLen: number) => Math.max(0, innerWidth - modeChip.length - 1 - hintLen);
-  const hintParts = options.telemetryLabel
-    ? [{ text: options.telemetryLabel + (isStreaming ? ' · Esc' : ''), fg: tokens.foregroundMuted, bg }]
-    : isStreaming
-    ? [{ text: 'Esc', fg: tokens.foregroundSubtle, bg }]
+  const hintParts = isStreaming
+    ? [{ text: innerWidth >= 40 ? 'Esc interrupt' : 'Esc', fg: tokens.foregroundSubtle, bg }]
+    : options.telemetryLabel
+    ? [{ text: options.telemetryLabel, fg: tokens.foregroundMuted, bg }]
     : meta.length + 2 <= roomFor(hintLenOf(longHints))
       ? longHints
       : shortHints;
   const metaRoom = roomFor(hintLenOf(hintParts));
-  const shownMeta = meta.slice(0, meta.length + 2 <= metaRoom ? meta.length : Math.max(0, metaRoom - 2));
+  const truncate = (value: string, room: number) => value.length <= room ? value : room > 1 ? value.slice(0, room - 1) + '…' : value.slice(0, room);
+  const account = activeAccountLabel ? ` · ${activeAccountLabel}` : '';
+  const shownMeta = meta.length <= metaRoom ? meta : account && metaRoom >= account.length + 6
+    ? truncate(activeModelLabel, metaRoom - account.length) + account
+    : truncate(meta, metaRoom);
   const gap = Math.max(0, metaRoom - shownMeta.length);
 
   lines.push({

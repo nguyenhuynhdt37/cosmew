@@ -289,7 +289,7 @@ test('chat resize keeps the composer usable and shows complete Fyn art or its st
       expect(frame.plainLines).toHaveLength(rows!);
       expect(frame.plainLines.every(line => line.length === cols)).toBe(true);
       expect(frame.plainText).toContain('Ask anything');
-      if (rows! >= 24) {
+      if (rows! >= 34) {
         const labelRow = frame.plainLines.findIndex(line => line.includes('Fyn ·'));
         expect(labelRow).toBeGreaterThanOrEqual(5);
         // All five art rows precede the label, above the input frame.
@@ -318,3 +318,32 @@ test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persis
     expect(saved.mode).toBe('light'); expect(saved.activeTheme).toBe('light');
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 }, 15000);
+
+test('short terminal keeps the draft and slash chooser visible while reconnecting', async () => {
+  const x = context(); const a = await x.launch(60, 18);
+  try {
+    a.tui.resize(30, 10);
+    await type(a.tui, '/mo');
+    const frame = a.tui.computeFrameSnapshot();
+    expect(frame.plainText).toContain('Commands');
+    expect(frame.plainText).toContain('/model');
+    expect(a.tui.getComposerState().value).toBe('/mo');
+    expect(frame.plainLines.at(-2)).toContain('Chat');
+    await a.tui.handleKey('Escape');
+    expect(a.tui.getComposerState().value).toBe('/mo');
+  } finally { a.close(); }
+});
+
+test('standard chat layout reserves conversation space while keeping model and context visible', async () => {
+  const x = context(); await configure(x); const a = await x.launch(100, 30);
+  try {
+    await a.tui.submitPrompt('Layout test');
+    const frame = a.tui.computeFrameSnapshot();
+    expect(frame.plainText).toContain('Fyn · complete');
+    expect(frame.plainText).toContain('fixture-model');
+    expect(frame.plainText).toContain('Context');
+    expect(frame.plainText).toContain('Ask anything');
+    expect(frame.plainLines.slice(0, 20).some(line => line.includes('Hello fixture'))).toBe(true);
+    expect(frame.plainLines.filter(line => /[▀▄]/.test(line))).toHaveLength(0);
+  } finally { a.close(); }
+});

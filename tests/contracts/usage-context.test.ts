@@ -519,7 +519,7 @@ test('thinking arrives incrementally before the answer and an explicit collapse 
 
 test.skipIf(process.platform === 'win32')('actual PTY streams thinking before the answer and refreshes context on a model change', async () => {
   const c = await setup();
-  c.app.registry.add(c.server.provider('responses', {id:'terminal-thinking', auth:'none'}));
+  c.app.registry.add(c.server.provider('responses', {id:'terminal-thinking', auth:'none', timeoutMs:5000}));
   const account = await c.app.accounts.add('terminal-thinking', 'terminal-thinking', {kind:'none'});
   await c.client.discoverModels({accountId:account.id}); c.client.selectModel('fixture-model', {accountId:account.id});
   c.client.addManualModel('alternate-model');

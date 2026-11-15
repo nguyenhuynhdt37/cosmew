@@ -48,3 +48,12 @@ test('chat preserves long code lines and uses the same left edge for prompts and
   expect(lines[0]!.spans[0]!.text).toBe('› ');
   expect(lines[2]!.spans[0]!.text).toBe('• ');
 });
+
+test('composer prioritizes interruption and preserves account identity when model names are long', () => {
+  const state = createInitialComposerState();
+  const options = {width: 62, state, mode:'chat' as const, activeModelLabel:'very-long-provider-model-name-with-many-segments-2026', activeAccountLabel:'work', focused:true, tokens, borderStyle:'rounded' as const};
+  const idle = renderPromptComposerLines({...options, isStreaming:false}).flatMap(row => row.spans.map(span => span.text)).join('');
+  expect(idle).toContain('… · work');
+  const busy = renderPromptComposerLines({...options, isStreaming:true, telemetryLabel:'~$0.001'}).flatMap(row => row.spans.map(span => span.text)).join('');
+  expect(busy).toContain('Esc interrupt');
+});

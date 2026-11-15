@@ -1981,8 +1981,8 @@ export class FutrynTuiApp {
       tokens,
       borderStyle: manifest.borderStyle,
       workspaceFiles,
-      maxHeight: Math.max(4, rows - 6),
-      telemetryLabel: chatting && contentWidth >= 90 && status.usage.costUSD != null ? `~$${status.usage.costUSD.toFixed(status.usage.costUSD > 0 && status.usage.costUSD < 0.0001 ? 6 : 4)}` : undefined,
+      maxHeight: Math.max(4, rows - 2),
+      placeholder: !status.activeAccount ? 'Use /login to connect…' : !status.selection ? 'Use /model to choose…' : undefined,
       contextLine: status.selection && rows >= 12 ? renderContextIndicator(this.client.context(this.composer.value), contentWidth, tokens) : undefined,
     });
 
@@ -2020,16 +2020,16 @@ export class FutrynTuiApp {
       const blockHeight = welcomeLines.length + 1 + composerLines.length;
       const startRow = Math.max(0, Math.floor((rows - 1 - blockHeight) / 2));
       const welcomeWidth = welcomeLines[0]?.spans.reduce((acc, sp) => acc + sp.text.length, 0) ?? colWidth;
-      drawBoxBlock(
-        startRow,
-        Math.max(0, Math.floor((mainWidth - welcomeWidth) / 2)),
-        welcomeLines,
-        welcomeWidth,
-      );
-      drawBoxBlock(startRow + welcomeLines.length + 1, contentLeft, composerLines, contentWidth);
+      if (blockHeight <= rows - 1) {
+        drawBoxBlock(startRow, Math.max(0, Math.floor((mainWidth - welcomeWidth) / 2)), welcomeLines, welcomeWidth);
+        drawBoxBlock(startRow + welcomeLines.length + 1, contentLeft, composerLines, contentWidth);
+      } else {
+        // Prioritize the focused editor and autocomplete on short terminals.
+        drawBoxBlock(Math.max(0, rows - 1 - composerLines.length), contentLeft, composerLines, contentWidth);
+      }
     } else {
       const composerStartRow = Math.max(framePad + 1, rows - 1 - framePad - composerLines.length);
-      const mascotLines = contentWidth >= 28 && composerStartRow >= framePad + 10
+      const mascotLines = rows >= 34 && contentWidth >= 28 && composerStartRow >= framePad + 10
         ? renderFyn({ ...companionView, tokens, width: 28, scale: 5 })
         : [];
       const mascotRow = composerStartRow - mascotLines.length;
@@ -2238,11 +2238,11 @@ export class FutrynTuiApp {
     // 8. Dòng trạng thái mờ, không nền (thông báo tạm thời hoặc đường dẫn + model).
     const shortWs = status.workspace.split('/').slice(-2).join('/');
     const thinking = this.isStreaming ? '● ' : '';
-    const focusedDialog = ['connect', 'status', 'usage', 'context'].includes(this.overlay);
+    const focusedDialog = ['connect', 'themes', 'models', 'effort', 'status', 'usage', 'context'].includes(this.overlay);
     const leftText = focusedDialog ? '' : this.statusBanner
       ? ` ${this.statusBanner}`
       : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
-    const rightText = this.statusBanner || focusedDialog ? '' : 'Ctrl+P';
+    const rightText = this.statusBanner || focusedDialog ? '' : cols >= 55 ? 'Ctrl+P commands' : 'Ctrl+P';
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     drawSpansAt(
       rows - 1,
