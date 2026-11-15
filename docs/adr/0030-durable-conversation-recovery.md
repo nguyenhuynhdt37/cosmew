@@ -59,3 +59,24 @@ Distinct successful reads count as progress. Three batches containing only repea
 All effects still use ToolPort → registry/router/handler/orchestrator/runtime, workspace policy, approval, audit and revalidation. Recovery restores no approval, enables no native foreign tool, and does not open production exec_command. Historical content and summaries cannot authorize execution.
 
 Tests use deterministic provider transports with the real model adapter → core → permission → apply_patch → filesystem → read → model continuation chain. Child-process tests exercise actual process exit and SQLite reopening; uncertain-write fault injection demonstrates the non-atomic gap, not production permission bypass. HTML checks confirm file content, doctype, closing HTML, title/button and standalone styling; they are not a full HTML5 validator. No authenticated real-provider smoke test or interactive UI acceptance is claimed. See [acceptance matrix](../delivery/conversation-recovery.md).
+
+## Continuation and stop semantics
+
+A turn keeps sampling while the model's response contains tool calls; it completes only on a terminal response with text and no tool request. There is no default per-turn round or call ceiling. Each turn records one `stopReason` (`turnStopReasonSchema`):
+
+| Stop reason | Trigger |
+|---|---|
+| `completed` | Model ended with text and no tool request |
+| `budget_steps` / `budget_tool_calls` / `budget_tokens` / `budget_time` / `budget_cost` | A user-configured `TurnBudget` (`client.setTurnBudget`) ran out; tools are withdrawn for one final, labelled answer round |
+| `context_window` | Estimated or measured usage reached the reserve after compaction options are exhausted (tool-less final round), or the request can no longer fit (`CONTEXT_LIMIT`, durable history untouched) |
+| `stalled` | Progress heuristic above: repeated, refused or failed-only batches |
+| `safety_limit` | A named internal bound, e.g. a Codex bridge runtime exceeding `SAFETY_LIMITS.bridgeCallsPerTurn` |
+| `cancelled` / `failed` | Abort, or an error after bounded retries |
+
+Internal safety bounds are named in `SAFETY_LIMITS` (`packages/core/src/agent/engine.ts`) and are distinct from user budgets: 32 tool calls and 256 KiB text per model response, 256 calls per bridge turn (+4 refused attempts past a user call budget), 2 retries of a round that failed before producing any text, tool call or inline execution (`250ms · 2^n`, honouring `retry-after`; non-retryable and post-output errors are never re-sampled), 128k-token assumed window when the model reports none.
+
+Several calls in one response are executed by `executeBatch`: consecutive `fs.read` calls run concurrently (at most `readConcurrency` = 4), writes and commands run alone and in order; results are yielded, persisted and returned to the model in call order. Audit completion order of concurrent reads is not deterministic.
+
+### Remaining differences from Codex Core
+
+Codex retries stream errors per provider policy and may fall back transports; Hannes retries only empty rounds, twice. Codex marks parallel safety per tool and uses a read/write lock with cancellation before admission; Hannes groups by `fs.read` capability without a lock. Codex compaction can be model-generated or remote; Hannes uses the deterministic extractive compactor only. The Codex bridge loop remains owned by the Codex app-server. Unified Exec/PTY, MCP, hooks and subagents are not implemented.
