@@ -85,7 +85,8 @@ export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffRep
       };
     }
 
-    const raw = Buffer.from(proc.stdout).toString('utf8');
+    // File names and contents are untrusted: strip terminal control bytes before they reach any UI.
+    const raw = terminalText(Buffer.from(proc.stdout).toString('utf8'));
     if (!raw.trim()) {
       return {
         workspace: root,

@@ -1,6 +1,15 @@
 import type { FrameCell } from '../types';
 import type { RenderedBoxLine, StyledSpan } from './types';
 
+/**
+ * Every cell is written to the terminal verbatim, so a control byte (ESC, BEL, CR, C1…) from any
+ * source — diff contents, model text, file names — could inject escape sequences. Render it as a space.
+ */
+const printable = (ch: string): string => {
+  const code = ch.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? ' ' : ch;
+};
+
 /** Character grid every screen paints into before it is diffed and sent to the terminal. */
 export class Canvas {
   readonly cells: FrameCell[][];
@@ -23,7 +32,7 @@ export class Canvas {
       for (let i = 0; i < span.text.length; i++) {
         if (col >= limit) return;
         if (col >= 0) {
-          this.cells[row]![col] = { ch: span.text[i]!, fg: span.fg, bg: span.bg ?? this.cells[row]![col]!.bg, bold: Boolean(span.bold) };
+          this.cells[row]![col] = { ch: printable(span.text[i]!), fg: span.fg, bg: span.bg ?? this.cells[row]![col]!.bg, bold: Boolean(span.bold) };
         }
         col++;
       }
