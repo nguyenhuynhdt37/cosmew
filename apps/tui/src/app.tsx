@@ -535,14 +535,14 @@ export class FutrynTuiApp {
     if (parsed.definition?.command === '/theme') {
       if (parsed.args) {
         try { await this.themeEngine.setTheme(parsed.args); this.statusBanner = `Applied theme ${parsed.args}.`; }
-        catch { this.statusBanner = 'Theme not found. Use /theme to choose.'; }
+        catch { this.statusBanner = 'Theme not found. Use /theme auto, /theme dark, or /theme light.'; }
         return;
       }
       this.openOverlay('themes');
       return;
     }
     if (parsed.definition?.command === '/theme edit' || lower === '/editor' || lower === '/customize') {
-      this.statusBanner = 'Custom themes are unavailable. Use /theme for the three monochrome appearances.';
+      this.statusBanner = 'Custom themes are unavailable. Use /theme for the Auto, Dark, and Light.';
       return;
     }
     if (lower.startsWith('/theme set ')) {
@@ -1120,7 +1120,7 @@ export class FutrynTuiApp {
     }
     if (key === 'Enter') {
       const selected = list[this.themePickerState.selectedIndex];
-      if (selected) { await this.themeEngine.setTheme(selected.id); this.statusBanner = `Appearance: ${selected.name}.`; }
+      if (selected) { await this.themeEngine.setTheme(selected.id); this.statusBanner = `Theme: ${selected.name}.`; }
       this.overlay = 'none';
     }
   }
@@ -1282,7 +1282,7 @@ export class FutrynTuiApp {
       }
       await this.themeEngine.removeCustomTheme(manifest.id);
       this.themeEditorState = {
-        ...createInitialThemeEditorState('futryn-default', this.themeEngine.getEffectiveMode()),
+        ...createInitialThemeEditorState('auto', this.themeEngine.getEffectiveMode()),
         statusMessage: `Deleted custom theme "${manifest.id}".`,
       };
     }
@@ -1822,7 +1822,7 @@ export class FutrynTuiApp {
 
     const dir = key === 'ArrowLeft' ? -1 : 1;
     switch (idx) {
-      case 0: // Active Theme -> open /themes
+      case 0: // Active theme -> open /theme
         this.openOverlay('themes');
         break;
       case 1: { // Color Mode
@@ -1832,7 +1832,7 @@ export class FutrynTuiApp {
         break;
       }
       case 2: // Monochrome appearance has no wallpaper.
-        this.statusBanner = 'Wallpaper is unavailable in monochrome appearance.';
+        this.statusBanner = 'Wallpaper is unavailable for these themes.';
         break;
       case 3: // Animations enabled
         await this.themeEngine.updateAnimation({ enabled: !app.animations.enabled });

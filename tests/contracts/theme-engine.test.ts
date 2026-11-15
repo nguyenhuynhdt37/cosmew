@@ -99,15 +99,17 @@ function createTestClient(
 }
 
 describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
-  test('offers exactly three monochrome appearances with complete readable tokens', () => {
-    expect(BUILTIN_COLOR_THEMES.map(theme => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+  test('offers Auto, Dark and Light with readable semantic colors and black/white surfaces', () => {
+    expect(BUILTIN_COLOR_THEMES.map(theme => theme.id)).toEqual(['auto', 'dark', 'light']);
     expect(BUILTIN_LIVE_THEMES).toHaveLength(0);
     expect(ALL_BUILTIN_THEMES).toHaveLength(3);
     for (const manifest of ALL_BUILTIN_THEMES) {
       expect(themeManifestSchema.safeParse(manifest).success).toBe(true);
       for (const tokens of [manifest.dark, manifest.light]) {
-        for (const key of THEME_TOKEN_KEYS) expect(tokens[key]).toMatch(/^#([0-9a-f]{2})\1\1$/);
-        expect(contrastRatio(tokens.background, tokens.foreground)).toBeGreaterThan(4.5);
+        for (const key of THEME_TOKEN_KEYS) expect(tokens[key]).toMatch(/^#[0-9a-f]{6}$/);
+        for (const key of ['foreground', 'accent', 'error', 'warning', 'success', 'info', 'syntaxKeyword', 'syntaxString', 'syntaxFunction'] as const) expect(contrastRatio(tokens.background, tokens[key])).toBeGreaterThan(4.5);
+        expect(new Set([tokens.error, tokens.warning, tokens.success, tokens.info]).size).toBe(4);
+        expect(tokens.background === '#000000' || tokens.background === '#ffffff').toBe(true);
       }
       expect(getThemeMiniSwatches(manifest, 'dark').background).toBe(manifest.dark.background);
     }
@@ -119,19 +121,19 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       const settings = new MemorySettingsStore(); const custom = new FileCustomThemeStore(dir);
       const client = createTestClient(settings, custom); const engine = new ThemeEngine({client, systemDarkPreference:true});
       await engine.initialize();
-      expect(engine.getActiveAppearance().theme).toBe('futryn-default');
-      engine.previewTheme('monochrome-light');
+      expect(engine.getActiveAppearance().theme).toBe('auto');
+      engine.previewTheme('light');
       expect(engine.getActiveTokens().background).toBe('#ffffff');
       engine.cancelPreview(); expect(engine.getActiveTokens().background).toBe('#000000');
       await engine.setTheme('dark'); expect(engine.getActiveAppearance().mode).toBe('dark');
       await engine.setTheme('light', 'project'); expect(engine.getActiveTokens().background).toBe('#ffffff');
       const restarted = new ThemeEngine({client, systemDarkPreference:true}); await restarted.initialize();
-      expect(restarted.getActiveAppearance().theme).toBe('monochrome-light');
+      expect(restarted.getActiveAppearance().theme).toBe('light');
       const other = new ThemeEngine({client:createTestClient(settings, custom, '/workspace/proj-b'), systemDarkPreference:true}); await other.initialize();
-      expect(other.getActiveAppearance().theme).toBe('monochrome-dark');
+      expect(other.getActiveAppearance().theme).toBe('dark');
       await other.setMode('system'); expect(other.getActiveTokens().background).toBe('#000000');
       other.setSystemDarkPreference(false); expect(other.getActiveTokens().background).toBe('#ffffff');
-      expect(other.getActiveAppearance().theme).toBe('futryn-default');
+      expect(other.getActiveAppearance().theme).toBe('auto');
     } finally { await rm(dir, {recursive:true, force:true}); }
   });
 
@@ -145,6 +147,23 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
     expect(engine.getEffectiveMode()).toBe('dark');
   });
 
+  test('migrates previous profile IDs while preserving global and project preferences', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'futryn-theme-profile2-'));
+    try {
+      const settings = new MemorySettingsStore({ ...emptySettings(),
+        appearance: { ...defaultAppearance(), theme:'monochrome-dark', mode:'dark' },
+        projectAppearances: { '/workspace/proj-a': { theme:'monochrome-light', mode:'light' } },
+      });
+      const custom = new FileCustomThemeStore(dir);
+      const engine = new ThemeEngine({client:createTestClient(settings, custom), systemDarkPreference:true}); await engine.initialize();
+      expect(settings.read().appearance?.theme).toBe('dark');
+      expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('light');
+      expect(engine.getActiveTokens().background).toBe('#ffffff');
+      await engine.setTheme('futryn-default'); expect(engine.getActiveAppearance().theme).toBe('auto');
+      await engine.setTheme('monochrome-dark'); expect(engine.getActiveAppearance().theme).toBe('dark');
+    } finally { await rm(dir, {recursive:true, force:true}); }
+  });
+
   test('migrates old global and project appearances while retaining user theme files', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'futryn-theme-migration-'));
     try {
@@ -155,15 +174,15 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       const custom = new FileCustomThemeStore(dir);
       custom.save(themeManifestSchema.parse({ ...BUILTIN_COLOR_THEMES[0]!, id:'old-custom', builtIn:false, category:'custom', dark:{...BUILTIN_COLOR_THEMES[0]!.dark, accent:'#ff0000'} }));
       const engine = new ThemeEngine({client:createTestClient(settings, custom), systemDarkPreference:true}); await engine.initialize();
-      expect(engine.getActiveAppearance().theme).toBe('monochrome-light');
+      expect(engine.getActiveAppearance().theme).toBe('light');
       expect(engine.getActiveWallpaperPresetId()).toBeNull();
-      expect(settings.read().appearance?.theme).toBe('monochrome-dark');
-      expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('monochrome-light');
+      expect(settings.read().appearance?.theme).toBe('dark');
+      expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('light');
       expect(custom.loadAll().themes.some(theme => theme.id === 'old-custom')).toBe(true);
-      expect(engine.listThemes('all').map(theme => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+      expect(engine.listThemes('all').map(theme => theme.id)).toEqual(['auto', 'dark', 'light']);
       await expect(engine.setTheme('old-custom')).rejects.toThrow();
       await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
-      expect(engine.getActiveTokens().accent).toBe('#111111');
+      expect(engine.getActiveTokens().accent).toBe('#195dbc');
     } finally { await rm(dir, {recursive:true, force:true}); }
   });
 
@@ -258,7 +277,7 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       await engine.initialize();
 
       // Must not crash; falls back to futryn-default and keeps valid-custom
-      expect(engine.getActiveAppearance().theme).toBe('futryn-default');
+      expect(engine.getActiveAppearance().theme).toBe('auto');
       expect(engine.getTheme('valid-custom')).toBeDefined();
       expect(engine.getWarnings().length).toBeGreaterThan(0);
     } finally {

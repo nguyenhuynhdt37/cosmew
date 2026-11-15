@@ -260,7 +260,7 @@ export const animationConfigSchema = z.strictObject({
 export type AnimationConfig = z.infer<typeof animationConfigSchema>;
 
 export const appearanceSchema = z.strictObject({
-  theme: themeIdSchema.default('futryn-default'),
+  theme: themeIdSchema.default('auto'),
   mode: z.enum(['dark', 'light', 'system']).default('system'),
   wallpaper: themeIdSchema.nullable().default(null),
   animations: animationConfigSchema.default(() => ({

@@ -59,42 +59,44 @@ async function type(tui: FutrynTuiApp, text: string) {
   for (const ch of text) await tui.handleKey(ch);
 }
 
-test('TUI: three monochrome modes preview, cancel, apply and persist after restart', async () => {
+test('TUI: Auto, Dark and Light preview, cancel, apply and persist after restart', async () => {
   const x = context(); const a = await x.launch();
   await type(a.tui, '/theme'); await a.tui.handleKey('Enter');
   const menu = a.tui.computeFrameSnapshot().plainText;
-  expect(menu).toContain('System default'); expect(menu).toContain('White on black'); expect(menu).toContain('Black on white');
+  expect(menu).toContain('Auto'); expect(menu).toContain('Dark'); expect(menu).toContain('Light');
   expect(menu).not.toContain('Sakura');
   a.tui.resize(24, 14);
   const compactMenu = a.tui.computeFrameSnapshot().plainText;
   expect(compactMenu).toContain('Enter'); expect(compactMenu).toContain('Esc');
   a.tui.resize(120, 36);
-  const gray = (color:string) => /^#([0-9a-f]{2})\1\1$/i.test(color);
-  expect(a.tui.computeFrameSnapshot().cells.flat().every(cell => gray(cell.fg) && gray(cell.bg))).toBe(true);
+  expect(a.tui.computeFrameSnapshot().cells.flat().some(cell => cell.fg === '#8ab4f8' || cell.fg === '#195dbc')).toBe(true);
   await a.tui.handleKey('ArrowDown'); expect(a.tui.computeFrameSnapshot().isPreviewing).toBe(true);
-  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-dark');
-  await a.tui.handleKey('Escape'); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('futryn-default');
+  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('dark');
+  await a.tui.handleKey('Escape'); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('auto');
   await a.tui.handleKey('Ctrl+T'); await a.tui.handleKey('ArrowUp'); await a.tui.handleKey('Enter');
-  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light');
+  expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('light');
   expect(a.tui.computeFrameSnapshot().activeWallpaperId).toBeNull();
-  expect(a.tui.computeFrameSnapshot().cells.flat().every(cell => gray(cell.fg) && gray(cell.bg))).toBe(true); a.close();
-  const b = await x.launch(); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light');
-  expect(b.tui.computeFrameSnapshot().effectiveMode).toBe('light'); b.close();
+  expect(a.tui.computeFrameSnapshot().cells.flat().some(cell => cell.fg === '#195dbc')).toBe(true); a.close();
+  const b = await x.launch(); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('light');
+  expect(b.tui.computeFrameSnapshot().effectiveMode).toBe('light');
+  await b.tui.executeSlashCommand('/theme dark'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('dark');
+  await b.tui.executeSlashCommand('/themes light'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('light');
+  await b.tui.executeSlashCommand('/themes set auto'); expect(b.tui.computeFrameSnapshot().activeThemeId).toBe('auto'); b.close();
 });
 
 test('TUI: CLI exposes only three appearances and rejects retired color themes', async () => {
   const x = context();
   expect((await x.cli(['themes', 'set', 'dark'])).code).toBe(0);
   const listed = JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout);
-  expect(listed.themes.map((theme: {id:string}) => theme.id)).toEqual(['futryn-default', 'monochrome-dark', 'monochrome-light']);
+  expect(listed.themes.map((theme: {id:string}) => theme.id)).toEqual(['auto', 'dark', 'light']);
   expect(listed.mode).toBe('dark');
   expect((await x.cli(['themes', 'set', 'sakura'])).code).toBe(1);
   expect((await x.cli(['themes', 'wallpaper', 'neon-rain'])).code).toBe(1);
   const file = join(x.dir, 'old-theme.json'); writeFileSync(file, JSON.stringify({id:'old', bg:'#ff0000'}));
   expect((await x.cli(['themes', 'import', file])).code).toBe(1);
   expect((await x.cli(['themes', 'mode', 'light'])).code).toBe(0);
-  const a = await x.launch(); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('monochrome-light'); a.close();
-  expect((await x.cli(['themes', 'set', 'system'])).code).toBe(0);
+  const a = await x.launch(); expect(a.tui.computeFrameSnapshot().activeThemeId).toBe('light'); a.close();
+  expect((await x.cli(['themes', 'mode', 'auto'])).code).toBe(0);
   expect(JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout).mode).toBe('system');
 });
 
@@ -295,7 +297,7 @@ test('chat resize keeps the composer usable and shows complete Fyn art or its st
   } finally { a.close(); }
 });
 
-test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persists the monochrome light mode', async () => {
+test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persists the light theme', async () => {
   const x = context(); let output = '';
   const terminal = new Bun.Terminal({cols:80, rows:24, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
@@ -303,10 +305,10 @@ test.skipIf(process.platform === 'win32')('TUI: real terminal chooses and persis
   });
   const wait = async (text:string, from = 0) => { const deadline = Date.now() + 5000; while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
-    await wait('FUTRYN'); terminal.write('/theme\r'); await wait('White on black'); await wait('Black on white');
-    const mark = output.length; terminal.write('\x1b[B\x1b[B\r'); await wait('Appearance: Black on white.', mark);
+    await wait('FUTRYN'); terminal.write('/theme\r'); await wait('Auto'); await wait('Dark'); await wait('Light');
+    const mark = output.length; terminal.write('\x1b[B\x1b[B\r'); await wait('Theme: Light.', mark);
     terminal.write('\x03'); expect(await child.exited).toBe(0);
     const saved = JSON.parse((await x.cli(['themes', 'list', '--json'])).stdout);
-    expect(saved.mode).toBe('light'); expect(saved.activeTheme).toBe('monochrome-light');
+    expect(saved.mode).toBe('light'); expect(saved.activeTheme).toBe('light');
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 }, 15000);

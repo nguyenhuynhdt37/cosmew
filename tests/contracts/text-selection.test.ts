@@ -4,7 +4,7 @@ import { TextSelection } from '../../apps/tui/src/components/text-selection';
 const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
 function frame(): FrameSnapshot {
   const plainLines = ['  Hello world       ', '  giữ thụt dòng     ', '  third line        ', '                    ', '                    ', '                    ', '                    ', 'status footer       '].map(line => line.padEnd(20).slice(0,20));
-  return { cols:20, rows:8, cells:plainLines.map(line => [...line].map(ch => ({ch, fg:tokens.foreground, bg:tokens.background, bold:false}))), plainLines, plainText:plainLines.join('\n'), activeOverlay:'none', activeThemeId:'futryn-default', effectiveMode:'dark', activeWallpaperId:null, isPreviewing:false, isStreaming:false };
+  return { cols:20, rows:8, cells:plainLines.map(line => [...line].map(ch => ({ch, fg:tokens.foreground, bg:tokens.background, bold:false}))), plainLines, plainText:plainLines.join('\n'), activeOverlay:'none', activeThemeId:'auto', effectiveMode:'dark', activeWallpaperId:null, isPreviewing:false, isStreaming:false };
 }
 test('drag selection supports reverse ranges, line indentation, theme highlighting and bounded clipboard writes', () => {
   const selection = new TextSelection(); const base = frame();

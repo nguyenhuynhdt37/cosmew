@@ -37,8 +37,8 @@ const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
     [--account <id-or-alias>] [--offline] [--capability streaming|tools|vision|reasoning]
     models sync-metadata: explicitly fetch advisory https://models.dev/api.json
   model doctor [--generate] [--account <id-or-alias>]
-  themes list [--json] | get | set <dark|light|system> [--project]
-  themes mode <dark|light|system> [--project] | animation [--speed <n>] [--motion smooth|grid]
+  themes list [--json] | get | set <auto|dark|light> [--project]
+  themes mode <auto|dark|light> [--project] | animation [--speed <n>] [--motion smooth|grid]
     [--cell-size <1..4>] [--veil <0..0.95>] [--enabled true|false] [--reduced-motion true|false]
   themes export [<theme-id>]
   themes remove <custom-theme-id> | reset [--project]
@@ -263,8 +263,8 @@ async function handleThemesCli(app: Application, action: string | undefined, arg
 
   if (sub === 'mode') {
     const modeVal = argument ?? fail();
-    if (!['dark', 'light', 'system'].includes(modeVal)) fail();
-    const updated = await engine.setMode(modeVal as ThemeMode, scope);
+    if (!['auto', 'dark', 'light', 'system'].includes(modeVal)) fail();
+    const updated = await engine.setMode((modeVal === 'auto' ? 'system' : modeVal) as ThemeMode, scope);
     output(app, { scope, appearance: updated, effectiveMode: engine.getEffectiveMode() }, !!options.json);
     return;
   }
@@ -315,7 +315,7 @@ async function handleThemesCli(app: Application, action: string | undefined, arg
   }
 
   if (sub === 'import') {
-    output(app, 'Custom themes are unavailable. Choose system, dark, or light.');
+    output(app, 'Custom themes are unavailable. Choose auto, dark, or light.');
     throw new HannesError('UNSUPPORTED');
   }
 
@@ -401,7 +401,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     await send(message.trim());
     return;
   }
-  output(app, 'Hannes · /login /logout /models /accounts /model /themes /status /new /exit. Ctrl-C cancels and exits.');
+  output(app, 'Hannes · /login /logout /model /accounts /theme /status /new /exit. Ctrl-C cancels and exits.');
   if (!conversation) output(app, 'Chưa đăng nhập hoặc chưa chọn model. Gõ /login để bắt đầu.');
   const input = new ChatInput(signal);
   try {

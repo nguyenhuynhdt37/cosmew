@@ -15,12 +15,12 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   { command: '/usage', aliases: ['/cost'], title: 'Usage & Estimated Cost', description: 'Per-turn and session usage with coverage and pricing provenance', category: 'Navigation', duringRequest: true },
   { command: '/context', aliases: [], title: 'Context Window', description: 'Model limits, output reserve, measured or estimated context', category: 'Navigation', duringRequest: true },
   { command: '/effort', aliases: ['/model effort'], title: 'Reasoning Effort', description: 'Set an effort advertised by the active provider/model', category: 'Providers & Models', arguments: 'optional' },
-  { command: '/theme set', aliases: ['/themes set'], title: 'Apply Theme', description: 'Choose system, dark, or light appearance', category: 'Appearance', arguments: 'required' },
+  { command: '/theme set', aliases: ['/themes set'], title: 'Apply Theme', description: 'Choose auto, dark, or light', category: 'Appearance', arguments: 'required' },
   {
     command: '/theme', duringRequest: true, arguments: 'optional',
     aliases: ['/themes'],
     title: 'Theme Picker',
-    description: 'Choose system default, white on black, or black on white',
+    description: 'Choose Auto, Dark, or Light',
     category: 'Appearance',
     shortcut: 'Ctrl+T',
   },
@@ -29,7 +29,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     aliases: ['/editor', '/customize'],
     title: 'Theme Editor',
     description: 'Custom theme editing is unavailable',
-    unavailable: 'Custom themes are unavailable. Use /theme to choose system, dark, or light.',
+    unavailable: 'Custom themes are unavailable. Use /theme to choose Auto, Dark, or Light.',
     category: 'Appearance',
   },
   {

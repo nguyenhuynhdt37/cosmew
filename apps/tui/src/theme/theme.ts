@@ -34,9 +34,9 @@ import { WALLPAPER_SCENES, WallpaperEngine } from './wallpaper';
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
 
-const FEATURED_THEME_IDS = new Set(['futryn-default', 'monochrome-dark', 'monochrome-light']);
-const MODE_THEME_IDS: Record<ThemeMode, string> = { system: 'futryn-default', dark: 'monochrome-dark', light: 'monochrome-light' };
-const THEME_MODES: Record<string, ThemeMode> = { 'futryn-default': 'system', 'monochrome-dark': 'dark', 'monochrome-light': 'light' };
+const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light']);
+const MODE_THEME_IDS: Record<ThemeMode, string> = { system: 'auto', dark: 'dark', light: 'light' };
+const THEME_MODES: Record<string, ThemeMode> = { auto: 'system', dark: 'dark', light: 'light' };
 
 export function detectTerminalColorCapability(
   env: Record<string, string | undefined> = process.env,
@@ -282,7 +282,7 @@ export class ThemeEngine {
     }
 
     // Preserve user-owned theme files, but migrate every active selection to the
-    // monochrome palette. Correct global and project overrides independently.
+    // dark/light palette. Correct global and project overrides independently.
     const migrate = (appearance: AppearanceConfig): PartialAppearanceConfig | null => {
       const id = this.normalizeThemeId(appearance.theme);
       const desired = this.builtInMap.has(id) && THEME_MODES[id] === appearance.mode ? id : MODE_THEME_IDS[appearance.mode];
@@ -298,7 +298,7 @@ export class ThemeEngine {
         if (projectPatch) this.client.updateAppearance(projectPatch, 'project');
         this.committedAppearance = appearanceSchema.parse(this.client.getAppearance(true));
       } catch {
-        this.warnings.push('Could not save monochrome appearance; using it for this session.');
+        this.warnings.push('Could not save appearance; using it for this session.');
         this.committedAppearance = { ...this.committedAppearance, theme: MODE_THEME_IDS[this.committedAppearance.mode], wallpaper: null };
       }
     } else {
@@ -327,9 +327,9 @@ export class ThemeEngine {
 
   public normalizeThemeId(id: string): string {
     const clean = id.trim().toLowerCase();
-    if (clean === 'system' || clean === 'auto') return 'futryn-default';
-    if (clean === 'dark') return 'monochrome-dark';
-    if (clean === 'light') return 'monochrome-light';
+    if (clean === 'system' || clean === 'futryn-default') return 'auto';
+    if (clean === 'monochrome-dark') return 'dark';
+    if (clean === 'monochrome-light') return 'light';
     return clean;
   }
 
@@ -418,7 +418,7 @@ export class ThemeEngine {
     const activeId = this.previewThemeId ?? this.committedAppearance.theme;
     return (
       this.getTheme(activeId) ??
-      this.builtInMap.get('futryn-default') ??
+      this.builtInMap.get('auto') ??
       ALL_BUILTIN_THEMES[0]!
     );
   }
@@ -705,7 +705,7 @@ export class ThemeEngine {
     id: string,
     mode: 'dark' | 'light',
     tokenKey: ThemeTokenKey,
-    baseThemeId = 'futryn-default',
+    baseThemeId = 'auto',
   ): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
@@ -715,7 +715,7 @@ export class ThemeEngine {
     if (!existing) {
       throw new HannesError('NOT_FOUND');
     }
-    const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('futryn-default')!;
+    const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('auto')!;
     const updated: ThemeManifest = {
       ...existing,
       [mode]: {
@@ -728,7 +728,7 @@ export class ThemeEngine {
 
   public async resetCustomTheme(
     id: string,
-    baseThemeId = 'futryn-default',
+    baseThemeId = 'auto',
   ): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
@@ -738,7 +738,7 @@ export class ThemeEngine {
     if (!existing) {
       throw new HannesError('NOT_FOUND');
     }
-    const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('futryn-default')!;
+    const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('auto')!;
     const updated: ThemeManifest = {
       ...existing,
       dark: { ...base.dark },
@@ -762,7 +762,7 @@ export class ThemeEngine {
     }
     this.customMap.delete(norm);
     if (this.committedAppearance.theme === norm) {
-      await this.setTheme('futryn-default');
+      await this.setTheme('auto');
     } else {
       this.notify();
     }

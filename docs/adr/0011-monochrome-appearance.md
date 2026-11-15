@@ -1,5 +1,7 @@
 # ADR 0011: Three monochrome appearances
 
+Superseded for names and semantic colors by [ADR 0012](0012-theme-naming-and-semantic-colors.md).
+
 Accepted 2026-11-15 at the user's request. Supersedes ADR 0006's user-facing multicolor catalog, live wallpaper selection and custom-theme editor. PA1/TUI1/SUB1 boundaries and existing security policies remain unchanged; no dependency or storage schema is added.
 
 Appearance profile semantics version 2 has three choices, all using the same complete 30-token grayscale palette: `futryn-default` follows detected system/terminal appearance, `monochrome-dark` is light text on black, and `monochrome-light` is dark text on white. Mode and theme ID are saved together. `/theme` previews selection; Enter commits and Esc cancels. `themes set dark|light|system` and `themes mode dark|light|system` are supported. The CLI and slash editor/import workflows provide explicit unsupported diagnostics instead of implying a custom palette can be applied. Old built-in color and live-theme presets are removed from the catalog; wallpaper compositing is disabled in this profile. Mascot animation and other unrelated display settings remain available.

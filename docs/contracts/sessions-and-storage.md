@@ -34,3 +34,7 @@ Acceptance: power-loss giữa intent/effect/result; concurrent resume; migration
 ## TUI appearance profile 2
 
 [ADR 0011](../adr/0011-monochrome-appearance.md) replaces the previous selectable multicolor catalog with system, dark and light monochrome appearances. Schema-1 settings remain readable: retired theme/wallpaper selections migrate separately for global and current project while preserving the selected mode and unrelated settings. Existing custom-theme files are retained without being offered as active choices. No SQLite or settings schema migration is required.
+
+## TUI appearance profile 3
+
+[ADR 0012](../adr/0012-theme-naming-and-semantic-colors.md) uses canonical IDs `auto`, `dark`, `light` and a new default ID `auto`; the stored `mode` values and schema remain unchanged. Profile-2 IDs are accepted aliases and migrate on initialization, separately for global and active project. Dark/light surfaces retain semantic accent/status/syntax colors. Downgrading to software before profile 2 may fall back to its own default for unfamiliar IDs.

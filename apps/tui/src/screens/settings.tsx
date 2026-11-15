@@ -54,15 +54,16 @@ export function renderThemePickerOverlay(options: {
     return { spans };
   };
   const lines: RenderedBoxLine[] = [
-    line([{ text: '  Appearance', fg: tokens.accent, bold: true }]),
-    line([{ text: width < 34 ? '  Choose appearance' : '  Choose a monochrome appearance', fg: tokens.foregroundMuted }]),
+    line([{ text: '  Theme', fg: tokens.accent, bold: true }]),
+    line([{ text: width < 34 ? '  Choose appearance' : '  Choose a theme', fg: tokens.foregroundMuted }]),
     line([]),
   ];
   for (const [index, theme] of themes.entries()) {
     const selected = index === state.selectedIndex;
     const activeMark = active.theme === theme.id ? ' ●' : '';
     const marker = selected ? '  › ' : '    ';
-    const label = `${marker}${theme.name}${activeMark}`.slice(0, Math.max(0, width));
+    const name = `${marker}${theme.name}${activeMark}`;
+    const label = (width >= 40 ? name.padEnd(17) + theme.description : name).slice(0, Math.max(0, width));
     lines.push(line([{ text: label.padEnd(width), fg: selected ? tokens.selectionForeground : tokens.foreground,
       bg: selected ? tokens.selection : tokens.overlayBackground, bold: selected }]));
   }
@@ -89,7 +90,7 @@ export interface ThemeEditorState {
   statusMessage?: string;
 }
 
-export function createInitialThemeEditorState(themeId = 'futryn-default', mode: 'dark' | 'light' = 'dark'): ThemeEditorState {
+export function createInitialThemeEditorState(themeId = 'auto', mode: 'dark' | 'light' = 'dark'): ThemeEditorState {
   return {
     targetThemeId: themeId,
     editMode: mode,
@@ -540,8 +541,8 @@ export function renderSettingsOverlay(options: {
 
   const rows = [
     { label: 'Active Theme', value: `${appearance.theme} (Press Enter to open /theme)` },
-    { label: 'Color Mode', value: `${appearance.mode.toUpperCase()} (resolved: ${effectiveMode})` },
-    { label: 'Wallpaper', value: 'Unavailable in monochrome mode' },
+    { label: 'Color Mode', value: `${appearance.mode === 'system' ? 'AUTO' : appearance.mode.toUpperCase()} (resolved: ${effectiveMode})` },
+    { label: 'Wallpaper', value: 'Unavailable for these themes' },
     { label: 'Animations Enabled', value: appearance.animations.enabled ? 'ENABLED' : 'DISABLED' },
     { label: 'Motion Mode', value: appearance.animations.motion.toUpperCase() },
     { label: 'Animation Speed', value: `${appearance.animations.speed.toFixed(2)}x` },
