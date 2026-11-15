@@ -4,7 +4,7 @@ import type { Canvas } from '../../ui';
 import type { TranscriptViewport } from '../../types';
 import { renderContextIndicator } from '../context-meter';
 import { renderTopHeaderBar } from '../header';
-import { FYN_LABELS, renderFyn, type FynCompanion } from '../companion';
+import { FYN_LABELS, type FynCompanion } from '../companion';
 import { renderWeepinbell } from '../companion/weepinbell';
 import { renderPromptComposerLines, type ComposerState } from '../composer';
 import { explorationRows, formatElapsed, reasoningTitle, renderTranscriptViewport, type TranscriptItem } from '../transcript';
@@ -70,7 +70,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
   });
 
   if (!chatting) {
-    // Chưa có câu nào: linh vật gốc thu nhỏ, căn giữa cùng lời chào.
+    // Weepinbell belongs only to welcome; compact motion fits shorter terminals.
     const welcomeLines = renderWelcomeScreen({
       width: mainWidth,
       height: rows,
@@ -81,13 +81,9 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
       borderStyle: manifest.borderStyle,
     });
     const availableHeight = rows - 2 - welcomeLines.length - composerLines.length;
-    if (availableHeight >= 6) {
-      const mascotLines = renderFyn({
-        ...companionView,
-        tokens,
-        width: 28,
-        scale: 5,
-      });
+    if (availableHeight >= 8) {
+      const mascotLines = renderWeepinbell(tokens, {compact:availableHeight < 12, ...companionView});
+      mascotLines.push({spans:[{text:`Weepinbell · ${FYN_LABELS[companionView.state]}`,fg:tokens.foregroundMuted,bg:tokens.background}]});
       const welcomeWidth = welcomeLines[0]?.spans.reduce((sum, span) => sum + span.text.length, 0) ?? colWidth;
       const centered = mascotLines.map(line => {
         const width = line.spans.reduce((sum, span) => sum + span.text.length, 0);
@@ -112,13 +108,8 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     }
   } else {
     const composerStartRow = Math.max(framePad + 1, rows - 1 - framePad - composerLines.length);
-    const mascotLines = rows >= 24 && contentWidth >= 48 && composerStartRow >= framePad + 10
-      ? renderWeepinbell(tokens)
-      : [];
-    const mascotRow = composerStartRow - mascotLines.length - 1;
-    const showMascot = mascotLines.length > 0 && mascotRow >= framePad;
     let transcriptStartRow = framePad;
-    if (!showMascot && rows >= 12 && mainWidth >= 40) {
+    if (rows >= 12 && mainWidth >= 40) {
       const headerSpans = renderTopHeaderBar({
         width: contentWidth,
         status,
@@ -132,10 +123,10 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
       canvas.spans(framePad, contentLeft, headerSpans, contentWidth);
       transcriptStartRow = framePad + 2;
     }
-    // While a turn runs, one status row sits right above the composer (beside Fyn when shown).
-    const statusRow = v.isStreaming && !showMascot ? composerStartRow - 1 : -1;
-    const transcriptHeight = Math.max(0, (showMascot ? composerStartRow - (v.isStreaming ? 1 : 0) : statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
-    const transcriptWidth = showMascot ? Math.max(18, contentWidth - 26) : contentWidth;
+    // Live model/tool status remains above the composer, without companion artwork.
+    const statusRow = v.isStreaming ? composerStartRow - 1 : -1;
+    const transcriptHeight = Math.max(0, (statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
+    const transcriptWidth = contentWidth;
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
         items: v.transcript,
@@ -155,13 +146,6 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
       canvas.block(transcriptStartRow, contentLeft, vp.lines, transcriptWidth);
       viewport = {top: transcriptStartRow, left: contentLeft, width: transcriptWidth, height: transcriptHeight, offset: vp.clampedOffset, lines: vp.allLines,
         disclosures: vp.allLines.flatMap((line, row) => line.disclosure ? [{row, ...line.disclosure}] : [])};
-    }
-    if (showMascot) {
-      const mascotWidth = mascotLines[0]?.spans.length ?? 0;
-      const mascotLeft = contentLeft + contentWidth - mascotWidth;
-      canvas.block(mascotRow, mascotLeft, mascotLines, mascotWidth);
-      canvas.spans(composerStartRow - 1, contentLeft + contentWidth - 26, [{text:`Weepinbell · ${FYN_LABELS[companionView.state]}`,fg:tokens.foregroundMuted}], 26);
-      if (v.isStreaming) canvas.spans(composerStartRow - 1, contentLeft, turnStatusSpans(v, companionView.time), Math.max(0, contentWidth - mascotWidth - 2));
     }
     if (statusRow > transcriptStartRow) canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);

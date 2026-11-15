@@ -115,9 +115,9 @@ test('TUI: real provider/model/chat workflow against fixture server, transcript,
   expect(transcript[1]!.content).toBe('Hello fixture');
   expect(transcript[1]!.streaming).toBe(false);
   expect(a.tui.computeFrameSnapshot().plainText).toContain('Hello fixture');
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · complete');
+  expect(a.tui.computeFrameSnapshot().plainText).toContain('● complete');
   a.tui.stepAnimation(2);
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · ready');
+  expect(a.tui.computeFrameSnapshot().plainText).toContain('● ready');
   const posts = x.server.requests.filter(r => r.body);
   expect(JSON.stringify(posts.at(-1)?.body)).toContain('Say hello');
 
@@ -180,7 +180,7 @@ test('Fyn: animation without wallpaper, focus/reduced motion, sleep, and pending
     const initial = a.tui.computeFrameSnapshot();
     expect(initial.activeWallpaperId).toBeNull();
     a.tui.stepAnimation(0.8);
-    expect(a.tui.computeFrameSnapshot().plainText).not.toBe(initial.plainText);
+    expect(a.tui.computeFrameSnapshot().plainText).toBe(initial.plainText); // Large welcome sprite is still; compact welcome art can animate.
     await a.tui.handleKey('FocusOut');
     const paused = a.tui.computeFrameSnapshot().plainText;
     a.tui.stepAnimation(1);
@@ -191,12 +191,12 @@ test('Fyn: animation without wallpaper, focus/reduced motion, sleep, and pending
     a.tui.stepAnimation(4);
     expect(a.tui.computeFrameSnapshot().plainText).toBe(reduced);
     a.tui.stepAnimation(60);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · sleeping');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · sleeping');
     await a.tui.handleKey('x');
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · ready');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · ready');
     const request = a.tui.client.enqueuePermissionRequest({ capability: 'fs.read', action: 'read', target: 'fixture', reason: 'Presentation fixture only' });
     a.tui.stepAnimation(120);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · awaiting approval');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · awaiting approval');
     expect(a.tui.client.listPendingPermissions()).toHaveLength(1);
     a.tui.client.resolvePermission(request.approvalId, request.scopeHash, 'deny');
     expect(a.tui.computeFrameSnapshot().plainText).not.toContain('awaiting approval');
@@ -212,21 +212,21 @@ test('Fyn: provider stream, cancellation and failure never show a false completi
   try {
     x.server.set({ streamDelay: 100 });
     const turn = a.tui.submitPrompt('Slow fixture response');
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · processing');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● processing');
     const deadline = Date.now() + 3000;
     while (!a.tui.getTranscript().at(-1)?.content && Date.now() < deadline) await Bun.sleep(10);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · replying');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● replying');
     a.tui.stepAnimation(120);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · replying');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● replying');
     await a.tui.handleKey('Escape');
     await turn;
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · cancelled');
-    expect(a.tui.computeFrameSnapshot().plainText).not.toContain('Weepinbell · complete');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● cancelled');
+    expect(a.tui.computeFrameSnapshot().plainText).not.toContain('● complete');
     x.server.set({ status: 500, streamDelay: 0 });
     await a.tui.submitPrompt('Fail this fixture response');
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · error');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● error');
     a.tui.stepAnimation(120);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · error');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('● error');
   } finally { a.close(); }
 });
 
@@ -244,11 +244,11 @@ test.skipIf(process.platform === 'win32')('Fyn: actual PTY renders and exits cle
     const deadline = Date.now() + 6000;
     while (!output.includes('Trust this folder?') && Date.now() < deadline) await Bun.sleep(10);
     expect(output).toContain('Trust this folder?'); terminal.write('\x1b[A\r');
-    while (!output.includes('Fyn · ready') && Date.now() < deadline) await Bun.sleep(20);
-    expect(output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).toContain('Fyn · ready');
+    while (!output.includes('Weepinbell · ready') && Date.now() < deadline) await Bun.sleep(20);
+    expect(output.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')).toContain('Weepinbell · ready');
     const before = output.length;
     await Bun.sleep(800);
-    expect(output.length).toBeGreaterThan(before);
+    expect(output.length).toBeGreaterThanOrEqual(before); // Welcome may remain static while the clock runs.
     terminal.write('\x03');
     expect(await Promise.race([child.exited, Bun.sleep(3000).then(() => -1)])).toBe(0);
     expect(output).toContain('\x1b[?25h');
@@ -280,7 +280,7 @@ test('TUI: responsive full-screen width utilizes full terminal cols without 88-c
   }
 });
 
-test('chat resize keeps the composer usable and shows compact Fyn or its status fallback', async () => {
+test('chat resize keeps the composer usable without companion art at every size', async () => {
   const x = context(); await configure(x);
   const a = await x.launch(100, 30);
   try {
@@ -291,12 +291,8 @@ test('chat resize keeps the composer usable and shows compact Fyn or its status 
       expect(frame.plainLines).toHaveLength(rows!);
       expect(frame.plainLines.every(line => line.length === cols)).toBe(true);
       expect(frame.plainText).toContain('Ask anything');
-      if (rows! >= 24) {
-        expect(frame.plainText).toContain('Weepinbell ·');
-        const colored = frame.cells.flatMap(row => row.map((cell,col) => ({cell,col}))).filter(({cell}) => cell.fg === '#f7e65a' || cell.bg === '#f7e65a');
-        expect(colored.length).toBeGreaterThan(0);
-        expect(colored.every(({col}) => col > cols! / 2)).toBe(true);
-      }
+      expect(frame.plainText).not.toContain('Weepinbell');
+      expect(frame.cells.every(row=>row.every(cell=>cell.ch!=='▀' && cell.ch!=='▄'))).toBe(true);
     }
   } finally { a.close(); }
 });
@@ -341,12 +337,31 @@ test('standard chat layout reserves conversation space while keeping model and c
   try {
     await a.tui.submitPrompt('Layout test');
     const frame = a.tui.computeFrameSnapshot();
-    expect(frame.plainText).toContain('Weepinbell · complete');
+    expect(frame.plainText).not.toContain('Weepinbell');
     expect(frame.plainText).toContain('fixture-model');
     expect(frame.plainText).toContain('Context');
     expect(frame.plainText).toContain('Ask anything');
     expect(frame.plainLines.slice(0, 20).some(line => line.includes('Hello fixture'))).toBe(true);
-    expect(frame.plainLines.filter(line => /[▀▄]/.test(line))).toHaveLength(11);
-    expect(frame.cells.flatMap(row => row.slice(0, 70)).every(cell => cell.ch !== '▀')).toBe(true);
+    expect(frame.plainLines.filter(line => /[▀▄]/.test(line))).toHaveLength(0);
+    expect(frame.cells.flatMap(row => row.slice(0, 80)).every(cell => cell.ch !== '▀')).toBe(true);
+  } finally { a.close(); }
+});
+
+test('Weepinbell appears only on welcome and returns after clearing the conversation', async () => {
+  const x = context(); await configure(x); const a = await x.launch(120,36);
+  try {
+    const welcome = a.tui.computeFrameSnapshot();
+    expect(welcome.plainText).toContain('Weepinbell · ready');
+    expect(welcome.plainText).not.toContain('Fyn ·');
+    expect(welcome.cells.some(row=>row.some(cell=>cell.fg==='#f7e65a'||cell.bg==='#f7e65a'))).toBe(true);
+    await a.tui.submitPrompt('Conversation without a companion');
+    const frame=a.tui.computeFrameSnapshot();
+    expect(frame.plainText).not.toContain('Weepinbell');
+    expect(frame.plainLines.filter(line=>line.includes('▀'))).toHaveLength(0);
+    expect(frame.transcriptViewport!.width).toBeGreaterThan(100);
+    a.tui.stepAnimation(0.4);
+    expect(a.tui.computeFrameSnapshot().plainText).not.toContain('Weepinbell');
+    await a.tui.executeSlashCommand('/clear');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell');
   } finally { a.close(); }
 });

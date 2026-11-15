@@ -45,3 +45,14 @@ test('Weepinbell renders the original full pixel asset with its leaf, eye and mo
  for(const color of ['#f7e65a','#73bd5a','#f79cad','#ffffff','#000000'])expect(colors.has(color)).toBe(true);
  expect(lines.every(line=>line.spans.every(span=>span.text==='▀'))).toBe(true);
 });
+
+test('compact Weepinbell animates within fixed bounds and freezes when its motion clock is paused',async()=>{
+ const {renderWeepinbell}=await import('../../apps/tui/src/features/companion/weepinbell');
+ const render=(time:number,state:'idle'|'thinking'|'sleep'='idle')=>renderWeepinbell(tokens,{compact:true,time,state});
+ const still=render(0),moving=render(0.4);
+ expect(still).toHaveLength(7);expect(still.every(line=>line.spans.length===14)).toBe(true);
+ expect(moving).not.toEqual(still);expect(render(0)).toEqual(still);
+ expect(render(0,'sleep')).toEqual(render(2,'sleep'));
+ expect(render(0.4,'thinking')).not.toEqual(render(0,'thinking'));
+ for(const time of [0,0.4,1,2,5])expect(render(time).every(line=>line.spans.length===14)).toBe(true);
+});

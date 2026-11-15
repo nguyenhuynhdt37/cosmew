@@ -22,6 +22,7 @@ const normalize = (text: string, dir: string) => text
   .split(dir).join('<WS>')
   .replace(/futryn-golden-[A-Za-z0-9]{6}/g, 'futryn-golden-<RAND>')
   .replace(/127\.0\.0\.1:\d+/g, '<HOST>')
+  .replace(/Worked for \d+\.\d+s/g, 'Worked for <TIME>')
   .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<UUID>')
   .replace(/\b[0-9a-f]{8}\b/g, '<ID8>')
   .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z?/g, '<TS>');

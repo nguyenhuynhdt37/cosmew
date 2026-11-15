@@ -46,12 +46,11 @@ export function renderTopHeaderBar(options: {
       break;
   }
 
-  const fyn = `Fyn · ${label}`;
   const leftParts: StyledSpan[] = [
     { text: ' FUTRYN', fg: tokens.accent, bg, bold: true },
     { text: '   ', fg: tokens.foregroundSubtle, bg },
     { text: '● ', fg: stateColor, bg },
-    { text: fyn, fg: stateColor, bg },
+    { text: label, fg: stateColor, bg },
   ];
   const leftLen = leftParts.reduce((sum, span) => sum + span.text.length, 0);
   const bits = [

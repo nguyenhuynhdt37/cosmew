@@ -1,5 +1,6 @@
 import type { ThemeTokens } from '@hannes/contracts';
 import type { RenderedBoxLine } from '../../ui';
+import type { FynState } from './types';
 
 /** Exact local hydefetch/pokemon-colorscripts sprite, decoded to static pixels.
  * Pokémon artwork retains its original ownership; see docs/adr/0021. No ANSI is executed. */
@@ -29,15 +30,27 @@ export const WEEPINBELL_PIXELS = [
   ""
 ];
 
-export function renderWeepinbell(tokens: ThemeTokens): RenderedBoxLine[] {
-  const pixel = (y: number, x: number) => WEEPINBELL_PALETTE[parseInt(WEEPINBELL_PIXELS[y]?.[x] ?? '0', 16)] ?? tokens.background;
+/** Compact art samples the same sprite; motion translates it inside a fixed canvas. */
+export function renderWeepinbell(tokens: ThemeTokens, options?: { compact: boolean; time: number; state: FynState }): RenderedBoxLine[] {
+  const compact = options?.compact ?? false;
+  const artSize = compact ? 12 : 22;
+  const size = compact ? 14 : 22;
+  const time = options?.time ?? 0;
+  const working = options?.state === 'thinking' || options?.state === 'streaming';
+  const moving = options?.state !== 'sleep' && options?.state !== 'error';
+  const bob = compact && moving && time > 0 && Math.sin(time * (working ? 7 : 3)) > 0 ? 1 : 0;
+  const sway = compact && moving && time > 0 && Math.sin(time * (working ? 4 : 2)) > 0 ? 1 : 0;
+  const pixel = (y: number, x: number) => {
+    const px = x - sway, py = y - bob;
+    if (px < 0 || py < 0 || px >= artSize || py >= artSize) return tokens.background;
+    const sourceX = compact ? Math.min(21, Math.floor((px + 0.5) * 22 / artSize)) : px;
+    const sourceY = compact ? Math.min(19, Math.floor((py + 0.5) * 20 / artSize)) : py;
+    return WEEPINBELL_PALETTE[parseInt(WEEPINBELL_PIXELS[sourceY]?.[sourceX] ?? '0', 16)] ?? tokens.background;
+  };
   const lines: RenderedBoxLine[] = [];
-  for (let y = 0; y < WEEPINBELL_PIXELS.length; y += 2) {
+  for (let y = 0; y < size; y += 2) {
     const spans = [];
-    for (let x = 0; x < WEEPINBELL_PIXELS[0]!.length; x++) {
-      const top = pixel(y, x), bottom = pixel(y + 1, x);
-      spans.push({text:'▀', fg:top, bg:bottom});
-    }
+    for (let x = 0; x < size; x++) spans.push({text:'▀', fg:pixel(y, x), bg:pixel(y + 1, x)});
     lines.push({spans});
   }
   return lines;
