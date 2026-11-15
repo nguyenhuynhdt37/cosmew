@@ -946,9 +946,17 @@ export class FutrynClient {
     const kind: PermissionKind = explicitKind ?? ({ 'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'execute', 'network.connect': 'network' } as Record<string, PermissionKind>)[input.capability] ?? 'other';
     // Project rules first (deny > ask > allow), then the session mode.
     const tool: PermissionRuleTool = ({ 'process.execute': 'Bash', 'fs.write': 'Edit', 'fs.read': 'Read', 'network.connect': 'WebFetch' } as Record<string, PermissionRuleTool>)[input.capability] ?? 'Tool';
-    // Rules judge only structured targets (a real command or real paths), never display labels.
+    // Allow rules judge only structured targets (a real command or real paths), never display labels.
+    const rules = this.permissionRules();
     const target = ruleTarget === null || (tool === 'Tool' && ruleTarget === undefined) ? null : ruleTarget ?? input.target;
-    const ruled = target === null ? undefined : permissionRuleDecision(this.permissionRules(), { tool, target: tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(target) : target });
+    const relative = (value: string) => tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(value) : value;
+    let ruled = target === null ? undefined : permissionRuleDecision(rules, { tool, target: relative(target) });
+    if (target === null) {
+      // Fail closed: deny/ask rules still apply to the best text we have, and an unverifiable request
+      // never slips past a deny/ask rule of its tool through a permissive mode such as bypass.
+      ruled = permissionRuleDecision({ allow: [], ask: rules.ask, deny: rules.deny }, { tool, target: relative(input.target) })
+        ?? ([...rules.deny, ...rules.ask].some(rule => rule === tool || rule.startsWith(tool + '(')) ? 'ask' : undefined);
+    }
     const decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
     if (decision !== 'ask') {
       this.emitReactiveEvent(decision === 'allow' ? 'done' : 'error', `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${ruled ? 'project rule' : `${this.permissionModeValue} mode`}: ${input.action}`);

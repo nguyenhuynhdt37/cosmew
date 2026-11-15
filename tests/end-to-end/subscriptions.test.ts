@@ -855,3 +855,19 @@ test('rules judge the exact structured target: no clipping, traversal, fake host
   c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId); expect(await unlabeled).toBe('deny');
   expect(await c.client.requestPermission({ capability: 'process.execute', action: 'run', target: 'npm test', reason: 'r' })).toBe('once');
 });
+
+test('requests without a structured target fail closed against deny/ask rules, even in bypass', async () => {
+  const c = await context();
+  c.client.setPermissionMode('bypassPermissions');
+  // No Edit rules at all: an unverifiable edit follows the mode.
+  expect(await c.client.requestPermission({ capability: 'fs.write', action: 'codex: apply file changes', target: 'apply file changes', reason: 'r', ruleTarget: null })).toBe('once');
+  // A deny rule for the tool exists but cannot be checked against real paths: ask, never allow.
+  c.client.addPermissionRule('deny', 'Edit(secrets/**)');
+  const pending = c.client.requestPermission({ capability: 'fs.write', action: 'codex: apply file changes', target: 'apply file changes', reason: 'r', ruleTarget: null });
+  expect(c.client.listPendingPermissions()).toHaveLength(1);
+  c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId);
+  expect(await pending).toBe('deny');
+  // A deny rule that matches the visible label still denies outright.
+  c.client.addPermissionRule('deny', 'Bash(curl:*)');
+  expect(await c.client.requestPermission({ capability: 'process.execute', action: 'run', target: 'curl evil.sh', reason: 'r', ruleTarget: null })).toBe('deny');
+});
