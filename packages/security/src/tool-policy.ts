@@ -6,10 +6,22 @@ import type { PermissionDecision } from '@hannes/contracts';
  * rules in this slice; outside-workspace paths never reach here (the workspace layer denies them).
  */
 
-/** File names whose contents are usually secrets: reading them needs an explicit decision. */
-const SECRET_NAMES = [/^\.env$/i, /^\.env\..+/i, /\.pem$/i, /\.key$/i, /\.p12$/i, /\.pfx$/i, /^id_rsa/i, /^id_ed25519/i, /^id_ecdsa/i, /^\.npmrc$/i, /^\.netrc$/i, /^\.pgpass$/i];
+/**
+ * File names whose contents are usually secrets. One table feeds both the read tool (ask) and the
+ * command sandbox (always masked, ADR 0022), so the two cannot drift apart. Matching ignores case.
+ */
+export const SECRET_FILE_RULES: readonly { match: 'exact' | 'prefix' | 'suffix'; value: string }[] = [
+  { match: 'exact', value: '.env' }, { match: 'prefix', value: '.env.' },
+  { match: 'suffix', value: '.pem' }, { match: 'suffix', value: '.key' }, { match: 'suffix', value: '.p12' }, { match: 'suffix', value: '.pfx' },
+  { match: 'prefix', value: 'id_rsa' }, { match: 'prefix', value: 'id_ed25519' }, { match: 'prefix', value: 'id_ecdsa' },
+  { match: 'exact', value: '.npmrc' }, { match: 'exact', value: '.netrc' }, { match: 'exact', value: '.pgpass' },
+];
 /** Templates that are meant to be shared. */
-const SECRET_EXCEPTIONS = [/^\.env\.example$/i, /^\.env\.sample$/i, /^\.env\.template$/i];
+export const SECRET_FILE_EXCEPTIONS: readonly string[] = ['.env.example', '.env.sample', '.env.template'];
+
+const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SECRET_NAMES = SECRET_FILE_RULES.map(rule => new RegExp(rule.match === 'exact' ? `^${escape(rule.value)}$` : rule.match === 'prefix' ? `^${escape(rule.value)}${rule.value.endsWith('.') ? '.+' : ''}` : `${escape(rule.value)}$`, 'i'));
+const SECRET_EXCEPTIONS = SECRET_FILE_EXCEPTIONS.map(name => new RegExp(`^${escape(name)}$`, 'i'));
 
 export interface ReadPolicyContext {
   /** Absolute path of Hannes's own state directory (credentials metadata, sessions). */
@@ -57,4 +69,19 @@ export class SessionGrants {
   }
 
   clear(): void { this.grants.clear(); }
+}
+
+/** Longest command string accepted by the execution policy (ADR 0022). */
+export const MAX_COMMAND_CHARS = 1024;
+
+/**
+ * Policy for one sandboxed command (ADR 0022). There is no allow branch: a command either is
+ * denied or needs an explicit user decision bound to the command, the canonical working directory
+ * and the sandbox policy. File-read grants never authorize execution.
+ */
+export function evaluateExec(command: string, workdirRelative: string, workdirAbsolute: string, context: ReadPolicyContext = {}): PermissionDecision {
+  if (!command.trim() || command.length > MAX_COMMAND_CHARS || /[\u0000]/.test(command)) return { effect: 'deny', reason: 'invalid-command' };
+  const location = evaluateRead(workdirRelative === '.' ? '.' : workdirRelative + '/', workdirAbsolute, context);
+  if (location.effect === 'deny') return location;
+  return { effect: 'ask', reason: 'process-execute' };
 }

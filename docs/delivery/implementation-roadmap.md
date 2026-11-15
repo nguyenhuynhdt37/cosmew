@@ -1,5 +1,7 @@
 # Implementation roadmap
 
+Task 03A: bounded exec_command foundation and candidate OS tests under [ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md). **Gate closed**: detached descendant cleanup failed on macOS; Linux/Windows remain unsupported. Tool exposure is disabled; this is not production execution acceptance. See [evidence](exec-command-foundation.md).
+
 > Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.
 
 Mọi capability tương lai: **Not implemented**. Phase 0 không thực thi các tasks/test requirements dưới đây. Không có thời gian ước lượng cam kết. Mỗi phase có review scope và security gate; dependency hoàn thành không tự cho phép mở rộng phase đang được giao.

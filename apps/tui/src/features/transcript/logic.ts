@@ -140,7 +140,10 @@ export function toolSummary(call: ToolCall, results: ToolResult[] | undefined): 
 /** Stored tool results keep their status as a `[denied: CODE]` / `[error: CODE]` prefix. */
 function storedResult(m: Message): ToolResult {
   const match = /^\[(denied|error)(?:: ([A-Z_]+))?\] /.exec(m.content);
-  return { callId: m.toolCallId!, name: m.toolName!, status: (match?.[1] as ToolResult['status'] | undefined) ?? 'ok', code: match?.[2], content: match ? m.content.slice(match[0].length) : m.content };
+  const content = match ? m.content.slice(match[0].length) : m.content;
+  // Commands keep their exit code in the stored text (ADR 0022), so a resumed session shows it.
+  const exit = m.toolName === 'exec_command' ? /^Exit code: (-?\d+)\nWall time: /.exec(content) : null;
+  return { callId: m.toolCallId!, name: m.toolName!, status: (match?.[1] as ToolResult['status'] | undefined) ?? 'ok', code: match?.[2], content, ...(exit ? { exitCode: Number(exit[1]) } : {}) };
 }
 
 /**
@@ -249,4 +252,35 @@ export function reasoningTitle(text: string | undefined): string | undefined {
   if (!text) return undefined;
   const titles = [...text.matchAll(/\*\*([^*\n]{1,80})\*\*/g)].map(match => printable(match[1]!.trim())).filter(Boolean);
   return titles.at(-1);
+}
+
+/** Display facts for one exec_command call (ADR 0022). */
+export interface CommandSummary {
+  state: 'awaiting' | 'pending' | 'ran' | 'failed' | 'stopped';
+  command: string;
+  /** Last few output lines, control bytes removed. */
+  preview: string[];
+  hidden: number;
+  note?: string;
+}
+
+const PREVIEW_LINES = 3;
+
+export function commandSummary(call: ToolCall, result: ToolResult | undefined, context: { live: boolean; awaiting?: boolean }): CommandSummary {
+  const input = (call.input && typeof call.input === 'object' ? call.input : {}) as Record<string, unknown>;
+  const workdir = typeof input.workdir === 'string' && input.workdir !== '.' ? `(in ${printable(input.workdir)}) ` : '';
+  const command = workdir + printable(typeof input.cmd === 'string' ? input.cmd.replace(/\s*\n\s*/g, ' ') : '');
+  if (!result) return { state: context.awaiting ? 'awaiting' : context.live ? 'pending' : 'stopped', command, preview: [], hidden: 0, note: context.live ? undefined : 'no result' };
+  if (result.status === 'denied') return { state: 'failed', command, preview: [], hidden: 0, note: result.code === 'DENIED' ? 'denied — not run' : (result.code ?? 'denied').toLowerCase() };
+  // Output follows the "Output…:" header line; take its tail for the preview.
+  const body = result.content.split('\n');
+  const start = body.findIndex(line => /^Output( \(|:)/.test(line));
+  const output = (start >= 0 ? body.slice(start + 1) : []).map(printable).filter((line, i, all) => line.trim() || i < all.length - 1);
+  const shown = output.filter(line => line !== '(no output)');
+  const preview = shown.slice(-PREVIEW_LINES);
+  const hidden = Math.max(0, shown.length - preview.length);
+  if (result.status === 'error') return { state: 'failed', command, preview, hidden, note: result.code === 'TIMEOUT' ? 'timed out — process tree killed' : result.code === 'SANDBOX_UNAVAILABLE' || result.code === 'SANDBOX_FAILED' ? 'sandbox unavailable — not run' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' ') };
+  const exit = result.exitCode;
+  if (exit === 0) return { state: 'ran', command, preview, hidden };
+  return { state: 'failed', command, preview, hidden, note: exit === null || exit === undefined ? 'ended by signal' : `exit ${exit}` };
 }

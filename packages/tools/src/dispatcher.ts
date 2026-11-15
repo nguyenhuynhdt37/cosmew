@@ -1,19 +1,25 @@
 import { HannesError, toolResultSchema, type ToolCall, type ToolDescriptor, type ToolPort, type ToolResult, type ProjectInstructionReadResult } from '@hannes/contracts';
-import { evaluateRead, type SessionGrants } from '@hannes/security';
+import { evaluateExec, evaluateRead, type SessionGrants } from '@hannes/security';
 import { WorkspaceDenied, type ResolvedPath, type WorkspaceRoot } from '@hannes/workspace';
 import type { z } from 'zod';
 import { readDescriptor, readInput, runRead } from './builtin/read';
 import { candidateFiles, compilePattern, globDescriptor, globInput, grepDescriptor, grepInput, runGlob } from './builtin/search';
 import { LIMITS, clipBytes } from './limits';
+import { EXEC_LIMITS, execDescriptor, execInput, formatOutcome } from './exec/command';
+import type { CommandRuntime } from '@hannes/contracts';
 
 export type ApprovalDecision = 'once' | 'session' | 'deny';
 
 export interface ApprovalRequest {
   tool: string;
-  capability: 'fs.read';
-  /** Workspace-relative target. */
+  capability: 'fs.read' | 'process.execute';
+  /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
+  /** For commands: the canonical working directory (workspace-relative) and the sandbox. */
+  workdir?: string;
+  sandbox?: string;
+  scopeKey?: string;
 }
 
 /** One line of the tool audit trail. `requested` is written before any prompt or execution. */
@@ -40,6 +46,13 @@ export interface ToolDispatcherOptions {
   stateDirectory?: string;
   /** Search deadline; defaults to 30 s. */
   searchDeadlineMs?: number;
+  /** Sandboxed command runtime (ADR 0022). Without one, or while it is unavailable, exec_command is not offered. */
+  commands?: CommandRuntime;
+}
+
+/** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
+export function commandGrantTarget(command: string, workdirAbsolute: string, runtimeId: string): string {
+  return JSON.stringify({ exec: command, cwd: workdirAbsolute, sandbox: runtimeId });
 }
 
 const DESCRIPTORS: ToolDescriptor[] = [readDescriptor, globDescriptor, grepDescriptor];
@@ -52,7 +65,10 @@ const DESCRIPTORS: ToolDescriptor[] = [readDescriptor, globDescriptor, grepDescr
 export class ToolDispatcher implements ToolPort {
   constructor(private readonly options: ToolDispatcherOptions) {}
 
-  descriptors(): ToolDescriptor[] { return DESCRIPTORS; }
+  descriptors(): ToolDescriptor[] { return this.commandsReady() ? [...DESCRIPTORS, execDescriptor] : DESCRIPTORS; }
+
+  /** The sandbox exists and passed its self-test on this host. */
+  commandsReady(): boolean { return this.options.commands?.availability().ok === true; }
 
   /** Automatic instruction reads share policy/audit but never prompt for newly required access. */
   async readInstruction(path: string, maxBytes: number, signal?: AbortSignal): Promise<ProjectInstructionReadResult> {
@@ -109,9 +125,10 @@ export class ToolDispatcher implements ToolPort {
     const fail = (code: string, content: string, target?: string, status: 'error' | 'denied' = 'error') => finish({ status, code, content, target });
 
     signal?.throwIfAborted();
-    const descriptor = DESCRIPTORS.find(d => d.name === call.name);
+    const descriptor = this.descriptors().find(d => d.name === call.name);
     audit({ target: null, phase: 'requested' });
-    if (!descriptor) return fail('UNKNOWN_TOOL', `Unknown tool "${call.name}". Available: read, glob, grep.`);
+    if (call.name === 'exec_command' && !descriptor) return fail('SANDBOX_UNAVAILABLE', 'exec_command is unavailable: no verified command sandbox on this host. Nothing was run.');
+    if (!descriptor) return fail('UNKNOWN_TOOL', `Unknown tool "${call.name}". Available: ${this.descriptors().map(d => d.name).join(', ')}.`);
 
     try {
       if (call.name === 'read') {
@@ -124,6 +141,7 @@ export class ToolDispatcher implements ToolPort {
         if (!outcome.ok) return fail(outcome.code, readFailure(outcome.code, file.relative), file.relative);
         return finish({ status: 'ok', content: outcome.content, target: file.relative, truncated: outcome.truncated || undefined });
       }
+      if (call.name === 'exec_command') return await this.exec(call, audit, finish, fail, signal);
       if (call.name === 'glob') {
         const input = this.parse(globInput, call.input);
         if (!input) return fail('INVALID_INPUT', 'Invalid arguments for glob.');
@@ -153,6 +171,50 @@ export class ToolDispatcher implements ToolPort {
       if (error instanceof HannesError && error.code === 'TIMEOUT') return fail('TIMEOUT', 'The search took longer than 30 seconds and was stopped. Narrow the path, glob or pattern.');
       return fail('EXECUTION_FAILED', 'The tool failed.');
     }
+  }
+
+  /**
+   * exec_command (ADR 0022): validate → resolve the working directory inside the workspace →
+   * policy (never allow without a decision) → approval bound to command + directory + sandbox →
+   * revalidate everything → launch under the OS sandbox → clean, redact and bound the output.
+   */
+  private async exec(call: ToolCall, audit: (r: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) => void, finish: (r: Omit<ToolResult, 'callId' | 'name'>) => ToolResult,
+    fail: (code: string, content: string, target?: string, status?: 'error' | 'denied') => ToolResult, signal?: AbortSignal): Promise<ToolResult> {
+    const runtime = this.options.commands!;
+    const parsed = execInput.safeParse(call.input);
+    if (!parsed.success) return fail('INVALID_INPUT', 'Invalid arguments for exec_command. Supported: cmd (required), workdir, timeout_ms, max_output_tokens. Interactive sessions, tty and stdin are not supported.');
+    const input = parsed.data;
+    const where = this.options.workspace.resolve(input.workdir ?? '.');
+    if (where.kind !== 'directory') return fail('NOT_A_DIRECTORY', `${where.relative} is not a directory.`, where.relative);
+    const label = (this.options.redact(`${where.relative === '.' ? '' : where.relative + ': '}${input.cmd}`)).slice(0, 1024);
+    const decision = evaluateExec(input.cmd, where.relative, where.absolute, { stateDirectory: this.options.stateDirectory });
+    audit({ target: label, phase: 'decided', decision: decision.effect, reason: decision.reason });
+    if (decision.effect === 'deny') return finish({ status: 'denied', code: 'DENIED', content: `Command denied by policy (${decision.reason}). Nothing was run.`, target: label });
+    const grant = commandGrantTarget(input.cmd, where.absolute, runtime.id);
+    let viaSession = this.options.grants.has('process.execute', grant);
+    if (!viaSession) {
+      const answer = await this.options.approve({ tool: 'exec_command', capability: 'process.execute', target: input.cmd, workdir: where.relative, sandbox: runtime.label, scopeKey: grant, reason: decision.reason }, signal);
+      signal?.throwIfAborted();
+      audit({ target: label, phase: 'decided', decision: answer, reason: 'user' });
+      if (answer === 'deny') return finish({ status: 'denied', code: 'DENIED', content: 'The user denied running this command. Nothing was run.', target: label });
+      if (answer === 'session') { this.options.grants.grant('process.execute', grant); viaSession = true; }
+    }
+    // Revalidate right before launch: same directory, same policy, grant not revoked, sandbox still healthy.
+    const again = this.options.workspace.resolve(input.workdir ?? '.');
+    const current = evaluateExec(input.cmd, again.relative, again.absolute, { stateDirectory: this.options.stateDirectory });
+    if (again.absolute !== where.absolute || again.kind !== 'directory' || current.effect === 'deny' || (viaSession && !this.options.grants.has('process.execute', grant))) {
+      audit({ target: label, phase: 'decided', decision: 'deny', reason: 'revalidation' });
+      return finish({ status: 'denied', code: 'DENIED', content: 'The command was not run: its approval or working directory changed before launch.', target: label });
+    }
+    if (!runtime.availability().ok) return fail('SANDBOX_UNAVAILABLE', 'The command sandbox is unavailable. Nothing was run.', label);
+    signal?.throwIfAborted();
+    const timeoutMs = input.timeout_ms ?? EXEC_LIMITS.defaultTimeoutMs;
+    const outcome = await runtime.run({ command: input.cmd, cwd: where.absolute, timeoutMs, maxOutputBytes: (input.max_output_tokens ?? EXEC_LIMITS.defaultOutputTokens) * EXEC_LIMITS.bytesPerToken }, signal);
+    if (outcome.kind === 'cancelled' || signal?.aborted) throw new HannesError('CANCELLED');
+    if (outcome.sandboxFailed || outcome.kind === 'spawn-failed') return finish({ status: 'error', code: 'SANDBOX_FAILED', content: 'The sandbox could not start the command; it did not run unsandboxed.', target: label, durationMs: outcome.durationMs });
+    const { content, truncated } = formatOutcome(outcome, timeoutMs);
+    if (outcome.kind === 'timeout') return finish({ status: 'error', code: 'TIMEOUT', content, target: label, truncated: truncated || undefined, durationMs: outcome.durationMs });
+    return finish({ status: 'ok', content, target: label, truncated: truncated || undefined, exitCode: outcome.exitCode, durationMs: outcome.durationMs });
   }
 
   private parse<T extends z.ZodTypeAny>(schema: T, input: unknown): z.infer<T> | null {

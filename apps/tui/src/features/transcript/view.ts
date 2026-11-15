@@ -1,6 +1,6 @@
 import type { BorderStyle, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
+import { commandSummary, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
 
 export function renderMarkdownBody(options: {
@@ -84,6 +84,8 @@ export function renderTranscriptMessages(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
   syntaxHighlighting?: boolean;
+  /** True for a command still waiting for the user's decision (no process exists yet). */
+  awaitingApproval?: (call: ToolCall) => boolean;
 }): RenderedBoxLine[] {
   const { items, width, tokens, syntaxHighlighting = true } = options;
   const innerWidth = Math.max(16, width - 4);
@@ -117,7 +119,16 @@ export function renderTranscriptMessages(options: {
         lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
       } else if (part.kind === 'tools') {
         const calls = part.callIds.map(id => item.toolCalls?.find(call => call.id === id)).filter((call): call is ToolCall => Boolean(call));
-        if (calls.length) lines.push(...renderExplorationGroup({ calls, results: item.toolResults, width: innerWidth, tokens, bg, live: Boolean(item.streaming) }));
+        // Reads/searches group under "Explored"; every command gets its own cell, in order.
+        let run: ToolCall[] = [];
+        const flush = () => { if (run.length) lines.push(...renderExplorationGroup({ calls: run, results: item.toolResults, width: innerWidth, tokens, bg, live: Boolean(item.streaming) })); run = []; };
+        for (const call of calls) {
+          if (call.name !== 'exec_command') { run.push(call); continue; }
+          flush();
+          const result = item.toolResults?.find(r => r.callId === call.id);
+          lines.push(...renderCommandCell({ call, result, width: innerWidth, tokens, bg, live: Boolean(item.streaming), awaiting: !result && Boolean(options.awaitingApproval?.(call)) }));
+        }
+        flush();
       } else {
         const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 4), tokens, bg, syntaxHighlighting });
         for (const [row, bLine] of body.entries()) {
@@ -168,6 +179,7 @@ export function renderTranscriptViewport(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
   syntaxHighlighting: boolean;
+  awaitingApproval?: (call: ToolCall) => boolean;
 }): { lines: RenderedBoxLine[]; totalLines: number; clampedOffset: number } {
   const { items, width, height, scrollOffset, tokens, borderStyle, syntaxHighlighting } = options;
   const contentWidth = Math.max(16, width - 2);
@@ -177,6 +189,7 @@ export function renderTranscriptViewport(options: {
     tokens,
     borderStyle,
     syntaxHighlighting,
+    awaitingApproval: options.awaitingApproval,
   });
 
   const totalLines = allLines.length;
@@ -248,5 +261,34 @@ export function renderExplorationGroup(options: { calls: ToolCall[]; results: To
       ] });
     });
   });
+  return lines;
+}
+
+/**
+ * One sandboxed command, Codex-style:
+ *
+ *   • Ran rg -n "verifyToken" src
+ *     └ src/routes.ts:1:import { verifyToken } from './service';
+ *       … +3 lines
+ *
+ * The header says only what is true: waiting for approval, pending a result, ran (exit 0),
+ * or failed (nonzero exit, timeout, denial, sandbox error).
+ */
+export function renderCommandCell(options: { call: ToolCall; result: ToolResult | undefined; width: number; tokens: ThemeTokens; bg: string; live: boolean; awaiting?: boolean }): RenderedBoxLine[] {
+  const { tokens, bg, width } = options;
+  const summary = commandSummary(options.call, options.result, { live: options.live, awaiting: options.awaiting });
+  const marker = summary.state === 'pending' || summary.state === 'awaiting' ? { text: '◦', fg: tokens.accent }
+    : summary.state === 'ran' ? { text: '•', fg: tokens.success } : summary.state === 'failed' ? { text: '•', fg: tokens.error } : { text: '•', fg: tokens.foregroundSubtle };
+  const verb = { awaiting: 'Waiting for approval', pending: 'Command pending', ran: 'Ran', failed: 'Failed', stopped: 'Stopped' }[summary.state];
+  const command = wrapTextToWidth(summary.command, Math.max(8, width - verb.length - 3));
+  const lines: RenderedBoxLine[] = command.map((text, index) => ({ spans: index === 0
+    ? [{ ...marker, bg }, { text: ` ${verb} `, fg: tokens.foreground, bg, bold: true }, { text, fg: tokens.foreground, bg }]
+    : [{ text: ' '.repeat(verb.length + 3), fg: tokens.foreground, bg }, { text, fg: tokens.foreground, bg }] }));
+  const detail = [...summary.preview.map(text => ({ text, fg: tokens.foregroundMuted })), ...(summary.hidden ? [{ text: `… +${summary.hidden} lines`, fg: tokens.foregroundSubtle }] : []),
+    ...(summary.note ? [{ text: summary.note, fg: summary.state === 'failed' ? tokens.error : tokens.foregroundSubtle }] : [])];
+  detail.forEach((row, index) => lines.push({ spans: [
+    { text: index === 0 ? '  └ ' : '    ', fg: tokens.foregroundSubtle, bg },
+    { text: row.text.slice(0, Math.max(4, width - 4)), fg: row.fg, bg },
+  ] }));
   return lines;
 }

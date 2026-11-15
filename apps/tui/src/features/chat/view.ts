@@ -141,6 +141,11 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): void {
         tokens,
         borderStyle: manifest.borderStyle,
         syntaxHighlighting: appearance.syntaxHighlighting,
+        awaitingApproval: call => {
+          const cmd = (call.input as { cmd?: unknown } | null)?.cmd;
+          const plain = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+          return typeof cmd === 'string' && v.client.listPendingPermissions().some(p => p.capability === 'process.execute' && plain(p.target) === plain(cmd));
+        },
       });
       canvas.block(transcriptStartRow, contentLeft, vp.lines, contentWidth);
     }
@@ -165,7 +170,11 @@ export function turnStatusSpans(v: Pick<ChatScreenInput, 'client' | 'status' | '
   const pendingApproval = v.client.listPendingPermissions().length > 0;
   const last = turn?.parts?.at(-1);
   const label = pendingApproval ? 'Waiting for your approval'
-    : waitingTool ? (explorationRows(turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id)), []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring')
+    : waitingTool ? (() => {
+      const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
+      if (running.some(call => call.name === 'exec_command')) return 'Command pending';
+      return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
+    })()
     : last?.kind === 'reasoning' ? reasoningTitle(last.text) ?? 'Thinking'
     : last?.kind === 'text' ? 'Replying'
     : v.status.phase === 'waiting' ? 'Waiting for provider' : 'Working';

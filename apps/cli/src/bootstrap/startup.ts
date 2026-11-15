@@ -17,7 +17,7 @@ import {
   type WorkspaceDiffReport,
 } from '@hannes/contracts';
 import { Conversation } from '@hannes/core';
-import { ToolDispatcher } from '@hannes/tools';
+import { ToolDispatcher, platformCommandRuntime, type CommandRuntime } from '@hannes/tools';
 import { WorkspaceRoot, ProjectContextLoader } from '@hannes/workspace';
 import {
   AccountManager,
@@ -212,9 +212,17 @@ function committedMessages(messages: StoredMessage[]): Message[] {
 }
 
 /** Why a read needs approval, in words the permission dialog can show. */
-const APPROVAL_REASONS: Record<string, string> = { 'secret-file': 'This file usually holds secrets (keys, passwords, tokens).' };
+/** `$ cmd` (plus `in dir` when not the root) for a session command grant. */
+function commandGrantLabel(target: string, workspace: WorkspaceRoot): string {
+  try { const { exec, cwd } = JSON.parse(target) as { exec: string; cwd: string }; const dir = workspace.relativeOf(cwd); return `$ ${exec}${dir === '.' ? '' : ` (in ${dir})`}`; } catch { return '$ (command)'; }
+}
 
-export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions } = {}) {
+const APPROVAL_REASONS: Record<string, string> = {
+  'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
+  'process-execute': 'Runs a shell command in a read-only sandbox: no writes, no network, project files only.',
+};
+
+export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions; commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime } = {}) {
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
@@ -361,10 +369,15 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       workspace: workspaceTree(),
       grants,
       stateDirectory: realpathSync.native(resolve(directory)),
+      // Sandboxed exec_command (ADR 0022): Seatbelt on macOS; other platforms fail closed.
+      commands: (services.commands ?? ((root, state) => platformCommandRuntime({ workspaceRoot: root, stateDirectory: state, extraExecutables: ['rg'] })))(workspaceTree().root, realpathSync.native(resolve(directory))),
       redact: (text,incomplete) => incomplete ? redactor.stream().push(text) : redactor.text(text),
       audit: record => toolAudit.append(record),
       approve: (request, signal) => client
-        ? client.requestPermission({ capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
+        ? client.requestPermission(request.capability === 'process.execute'
+          // The action names directory and sandbox, so a "session" answer is bound to all three.
+          ? { capability: request.capability, action: `Run in ${(request.workdir ?? '.').slice(0,80)} · ${request.sandbox ?? 'sandbox'}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'high', scopeKey: request.scopeKey }
+          : { capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
         : Promise.resolve('deny'),
     });
     const toolPort: ToolPort = {
@@ -388,7 +401,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
     client = new FutrynClient({
       getProjectContext: () => client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null,
-      toolGrants: { list: () => grants.list().map(grant => workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
+      toolGrants: { list: () => grants.list().map(grant => grant.capability === 'process.execute' ? commandGrantLabel(grant.target, workspaceTree()) : workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),
       settings,
       listIntegrations: () => integrations.list().map(integration => ({ ...integration,

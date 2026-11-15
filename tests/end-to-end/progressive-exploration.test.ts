@@ -31,6 +31,9 @@ function explorer(view: ScriptedView): ScriptedReply {
   return { text: definition ? `${imported[1]} is defined in ${last.input.path}: ${definition.replace(/^\s*\d+\t/, '').trim()}` : `MISSING: ${imported[1]} is not defined in ${last.input.path}` };
 }
 
+/** exec_command is offered only where its OS sandbox is verified (ADR 0022). */
+const OFFERED = ['read', 'glob', 'grep'];
+
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
 
@@ -72,7 +75,7 @@ for (const protocol of ['chat', 'anthropic'] as const) test(`${protocol}: discov
   // Each later request carried every earlier result, joined to its own call.
   const views = c.views();
   expect(views.map(v => v.results.length)).toEqual([0, 1, 2, 3]);
-  for (const view of views) { expect(view.orphanResults).toBe(0); expect(view.unansweredCalls).toBe(0); expect(view.tools).toEqual(['read', 'glob', 'grep']); }
+  for (const view of views) { expect(view.orphanResults).toBe(0); expect(view.unansweredCalls).toBe(0); expect(view.tools).toEqual(OFFERED); }
   const final = views.at(-1)!;
   expect(final.results.map(r => [r.name, r.input.path ?? r.input.pattern])).toEqual([['glob', '**/routes.*'], ['read', 'src/routes.ts'], ['read', 'src/service.ts']]);
   expect(final.results[1]!.content).toContain("from './service'");
@@ -164,7 +167,7 @@ test(`round budget: after ${MAX_TOOL_ROUNDS} tool rounds the tools are withdrawn
   const { answer } = await ask(c.client, 'follow the chain');
   const views = c.views();
   expect(views).toHaveLength(MAX_TOOL_ROUNDS + 1);
-  expect(views.slice(0, -1).every(v => v.tools.length === 3)).toBe(true);
+  expect(views.slice(0, -1).every(v => v.tools.length === OFFERED.length)).toBe(true);
   expect(views.at(-1)!.tools).toEqual([]);
   expect(views.at(-1)!.system).toContain('tool budget for this turn is used up');
   expect(views.slice(0, -1).some(v => v.system.includes('used up'))).toBe(false);

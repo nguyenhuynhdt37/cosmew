@@ -30,3 +30,5 @@ Permission invariant: validate → normalize target → evaluate policy → pers
 DAG graph, public entry checks và side-effect enforcement sẽ thành checks ở phase triển khai. Phase 0 chỉ mô tả. ADR bắt buộc cho dependency edge mới, shared ownership, public type/version thay đổi, process boundary hay thay security model.
 
 Task 01 ([ADR 0019](../adr/0019-project-context-loader.md)) adds no package edges: workspace discovery receives an authorized-reader port from contracts; tools implements it with the existing workspace/security dependencies; core receives only ProjectContextPort. CLI composes these; SDK/TUI consume content-free reports. Core never imports workspace/tools/security/SDK implementations.
+
+Task 03A ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md)): contracts own CommandRuntime; tools owns the candidate OS/process executor, security owns process.execute decisions, CLI composes the runtime and TUI only renders events. No new package edges or dependencies. Raw process launch helpers remain tools-private. Production execution stays disabled until the complete security gate passes.

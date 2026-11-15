@@ -6,3 +6,4 @@ export * from './tools';
 
 export * from './telemetry';
 export * from './project-context';
+export * from './command-runtime';

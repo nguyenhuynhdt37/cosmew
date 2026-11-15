@@ -5,7 +5,7 @@ import type { ToolCall } from './models';
  * TOOLS1 (ADR 0017): read-only workspace tools. Descriptors carry no executable code; the
  * dispatcher in `@hannes/tools` is the single enforcement point and `@hannes/security` decides.
  */
-export const toolCapabilitySchema = z.enum(['fs.read']);
+export const toolCapabilitySchema = z.enum(['fs.read', 'process.execute']);
 export type ToolCapability = z.infer<typeof toolCapabilitySchema>;
 
 export interface ToolDescriptor {
@@ -34,6 +34,10 @@ export const toolResultSchema = z.strictObject({
   truncated: z.boolean().optional(),
   /** Safe error code for `denied` / `error`. */
   code: z.string().max(64).optional(),
+  /** exec_command (ADR 0022): exit code of the command; null when it was killed by a signal. */
+  exitCode: z.number().int().nullable().optional(),
+  /** exec_command: wall-clock run time of the process. */
+  durationMs: z.number().int().min(0).optional(),
 });
 export type ToolResult = z.infer<typeof toolResultSchema>;
 

@@ -167,7 +167,11 @@ export class FutrynClient {
   listToolGrants(): string[] { return this.ports.toolGrants?.list() ?? []; }
 
   /** Revoke every session tool grant; the next read asks again. */
-  revokeToolGrants(): void { this.ports.toolGrants?.clear(); this.notifyStateChange(); }
+  revokeToolGrants(): void {
+    // Both stores: the dispatcher's grants and the prompt cache that answers 'session' without
+    // asking. Clearing only the first let a revoked file or command be re-granted silently.
+    this.ports.toolGrants?.clear(); this.sessionGrants.clear(); this.notifyStateChange();
+  }
 
   /** Last authorized instruction snapshot metadata; instruction contents are not exposed here. */
   projectContext(): ProjectContextReport | null { return this.ports.getProjectContext?.() ?? null; }
@@ -819,10 +823,11 @@ export class FutrynClient {
     reason: string;
     diffPreview?: string;
     ttlMs?: number;
+    scopeKey?: string;
   }): PermissionPromptRequest {
     const now = new Date();
     const expires = new Date(now.getTime() + (input.ttlMs ?? 300_000));
-    const scopeHash = createHash('sha256').update(JSON.stringify([input.capability, input.action, input.target])).digest('hex');
+    const scopeHash = createHash('sha256').update(JSON.stringify([input.capability, input.action, input.target, ...(input.scopeKey ? [input.scopeKey] : [])])).digest('hex');
     const req = permissionPromptRequestSchema.parse({
       approvalId: crypto.randomUUID(),
       capability: input.capability,
@@ -875,7 +880,7 @@ export class FutrynClient {
    * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
    * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
    */
-  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel'] }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
+  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
     const request = this.enqueuePermissionRequest(input);
     if (request.status === 'approved_session') return Promise.resolve('session');

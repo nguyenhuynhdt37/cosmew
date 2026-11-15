@@ -25,21 +25,23 @@ export function renderPermissionDialogOverlay(options: {
   };
   if (request) {
     wrap(`${state.selectedIndex + 1}/${pending.length} waiting · ${request.capability}`);
-    wrap(`Target: ${JSON.stringify(request.target)}`);
-    wrap(`Action: ${request.action}`);
+    const command = request.capability === 'process.execute';
+    wrap(command ? `Command: ${request.target}` : `Target: ${JSON.stringify(request.target)}`);
+    wrap(`${command ? 'Where' : 'Action'}: ${request.action}`);
     wrap(`Why: ${request.reason}`);
-    wrap('Once applies to this request. Session allows this target until revoked.');
+    wrap(command ? 'Once runs it now. Session allows this exact command in this directory until revoked.' : 'Once applies to this request. Session allows this target until revoked.');
     if (request.diffPreview) wrap('Preview:\n' + request.diffPreview);
   } else {
     wrap('No requests waiting.');
     wrap(options.workspaceReading === 'read-only' ? 'Workspace reading is enabled for this model.' : options.workspaceReading === 'disabled' ? 'Workspace reads are disabled for this session.' : 'Workspace reads are unavailable for this model.');
     wrap('Project files: allowed after folder consent.');
     wrap('Secret files: ask. Outside workspace: denied.');
-    wrap('Implemented: read, glob, grep. No shell or writes.');
+    wrap('Implemented: read, glob, grep. No writes.');
+    wrap('Commands unavailable: process cleanup safety check failed.');
     if (grants.length) {
       wrap(`Allowed this session (${grants.length}, Ctrl+X revokes):`);
       for (const grant of grants) wrap('  ' + JSON.stringify(grant));
-    } else wrap('No file access remembered for this session.');
+    } else wrap('No file or command access remembered for this session.');
     const resolved = requests.filter(r => r.status !== 'pending');
     if (resolved.length) wrap(`Recent decisions: ${resolved.slice(0, 3).map(r => r.status).join(', ')}`);
   }

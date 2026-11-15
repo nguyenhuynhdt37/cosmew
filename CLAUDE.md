@@ -6,6 +6,8 @@ Hannes / FUTRYN is a TypeScript + Bun coding-agent harness. The active slice is 
 
 `AGENTS.md` (Vietnamese) is authoritative for scope rules; read it and the ADRs in `docs/adr/` before extending the slice.
 
+Task 03A ([ADR 0022](docs/adr/0022-sandboxed-exec-command-foundation.md)) permits a one-shot sandboxed exec_command foundation. Production execution remains disabled: the macOS candidate cannot guarantee detached descendant cleanup; Linux/Windows are unsupported. Candidate OS tests and injected fixtures are not production availability evidence. No persistent sessions, PTY, write_stdin or write tools.
+
 ## Commands
 
 Requires Bun 1.4.4. No build step; Bun runs the TS workspace directly.

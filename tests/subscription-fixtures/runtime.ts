@@ -36,7 +36,7 @@ if (copilot && process.argv.includes('login')) {
   }
   function requestRead() {
     const id = scenario === 'read-duplicate' ? 'same-call' : 'read-' + ++reads;
-    send({id: 'read-tool-' + reads, method: 'item/tool/call', params: {threadId: scenario === 'read-wrong-thread' ? 'foreign-thread' : session, turnId: scenario === 'read-wrong-turn' ? 'foreign-turn' : 'fixture-turn', callId: id, namespace: scenario === 'read-namespace' ? 'mcp' : null, tool: scenario === 'read-unknown' ? 'shell' : scenario === 'read-glob' ? 'glob' : scenario === 'read-grep' ? 'grep' : 'read', arguments: scenario === 'read-glob' ? {pattern: '**/*.md'} : scenario === 'read-grep' ? {pattern: 'banana'} : {path: scenario === 'read-secret' ? '.env' : scenario === 'read-outside' ? '../outside.txt' : 'README.md'}}});
+    send({id: 'read-tool-' + reads, method: 'item/tool/call', params: {threadId: scenario === 'read-wrong-thread' ? 'foreign-thread' : session, turnId: scenario === 'read-wrong-turn' ? 'foreign-turn' : 'fixture-turn', callId: id, namespace: scenario === 'read-namespace' ? 'mcp' : null, tool: scenario === 'exec-command' ? 'exec_command' : scenario === 'read-unknown' ? 'shell' : scenario === 'read-glob' ? 'glob' : scenario === 'read-grep' ? 'grep' : 'read', arguments: scenario === 'exec-command' ? {cmd: 'rg -n marker source.ts'} : scenario === 'read-glob' ? {pattern: '**/*.md'} : scenario === 'read-grep' ? {pattern: 'banana'} : {path: scenario === 'read-secret' ? '.env' : scenario === 'read-outside' ? '../outside.txt' : 'README.md'}}});
     if (scenario === 'read-duplicate' && !reads) { reads++; requestRead(); }
   }
   /** `explore`: a deterministic model whose every step is computed from the previous tool result. */
@@ -120,7 +120,7 @@ if (copilot && process.argv.includes('login')) {
         if (!readFileSync(join(profile, 'config.toml'), 'utf8').includes('shell_tool = false')) process.exit(26);
         dynamicTools = p.dynamicTools ?? [];
         projectInstructions = p.developerInstructions ?? '';
-        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep'].includes(t.name))) process.exit(47);
+        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep', 'exec_command'].includes(t.name))) process.exit(47);
         result = { thread: { id: session } }; break;
       case 'session.create':
         if (p.availableTools.length || !p.requestPermission || p.enableConfigDiscovery !== false || p.installedPlugins.length) process.exit(27);
@@ -164,8 +164,8 @@ if (copilot && process.argv.includes('login')) {
           if (!projectInstructions.includes('Investigate progressively') || !projectInstructions.includes('at most 32 tool calls')) process.exit(51);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); call('glob', {pattern: '**/routes.*'}); return;
         }
-        if (runtime === 'codex' && scenario.startsWith('read-') && dynamicTools.length) {
-          if (dynamicTools.map((t: any) => t.name).join(',') !== 'read,glob,grep') process.exit(48);
+        if (runtime === 'codex' && (scenario.startsWith('read-') || scenario === 'exec-command') && dynamicTools.length) {
+          if (!dynamicTools.map((t: any) => t.name).join(',').startsWith('read,glob,grep')) process.exit(48);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); requestRead(); return;
         }
         if (scenario === 'tool-attempt') {

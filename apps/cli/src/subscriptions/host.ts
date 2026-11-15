@@ -8,6 +8,9 @@ import { SubscriptionRpc, type RpcMessage } from './rpc';
 import { codexProjectInstructions, codexToolContent } from './project-context';
 import { CodexUsageTracker } from './codex-usage';
 
+/** Hannes-owned tools the Codex bridge may expose; each call still runs through the Hannes dispatcher (ADR 0018, 0022). */
+const HANNES_BRIDGE_TOOLS = ['read', 'glob', 'grep', 'exec_command'];
+
 type RuntimeRef = Extract<CredentialRef, {kind:'runtime'}>;
 type Connection = { lease: string; profile: RuntimeProfile; rpc: SubscriptionRpc; recipe: SubscriptionRecipe };
 interface Login {
@@ -265,7 +268,7 @@ export class SubscriptionHost {
     } finally { signal?.removeEventListener('abort', abort); await this.close(connection, account); }
   }
   async *stream(provider: Provider, account: Account, request: ModelRequest, signal?: AbortSignal, executeTool?: InlineToolExecutor, workspaceRoot?: string): AsyncIterable<ModelEvent> {
-    if (request.tools.length && (provider.runtime !== 'codex' || !executeTool || request.tools.some(t => !['read', 'glob', 'grep'].includes(t.name)))) throw new HannesError('UNSUPPORTED');
+    if (request.tools.length && (provider.runtime !== 'codex' || !executeTool || request.tools.some(t => !HANNES_BRIDGE_TOOLS.includes(t.name)))) throw new HannesError('UNSUPPORTED');
     if (request.reasoningEffort && !this.settings.read().catalogs.find(c => c.accountId === account.id)?.models.find(m => m.id === request.modelId)?.reasoningEfforts?.includes(request.reasoningEffort)) throw new HannesError('UNSUPPORTED');
     const connection = await this.connect(provider, account);
     const { rpc, recipe, profile } = connection;

@@ -83,7 +83,7 @@ test('"Allow for session" reads the secret once approved and is remembered until
   expect(c.tui.computeFrameSnapshot().plainText).toContain('.env');
   await c.tui.handleKey('Ctrl+X');
   expect(c.client.listToolGrants()).toEqual([]);
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('No file access remembered');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('No file or command access remembered');
   await c.tui.handleKey('Escape');
 });
 

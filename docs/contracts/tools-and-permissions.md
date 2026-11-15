@@ -1,5 +1,9 @@
 # Tools và permission contracts
 
+Task 03A contract **1.8** ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md)): additive process.execute tool capability, optional exitCode/durationMs on ToolResult, and CommandRuntime/CommandRequest/CommandOutcome ports. Core still sees only ToolPort. `exec_command` arguments are strictly cmd (1–1024 characters), optional workspace-relative workdir, timeout_ms (1000–120000), max_output_tokens (100–14000, four bytes per approximate token). No tty/yield/session/write_stdin arguments; unknown fields are errors. Result status describes execution delivery; a nonzero exit is returned truthfully and rendered Failed. No storage migration; prior read-only messages remain valid; older strict consumers cannot consume the expanded contract. **Production gate is closed on all platforms**; prototype support is not enabled command execution.
+
+Execution approval is bound to command + canonical cwd + effective sandbox ID (one-shot mode). SDK prompt scope hashing includes that raw binding in addition to display fields; target redaction cannot merge distinct grants. No fs.read grant authorizes a command. Revocation clears both the dispatcher and SDK prompt cache. The existing approval TTL/cancellation rules apply. macOS candidate isolation tests are separate from mandatory lifecycle acceptance; Linux/Windows explicitly fail closed. [Evidence and blocker](../delivery/exec-command-foundation.md).
+
 **Đề xuất v1. TOOLS1 đã triển khai một phần con chỉ đọc (`read`/`glob`/`grep`, quyết định allow/ask/deny, approval once/session/deny, audit) theo [ADR 0017](../adr/0017-read-only-tools-and-permission-engine.md); phần còn lại (write, shell, lease, revision, artifact) vẫn Not implemented.** Allow/Ask/Deny là quyết định policy, không là nhãn do tool/plugin tự khai. Dispatcher là enforcement point, security là decision owner; executor không nhận raw bypass path.
 
 | Record | Fields | Invariants |
