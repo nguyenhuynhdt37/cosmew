@@ -1,5 +1,7 @@
 # ADR 0009: Commands, observable request state and account continuation
 
+Fix 01 scope amendment (2026-11-15, explicit user request): correct only Codex subscription token accounting using thread cumulative snapshots, identity fencing and monotonic snapshot selection. Keep context occupancy separate, quota independent and missing measurements unknown. No contract/storage version, dependency, provider-adapter, exploration, tool or TUI-layout changes. Source evidence and deterministic acceptance are recorded in [Fix 01](../delivery/codex-token-usage-fix.md).
+
 Accepted 2026-11-15 following explicit approval to implement the command/usage/context audit, account switching with continued conversation and logout confirmation. Extends PA1/TUI1/SUB1 only; general execution, MCP/plugin hosts and delegated agents remain Not implemented. No new dependency or package edge.
 
 Contract 1.3 adds optional model reasoning-effort metadata/preferences, a request effort field, reasoning-summary/usage/context stream events, validated turn receipts and optional receipt arguments to ConversationStore. CLI/core/models/security/persistence/SDK/TUI consumers migrate together. Settings schema 1 accepts optional reasoningPreferences; existing settings remain valid. Older strict readers cannot read new preferences, so downgrade is unsupported. Existing providers need not supply new events. New event consumers handle unknown usage explicitly.

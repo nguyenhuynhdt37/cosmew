@@ -92,3 +92,5 @@ Task 01 Project Context Loader: [usage, module changes and deterministic accepta
 Task 02 Progressive Code Exploration: [ADR 0020 with audit, budget decision and deterministic acceptance](adr/0020-progressive-code-exploration.md). Shared guidance, 16 rounds / 32 calls per turn, unchanged-reread notice; no new tools.
 
 Codex-style activity presentation: [ADR 0021](adr/0021-codex-style-activity-presentation.md) (ordered transcript parts, Explored groups, inline thinking, status row; TUI only).
+
+Fix 01 Codex token accounting: [verified sources, cumulative snapshot rules and fixture results](delivery/codex-token-usage-fix.md).

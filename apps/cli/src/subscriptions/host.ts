@@ -6,6 +6,7 @@ import { authorizeSubscription, subscriptionEnvironment, type SubscriptionRecipe
 import { MAX_INLINE_TOOL_ATTEMPTS } from '@hannes/core';
 import { SubscriptionRpc, type RpcMessage } from './rpc';
 import { codexProjectInstructions, codexToolContent } from './project-context';
+import { CodexUsageTracker } from './codex-usage';
 
 type RuntimeRef = Extract<CredentialRef, {kind:'runtime'}>;
 type Connection = { lease: string; profile: RuntimeProfile; rpc: SubscriptionRpc; recipe: SubscriptionRecipe };
@@ -272,6 +273,15 @@ export class SubscriptionHost {
     let measuredUsage: import('@hannes/contracts').Usage = { inputTokens: null, outputTokens: null, costUSD: null };
     const usageIds = new Set<string>();
     let usageCalls = 0;
+    const codexUsage = new CodexUsageTracker();
+    const pendingCodexUsage: RpcMessage[] = [];
+    const applyCodexUsage = (message: RpcMessage) => {
+      if (!threadId || !turnId || message.params?.threadId !== threadId || message.params?.turnId !== turnId) return;
+      const snapshot = codexUsage.observe(message.params?.tokenUsage);
+      if (!snapshot) return;
+      publishUsage(snapshot.usage);
+      publishContext(snapshot.usedTokens, snapshot.limitTokens);
+    };
     const measured = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
     const publishUsage = (value: unknown) => { measuredUsage = usageSchema.parse({ ...(measuredUsage.quota ? { quota: measuredUsage.quota } : {}), ...(value as object) }); queue.push({ type: 'usage', usage: measuredUsage }); wake?.(); };
     const publishContext = (used: unknown, limit: unknown) => {
@@ -304,10 +314,13 @@ export class SubscriptionHost {
           }
           if (message.method === 'item/reasoning/summaryTextDelta') pushText(message.params?.delta, 'reasoningDelta');
           if (message.method === 'thread/tokenUsage/updated') {
-            const data = message.params?.tokenUsage; const last = data?.last;
-            if (last) publishUsage({ inputTokens: measured(last.inputTokens), outputTokens: measured(last.outputTokens), costUSD: null,
-              cacheReadTokens: measured(last.cachedInputTokens), cacheWriteTokens: measured(last.cacheWriteInputTokens), reasoningTokens: measured(last.reasoningOutputTokens) });
-            if (data) publishContext(last?.totalTokens, data.modelContextWindow);
+            if (!terminal && threadId && message.params?.threadId === threadId) {
+              if (turnId) applyCodexUsage(message);
+              else {
+                if (pendingCodexUsage.length >= 256) throw new HannesError('PROTOCOL');
+                pendingCodexUsage.push(message);
+              }
+            }
           }
           if (message.method === 'item/agentMessage/delta') pushText(message.params?.delta);
           if (message.method === 'turn/completed') message.params?.turn?.status === 'completed' ? finished() : fail(new HannesError('PROTOCOL'));
@@ -396,6 +409,7 @@ export class SubscriptionHost {
         const started = await rpc.request('turn/start', { threadId: result.thread.id, model: request.modelId, summary: 'auto', input: [{ type: 'text', text: prompt, text_elements: [] }], ...(request.reasoningEffort ? { effort: request.reasoningEffort } : {}), approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false } });
         if (error) throw error;
         turnId = started?.turn?.id; releaseTurn();
+        for (const message of pendingCodexUsage.splice(0)) applyCodexUsage(message);
         if (request.tools.length && !turnId) throw new HannesError('PROTOCOL');
       } else if (recipe.runtime === 'copilot') {
         const result = await rpc.request('session.create', { model: request.modelId, sessionId: crypto.randomUUID(), streaming: true, workingDirectory: profile.workspace,

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
 import { HannesError, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
-import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet } from '@hannes/tui';
+import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows } from '@hannes/tui';
 import { RuntimeProfile } from '@hannes/persistence';
 import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
@@ -537,4 +537,62 @@ test('Task 01 context reaches Codex as one current user message, never developer
  writeFileSync(join(c.ws,'AGENTS.md'),'RULE_TASK01_NATIVE_V2');
  await c.tui.submitPrompt('Explain the updated project');expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]?.status).toBe('ok');
  expect(c.client.projectContext()!.sources[0]!.hash).not.toBe(hash);
+});
+
+test('Codex usage: three inline calls select cumulative totals once across receipts, SDK and TUI', async () => {
+  const c = await readContext('usage-three');
+  const events: ModelEvent[] = [];
+  for await (const event of c.client.sendMessage('Read README twice, then answer')) events.push(event);
+  expect(events.filter(e => e.type === 'toolResult')).toHaveLength(2);
+  const usage = {inputTokens:600,outputTokens:90,costUSD:null,cacheReadTokens:260,cacheWriteTokens:60,reasoningTokens:35};
+  expect(events.at(-1)).toMatchObject({type:'completed',usage});
+  expect(events.filter(e => e.type === 'usage').map(e => e.type === 'usage' ? [e.usage.inputTokens,e.usage.outputTokens] : [])).toEqual([[100,20],[300,50],[600,90],[600,90]]);
+  expect(c.client.usage()).toMatchObject({inputTokens:600,outputTokens:90,reportedTurns:1,unknownTurns:0,last:{outcome:'completed',usage}});
+  expect(c.client.usage().last?.usage?.quota?.[0]?.usedPercent).toBe(40);
+  expect(c.client.context().lastMeasured).toMatchObject({usedTokens:340,limitTokens:32000});
+  const id = c.client.activeSession()!.id;
+  expect(c.app.conversations.get(id)?.turns?.at(-1)?.usage).toMatchObject(usage);
+  expect(reportRows(c.client,'usage','',true).join('\n')).toContain('Input subtotal: 600 · Output subtotal: 90');
+  expect(reportRows(c.client,'usage','',true).join('\n')).toContain('Cache read: 260 · Cache write: 60');
+  const resumed = c.app.createFutrynClient(c.ws); resumed.setToolsEnabled(true); resumed.resumeSession(id);
+  expect(resumed.usage()).toMatchObject({inputTokens:600,outputTokens:90,last:{usage}});
+  // A new ephemeral thread starts at zero; its lifetime totals are counted only once too.
+  for await (const _event of resumed.sendMessage('Another turn')) { /* drain */ }
+  expect(resumed.usage()).toMatchObject({inputTokens:1200,outputTokens:180,reportedTurns:2});
+});
+
+test('Codex usage: notifications before turn/start response are fenced and ordered', async () => {
+  const c = await context('usage-early'); await connect(c,'codex');
+  for await (const _event of c.client.sendMessage('hello')) { /* drain */ }
+  expect(c.client.usage()).toMatchObject({inputTokens:600,outputTokens:90});
+  expect(c.client.context().lastMeasured).toMatchObject({usedTokens:340,limitTokens:32000});
+});
+
+for (const scenario of ['usage-none','usage-quota-only','usage-last-only','usage-unordered','usage-partial']) test(`Codex usage: ${scenario} never fabricates missing totals`, async () => {
+  const c = await context(scenario); await connect(c,'codex');
+  for await (const _event of c.client.sendMessage('hello')) { /* drain */ }
+  const partial = scenario === 'usage-partial';
+  expect(c.client.usage()).toMatchObject({inputTokens:partial ? 600 : null,outputTokens:null,reportedTurns:0,unknownTurns:1});
+  const usage = c.client.usage().last?.usage;
+  expect(usage?.costUSD).toBeNull();
+  expect(usage?.quota?.[0]?.usedPercent).toBe(25);
+  if (partial) {
+    expect(usage).toMatchObject({cacheReadTokens:null,cacheWriteTokens:null,reasoningTokens:null});
+    expect(c.client.context().lastMeasured).toMatchObject({usedTokens:null,limitTokens:null});
+  }
+});
+
+for (const scenario of ['usage-cancel','usage-fail']) test(`Codex usage: ${scenario} retains only measured partial usage without completion`, async () => {
+  const c = await context(scenario); await connect(c,'codex');
+  const controller = new AbortController(); const events: ModelEvent[] = [];
+  let caught: unknown;
+  try {
+    for await (const event of c.client.sendMessage('hello',{signal:controller.signal})) {
+      events.push(event);
+      if (scenario === 'usage-cancel' && event.type === 'usage') controller.abort();
+    }
+  } catch (error) {caught=error;}
+  expect(caught).toBeInstanceOf(HannesError);
+  expect(events.some(e => e.type === 'completed')).toBe(false);
+  expect(c.client.usage().last).toMatchObject({outcome:scenario === 'usage-cancel' ? 'cancelled' : 'failed',usage:{inputTokens:100,outputTokens:20}});
 });

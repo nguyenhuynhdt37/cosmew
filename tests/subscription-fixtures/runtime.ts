@@ -28,6 +28,12 @@ if (copilot && process.argv.includes('login')) {
   }
   const event = (method: string, params: unknown) => send({ jsonrpc: '2.0', method, params });
   const notifyCopilot = (type: string, data = {}) => event('session.event', { sessionId: session, event: { type, data } });
+  const usageCall = (inputTokens: number, outputTokens: number, cachedInputTokens: number, cacheWriteInputTokens: number, reasoningOutputTokens: number) => ({inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, totalTokens: inputTokens + outputTokens});
+  const usageTotals = [usageCall(100,20,30,10,8), usageCall(300,50,110,30,20), usageCall(600,90,260,60,35)];
+  const usageLast = [usageTotals[0], usageCall(200,30,80,20,12), usageCall(300,40,150,30,15)];
+  function tokenUsage(index: number, extra = {}) {
+    event('thread/tokenUsage/updated', {threadId:session, turnId:'fixture-turn', tokenUsage:{total:usageTotals[index], last:usageLast[index], modelContextWindow:32000}, ...extra});
+  }
   function requestRead() {
     const id = scenario === 'read-duplicate' ? 'same-call' : 'read-' + ++reads;
     send({id: 'read-tool-' + reads, method: 'item/tool/call', params: {threadId: scenario === 'read-wrong-thread' ? 'foreign-thread' : session, turnId: scenario === 'read-wrong-turn' ? 'foreign-turn' : 'fixture-turn', callId: id, namespace: scenario === 'read-namespace' ? 'mcp' : null, tool: scenario === 'read-unknown' ? 'shell' : scenario === 'read-glob' ? 'glob' : scenario === 'read-grep' ? 'grep' : 'read', arguments: scenario === 'read-glob' ? {pattern: '**/*.md'} : scenario === 'read-grep' ? {pattern: 'banana'} : {path: scenario === 'read-secret' ? '.env' : scenario === 'read-outside' ? '../outside.txt' : 'README.md'}}});
@@ -56,6 +62,19 @@ if (copilot && process.argv.includes('login')) {
   }
   async function handle(message: any) {
     if (typeof message.id === 'string' && message.id.startsWith('read-tool-')) {
+      if (scenario === 'usage-three') {
+        tokenUsage(reads);
+        if (reads === 1) {requestRead(); return;}
+        tokenUsage(2); tokenUsage(0); tokenUsage(1); // Duplicate and delayed earlier calls.
+        tokenUsage(2, {threadId:'foreign-thread', tokenUsage:{total:usageCall(9000,900,1000,100,100)}});
+        tokenUsage(2, {turnId:'foreign-turn', tokenUsage:{total:usageCall(9000,900,1000,100,100)}});
+        tokenUsage(2, {tokenUsage:{total:usageCall(610,80,260,60,35)}}); // Same total, conflicting fields.
+        tokenUsage(2, {tokenUsage:{total:usageCall(500,300,260,60,35)}}); // Higher watermark, regressive input.
+        event('account/rateLimits/updated', {rateLimits:{primary:{usedPercent:40}}});
+        answer('Three calls completed');
+        tokenUsage(2, {tokenUsage:{total:usageCall(9000,900,1000,100,100)}}); // Too late.
+        return;
+      }
       if (scenario === 'explore') { explore(message.result); return; }
       if (scenario === 'read-runaway' || (scenario === 'read-repeat' && reads < 34)) { requestRead(); return; }
       const result = message.result;
@@ -109,6 +128,32 @@ if (copilot && process.argv.includes('login')) {
         result = { sessionId: session }; break;
       case 'turn/start': case 'session.send': case 'session/prompt': {
         if (!valid()) { send({ id: message.id, error: { code: -32000, message: 'Expired secret' } }); return; }
+        if (runtime === 'codex' && scenario.startsWith('usage-')) {
+          if (scenario === 'usage-early') {
+            tokenUsage(2,{turnId:'foreign-turn',tokenUsage:{total:usageCall(9000,900,1000,100,100)}});
+            tokenUsage(2,{turnId:undefined,tokenUsage:{total:usageCall(9000,900,1000,100,100)}});
+            tokenUsage(0); tokenUsage(2); tokenUsage(1);
+            answer('Early notifications');
+            send({id:message.id,result:{turn:{id:'fixture-turn'}}}); return;
+          }
+          send({id:message.id,result:{turn:{id:'fixture-turn'}}});
+          if (scenario === 'usage-three') {tokenUsage(0); requestRead(); return;}
+          if (scenario === 'usage-partial') {
+            tokenUsage(0);
+            tokenUsage(2,{tokenUsage:{total:{totalTokens:690,inputTokens:600,reasoningOutputTokens:-1,cacheWriteInputTokens:1.5},last:{},modelContextWindow:null}});
+          } else if (scenario === 'usage-unordered') {
+            tokenUsage(0,{tokenUsage:{total:{inputTokens:100,outputTokens:20},last:usageLast[0]}});
+          } else if (scenario === 'usage-last-only') {
+            tokenUsage(0,{tokenUsage:{last:usageLast[0],modelContextWindow:32000}});
+          } else if (scenario !== 'usage-none' && scenario !== 'usage-quota-only') tokenUsage(0);
+          event('account/rateLimits/updated',{rateLimits:{primary:{usedPercent:25}}});
+          if (scenario === 'usage-cancel') {await Bun.sleep(20000); return;}
+          if (scenario === 'usage-fail') {
+            await Bun.sleep(40);
+            event('turn/completed',{turn:{status:'failed'}}); return;
+          }
+          answer('Usage fixture complete'); return;
+        }
         if (runtime === 'codex' && scenario === 'read-project-instructions') {
           const prompt = p.input[0].text as string;
           const history = JSON.parse(prompt.slice(prompt.indexOf('\n')+1));
@@ -142,7 +187,7 @@ if (copilot && process.argv.includes('login')) {
           } else if (runtime === 'codex') {
             event('account/rateLimits/updated', { rateLimits: { primary: { usedPercent: 25, resetsAt: 1800000000 } } });
             event('item/reasoning/summaryTextDelta', { delta: 'Provider supplied summary' });
-            event('thread/tokenUsage/updated', { tokenUsage: { last: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 30, cacheWriteInputTokens: 10, reasoningOutputTokens: 8, totalTokens: 120 }, modelContextWindow: 32000 } });
+            tokenUsage(0);
           }
         }
         if (scenario === 'thought-stream' && !copilot && runtime !== 'codex') {
