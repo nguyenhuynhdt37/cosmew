@@ -10,6 +10,7 @@ export class ModelsFeature implements OverlayFeature, ModelWorkflow {
   private state: ModelPickerState = createInitialModelPickerState();
   /** Account whose models are shown while a switch waits for a model choice. */
   private pendingAccountId: string | null = null;
+  private discoveryAbort: AbortController | null = null;
 
   constructor(private readonly host: TuiHost) {}
 
@@ -18,7 +19,7 @@ export class ModelsFeature implements OverlayFeature, ModelWorkflow {
     this.pendingAccountId = null;
   }
 
-  close(): void { this.pendingAccountId = null; }
+  close(): void { this.discoveryAbort?.abort(); this.discoveryAbort = null; this.pendingAccountId = null; }
 
   awaitModelForAccount(accountId: string, message: string): void {
     this.pendingAccountId = accountId;
@@ -71,6 +72,7 @@ export class ModelsFeature implements OverlayFeature, ModelWorkflow {
       if (!accounts.length) { this.state.statusMessage = 'Use /login to connect a provider.'; return; }
       const current = accounts.findIndex(a => a.id === client.status().activeAccount?.id);
       const target = accounts[(current + (key === 'Tab' ? 1 : -1) + accounts.length) % accounts.length]!;
+      this.discoveryAbort?.abort();
       client.useAccount(target.id);
       host.syncTranscript();
       this.state = { ...createInitialModelPickerState(), statusMessage: `${target.providerId} · ${target.alias}. Ctrl+R discovers models; Tab switches accounts.` };
@@ -78,10 +80,17 @@ export class ModelsFeature implements OverlayFeature, ModelWorkflow {
     }
     if (key === 'Ctrl+E' || key === 'ArrowLeft' || key === 'ArrowRight') { this.adjustEffort(st, models, key); return; }
     if (key === 'Ctrl+R') {
+      this.discoveryAbort?.abort();
+      const abort = this.discoveryAbort = new AbortController();
+      const accountId = pending ?? client.status().activeAccount?.id;
+      if (!accountId) { st.statusMessage = 'Use /login to connect a provider.'; return; }
+      st.statusMessage = 'Discovering models…';
       try {
-        const res = await client.discoverModels({ accountId: pending });
+        const res = await client.discoverModels({ accountId, signal: abort.signal });
+        if (abort.signal.aborted || this.state !== st || host.overlay !== 'models' || (this.pendingAccountId ?? client.status().activeAccount?.id) !== accountId) return;
         this.state = { ...st, selectedIndex: 0, statusMessage: `Discovered ${res.models.length} models from ${res.account.alias}.` };
       } catch {
+        if (abort.signal.aborted || this.state !== st || host.overlay !== 'models') return;
         this.state = { ...st, statusMessage: 'Model discovery failed. Check active account credentials (/login).' };
       }
       return;

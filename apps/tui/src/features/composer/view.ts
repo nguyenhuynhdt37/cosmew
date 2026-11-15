@@ -212,13 +212,13 @@ export function renderPromptComposerLines(options: {
     : meta.length + 2 <= roomFor(hintLenOf(longHints))
       ? longHints
       : shortHints;
-  const metaRoom = roomFor(hintLenOf(hintParts));
+  const metaRoom = Math.max(0, roomFor(hintLenOf(hintParts)) - 1);
   const truncate = (value: string, room: number) => value.length <= room ? value : room > 1 ? value.slice(0, room - 1) + '…' : value.slice(0, room);
   const account = activeAccountLabel ? ` · ${activeAccountLabel}` : '';
   const shownMeta = meta.length <= metaRoom ? meta : account && metaRoom >= account.length + 6
     ? truncate(activeModelLabel, metaRoom - account.length) + account
     : truncate(meta, metaRoom);
-  const gap = Math.max(0, metaRoom - shownMeta.length);
+  const gap = Math.max(0, metaRoom - shownMeta.length) + 1;
 
   lines.push({
     spans: [

@@ -159,3 +159,15 @@ Chat prompts and replies share a left edge. The composer has one input frame wit
 Visual QA used rendered framebuffer cells at 100×30 for welcome and a Markdown/code conversation. Those presentation samples contain synthetic text and do not establish live-provider acceptance. Executable regression coverage is in `tests/contracts/chat-presentation.test.ts`; terminal acceptance is covered separately by the actual `Bun.Terminal` provider/login/chat/cancel/logout tests. No dependency or public contract was added.
 
 Verification: `bun run typecheck` and `bun run lint` pass. `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests`: **128 pass, 0 fail**, 13 files (includes HTTP integration, native keyring, native Copilot-state roundtrip and actual terminal E2E). After the final narrow-layout adjustment, the 12 chat-presentation/TUI tests also pass, including resize down to 20×10. Authenticated live-provider generation was not repeated for these presentation changes.
+
+## Login/model state audit (2026-11-15)
+
+Read [OpenCode local model state](https://github.com/anomalyco/opencode/blob/dev/packages/tui/src/context/local.tsx), branch `dev`, on 2026-11-15: separates `catalogReady` from preferences readiness, keys selection by provider/model, and checks reasoning variants against the selected model. Exact upstream commit could not be obtained (GitHub API returned 404); branch evidence only, revision Needs verification.
+
+Read [Codex model metadata](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs), branch `main`, on 2026-11-15: internal context-window metadata is optional. Internal metadata is not evidence that app-server model/list exposes it. Exact commit Needs verification for the same API limitation.
+
+Stronger local protocol evidence: installed official `codex-cli 0.167.0`; ran `codex app-server generate-ts --out /tmp/hannes-codex-protocol`. Generated `v2/Model.ts` has separate `id` and runnable `model`, `hidden`, and reasoning metadata, but no context-window field. Generated `v2/ThreadTokenUsage.ts` has nullable `modelContextWindow`. Generated files stay outside the repository. No user auth/profile files were read and no billed model requests were made. Therefore a first-login unknown limit must remain explicitly unknown until runtime evidence exists; no model-name-based guessed context sizes are added.
+
+Applied locally: choose Codex runnable slug, filter hidden catalog entries, reject switch completion after the source selection changes, cancel/ignore obsolete model-picker discovery, retain source history while reconnecting another account, and separate account labels from composer shortcuts. These changes add no dependency/public schema and do not establish live vendor acceptance.
+
+Verification: `bun run lint` (includes typecheck) and `bun test tests` pass: **197 pass, 5 skip, 0 fail**, 202 tests across 21 files. New regressions exercise late selection completion, dismissed discovery and Codex first-login runnable-slug/hidden-entry handling through real fixture subprocesses. Opt-in native keyring/runtime checks remain skipped; live account login/model entitlement is not claimed.

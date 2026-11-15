@@ -29,7 +29,10 @@ async function waitFor(check: () => boolean, timeout = 3000) {
   while (!check() && Date.now() < deadline) await Bun.sleep(10);
   expect(check()).toBe(true);
 }
-async function login(tui: FutrynTuiApp, _alias: string, method: 'env' | 'none' | 'api-key' = 'env') {
+async function login(tui: FutrynTuiApp, alias: string, method: 'env' | 'none' | 'api-key' = 'env') {
+  const envName = 'FUTRYN_CONNECT_TEST_' + alias.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+  process.env[envName] = 'synthetic-connect-sensitive-value-' + alias;
+  cleanups.push(() => { delete process.env[envName]; });
   await tui.executeSlashCommand('/login');
   await type(tui, 'fixture');
   expect(tui.computeFrameSnapshot().plainText).toContain('Fixture');
@@ -40,7 +43,7 @@ async function login(tui: FutrynTuiApp, _alias: string, method: 'env' | 'none' |
   }
   await tui.handleKey('Enter');
   if (method !== 'none') {
-    await type(tui, method === 'env' ? 'FUTRYN_CONNECT_TEST_KEY' : 'synthetic-connect-sensitive-value');
+    await type(tui, method === 'env' ? envName : 'synthetic-connect-sensitive-value');
     expect(tui.computeFrameSnapshot().plainText).not.toContain('synthetic-connect-sensitive-value');
     await tui.handleKey('Enter');
   }
@@ -362,7 +365,9 @@ test('/logout names the account, defaults to Cancel, and confirms the selected s
   expect(app.accounts.list()).toHaveLength(0);
   // Add another identity and check that Esc never signs out either account.
   await app.accounts.add('fixture', 'second', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_KEY' });
-  await app.accounts.add('fixture', 'third', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_KEY' });
+  process.env.FUTRYN_CONNECT_TEST_OTHER = 'synthetic-distinct-key';
+  cleanups.push(() => { delete process.env.FUTRYN_CONNECT_TEST_OTHER; });
+  await app.accounts.add('fixture', 'third', { kind: 'env', name: 'FUTRYN_CONNECT_TEST_OTHER' });
   const second = app.accounts.get('second'); app.accounts.use(second.id);
   await tui.executeSlashCommand('/logout');
   const view = tui.computeFrameSnapshot().plainText;

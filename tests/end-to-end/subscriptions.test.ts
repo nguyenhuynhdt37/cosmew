@@ -250,3 +250,12 @@ for (const runtime of ['gemini-cli', 'qwen-code'] as const) test(`${runtime}: AC
   expect(answer).toBe('Subscription fixture response');
   expect(c.client.activeSession()!.messages.some(message => message.content.includes('Provider thought'))).toBe(false);
 });
+
+test('Codex catalog selects the runnable model slug and excludes hidden entries on first login', async () => {
+  const c = await context('catalog-slug'); await connect(c, 'codex');
+  expect(c.client.cachedModels().map(model => model.id)).toEqual(['runtime-model', 'runtime-alt']);
+  expect(c.client.status().selection?.modelId).toBe('runtime-model');
+  expect(c.client.context().limitTokens).toBeNull(); // Model/list does not advertise a context window.
+  for await (const _event of c.client.sendMessage('First login')) { /* real fixture runtime */ }
+  expect(c.client.usage().last?.outcome).toBe('completed');
+});

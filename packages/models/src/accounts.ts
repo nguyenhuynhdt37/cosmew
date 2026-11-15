@@ -5,6 +5,7 @@ export class AccountManager {
   list() { return this.store.read().accounts; }
   get(id: string): Account { const accounts = this.list(); const a = accounts.find(a => a.id === id) ?? accounts.find(a => a.alias === id); if (!a) throw new HannesError('NOT_FOUND'); return a; }
   async add(providerId: string, alias: string, credential: CredentialRef, secret?: string): Promise<Account> {
+    await this.rejectDuplicate(providerId, credential, secret);
     const account = accountSchema.parse({ id: crypto.randomUUID(), providerId, alias, credential, status: 'unvalidated', validatedAt: null, authGeneration: 1 });
     const state = this.store.read();
     if (!state.providers.some(p => p.id === providerId) || state.accounts.some(a => a.alias === alias || ((credential.kind === 'keyring' || credential.kind === 'runtime') && (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') && a.credential.key === credential.key))) throw new HannesError('INVALID_INPUT');
@@ -29,12 +30,37 @@ export class AccountManager {
     accountSchema.parse({ ...current, credential });
     if ((credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) || (provider.auth === 'api-key') === (credential.kind === 'none')) throw new HannesError('AUTH');
     if ((credential.kind === 'keyring' || credential.kind === 'runtime') && this.list().some(a => (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') && a.credential.key === credential.key)) throw new HannesError('INVALID_INPUT');
+    await this.rejectDuplicate(current.providerId, credential, secret, current.id);
     await this.logout(current.id);
     if (credential.kind === 'keyring') { if (!secret) throw new HannesError('AUTH'); await this.vault.set(credential.key, secret); }
     try {
       this.store.update(s => { const a = s.accounts.find(a => a.id === current.id)!; a.credential = credential; a.authGeneration = (a.authGeneration ?? 1) + 1; a.status = 'unvalidated'; a.validatedAt = null; if (!s.activeAccountId) s.activeAccountId = a.id; });
     } catch (e) { if (credential.kind === 'keyring') await this.vault.delete(credential); throw e; }
     return this.get(current.id);
+  }
+  /** Compare locally saved identity without persisting or logging identity/token data. */
+  private async rejectDuplicate(providerId: string, credential: CredentialRef, secret?: string, exceptId?: string): Promise<void> {
+    const identity = async (ref: CredentialRef, supplied?: string): Promise<string | undefined> => {
+      if (ref.kind === 'none') return undefined;
+      if (ref.kind !== 'runtime') return supplied ?? await this.vault.get(ref);
+      const record = await this.vault.getRuntime?.(ref);
+      if (!record) return undefined;
+      try {
+        const files = JSON.parse(record).files;
+        if (ref.runtime === 'codex') {
+          const auth = JSON.parse(files['auth.json']);
+          if (typeof auth.tokens?.account_id === 'string' && auth.tokens.account_id) return 'codex:' + auth.tokens.account_id;
+        }
+        // Exact snapshots also catch reused credentials when no stable identity is supplied.
+        return record;
+      } catch { throw new HannesError('AUTH'); }
+    };
+    const incoming = await identity(credential, secret);
+    if (!incoming) return;
+    for (const account of this.list()) {
+      if (account.id === exceptId || account.providerId !== providerId || account.status === 'logged-out') continue;
+      if (await identity(account.credential) === incoming) throw new HannesError('INVALID_INPUT');
+    }
   }
   rename(id: string, alias: string): void {
     const a = this.get(id); accountSchema.parse({ ...a, alias });

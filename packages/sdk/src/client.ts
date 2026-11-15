@@ -287,6 +287,7 @@ export class FutrynClient {
   }
 
   async connectAccount(input: ConnectAccountInput, signal?: AbortSignal): Promise<Account> {
+    if (this.sending) throw new HannesError('POLICY');
     const existingProvider = this.ports.listProviders().find(p => p.id === input.providerId);
     if (!existingProvider) {
       const preset = this.ports.listProviderPresets().find(p => p.id === input.providerId);
@@ -315,6 +316,8 @@ export class FutrynClient {
       if (input.validate !== false) await this.ports.validateAccount(this.ports.getAccount(account.id), signal);
       if (signal?.aborted) throw new HannesError('CANCELLED');
       const refreshed = this.ports.getAccount(account.id);
+      // Reconnecting a switch target must retain the source chat until explicit continuation.
+      if (input.reauthenticateAccountId && this.currentSession && this.currentSession.selection.accountId !== refreshed.id) { this.notifyStateChange(); return refreshed; }
       this.ports.useAccount(refreshed.id);
       const models = this.ports.cachedModels(refreshed);
       const chosen = models.find(m => m.id === (input.manualModelId ?? refreshed.defaultModel)) ?? models[0];
@@ -640,14 +643,18 @@ export class FutrynClient {
 
   async switchAccount(reference: string, continueHistory = false, modelId?: string, signal?: AbortSignal): Promise<Account> {
     if (this.sending) throw new HannesError('POLICY');
-    const accounts = this.listAccounts().filter(account => account.status !== 'logged-out');
+    const accounts = this.listAccounts();
     const target = /^\d+$/.test(reference) ? accounts[Number(reference) - 1] : accounts.find(a => a.id === reference || a.alias === reference);
     if (!target) throw new HannesError('NOT_FOUND');
+    if (target.status === 'logged-out') throw new HannesError('AUTH');
     const source = this.currentSession;
     const current = source?.selection ?? this.status().selection;
     if ((current?.accountId ?? this.status().activeAccount?.id) === target.id && (!modelId || current?.modelId === modelId)) return target;
     if (signal?.aborted) throw new HannesError('CANCELLED');
+    const initialActiveId = this.status().activeAccount?.id;
+    const initialSelection = JSON.stringify(this.status().selection);
     const catalog = await this.ports.discoverModels(target, signal);
+    if (this.sending || this.currentSession !== source || this.status().activeAccount?.id !== initialActiveId || JSON.stringify(this.status().selection) !== initialSelection) throw new HannesError('POLICY');
     if (signal?.aborted) throw new HannesError('CANCELLED');
     const previousId = source?.selection.modelId ?? this.status().selection?.modelId;
     const model = modelId ? catalog.models.find(m => m.id === modelId) : catalog.models.find(m => m.id === previousId) ?? catalog.models.find(m => m.id === target.defaultModel);

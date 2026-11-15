@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HannesError, type ModelPort } from '@hannes/contracts';
+import { providerPresets } from '@hannes/models';
 import { Conversation } from '@hannes/core';
 import { openPrivateDatabase, SqliteConversations } from '@hannes/persistence';
 import { acceptSlashSelection, parseSlashCommand, SLASH_COMMANDS } from '@hannes/sdk';
@@ -541,3 +542,68 @@ test.skipIf(process.platform === 'win32')('actual PTY streams thinking before th
     terminal.write('\x03'); expect(await child.exited).toBe(0);
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 }, 15000);
+
+test('signed-out switch target offers sign-in for the same profile and preserves source history', async () => {
+  const c = await setup(); await send(c.client, 'Keep this history');
+  const second = await c.app.accounts.add('usage', 'expired', {kind: 'none'});
+  await c.app.accounts.logout(second.id);
+  const session = c.client.activeSession()!.id;
+  await c.tui.executeSlashCommand('/switch expired');
+  await c.tui.handleKey('ArrowDown'); await c.tui.handleKey('Enter');
+  expect(c.tui.computeFrameSnapshot().plainLines.join('\n')).toContain('Sign in to expired');
+  expect(c.client.activeSession()!.id).toBe(session);
+  expect(c.client.status().activeAccount?.id).toBe(c.account.id);
+  const restored = await c.client.connectAccount({providerId: 'usage', alias: 'expired', credential: {kind: 'none'}, reauthenticateAccountId: second.id});
+  expect(restored.id).toBe(second.id);
+  expect(c.client.activeSession()!.id).toBe(session);
+  await c.client.switchAccount(second.id, true);
+  expect(c.client.activeSession()!.selection.accountId).toBe(second.id);
+  expect(c.client.activeSession()!.messages.length).toBe(2);
+});
+
+test('ChatGPT profiles reject the same account identity even with refreshed tokens', async () => {
+  const c = await setup();
+  c.app.registry.add(providerPresets.find(p => p.id === 'chatgpt')!);
+  const records = new Map<string, string>();
+  c.vault.getRuntime = async ref => records.get(ref.key);
+  const ref = () => ({kind: 'runtime' as const, runtime: 'codex' as const, key: crypto.randomUUID()});
+  const first = ref(), duplicate = ref(), other = ref();
+  for (const [credential, id, token] of [[first, 'same', 'old'], [duplicate, 'same', 'new'], [other, 'different', 'other']] as const) {
+    records.set(credential.key, JSON.stringify({version: 1, files: {'auth.json': JSON.stringify({tokens: {account_id: id, access_token: token}})}}));
+  }
+  const account = await c.app.accounts.add('chatgpt', 'chat-one', first);
+  await expect(c.app.accounts.add('chatgpt', 'chat-duplicate', duplicate)).rejects.toThrow(HannesError);
+  const distinct = await c.app.accounts.add('chatgpt', 'chat-two', other);
+  await expect(c.app.accounts.reauthenticate(distinct.id, duplicate)).rejects.toThrow(HannesError);
+  expect(c.app.accounts.get(distinct.id).status).toBe('unvalidated');
+  await c.app.accounts.reauthenticate(account.id, duplicate);
+  expect(c.app.accounts.get(account.id).credential).toEqual(duplicate);
+});
+
+test('late account discovery cannot overwrite a newer explicit selection', async () => {
+  const c = await setup(); await send(c.client, 'Source history');
+  const second = await c.app.accounts.add('usage', 'target', {kind: 'none'});
+  const third = await c.app.accounts.add('usage', 'newer', {kind: 'none'});
+  c.server.set({delay: 100});
+  const switching = c.client.switchAccount(second.id, true);
+  const outcome = switching.then(() => null, error => error);
+  c.client.useAccount(third.id);
+  expect(await outcome).toMatchObject({code: 'POLICY'});
+  expect(c.client.status().activeAccount?.id).toBe(third.id);
+  expect(c.app.conversations.list()).toHaveLength(1);
+});
+
+test('closing discovery and reopening the model picker ignores the old result', async () => {
+  const c = await setup(); c.server.set({delay: 100});
+  await c.tui.executeSlashCommand('/model');
+  const refresh = c.tui.handleKey('Ctrl+R');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Discovering models');
+  await c.tui.handleKey('Escape');
+  await c.tui.executeSlashCommand('/model');
+  await refresh;
+  const text = c.tui.computeFrameSnapshot().plainText;
+  expect(text).not.toContain('Discovered 1 models');
+  expect(text).not.toContain('Model discovery failed');
+  expect(text).not.toContain('undefined');
+  expect(c.client.status().activeAccount?.id).toBe(c.account.id);
+});

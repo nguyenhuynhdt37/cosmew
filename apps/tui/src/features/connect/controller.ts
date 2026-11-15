@@ -75,7 +75,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
   /** `/switch [account]` */
   beginSwitch(args: string): void {
     const { host } = this;
-    const accounts = host.client.listAccounts().filter(a => a.status !== 'logged-out');
+    const accounts = host.client.listAccounts();
     if (!accounts.length) { host.setBanner('No connected accounts. Use /login.'); return; }
     const target = args ? (/^\d+$/.test(args) ? accounts[Number(args) - 1] : accounts.find(a => a.id === args || a.alias === args)) : null;
     if (args && !target) { host.setBanner('Account not found. Use /login to manage accounts.'); return; }
@@ -138,8 +138,11 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
       else if (error instanceof HannesError && error.code === 'NOT_FOUND' && host.client.cachedModels(id).length) {
         host.openOverlay('models');
         host.features.models.awaitModelForAccount(id, 'Choose a model for the new account. Current account stays active until you confirm.');
+      } else if (error instanceof HannesError && error.code === 'AUTH') {
+        const account = host.client.listAccounts().find(a => a.id === id);
+        this.state = { ...createInitialConnectProviderState(), step: 'method', pendingAction: 'switch', accountId: id, providerId: account?.providerId, providerLabel: alias, statusMessage: 'This account needs sign-in. Sign in again to reconnect this profile, then choose it to continue your chat.' };
       } else {
-        this.state = { ...createInitialConnectProviderState(), step: 'confirm', switchOnly: true, pendingAction: 'switch', accountId: id, providerLabel: alias, statusMessage: this.describe(error) };
+        this.state = { ...createInitialConnectProviderState(), step: 'confirm', switchOnly: true, pendingAction: 'switch', accountId: id, providerLabel: alias, statusMessage: this.describe(error, host.client.listAccounts().find(a => a.id === id)?.providerId) };
       }
       return false;
     } finally { if (this.switchAbort === abort) this.switchAbort = null; }
@@ -357,6 +360,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         authorizationCode: st.method === 'openrouter-oauth' ? secret : undefined,
       }, controller.signal);
       if (controller.signal.aborted) return;
+      if (st.pendingAction === 'switch') { await this.continueWithAccount(account.id); return; }
       host.syncTranscript();
       host.openOverlay('models');
       host.setBanner(`Connected ${account.alias}. Choose a model to chat.`);

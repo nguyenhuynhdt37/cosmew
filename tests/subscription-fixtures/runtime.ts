@@ -51,7 +51,7 @@ if (copilot && process.argv.includes('login')) {
         save(); break;
       case 'account/read': result = { account: valid() ? { type: 'chatgpt', planType: 'plus' } : null }; break;
       case 'auth.getStatus': result = { isAuthenticated: valid() }; break;
-      case 'model/list': result = { data: [{ id: 'runtime-model', displayName: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: [{reasoningEffort: 'low', description: 'Low'}, {reasoningEffort: 'high', description: 'High'}], defaultReasoningEffort: 'low' } : {}) }, { id: 'runtime-alt', displayName: 'Alternate' }], nextCursor: null }; break;
+      case 'model/list': result = { data: [{ id: scenario === 'catalog-slug' ? 'catalog-entry-id' : 'runtime-model', model: 'runtime-model', displayName: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: [{reasoningEffort: 'low', description: 'Low'}, {reasoningEffort: 'high', description: 'High'}], defaultReasoningEffort: 'low' } : {}) }, { id: 'runtime-alt', model: 'runtime-alt', displayName: 'Alternate' }, ...(scenario === 'catalog-slug' ? [{id: 'hidden', model: 'hidden', hidden: true}] : [])], nextCursor: null }; break;
       case 'models.list': result = { models: [{ id: 'runtime-model', name: 'Runtime model', ...(scenario === 'telemetry' ? { supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low', capabilities: { limits: { max_context_window_tokens: 32000, max_output_tokens: 8000 } } } : {}) }, { id: 'runtime-alt', name: 'Alternate' }] }; break;
       case 'session/new': {
         const settingsFile = runtime === 'gemini-cli' ? '.gemini/settings.json' : 'settings.json';

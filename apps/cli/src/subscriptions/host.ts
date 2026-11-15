@@ -220,7 +220,8 @@ export class SubscriptionHost {
     throw new HannesError('PROTOCOL');
   }
   private runtimeModel(raw: any, runtime: 'codex' | 'copilot'): ModelInfo {
-    const model = normalizeModel(raw.id, raw.displayName ?? raw.name);
+    // Codex exposes a catalog entry id separately from the model slug accepted by turns.
+    const model = normalizeModel(runtime === 'codex' ? raw.model ?? raw.id : raw.id, raw.displayName ?? raw.name);
     const efforts = raw.supportedReasoningEfforts;
     if (Array.isArray(efforts) && efforts.length <= 20) {
       const values = efforts.map((entry: any) => runtime === 'codex' ? entry.reasoningEffort : entry);
@@ -246,7 +247,7 @@ export class SubscriptionHost {
       if (connection.recipe.runtime === 'codex') {
         const result = await connection.rpc.request('model/list', { limit: 100 });
         if (!Array.isArray(result?.data) || result.nextCursor) throw new HannesError('PROTOCOL');
-        models = result.data.map((m: any) => this.runtimeModel(m, 'codex'));
+        models = result.data.filter((m: any) => m.hidden !== true).map((m: any) => this.runtimeModel(m, 'codex'));
       } else if (connection.recipe.runtime === 'copilot') {
         const result = await connection.rpc.request('models.list');
         const list = result?.models ?? result;
