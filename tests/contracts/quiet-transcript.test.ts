@@ -16,7 +16,7 @@ test('compact activity disclosures preserve tool arguments, ordering, errors and
  const render=()=>renderTranscriptMessages({items:[item],width:100,tokens,borderStyle:'rounded',compactActivities:true});
  const folded=render();expect(text(folded)).toContain('▸ Thinking · Checking config');expect(text(folded)).toContain('Finished with errors');expect(text(folded)).not.toContain('Provider summary details.');expect(text(folded)).not.toContain('"offset"');
  expect(folded.filter(line=>line.disclosure).map(line=>line.disclosure)).toEqual([{itemId:'a',key:'reasoning:0'},{itemId:'a',key:'tools:r'}]);
- item.expandedActivities=['reasoning:0','tools:r'];const expanded=text(render());expect(expanded).toContain('Provider summary details.');expect(expanded).toContain('read {"path":"src/config.ts","offset":40,"limit":20}');expect(expanded).toContain('→ denied');expect(expanded.indexOf('Checking config')).toBeLessThan(expanded.indexOf('"offset"'));expect(expanded.indexOf('"offset"')).toBeLessThan(expanded.indexOf('  answer'));
+ item.expandedActivities=['reasoning:0','tools:r'];const expanded=text(render());expect(expanded).toContain('Provider summary details.');expect(expanded).toContain('Read({"path":"src/config.ts","offset":40,"limit":20})');expect(expanded).toContain('⎿  denied');expect(expanded.indexOf('Checking config')).toBeLessThan(expanded.indexOf('"offset"'));expect(expanded.indexOf('"offset"')).toBeLessThan(expanded.indexOf('  answer'));
  item.reasoningExpanded=true;item.collapsedActivities=['reasoning:0'];item.parts![0]={kind:'reasoning',text:'**Checking config**\nProvider summary details. More deltas.'};expect(text(render())).not.toContain('More deltas.');expect(text(render())).toContain('\"offset\":40');
 });
 
@@ -29,12 +29,12 @@ test('terminal repaint hides and parks the hardware cursor instead of leaving it
 
 test('chat role labels and prompt tint separate user text, activity and the model answer',()=>{
  const lines=renderTranscriptMessages({items:[{id:'u',role:'user',content:'Question\nsecond line'},{id:'a',role:'assistant',content:'Answer'}],width:80,tokens,borderStyle:'rounded',compactActivities:true});
- const shown=text(lines);expect(shown).toContain('╭─ Bạn');expect(shown).toContain('● Hannes');
+ const shown=text(lines);expect(shown).toContain('╭─ Bạn');expect(shown).toContain('⏺ Hannes');
  const prompt=lines.find(line=>line.spans.some(span=>span.text.includes('Question')))!;
  const answer=lines.find(line=>line.spans.some(span=>span.text==='Answer'))!;
  expect(prompt.spans[0]!.text).toBe('│ ');expect(prompt.spans[1]!.bg).not.toBe(tokens.background);
  expect(answer.spans.every(span=>span.bg===tokens.background)).toBe(true);
- expect(shown.indexOf('╭─ Bạn')).toBeLessThan(shown.indexOf('● Hannes'));
+ expect(shown.indexOf('╭─ Bạn')).toBeLessThan(shown.indexOf('⏺ Hannes'));
 });
 
 test('Weepinbell renders the original full pixel asset with its leaf, eye and mouth colors',async()=>{

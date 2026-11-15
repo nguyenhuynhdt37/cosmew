@@ -27,6 +27,8 @@ export class DiffFeature implements OverlayFeature {
       this.state = { selectedFileIndex: (this.state.selectedFileIndex + delta + report.files.length) % report.files.length, scrollOffset: 0 };
       return;
     }
+    if (key === 'PageDown') { this.state = {...this.state, scrollOffset:this.state.scrollOffset + Math.max(1, this.layout('diff', this.host.cols, this.host.rows).height - 4)}; return; }
+    if (key === 'PageUp') { this.state = {...this.state, scrollOffset:Math.max(0,this.state.scrollOffset - Math.max(1,this.layout('diff', this.host.cols, this.host.rows).height - 4))}; return; }
     if (key === 'ArrowDown') this.state = { ...this.state, scrollOffset: this.state.scrollOffset + 1 };
     else if (key === 'ArrowUp') this.state = { ...this.state, scrollOffset: Math.max(0, this.state.scrollOffset - 1) };
   }

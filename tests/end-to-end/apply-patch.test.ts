@@ -29,8 +29,9 @@ async function pending(c:Awaited<ReturnType<typeof make>>){const end=Date.now()+
 for(const protocol of ['chat','anthropic'] as const)test(`${protocol}: approved patch diff reaches TUI, real filesystem, paired storage and model continuation`,async()=>{
  const c=await make(protocol);const turn=c.tui.submitPrompt('Update notes');await pending(c);
  const permission=c.client.listPendingPermissions()[0]!;expect(permission).toMatchObject({capability:'fs.write',target:'notes.txt'});expect(permission.diffPreview).toContain('-old\n+PATCH_MARKER');
- expect(c.tui.computeFrameSnapshot().plainText).toContain('+PATCH_MARKER');expect(readFileSync(join(c.root,'notes.txt'),'utf8')).toBe('old\n');
+ expect(c.tui.computeFrameSnapshot().plainText).toContain('+ PATCH_MARKER');expect(readFileSync(join(c.root,'notes.txt'),'utf8')).toBe('old\n');
  await c.tui.handleKey('1');await turn;expect(readFileSync(join(c.root,'notes.txt'),'utf8')).toBe('PATCH_MARKER\n');
+ expect(c.tui.computeFrameSnapshot().plainText).toContain('notes.txt · applied diff');
  const answer=c.tui.getTranscript().at(-1)!;expect(answer.content).toContain('MODEL_CONTINUED');expect(answer.content).toContain('PATCH_MARKER');
  const receipt=JSON.parse(answer.toolResults![0]!.content);expect(receipt.changes).toHaveLength(1);expect(receipt.changes[0]).toMatchObject({path:'notes.txt',action:'update'});
  const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;

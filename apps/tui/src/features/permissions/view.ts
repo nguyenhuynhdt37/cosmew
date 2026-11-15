@@ -2,6 +2,7 @@ import type { FutrynClient } from '@hannes/sdk';
 import type { BorderStyle, PermissionPromptRequest, ThemeTokens } from '@hannes/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
 import type { PermissionDialogState } from './types';
+import { parseUnifiedDiff, renderDiffCodeLine } from '../diff/code-lines';
 
 export function renderPermissionDialogOverlay(options: {
   workspaceReading?: ReturnType<FutrynClient['status']>['workspaceReadStatus'];
@@ -15,7 +16,7 @@ export function renderPermissionDialogOverlay(options: {
   const modal = new Modal({width, height, minInner: 1, tokens, borderStyle, borderColor: request ? tokens.warning : tokens.borderFocused});
   const title = request ? ' Permission request ' : ' Permissions ';
   modal.top(title.slice(0, modal.innerWidth));
-  const body: string[] = [];
+  const body: (string | RenderedBoxLine)[] = [];
   const wrap = (text: string) => {
     const size = Math.max(1, modal.innerWidth - 2);
     for (const line of text.split('\n')) {
@@ -30,7 +31,12 @@ export function renderPermissionDialogOverlay(options: {
     wrap(`${command ? 'Where' : 'Action'}: ${request.action}`);
     wrap(`Why: ${request.reason}`);
     wrap(request.capability==='fs.write' ? 'Once applies this exact diff. Session remembers only this patch and original file versions.' : command ? 'Once runs it now. Session allows this exact command in this directory until revoked.' : 'Once applies to this request. Session allows this target until revoked.');
-    if (request.diffPreview) wrap('Preview:\n' + request.diffPreview);
+    if (request.diffPreview) {
+      wrap('Preview · proposed changes (not applied):');
+      const diff = parseUnifiedDiff(request.diffPreview);
+      if (diff.length) body.push(...diff.flatMap(line => renderDiffCodeLine(line,modal.innerWidth,tokens)));
+      else wrap(request.diffPreview);
+    }
   } else {
     wrap('No requests waiting.');
     wrap(options.workspaceReading === 'read-only' ? 'Workspace reading is enabled for this model.' : options.workspaceReading === 'disabled' ? 'Workspace reads are disabled for this session.' : 'Workspace reads are unavailable for this model.');
@@ -50,7 +56,10 @@ export function renderPermissionDialogOverlay(options: {
   const offset = Math.max(0, Math.min(state.scrollOffset ?? 0, Math.max(0, body.length - capacity)));
   // Remember the visible origin, so PageUp responds immediately after reaching the end.
   state.scrollOffset = offset;
-  for (const line of body.slice(offset, offset + capacity)) modal.text(line, {fg: tokens.foregroundMuted});
+  for (const line of body.slice(offset, offset + capacity)) {
+    if (typeof line === 'string') modal.text(line, {fg: tokens.foregroundMuted});
+    else modal.spans(line.spans);
+  }
   modal.fillTo(height - 1 - actionRows);
   if (request) {
     for (const [action, label] of [['once', '[1] Allow once'], ['session', '[2] Allow this session'], ['deny', '[3] Deny']] as const) {

@@ -3,6 +3,7 @@ import type { RenderedBoxLine, StyledSpan } from '../../ui';
 import { commandSummary, reasoningTitle, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
 import { mixHex } from '../../theme/presets';
+import { parseUnifiedDiff, renderDiffCodeLine } from '../diff/code-lines';
 
 export function renderMarkdownBody(options: {
   content: string;
@@ -120,7 +121,7 @@ export function renderTranscriptMessages(options: {
       continue;
     }
 
-    if (options.compactActivities) lines.push({spans:[{text:'● Hannes',fg:tokens.foreground,bg,bold:true}]});
+    if (options.compactActivities) lines.push({spans:[{text:'⏺ Hannes',fg:tokens.foreground,bg,bold:true}]});
 
     // Compact adjacent tool-only rounds for display; the recorded timeline is untouched.
     const parts:TranscriptPart[]=[];
@@ -161,13 +162,21 @@ export function renderTranscriptMessages(options: {
           ].join(' · ');
           const label = completed < calls.length ? item.streaming ? 'Running' : 'Stopped' : failed ? 'Finished with errors' : 'Completed';
           lines.push({disclosure, spans: [{text: `  ${expanded ? '▾' : '▸'} ${label} · ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}${summary ? ` · ${summary}` : ''}`.slice(0, innerWidth), fg: failed ? tokens.error : tokens.foregroundMuted, bg}]});
-          if (!expanded) { previous = part.kind; continue; }
+          if (!expanded) {
+            for (const call of calls.filter(call => call.name === 'apply_patch')) {
+              const result = item.toolResults?.find(result => result.callId === call.id);
+              lines.push(...renderPatchCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming),showDiff:true}));
+            }
+            previous = part.kind; continue;
+          }
           for (const call of calls) {
             const result = item.toolResults?.find(result => result.callId === call.id);
-            for (const text of wrapTextToWidth(`${call.name} ${JSON.stringify(call.input)}`, Math.max(8, innerWidth - 4))) lines.push({spans:[{text: `    ${text}`, fg: tokens.foregroundMuted, bg}]});
-            lines.push({spans:[{text:`    → ${result?.status ?? (item.streaming ? 'pending' : 'stopped')}${result?.code ? ` (${result.code})` : ''}`, fg: result && result.status !== 'ok' ? tokens.error : tokens.foregroundSubtle, bg}]});
+            const names: Record<string,string> = {read:'Read',glob:'Glob',grep:'Search',exec_command:'Command',apply_patch:'Update'};
+            const args = call.name === 'apply_patch' ? toolTarget(call) : JSON.stringify(call.input);
+            for (const [index,text] of wrapTextToWidth(`${names[call.name] ?? call.name}(${args})`, Math.max(8, innerWidth - 4)).entries()) lines.push({spans:[{text:index===0?'  ⏺ ':'    ',fg:tokens.foregroundSubtle,bg},{text,fg:tokens.foreground,bg,bold:index===0}]});
+            lines.push({spans:[{text:`    ⎿  ${result?.status ?? (item.streaming ? 'pending' : 'stopped')}${result?.code ? ` (${result.code})` : ''}`, fg: result && result.status !== 'ok' ? tokens.error : tokens.foregroundSubtle, bg}]});
             if (call.name === 'exec_command') lines.push(...renderCommandCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming),awaiting:!result && Boolean(options.awaitingApproval?.(call))}));
-            if (call.name === 'apply_patch') lines.push(...renderPatchCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming)}));
+            if (call.name === 'apply_patch') lines.push(...renderPatchCell({call,result,width:innerWidth,tokens,bg,live:Boolean(item.streaming),showDiff:true}));
           }
           previous = part.kind;
           continue;
@@ -357,9 +366,9 @@ export function renderCommandCell(options: { call: ToolCall; result: ToolResult 
 }
 
 /** Patch proposals are not exploration, and only returned receipts describe actual writes. */
-function renderPatchCell(options:{call:ToolCall;result:ToolResult|undefined;width:number;tokens:ThemeTokens;bg:string;live:boolean}):RenderedBoxLine[]{
+function renderPatchCell(options:{call:ToolCall;result:ToolResult|undefined;width:number;tokens:ThemeTokens;bg:string;live:boolean;showDiff?:boolean}):RenderedBoxLine[]{
   const {call,result,width,tokens,bg,live}=options;
-  let receipt:{status?:string;changes?:{path?:unknown;action?:unknown}[];remaining?:unknown[];createdDirectories?:unknown[];failureCode?:unknown}|undefined;
+  let receipt:{status?:string;changes?:{path?:unknown;action?:unknown;diff?:unknown}[];remaining?:unknown[];createdDirectories?:unknown[];failureCode?:unknown}|undefined;
   try{const parsed=result?JSON.parse(result.content):undefined;if(parsed&&typeof parsed==='object')receipt=parsed;}catch{/* verification/denial messages are plain text */}
   const partial=result?.status==='error'&&result.code==='PARTIAL_APPLY';
   const effectsAllowed=result?.status==='ok'||partial;
@@ -380,5 +389,15 @@ function renderPatchCell(options:{call:ToolCall;result:ToolResult|undefined;widt
   if(result?.status==='error')details.push(clean(String(receipt?.failureCode??result.code??'error')).toLowerCase().replaceAll('_',' '));
   const lines:RenderedBoxLine[]=[{spans:[{text:!result&&live?'◦':'•',fg:!result&&live?tokens.accent:color,bg},{text:' '+title,fg:color,bg,bold:true}]}];
   details.forEach((detail,index)=>wrapTextToWidth(detail,Math.max(8,width-4)).forEach((text,row)=>lines.push({spans:[{text:index===0&&row===0?'  └ ':'    ',fg:tokens.foregroundSubtle,bg},{text,fg:tokens.foregroundMuted,bg}]})));
+  if (options.showDiff && effectsAllowed) {
+    for (const change of changes) {
+      if (typeof change.diff !== 'string') continue;
+      const diffLines = parseUnifiedDiff(change.diff).flatMap(line => renderDiffCodeLine(line,Math.max(1,width-4),tokens));
+      if (!diffLines.length) continue;
+      lines.push({spans:[{text:`    ${clean(String(change.path))} · applied diff`,fg:tokens.foreground,bg,bold:true}]});
+      for (const line of diffLines.slice(0,12)) lines.push({spans:[{text:'    ',fg:tokens.foregroundMuted,bg},...line.spans]});
+      if (diffLines.length>12) lines.push({spans:[{text:`    … ${diffLines.length-12} more lines · /diff`,fg:tokens.foregroundSubtle,bg}]});
+    }
+  }
   return lines;
 }
