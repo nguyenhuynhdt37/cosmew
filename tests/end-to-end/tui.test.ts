@@ -115,9 +115,9 @@ test('TUI: real provider/model/chat workflow against fixture server, transcript,
   expect(transcript[1]!.content).toBe('Hello fixture');
   expect(transcript[1]!.streaming).toBe(false);
   expect(a.tui.computeFrameSnapshot().plainText).toContain('Hello fixture');
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · complete');
+  expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · complete');
   a.tui.stepAnimation(2);
-  expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · ready');
+  expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · ready');
   const posts = x.server.requests.filter(r => r.body);
   expect(JSON.stringify(posts.at(-1)?.body)).toContain('Say hello');
 
@@ -212,21 +212,21 @@ test('Fyn: provider stream, cancellation and failure never show a false completi
   try {
     x.server.set({ streamDelay: 100 });
     const turn = a.tui.submitPrompt('Slow fixture response');
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · processing');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · processing');
     const deadline = Date.now() + 3000;
     while (!a.tui.getTranscript().at(-1)?.content && Date.now() < deadline) await Bun.sleep(10);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · replying');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · replying');
     a.tui.stepAnimation(120);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · replying');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · replying');
     await a.tui.handleKey('Escape');
     await turn;
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · cancelled');
-    expect(a.tui.computeFrameSnapshot().plainText).not.toContain('Fyn · complete');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · cancelled');
+    expect(a.tui.computeFrameSnapshot().plainText).not.toContain('Weepinbell · complete');
     x.server.set({ status: 500, streamDelay: 0 });
     await a.tui.submitPrompt('Fail this fixture response');
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · error');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · error');
     a.tui.stepAnimation(120);
-    expect(a.tui.computeFrameSnapshot().plainText).toContain('Fyn · error');
+    expect(a.tui.computeFrameSnapshot().plainText).toContain('Weepinbell · error');
   } finally { a.close(); }
 });
 
@@ -292,10 +292,10 @@ test('chat resize keeps the composer usable and shows compact Fyn or its status 
       expect(frame.plainLines.every(line => line.length === cols)).toBe(true);
       expect(frame.plainText).toContain('Ask anything');
       if (rows! >= 24) {
-        const labelRow = frame.plainLines.findIndex(line => line.includes('Fyn ·'));
-        expect(labelRow).toBeGreaterThanOrEqual(2);
-        expect(frame.plainLines[labelRow - 2]).toContain('/\\_/\\');
-        expect(frame.plainLines[labelRow - 1]).toMatch(/\([o-]\.[o-]\)/);
+        expect(frame.plainText).toContain('Weepinbell ·');
+        const colored = frame.cells.flatMap(row => row.map((cell,col) => ({cell,col}))).filter(({cell}) => cell.fg === '#f7e65a' || cell.bg === '#f7e65a');
+        expect(colored.length).toBeGreaterThan(0);
+        expect(colored.every(({col}) => col > cols! / 2)).toBe(true);
       }
     }
   } finally { a.close(); }
@@ -341,11 +341,12 @@ test('standard chat layout reserves conversation space while keeping model and c
   try {
     await a.tui.submitPrompt('Layout test');
     const frame = a.tui.computeFrameSnapshot();
-    expect(frame.plainText).toContain('Fyn · complete');
+    expect(frame.plainText).toContain('Weepinbell · complete');
     expect(frame.plainText).toContain('fixture-model');
     expect(frame.plainText).toContain('Context');
     expect(frame.plainText).toContain('Ask anything');
     expect(frame.plainLines.slice(0, 20).some(line => line.includes('Hello fixture'))).toBe(true);
-    expect(frame.plainLines.filter(line => /[▀▄]/.test(line))).toHaveLength(0);
+    expect(frame.plainLines.filter(line => /[▀▄]/.test(line))).toHaveLength(11);
+    expect(frame.cells.flatMap(row => row.slice(0, 70)).every(cell => cell.ch !== '▀')).toBe(true);
   } finally { a.close(); }
 });

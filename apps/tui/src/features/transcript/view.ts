@@ -2,6 +2,7 @@ import type { BorderStyle, ThemeTokens, ToolCall, ToolResult } from '@hannes/con
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
 import { commandSummary, reasoningTitle, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
+import { mixHex } from '../../theme/presets';
 
 export function renderMarkdownBody(options: {
   content: string;
@@ -106,15 +107,20 @@ export function renderTranscriptMessages(options: {
     if (idx > 0) lines.push({ spans: [] });
 
     if (isUser) {
+      const questionBg = mixHex(tokens.background, tokens.accent, 0.09);
       const wrapped = wrapTextToWidth(item.content || '', Math.max(8, innerWidth - 4));
-      for (const [row, text] of wrapped.entries()) {
-        lines.push({ spans: [
-          { text: row === 0 ? '› ' : '  ', fg: tokens.accent, bg: tokens.backgroundElevated, bold: true },
-          { text: text.padEnd(innerWidth - 2), fg: tokens.foreground, bg: tokens.backgroundElevated },
-        ] });
+      lines.push({spans:[{text:'╭─ Bạn',fg:tokens.accent,bg,bold:true}]});
+      for (const text of wrapped) {
+        lines.push({spans:[
+          {text:'│ ',fg:tokens.accent,bg:questionBg,bold:true},
+          {text:text.padEnd(innerWidth - 2),fg:tokens.foreground,bg:questionBg},
+        ]});
       }
+      lines.push({spans:[{text:'╰' + '─'.repeat(Math.min(12, innerWidth - 1)),fg:tokens.accent,bg}]});
       continue;
     }
+
+    if (options.compactActivities) lines.push({spans:[{text:'● Hannes',fg:tokens.foreground,bg,bold:true}]});
 
     // Compact adjacent tool-only rounds for display; the recorded timeline is untouched.
     const parts:TranscriptPart[]=[];
@@ -134,7 +140,7 @@ export function renderTranscriptMessages(options: {
       if (part.kind === 'reasoning') {
         if (options.compactActivities) {
           const title = reasoningTitle(part.text);
-          lines.push({disclosure, spans: [{text: `${expanded ? '▾' : '▸'} Thinking${title ? ` · ${title}` : ''}`.slice(0, innerWidth), fg: tokens.foregroundMuted, bg, italic: true}]});
+          lines.push({disclosure, spans: [{text: `  ${expanded ? '▾' : '▸'} Thinking${title ? ` · ${title}` : ''}`.slice(0, innerWidth), fg: tokens.foregroundMuted, bg, italic: true}]});
           if (expanded) lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
         } else if (item.reasoningExpanded !== false) lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
       } else if (part.kind === 'tools') {
@@ -154,7 +160,7 @@ export function renderTranscriptMessages(options: {
             ...calls.filter(call => call.name === 'apply_patch').map(() => 'apply_patch'),
           ].join(' · ');
           const label = completed < calls.length ? item.streaming ? 'Running' : 'Stopped' : failed ? 'Finished with errors' : 'Completed';
-          lines.push({disclosure, spans: [{text: `${expanded ? '▾' : '▸'} ${label} · ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}${summary ? ` · ${summary}` : ''}`.slice(0, innerWidth), fg: failed ? tokens.error : tokens.foregroundMuted, bg}]});
+          lines.push({disclosure, spans: [{text: `  ${expanded ? '▾' : '▸'} ${label} · ${calls.length} ${calls.length === 1 ? 'tool' : 'tools'}${summary ? ` · ${summary}` : ''}`.slice(0, innerWidth), fg: failed ? tokens.error : tokens.foregroundMuted, bg}]});
           if (!expanded) { previous = part.kind; continue; }
           for (const call of calls) {
             const result = item.toolResults?.find(result => result.callId === call.id);
@@ -181,7 +187,7 @@ export function renderTranscriptMessages(options: {
         const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 4), tokens, bg, syntaxHighlighting });
         for (const [row, bLine] of body.entries()) {
           if (bLine.spans.length === 0) { lines.push({ spans: [] }); continue; }
-          lines.push({ spans: [{ text: row === 0 ? '• ' : '  ', fg: tokens.foregroundSubtle, bg }, ...bLine.spans] });
+          lines.push({ spans: [{ text: row === 0 && !options.compactActivities ? '• ' : '  ', fg: tokens.foregroundSubtle, bg }, ...bLine.spans] });
         }
       }
       previous = part.kind;

@@ -4,7 +4,8 @@ import type { Canvas } from '../../ui';
 import type { TranscriptViewport } from '../../types';
 import { renderContextIndicator } from '../context-meter';
 import { renderTopHeaderBar } from '../header';
-import { renderFyn, type FynCompanion } from '../companion';
+import { FYN_LABELS, renderFyn, type FynCompanion } from '../companion';
+import { renderWeepinbell } from '../companion/weepinbell';
 import { renderPromptComposerLines, type ComposerState } from '../composer';
 import { explorationRows, formatElapsed, reasoningTitle, renderTranscriptViewport, type TranscriptItem } from '../transcript';
 import { renderWelcomeScreen } from '../welcome';
@@ -111,10 +112,10 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     }
   } else {
     const composerStartRow = Math.max(framePad + 1, rows - 1 - framePad - composerLines.length);
-    const mascotLines = rows >= 24 && contentWidth >= 28 && composerStartRow >= framePad + 10
-      ? renderFyn({ ...companionView, tokens, width: 24, compact: true })
+    const mascotLines = rows >= 24 && contentWidth >= 48 && composerStartRow >= framePad + 10
+      ? renderWeepinbell(tokens)
       : [];
-    const mascotRow = composerStartRow - mascotLines.length;
+    const mascotRow = composerStartRow - mascotLines.length - 1;
     const showMascot = mascotLines.length > 0 && mascotRow >= framePad;
     let transcriptStartRow = framePad;
     if (!showMascot && rows >= 12 && mainWidth >= 40) {
@@ -133,12 +134,13 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     }
     // While a turn runs, one status row sits right above the composer (beside Fyn when shown).
     const statusRow = v.isStreaming && !showMascot ? composerStartRow - 1 : -1;
-    const transcriptHeight = Math.max(0, (showMascot ? mascotRow : statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
+    const transcriptHeight = Math.max(0, (showMascot ? composerStartRow - (v.isStreaming ? 1 : 0) : statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
+    const transcriptWidth = showMascot ? Math.max(18, contentWidth - 26) : contentWidth;
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
         items: v.transcript,
         compactActivities: true,
-        width: contentWidth,
+        width: transcriptWidth,
         height: transcriptHeight,
         scrollOffset: v.scrollOffset,
         tokens,
@@ -150,13 +152,16 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
           return typeof cmd === 'string' && v.client.listPendingPermissions().some(p => p.capability === 'process.execute' && plain(p.target) === plain(cmd));
         },
       });
-      canvas.block(transcriptStartRow, contentLeft, vp.lines, contentWidth);
-      viewport = {top: transcriptStartRow, left: contentLeft, width: contentWidth, height: transcriptHeight, offset: vp.clampedOffset, lines: vp.allLines,
+      canvas.block(transcriptStartRow, contentLeft, vp.lines, transcriptWidth);
+      viewport = {top: transcriptStartRow, left: contentLeft, width: transcriptWidth, height: transcriptHeight, offset: vp.clampedOffset, lines: vp.allLines,
         disclosures: vp.allLines.flatMap((line, row) => line.disclosure ? [{row, ...line.disclosure}] : [])};
     }
     if (showMascot) {
-      canvas.block(mascotRow, contentLeft, mascotLines, 28);
-      if (v.isStreaming && contentWidth >= 44) canvas.spans(mascotRow + 1, contentLeft + 24, turnStatusSpans(v, companionView.time), contentWidth - 24);
+      const mascotWidth = mascotLines[0]?.spans.length ?? 0;
+      const mascotLeft = contentLeft + contentWidth - mascotWidth;
+      canvas.block(mascotRow, mascotLeft, mascotLines, mascotWidth);
+      canvas.spans(composerStartRow - 1, contentLeft + contentWidth - 26, [{text:`Weepinbell · ${FYN_LABELS[companionView.state]}`,fg:tokens.foregroundMuted}], 26);
+      if (v.isStreaming) canvas.spans(composerStartRow - 1, contentLeft, turnStatusSpans(v, companionView.time), Math.max(0, contentWidth - mascotWidth - 2));
     }
     if (statusRow > transcriptStartRow) canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);

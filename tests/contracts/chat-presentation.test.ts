@@ -42,8 +42,9 @@ test('chat preserves long code lines and uses the same left edge for prompts and
   const body = renderMarkdownBody({ content: '```ts\n' + source + '\n```', width: 40, tokens, bg: tokens.background, syntaxHighlighting: true });
   expect(body.slice(1).map(l => l.spans.map(s => s.text).join('').trim()).join('')).toBe(source);
   const lines = renderTranscriptMessages({ items: [{ id: 'u', role: 'user', content: 'Prompt' }, { id: 'a', role: 'assistant', content: 'Response' }], width: 80, tokens, borderStyle: 'rounded' });
-  expect(lines[0]!.spans[0]!.text).toBe('› ');
-  expect(lines[2]!.spans[0]!.text).toBe('• ');
+  expect(lines[0]!.spans[0]!.text).toBe('╭─ Bạn');
+  expect(lines[1]!.spans[0]!.text).toBe('│ ');
+  expect(lines.at(-1)!.spans[0]!.text).toBe('• ');
 });
 
 test('composer prioritizes interruption and preserves account identity when model names are long', () => {

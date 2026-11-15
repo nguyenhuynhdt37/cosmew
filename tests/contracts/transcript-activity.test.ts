@@ -132,7 +132,7 @@ test('live frame: exploration appears while the turn runs, with a status line; i
   await turn;
   const done = tui.computeFrameSnapshot().plainText;
   expect(done).toContain('▸ Completed · 2 tools');
-  expect(done).toContain('• Notes say hello.');
+  expect(done).toContain('Notes say hello.');
   expect(done).not.toContain('Esc to interrupt)');
 });
 
