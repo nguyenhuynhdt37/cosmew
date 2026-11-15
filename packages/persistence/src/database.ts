@@ -16,9 +16,9 @@ export function openPrivateDatabase(directory: string): Database {
     }
     const fd = openSync(path, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600); closeSync(fd); chmodSync(path, 0o600);
     const db = new Database(path, { strict: true });
-    db.exec('PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
+    db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (version > 3) { db.close(); throw new HannesError('STORAGE'); }
+    if (version > 4) { db.close(); throw new HannesError('STORAGE'); }
     db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, selection TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
@@ -31,7 +31,19 @@ export function openPrivateDatabase(directory: string): Database {
       if (!columns.some(column => column.name === 'parts')) db.exec('ALTER TABLE messages ADD COLUMN parts TEXT');
       db.exec(`CREATE TABLE IF NOT EXISTS tool_audit (at TEXT NOT NULL, call_id TEXT NOT NULL, tool TEXT NOT NULL, target TEXT,
         phase TEXT NOT NULL, decision TEXT, reason TEXT, outcome TEXT, code TEXT);`);
-      db.exec('PRAGMA user_version=3;');
+      db.exec(`CREATE TABLE IF NOT EXISTS execution_turns (
+        conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL,
+        user_revision INTEGER NOT NULL, end_revision INTEGER, state TEXT NOT NULL,
+        owner_pid INTEGER NOT NULL, owner TEXT NOT NULL, PRIMARY KEY(conversation,id));
+        CREATE TABLE IF NOT EXISTS conversation_events (
+        conversation TEXT NOT NULL REFERENCES conversations(id), seq INTEGER NOT NULL,
+        turn_id TEXT NOT NULL, at TEXT NOT NULL, data TEXT NOT NULL,
+        PRIMARY KEY(conversation,seq), FOREIGN KEY(conversation,turn_id) REFERENCES execution_turns(conversation,id));
+        CREATE TABLE IF NOT EXISTS conversation_checkpoints (
+        conversation TEXT PRIMARY KEY REFERENCES conversations(id), task TEXT, context TEXT);`);
+      const auditColumns=db.query('PRAGMA table_info(tool_audit)').all() as {name:string}[];
+      if(!auditColumns.some(column=>column.name==='scope_hash'))db.exec('ALTER TABLE tool_audit ADD COLUMN scope_hash TEXT');
+      db.exec('PRAGMA user_version=4;');
     })();
     return db;
   } catch { throw new HannesError('STORAGE'); }

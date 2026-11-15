@@ -2,7 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
+import { SAFETY_LIMITS } from '@hannes/core';
+/** A user tool-call budget used by the Codex bridge budget tests (ADR 0030); not a default. */
+const MAX_TOOL_CALLS = 32, MAX_INLINE_TOOL_ATTEMPTS = MAX_TOOL_CALLS + SAFETY_LIMITS.bridgeRefusalGrace;
 import { HannesError, executionBackendFor, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
 import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows } from '@hannes/tui';
 import { RuntimeProfile } from '@hannes/persistence';
@@ -354,13 +356,14 @@ test('Codex read outside the workspace is denied by the same dispatcher', async 
 
 for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 'read-namespace', 'read-duplicate', 'read-runaway']) test(`Codex dynamic request fails closed: ${scenario}`, async () => {
   const c = await readContext(scenario);
+  c.client.setTurnBudget({ maxToolCalls: MAX_TOOL_CALLS });
   const events: ModelEvent[] = [];
   await expect((async () => { for await (const event of c.client.sendMessage('Inspect project')) events.push(event); })()).rejects.toBeInstanceOf(HannesError);
   expect(events.some(e => e.type === 'completed')).toBe(false);
   const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
   expect(results.length).toBeLessThanOrEqual(MAX_INLINE_TOOL_ATTEMPTS);
   if (scenario === 'read-runaway') {
-    // ADR 0020: 32 calls run, a few more are refused unexecuted, then the turn fails closed.
+    // With a user budget of 32: 32 calls run, a few more are refused unexecuted, then the turn fails closed.
     expect(results).toHaveLength(MAX_INLINE_TOOL_ATTEMPTS);
     expect(results.slice(MAX_TOOL_CALLS).every(r => r.code === 'TOOL_BUDGET')).toBe(true);
     expect((c.app.db.query("SELECT count(*) AS n FROM tool_audit WHERE phase='completed'").get() as {n: number}).n).toBe(MAX_TOOL_CALLS);
@@ -370,6 +373,7 @@ for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 
 
 test('Codex tool budget: a model that stops after the refusal still completes; rereads return the unchanged notice', async () => {
   const c = await readContext('read-repeat'); // 34 identical README reads, then it answers with the last result
+  c.client.setTurnBudget({ maxToolCalls: MAX_TOOL_CALLS });
   const events: ModelEvent[] = [];
   for await (const event of c.client.sendMessage('Inspect project')) events.push(event);
   const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
@@ -380,6 +384,22 @@ test('Codex tool budget: a model that stops after the refusal still completes; r
   expect((c.app.db.query("SELECT count(*) AS n FROM tool_audit WHERE phase='completed'").get() as {n: number}).n).toBe(MAX_TOOL_CALLS);
   expect(events.at(-1)!.type).toBe('completed');
 });
+
+test('Codex bridge without a user budget: 34 reads all run; only the named bridge safety limit ends a runaway', async () => {
+  const c = await readContext('read-repeat');
+  const events: ModelEvent[] = [];
+  for await (const event of c.client.sendMessage('Inspect project')) events.push(event);
+  const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
+  expect(results).toHaveLength(34);
+  expect(results.every(r => r.status === 'ok')).toBe(true);
+  expect(events.at(-1)!.type).toBe('completed');
+  const runaway = await readContext('read-runaway');
+  const seen: ModelEvent[] = [];
+  await expect((async () => { for await (const event of runaway.client.sendMessage('Inspect project')) seen.push(event); })()).rejects.toMatchObject({ code: 'POLICY' });
+  expect(seen.filter(e => e.type === 'toolResult')).toHaveLength(SAFETY_LIMITS.bridgeCallsPerTurn);
+  const receipt = runaway.app.db.query('select data from turn_receipts order by rowid desc').get() as { data: string };
+  expect(JSON.parse(receipt.data).stopReason).toBe('safety_limit');
+}, 30000);
 
 async function exploreContext(files: Record<string, string>) {
   const c = await readContext('explore');

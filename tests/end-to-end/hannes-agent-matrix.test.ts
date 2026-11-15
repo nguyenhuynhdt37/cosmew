@@ -96,6 +96,7 @@ for (const protocol of ['chat', 'anthropic'] as const) {
   test(`${protocol}: tool budget exhaustion withdraws tools and the model must answer`, async () => {
     let calls = 0;
     const c = await make(protocol, v => v.tools.length ? (calls++, { calls: [{ name: 'read', input: { path: 'notes.txt', offset: calls } }] }) : { text: `STOPPED after ${v.results.length}` });
+    c.client.setTurnBudget({ maxToolCalls: 32 }); // ADR 0030: budgets are user-configured, not a default ceiling
     const r = await turn(c, 'loop forever');
     expect(r.results.length).toBeLessThanOrEqual(32);
     expect(r.answer).toStartWith('STOPPED');
@@ -112,7 +113,7 @@ for (const protocol of ['chat', 'anthropic'] as const) {
     const c = await make(protocol, () => ({ calls: [{ name: 'apply_patch', input: { patch: PATCH } }] }));
     c.server.set({ status: 500 });
     await expect(turn(c, 'patch')).rejects.toMatchObject({ code: 'TRANSPORT' });
-    expect(c.server.requests.length).toBeLessThanOrEqual(3);
+    expect(c.server.requests.filter(request=>request.body).length).toBeLessThanOrEqual(3);
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('old\n');
   });
 

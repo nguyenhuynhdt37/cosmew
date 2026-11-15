@@ -343,3 +343,7 @@ SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-sid
 - `features/transcript/{types,logic,view}.ts`: ordered `parts`, `explorationRows` grouping, `renderExplorationGroup`, inline reasoning, stored-session rebuild.
 - `features/chat/{controller,view}.ts`: parts appended per event, `turnStartedAt`, `turnStatusSpans` status row.
 - `ui/types.ts`, `ui/canvas.ts`, `render/ansi-diff.ts`, `types.ts`: optional italic cells.
+
+## Conversation recovery ownership (ADR 0030)
+
+Activated files: contracts/recovery.ts defines durable events/checkpoints; core/context/builder.ts normalizes model history and estimates/truncates context; core/context/compaction.ts implements extractive snapshots; core/agent/progress.ts tracks evidence and auxiliary continuity; persistence/event-store.ts owns ordered journal writes and legacy reconstruction. Paths are under packages/*/src. Core uses only contracts/ports; CLI composes model metadata/redaction/mode; SDK refreshes canonical history after all outcomes. No new package or dependency was added.

@@ -12,6 +12,7 @@ export interface ToolAuditEntry {
   reason?: string;
   outcome?: string;
   code?: string;
+  scopeHash?: string;
 }
 
 /** Append-only tool audit trail (ADR 0017). Writes are synchronous so intent is durable before a prompt. */
@@ -20,13 +21,13 @@ export class ToolAuditStore {
 
   append(entry: ToolAuditEntry): void {
     try {
-      this.db.query('INSERT INTO tool_audit (at, call_id, tool, target, phase, decision, reason, outcome, code) VALUES (?,?,?,?,?,?,?,?,?)')
-        .run(entry.at, entry.callId, entry.tool.slice(0, 100), entry.target?.slice(0, 1024) ?? null, entry.phase, entry.decision ?? null, entry.reason?.slice(0, 100) ?? null, entry.outcome ?? null, entry.code?.slice(0, 64) ?? null);
+      this.db.query('INSERT INTO tool_audit (at, call_id, tool, target, phase, decision, reason, outcome, code, scope_hash) VALUES (?,?,?,?,?,?,?,?,?,?)')
+        .run(entry.at, entry.callId, entry.tool.slice(0, 100), entry.target?.slice(0, 1024) ?? null, entry.phase, entry.decision ?? null, entry.reason?.slice(0, 100) ?? null, entry.outcome ?? null, entry.code?.slice(0, 64) ?? null,entry.scopeHash??null);
     } catch { throw new HannesError('STORAGE'); }
   }
 
   recent(limit = 100): ToolAuditEntry[] {
-    const rows = this.db.query('SELECT at, call_id, tool, target, phase, decision, reason, outcome, code FROM tool_audit ORDER BY rowid DESC LIMIT ?').all(limit) as Record<string, string | null>[];
-    return rows.map(row => ({ at: row.at!, callId: row.call_id!, tool: row.tool!, target: row.target ?? null, phase: row.phase!, decision: row.decision ?? undefined, reason: row.reason ?? undefined, outcome: row.outcome ?? undefined, code: row.code ?? undefined }));
+    const rows = this.db.query('SELECT at, call_id, tool, target, phase, decision, reason, outcome, code, scope_hash FROM tool_audit ORDER BY rowid DESC LIMIT ?').all(limit) as Record<string, string | null>[];
+    return rows.map(row => ({ at: row.at!, callId: row.call_id!, tool: row.tool!, target: row.target ?? null, phase: row.phase!, decision: row.decision ?? undefined, reason: row.reason ?? undefined, outcome: row.outcome ?? undefined, code: row.code ?? undefined,...(row.scope_hash?{scopeHash:row.scope_hash}:{}) }));
   }
 }

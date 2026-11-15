@@ -203,7 +203,7 @@ if (copilot && process.argv.includes('login')) {
           if (matches.length !== 1 || history[0].role !== 'user' || !history[0].content.startsWith('Project instructions (user/project-scoped context') || projectInstructions.includes('RULE_TASK01_NATIVE')) process.exit(50);
         }
         if (runtime === 'codex' && scenario === 'explore' && dynamicTools.length) {
-          if (!projectInstructions.includes('Investigate progressively') || !projectInstructions.includes('at most 32 tool calls')) process.exit(51);
+          if (!projectInstructions.includes('Investigate progressively') || !projectInstructions.includes('Keep working with tools')) process.exit(51);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); call('glob', {pattern: '**/routes.*'}); return;
         }
         if (runtime === 'codex' && (scenario.startsWith('read-') || scenario === 'exec-command') && dynamicTools.length) {

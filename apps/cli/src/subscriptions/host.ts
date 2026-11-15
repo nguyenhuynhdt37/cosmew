@@ -6,7 +6,7 @@ import { answerRuntimeApproval, authorizeSubscription, classifyRuntimeApproval, 
 
 /** Decides one native runtime permission request through the Hannes prompt and permission mode. */
 export type RuntimeApprover = (request: RuntimeApproval & { runtime: SubscriptionRuntime }, signal?: AbortSignal) => Promise<boolean>;
-import { MAX_INLINE_TOOL_ATTEMPTS } from '@hannes/core';
+import { SAFETY_LIMITS } from '@hannes/core';
 import type { RuntimeActivity } from '@hannes/contracts';
 
 /** Claude-style label for a runtime's own tool (Grok/ACP titles and kinds, Copilot names). */
@@ -436,7 +436,8 @@ export class SubscriptionHost {
         if (terminal || signal?.aborted || !threadId || !turnId || params?.threadId !== threadId || params?.turnId !== turnId || params.namespace != null) throw new HannesError('POLICY');
         if (Buffer.byteLength(JSON.stringify(params.arguments) ?? '') > 65536) throw new HannesError('PROTOCOL');
         const call = toolCallSchema.parse({id: params.callId, name: params.tool, input: params.arguments});
-        if (callIds.size >= MAX_INLINE_TOOL_ATTEMPTS || callIds.has(call.id) || !request.tools.some(t => t.name === call.name)) throw new HannesError('POLICY');
+        // Defence in depth behind the engine's named bridge limit (ADR 0030), which fires first.
+        if (callIds.size > SAFETY_LIMITS.bridgeCallsPerTurn + SAFETY_LIMITS.bridgeRefusalGrace || callIds.has(call.id) || !request.tools.some(t => t.name === call.name)) throw new HannesError('POLICY');
         callIds.add(call.id);
         inFlightTools++;
         const execute = toolQueue.then(async () => {

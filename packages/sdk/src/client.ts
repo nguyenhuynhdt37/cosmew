@@ -25,6 +25,8 @@ import {
   type PermissionMode,
   type PermissionKind,
   PERMISSION_MODES,
+  turnBudgetSchema,
+  type TurnBudget,
   executionBackendFor,
   type ExecutionBackend,
   permissionModeDecision,
@@ -142,6 +144,8 @@ export class FutrynClient {
   private permissionModeValue: PermissionMode = 'default';
   /** Explicit opt-in to a delegated agent runtime (ADR 0029); never implied by folder consent. */
   private delegatedAgentValue = false;
+  /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
+  private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
   private sending = false;
   private streamingText = '';
@@ -208,6 +212,13 @@ export class FutrynClient {
   }
 
   permissionMode(): PermissionMode { return this.permissionModeValue; }
+  /** The user's work budget for each turn, or undefined when no limit is set. */
+  turnBudget(): TurnBudget | undefined { return this.turnBudgetValue ? { ...this.turnBudgetValue } : undefined; }
+  setTurnBudget(budget: TurnBudget | null): TurnBudget | undefined {
+    if (budget === null) this.turnBudgetValue = undefined;
+    else { const parsed = turnBudgetSchema.safeParse(budget); if (!parsed.success) throw new HannesError('INVALID_INPUT'); this.turnBudgetValue = Object.keys(parsed.data).length ? parsed.data : undefined; }
+    this.notifyStateChange(); return this.turnBudget();
+  }
   /** True only after an explicit opt-in for this session and while folder consent holds. */
   delegatedAgent(): boolean { return this.delegatedAgentValue && this.toolsAllowed; }
   /**
@@ -684,13 +695,14 @@ export class FutrynClient {
         } else if (event.type === 'completed') {
           this.lastUsage = event.usage; this.streamingText = ''; this.streamingSteps = [];
           const stored = this.ports.getSession(session.id);
-          if (stored) session.messages = stored.messages.filter(m => m.state === 'committed').map(({role, content, toolCalls, toolCallId, toolName}) => ({role, content, toolCalls, toolCallId, toolName}));
+          if (stored) session.messages = stored.recovery?.messages ?? stored.messages.filter(m => m.state === 'committed').map(({role, content, toolCalls, toolCallId, toolName}) => ({role, content, toolCalls, toolCallId, toolName}));
           else session.messages.push({role: 'user', content: trimmed}, {role: 'assistant', content: assistantText});
           this.emitReactiveEvent('done', event.finishReason);
         }
         yield event;
       }
     } catch (err) {
+      const stored=this.ports.getSession(session.id);if(stored?.recovery)session.messages=stored.recovery.messages;
       this.emitReactiveEvent('error', err instanceof HannesError ? err.code : 'ERROR');
       throw err;
     } finally { this.sending = false; this.streamingText = ''; this.streamingSteps = []; }

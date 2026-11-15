@@ -28,6 +28,7 @@ export interface ToolAuditRecord {
   reason?: string;
   outcome?: ToolResult['status'];
   code?: string;
+  scopeHash?: string;
 }
 
 export interface ToolDispatcherOptions {

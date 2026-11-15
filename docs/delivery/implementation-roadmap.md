@@ -237,3 +237,7 @@ Remaining PA1 release gates: authenticated live provider/model tests; available 
 ## Task 02 progressive code exploration
 
 2026-11-15: the user authorized only Task 02 ([ADR 0020](../adr/0020-progressive-code-exploration.md)). Shared exploration guidance for direct providers and Codex, a per-turn budget of 16 tool rounds and 32 executed calls, and an `[unchanged]` notice for identical rereads. Verified with deterministic fixture policies only; live model behavior is not verified.
+
+## Implemented recovery slice — 2026-11-16
+
+[ADR 0030](../adr/0030-durable-conversation-recovery.md) implements durable turns/events, interruption reconstruction, task continuity, extractive compaction and bounded progress. [Fixture/process evidence and limits](conversation-recovery.md) do not constitute authenticated-provider or interactive Product MVP acceptance. Production exec_command containment gate remains closed.

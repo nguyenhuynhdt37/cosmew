@@ -1,4 +1,4 @@
-export type ErrorCode = 'INVALID_INPUT' | 'AUTH' | 'FORBIDDEN' | 'NOT_FOUND' | 'RATE_LIMIT' | 'TIMEOUT' | 'CANCELLED' | 'TRANSPORT' | 'PROTOCOL' | 'POLICY' | 'STORAGE' | 'UNSUPPORTED' | 'BUDGET' | 'RUNTIME_UNAVAILABLE' | 'CONTEXT_LIMIT';
+export type ErrorCode = 'INVALID_INPUT' | 'AUTH' | 'FORBIDDEN' | 'NOT_FOUND' | 'RATE_LIMIT' | 'TIMEOUT' | 'CANCELLED' | 'TRANSPORT' | 'PROTOCOL' | 'POLICY' | 'STORAGE' | 'UNSUPPORTED' | 'BUDGET' | 'RUNTIME_UNAVAILABLE' | 'CONTEXT_LIMIT' | 'STALLED';
 const safeMessages: Record<ErrorCode, string> = {
   INVALID_INPUT: 'Invalid configuration or request. Check help and field formats.',
   AUTH: 'Account credentials are missing, expired or could not be verified. Sign in again or check provider access.',
@@ -13,7 +13,8 @@ const safeMessages: Record<ErrorCode, string> = {
   STORAGE: 'Private settings, session store or OS credential store unavailable. Check permissions; no plaintext fallback is used.',
   UNSUPPORTED: 'Authentication or runtime protocol is unsupported. Check the provider method and supported runtime version.',
   RUNTIME_UNAVAILABLE: 'The official provider runtime is not installed or is not on PATH. Install Codex, Copilot CLI, Gemini CLI or Qwen Code for the selected subscription, then retry.',
-  CONTEXT_LIMIT: 'The output reserve does not fit the model context window. Reduce max output tokens or select a model with a larger window.',
+  STALLED: 'No safe progress after bounded recovery. Review the unfinished task and tool evidence before continuing.',
+  CONTEXT_LIMIT: 'The conversation plus the output reserve no longer fits the model context window. Critical user constraints and recent execution evidence cannot be safely compacted further. Reduce output reserve, explicitly narrow the task, or choose a larger context window.',
   BUDGET: 'Estimated cost guard denied the request: pricing is unknown or the estimate exceeds your limit. Refresh metadata or explicitly change the limit; this is not a billing guarantee.',
 };
 export class HannesError extends Error {

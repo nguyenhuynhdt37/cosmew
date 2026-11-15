@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {HannesError, toolResultSchema, type PermissionDecision, type ToolCall, type ToolResult} from '@hannes/contracts';
 import {evaluateRead, evaluateExec, evaluateWrite} from '@hannes/security';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@hannes/workspace';
@@ -7,7 +8,7 @@ import {join} from 'node:path';
 import {clipBytes} from './limits';
 import {ToolRouter} from './router';
 
-type Authorization = {gate: ToolOutput | null; viaSession: boolean};
+type Authorization = {gate: ToolOutput | null; viaSession: boolean;scopeHash?:string};
 
 /** Shared invocation lifecycle. Discovery never replaces policy, approval or launch-time checks. */
 export class ToolOrchestrator {
@@ -18,9 +19,10 @@ export class ToolOrchestrator {
   async invoke(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
     signal?.throwIfAborted();
     const audit: Audit = record => this.options.audit?.({at:new Date().toISOString(),callId:call.id,tool:call.name,...record});
+    let authorizationScopeHash:string|undefined;
     const finish = (result: ToolOutput): ToolResult => {
       const clipped=clipBytes(this.options.redact(result.content),60000);
-      const final=toolResultSchema.parse({...result,content:clipped.text,truncated:result.truncated || clipped.clipped || undefined,callId:call.id,name:call.name});
+      const final=toolResultSchema.parse({...result,content:clipped.text,truncated:result.truncated || clipped.clipped || undefined,callId:call.id,name:call.name,...(authorizationScopeHash?{authorizationScopeHash}:{})});
       audit({target:final.target ?? null,phase:'completed',outcome:final.status,code:final.code});
       return final;
     };
@@ -39,6 +41,7 @@ export class ToolOrchestrator {
         : prepared.kind==='command' ? await this.authorizeCommand(prepared,audit,signal)
         : prepared.kind==='read' ? await this.authorizeRead(call.name,prepared.file,audit,signal)
         : {gate:this.authorizeSearch(prepared,audit),viaSession:false};
+      authorizationScopeHash=authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
       // Availability/exposure may change while an approval is pending. Never execute an old route.
@@ -75,18 +78,19 @@ export class ToolOrchestrator {
 
   private async permission(decision: PermissionDecision, request: ApprovalRequest, grant: string, target: string, audit: Audit,
     deniedByPolicy: string, deniedByUser: string, signal?: AbortSignal, allowPrompt=true): Promise<Authorization> {
-    audit({target,phase:'decided',decision:decision.effect,reason:decision.reason});
-    if (decision.effect==='deny') return {gate:{status:'denied',code:'DENIED',content:deniedByPolicy,target},viaSession:false};
-    if (decision.effect==='allow') return {gate:null,viaSession:false};
-    if (this.options.grants.has(request.capability,grant)) return {gate:null,viaSession:true};
-    if (!allowPrompt) return {gate:{status:'denied',code:'APPROVAL_REQUIRED',content:'Automatic instruction loading requires an existing permission grant.',target},viaSession:false};
+    const scopeHash=createHash('sha256').update(JSON.stringify([request.capability,grant])).digest('hex');
+    audit({target,phase:'decided',decision:decision.effect,reason:decision.reason,scopeHash});
+    if (decision.effect==='deny') return {gate:{status:'denied',code:'DENIED',content:deniedByPolicy,target},viaSession:false,scopeHash};
+    if (decision.effect==='allow') return {gate:null,viaSession:false,scopeHash};
+    if (this.options.grants.has(request.capability,grant)) return {gate:null,viaSession:true,scopeHash};
+    if (!allowPrompt) return {gate:{status:'denied',code:'APPROVAL_REQUIRED',content:'Automatic instruction loading requires an existing permission grant.',target},viaSession:false,scopeHash};
     const answer=await this.options.approve(request,signal);
     signal?.throwIfAborted();
-    audit({target,phase:'decided',decision:answer,reason:'user'});
+    audit({target,phase:'decided',decision:answer,reason:'user',scopeHash});
     // Fail closed even if an injected approval adapter returns an unexpected value.
-    if (answer!=='once' && answer!=='session') return {gate:{status:'denied',code:'DENIED',content:deniedByUser,target},viaSession:false};
+    if (answer!=='once' && answer!=='session') return {gate:{status:'denied',code:'DENIED',content:deniedByUser,target},viaSession:false,scopeHash};
     if (answer==='session') this.options.grants.grant(request.capability,grant);
-    return {gate:null,viaSession:answer==='session'};
+    return {gate:null,viaSession:answer==='session',scopeHash};
   }
 
   async authorizeRead(tool: string, file: ResolvedPath, audit: Audit, signal?: AbortSignal, allowPrompt=true): Promise<Authorization> {

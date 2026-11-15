@@ -19,6 +19,7 @@ export interface SessionSummary {
 export interface SessionRecord extends SessionSummary {
   messages: StoredMessage[];
   turns?: import('./telemetry').TurnReceipt[];
+  recovery?: import('./recovery').RecoveredConversation;
 }
 
 export const diffLineSchema = z.strictObject({
@@ -48,6 +49,12 @@ export interface WorkspaceDiffReport {
 
 export interface ConversationStore {
   create(selection: Selection): string;
+  /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
+  beginExecution?(id:string,user:Message,receipt:import('./telemetry').TurnReceipt):number;
+  recordExecution?(id:string,turnId:string,event:import('./recovery').ExecutionEventData):number;
+  recover?(id:string):import('./recovery').RecoveredConversation;
+  saveTask?(id:string,task:import('./recovery').ActiveTaskCheckpoint):void;
+  saveContextSnapshot?(id:string,snapshot:import('./recovery').ContextSnapshot):void;
   append(id: string, message: Message, state: 'pending' | 'committed', receipt?: import('./telemetry').TurnReceipt): number;
   /** Commit the pending user message, any tool rounds of this turn (`intermediate`) and the final answer atomically. */
   complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt, intermediate?: Message[]): void;

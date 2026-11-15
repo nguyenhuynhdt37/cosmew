@@ -1,6 +1,6 @@
 # Hannes CLI
 
-Hannes is a TypeScript/Bun coding-agent harness under development. The **Provider & Authentication slice is implemented and fixture-tested**: persistent providers/accounts, OS keyring or environment-reference authentication, dynamic/manual catalogs, model selection, streamed multi-turn chat and diagnostics. **The full Product MVP is not accepted yet**: commercial generation has not been live-verified, and subscription/delegated-agent integrations remain Not implemented.
+Hannes is a TypeScript/Bun coding-agent harness under development. The **Provider & Authentication slice is implemented and fixture-tested**: persistent providers/accounts, OS keyring or environment-reference authentication, dynamic/manual catalogs, model selection, streamed multi-turn chat and diagnostics. **The full Product MVP is not accepted yet**: commercial generation has not been live-verified, and authenticated-provider/interactive acceptance remains limited. Subscription backend ownership and opt-in rules are described in [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
 
 Requires Bun **1.4.4**. No application build is required; Bun runs the TypeScript workspace.
 
@@ -47,7 +47,7 @@ bun run hannes models select <model-id-from-list>
 printf 'Explain dependency injection.\n' | bun run hannes run --json
 ```
 
-Never put key values in command arguments or repository settings. Default state is `~/.hannes/provider-auth.sqlite`; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic fallback or shell/filesystem tool execution.
+Never put key values in command arguments or repository settings. Default state is `~/.hannes/provider-auth.sqlite`; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic provider fallback. Workspace reads and approved apply_patch writes are mediated by Hannes; production shell execution remains disabled.
 
 ```sh
 bun run typecheck
@@ -62,7 +62,13 @@ HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts
 
 See [CLI/auth setup and troubleshooting](docs/subsystems/providers-and-auth.md), [provider/auth matrix](docs/compatibility/providers-auth-matrix.md), [architecture audit and plan](docs/delivery/provider-auth-plan.md), [upstream comparison](docs/delivery/provider-auth-research.md), [ADR 0005](docs/adr/0005-provider-auth-product.md), [security review](docs/delivery/provider-auth-security-review.md), and [acceptance evidence](docs/delivery/provider-auth-acceptance.md).
 
-The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, general tool execution, MCP/plugins, remote server, full recovery and GUI compatibility are **Not implemented**. Empty source placeholders are not feature evidence.
+The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, MCP/plugins, remote server, general process execution and GUI compatibility remain **Not implemented**. Empty source placeholders are not feature evidence.
 
 
 Current login UX and official subscription transports: [subscription sign-in and verification](docs/delivery/subscription-auth.md). Vendors are grouped once; subscription opens browser/device sign-in, API key asks only for the hidden key, and account names are automatic.
+
+## Continue an interrupted task
+
+In a writable scratch project, choose a direct model backend (`hannes`), then ask: `Create helo.html, a beautiful standalone sales landing page.` Cancel after exploration, then send `tiếp` or `continue`. Hannes preserves the accepted request and completed tool evidence, requests current write approval, and guides the model to create and read back the artifact. Use `/resume` after restart. Denied writes are not retried automatically; an uncertain write requires filesystem inspection before another mutation. Model capability and credentials still determine live success.
+
+Durable history is retained separately from token-budgeted model context. Extractive checkpoints preserve user constraints, mutation receipts and recent turns; if critical context cannot fit safely, the turn reports a limit. No approval is restored by history, resume or fork. See [recovery architecture](docs/adr/0030-durable-conversation-recovery.md) and [fixture/process acceptance](docs/delivery/conversation-recovery.md).

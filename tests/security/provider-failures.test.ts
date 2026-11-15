@@ -104,7 +104,7 @@ function recordingStore() {
   const store: ConversationStore = { create(_s: Selection) { return 'conversation'; }, append() { actions.push('pending'); return ++rev; }, complete() { actions.push('complete'); }, interrupt() { actions.push('interrupted'); } };
   return { store, actions };
 }
-test('core persists intent before provider request; failed turns do not contaminate next context', async () => {
+test('core persists intent before provider request; failed user intent remains visible without inventing successful output', async () => {
   const r = recordingStore(); let attempts = 0; const inputs: ModelRequest[] = [];
   const model: ModelPort = { generate: async () => { throw new Error('unused'); }, async *stream(input) {
     inputs.push(input); expect(r.actions.at(-1)).toBe('pending'); attempts++;
@@ -115,8 +115,8 @@ test('core persists intent before provider request; failed turns do not contamin
   } };
   const conversation = new Conversation({ accountId: crypto.randomUUID(), modelId: 'fixture-model' }, model, r.store);
   await expect(Array.fromAsync(conversation.send('failed-private-turn'))).rejects.toMatchObject({ code: 'TRANSPORT' });
-  expect(conversation.history()).toEqual([]); await Array.fromAsync(conversation.send('retry-explicitly'));
-  expect(inputs[1]?.messages).toEqual([{ role: 'user', content: 'retry-explicitly' }]); expect(r.actions).toEqual(['pending', 'interrupted', 'pending', 'complete']);
+  expect(conversation.history()).toEqual([{role:'user',content:'failed-private-turn'}]); await Array.fromAsync(conversation.send('retry-explicitly'));
+  expect(inputs[1]?.messages).toEqual([{role:'user',content:'failed-private-turn'},{ role: 'user', content: 'retry-explicitly' }]); expect(r.actions).toEqual(['pending', 'interrupted', 'pending', 'complete']);
 });
 test('core rejects tool execution and concurrent turns', async () => {
   const r = recordingStore();

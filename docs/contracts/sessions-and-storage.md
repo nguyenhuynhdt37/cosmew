@@ -2,7 +2,7 @@
 
 > PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
 
-**Đề xuất v1; Not implemented.** Persistence là owner mọi SQLite write; core chỉ gọi transaction ports. Không có schema SQL/migration implementation trong Phase 0.
+**Historical proposal; the implemented recovery slice is specified below.** Persistence là owner mọi SQLite write; core chỉ gọi transaction ports. Không có schema SQL/migration implementation trong Phase 0.
 
 | Entity | Fields dự kiến | Invariant |
 |---|---|---|
@@ -38,3 +38,9 @@ Acceptance: power-loss giữa intent/effect/result; concurrent resume; migration
 ## TUI appearance profile 3
 
 [ADR 0012](../adr/0012-theme-naming-and-semantic-colors.md) uses canonical IDs `auto`, `dark`, `light` and a new default ID `auto`; the stored `mode` values and schema remain unchanged. Profile-2 IDs are accepted aliases and migrate on initialization, separately for global and active project. Dark/light surfaces retain semantic accent/status/syntax colors. Downgrading to software before profile 2 may fall back to its own default for unfamiliar IDs.
+
+## Implemented contract 1.12 / SQLite 4
+
+[ADR 0030](../adr/0030-durable-conversation-recovery.md) supersedes the blanket future-only status and committed-only continuation rule above. SQLite owns ordered execution turns/events and task/context checkpoints. User acceptance is durable before model work; text, call intent and actual results survive failure. Terminal lifecycle transitions and event sequence/pairing are validated. Recovery merges legacy rows and journal ranges without invoking tools. Missing outcomes are unknown or not-executed, never successful. Resume and fork preserve evidence, clear grants and require current policy/revalidation for new calls.
+
+Schema 0–3 upgrades transactionally to 4, adding execution_turns, conversation_events, conversation_checkpoints and tool_audit.scope_hash without rewriting historical messages. Versions above 4 are rejected; no downgrade. DELETE journal / FULL sync are used, not the historical proposed WAL/lease system. Live PID ownership fences concurrent turns; PID reuse fails closed. throughRevision in context snapshots is a hashed canonical-message prefix count. Optional store methods preserve custom-port compatibility; crash recovery requires the SQLite implementation. Filesystem effects are not atomic with SQLite receipts.

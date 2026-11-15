@@ -1,2 +1,5 @@
-export { Conversation, MAX_TOOL_ROUNDS, MAX_TOOL_CALLS, MAX_INLINE_TOOL_ATTEMPTS } from './agent/engine';
+export { Conversation, SAFETY_LIMITS, estimateTokens, type ConversationOptions } from './agent/engine';
 export { explorationGuidance, budgetExhaustedNotice } from './agent/guidance';
+
+export { normalizeHistory, estimateContextTokens } from './context/builder';
+export { compactHistory, useContextSnapshot, DeterministicCompactor, type ContextCompactor } from './context/compaction';

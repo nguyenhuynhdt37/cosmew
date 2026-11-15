@@ -12,6 +12,8 @@ import {
   type StoredMessage,
 } from '@hannes/contracts';
 
+import { ExecutionJournal } from './event-store';
+
 type StoredRow = { revision: number; role: Message['role']; content: string; state: StoredMessage['state']; parts: string | null };
 
 /** Tool fields live in the `parts` JSON column; plain text messages store NULL. */
@@ -21,7 +23,9 @@ function encodeParts(message: Message): string | null {
 }
 
 function decodeRow(row: StoredRow): StoredMessage {
+  if(!Number.isSafeInteger(row.revision)||row.revision<1||!['pending','committed','interrupted'].includes(row.state))throw new HannesError('STORAGE');
   const parts = row.parts ? JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName'> : {};
+  if(Object.keys(parts).some(key=>!['toolCalls','toolCallId','toolName'].includes(key)))throw new HannesError('STORAGE');
   const message = messageSchema.parse({ role: row.role, content: row.content, ...parts });
   return { ...message, revision: row.revision, state: row.state };
 }
@@ -32,7 +36,25 @@ function toMessage(stored: StoredMessage): Message {
 }
 
 export class SqliteConversations implements ConversationStore {
-  constructor(private readonly db: Database) {}
+  private readonly journal: ExecutionJournal;
+  constructor(private readonly db: Database, private readonly redact:(value:string)=>string = value=>value) { this.journal=new ExecutionJournal(db,redact); }
+  private clean(value:unknown):unknown {
+    if(typeof value==='string')return this.redact(value);
+    if(Array.isArray(value))return value.map(v=>this.clean(v));
+    if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,this.clean(v)]));
+    return value;
+  }
+  beginExecution(id:string,user:Message,receipt:TurnReceipt):number {
+    try{if(user.role!=='user'||user.toolCalls||user.toolCallId)throw new HannesError('INVALID_INPUT');return this.db.transaction(()=>{const current=this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}|null;if(!current)throw new HannesError('STORAGE');this.journal.claim(id,receipt.requestId,current.revision+1,{...user,content:this.redact(user.content)});return this.append(id,{...user,content:this.redact(user.content)},'pending',receipt);}).immediate();}
+    catch(e){if(e instanceof HannesError)throw e;throw new HannesError('STORAGE');}
+  }
+  recordExecution(id:string,turnId:string,event:import('@hannes/contracts').ExecutionEventData):number{return this.journal.record(id,turnId,event);}
+  recover(id:string):import('@hannes/contracts').RecoveredConversation {
+    const messages=(this.db.query('SELECT revision,role,content,state,parts FROM messages WHERE conversation=? ORDER BY revision').all(id) as StoredRow[]).map(decodeRow);
+    return this.journal.recover(id,messages);
+  }
+  saveTask(id:string,task:import('@hannes/contracts').ActiveTaskCheckpoint):void{this.journal.task(id,task);}
+  saveContextSnapshot(id:string,snapshot:import('@hannes/contracts').ContextSnapshot):void{this.journal.snapshot(id,snapshot);}
   create(selection: Selection): string {
     try {
       const id = crypto.randomUUID();
@@ -46,18 +68,19 @@ export class SqliteConversations implements ConversationStore {
     return this.db.transaction(() => {
       const source = this.get(id); if (!source) throw new HannesError('NOT_FOUND');
       const next = this.create(selection);
-      for (const message of source.messages.filter(m => m.state === 'committed')) this.append(next, toMessage(message), 'committed');
+      for (const message of source.recovery?.messages ?? source.messages.map(toMessage)) this.append(next, message, 'committed');
+      if(source.recovery?.task)this.saveTask(next,{...source.recovery.task,verifiedActions:source.recovery.task.verifiedActions.filter(a=>!a.status.startsWith('verified:')),state:'unfinished',pending:['Revalidate prior artifact evidence in this workspace before making changes.']});
       return this.get(next)!;
     }).immediate();
   }
   append(id: string, message: Message, state: 'pending' | 'committed', receipt?: TurnReceipt): number {
     try {
       return this.db.transaction(() => {
-        messageSchema.parse(message);
+        message=messageSchema.parse(this.clean(message));
         const row = this.db.query('UPDATE conversations SET revision=revision+1 WHERE id=? RETURNING revision').get(id) as { revision: number } | null;
         if (!row) throw new HannesError('STORAGE');
         this.db.query('INSERT INTO messages (conversation, revision, role, content, state, parts) VALUES(?,?,?,?,?,?)').run(id, row.revision, message.role, message.content, state, encodeParts(message));
-        if (receipt) this.db.query('INSERT INTO turn_receipts VALUES(?,?,?)').run(id, row.revision, JSON.stringify(turnReceiptSchema.parse(receipt)));
+        if (receipt) this.db.query('INSERT INTO turn_receipts VALUES(?,?,?)').run(id, row.revision, JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))));
         return row.revision;
       }).immediate();
     } catch {
@@ -75,13 +98,14 @@ export class SqliteConversations implements ConversationStore {
         for (const step of intermediate) this.append(id, messageSchema.parse(step), 'committed');
         this.append(id, messageSchema.parse(message), 'committed');
         if (receipt) this.writeReceipt(id, revision, receipt);
+        this.journal.finish(id,revision,'completed');
       }).immediate();
     } catch {
       throw new HannesError('STORAGE');
     }
   }
   private writeReceipt(id: string, revision: number, receipt: TurnReceipt): void {
-    const result = this.db.query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?').run(JSON.stringify(turnReceiptSchema.parse(receipt)), id, revision);
+    const result = this.db.query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?').run(JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))), id, revision);
     if (result.changes !== 1) throw new HannesError('STORAGE');
   }
   observeTurn(id: string, revision: number, receipt: TurnReceipt): void {
@@ -96,6 +120,7 @@ export class SqliteConversations implements ConversationStore {
         // Mutating receipts survive interrupted continuations; they are evidence, never replay jobs.
         for(const step of appliedSteps)this.append(id,messageSchema.parse(step),'committed');
         if (receipt) this.writeReceipt(id, revision, receipt);
+        this.journal.finish(id,revision,receipt?.outcome==='cancelled'?'cancelled':receipt?.outcome==='interrupted'?'interrupted':'failed');
       }).immediate();
     } catch { throw new HannesError('STORAGE'); }
   }
@@ -143,6 +168,7 @@ export class SqliteConversations implements ConversationStore {
       } | null;
       if (!row) return undefined;
       const selection = selectionSchema.parse(JSON.parse(row.selection));
+      const recovery=this.recover(id);
       const messages = (this.db
         .query('SELECT revision, role, content, state, parts FROM messages WHERE conversation=? ORDER BY revision ASC')
         .all(row.id) as StoredRow[]).map(decodeRow);
@@ -157,6 +183,7 @@ export class SqliteConversations implements ConversationStore {
         lastState: lastMsg?.state ?? 'idle',
         preview: lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet',
         messages,
+        recovery,
         turns: (this.db.query('SELECT data FROM turn_receipts WHERE conversation=? ORDER BY revision').all(id) as {data: string}[]).map(row => {
           return turnReceiptSchema.parse(JSON.parse(row.data));
         }),
@@ -168,12 +195,17 @@ export class SqliteConversations implements ConversationStore {
   delete(id: string): boolean {
     try {
       return this.db.transaction(() => {
+        if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new HannesError('POLICY');
+        this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
+        this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
+        this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);
         this.db.query('DELETE FROM turn_receipts WHERE conversation=?').run(id);
         this.db.query('DELETE FROM messages WHERE conversation=?').run(id);
         const res = this.db.query('DELETE FROM conversations WHERE id=?').run(id);
         return res.changes > 0;
       }).immediate();
-    } catch {
+    } catch(e) {
+      if(e instanceof HannesError)throw e;
       throw new HannesError('STORAGE');
     }
   }

@@ -24,6 +24,8 @@ export interface PermissionDecision {
 }
 
 export const toolResultSchema = z.strictObject({
+  /** Historical authorization binding, never a reusable grant. */
+  authorizationScopeHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   callId: z.string().min(1).max(200),
   name: z.string().min(1).max(100),
   status: z.enum(['ok', 'denied', 'error']),

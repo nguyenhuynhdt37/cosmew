@@ -1,7 +1,7 @@
 import { permissionRuleSetSchema } from './permissions';
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.11' as const;
+export const CONTRACT_VERSION = '1.12' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
@@ -110,7 +110,8 @@ export const messageSchema = z.strictObject({
 export type Message = z.infer<typeof messageSchema>;
 export const requestSchema = z.strictObject({
   requestId: z.string().uuid(), modelId: modelIdSchema,
-  messages: z.array(messageSchema).min(1).max(200),
+  // No message-count ceiling (ADR 0030): the context window, checked by the agent loop, bounds history.
+  messages: z.array(messageSchema).min(1).max(100000),
   maxOutputTokens: z.number().int().min(1).max(32768).default(4096),
   reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),

@@ -10,11 +10,11 @@ import {
   type CredentialVault,
   type DiffLine,
   type Message,
-  type StoredMessage,
   type ToolPort,
   type ToolResult,
   type WorkspaceDiffFile,
   type WorkspaceDiffReport,
+  type TurnBudget,
 } from '@hannes/contracts';
 import { Conversation } from '@hannes/core';
 import { ToolDispatcher, platformCommandRuntime, type CommandRuntime } from '@hannes/tools';
@@ -207,8 +207,9 @@ export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffRep
 }
 
 /** Committed history as conversation messages, keeping tool calls and tool results. */
-function committedMessages(messages: StoredMessage[]): Message[] {
-  return messages.filter(m => m.state === 'committed').map(({ revision: _revision, state: _state, ...message }) => message);
+function committedMessages(record: import('@hannes/contracts').SessionRecord): Message[] {
+  if(record.recovery)return record.recovery.messages;
+  return record.messages.filter(m => m.state === 'committed').map(({ revision: _revision, state: _state, ...message }) => message);
 }
 
 /** Why a read needs approval, in words the permission dialog can show. */
@@ -240,10 +241,10 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
-  const conversations = new SqliteConversations(db);
+  const redactor = new Redactor();
+  const conversations = new SqliteConversations(db,value=>redactor.text(value));
   const toolAudit = new ToolAuditStore(db);
   const customThemes = new FileCustomThemeStore(directory);
-  const redactor = new Redactor();
   const vault = services.vault ?? new SecureVault(redactor);
   const oauth = new OpenRouterPKCE(redactor, services.fetch);
   const registry = new ProviderRegistry(settings);
@@ -277,7 +278,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover, delegated: () => boolean = () => false) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover, delegated: () => boolean = () => false, budget: () => TurnBudget | undefined = () => undefined, analysisOnly:()=>boolean=()=>false) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
@@ -303,6 +304,8 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       modelTools,
       runtime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
       projectContext,
+      // ADR 0030: the user's optional work budget and the model's reported context window.
+      { budget, analysisOnly, contextLimit: () => catalog(account).cached().find(m => m.id === selection.modelId)?.contextLimit ?? null, outputLimit:()=>catalog(account).cached().find(m=>m.id===selection.modelId)?.outputLimit??null },
     );
   };
 
@@ -313,7 +316,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
   const resumeConversation = (id: string) => {
     const record = conversations.get(id); if (!record) throw new HannesError('NOT_FOUND');
-    return createConversationForSelection(record.selection, { id, messages: committedMessages(record.messages) });
+    return createConversationForSelection(record.selection, { id, messages: committedMessages(record) });
   };
 
   const discoverModels = async (account: Account, signal?: AbortSignal) => {
@@ -512,13 +515,13 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         // Validate the target account/model before creating any durable copy.
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
-        const messages = committedMessages(record.messages);
-        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
+        const messages = committedMessages(record);
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false, () => client?.turnBudget(),()=>['plan','review'].includes(client?.mode()??'chat'));
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false, () => client?.turnBudget(),()=>['plan','review'].includes(client?.mode()??'chat'));
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -526,11 +529,11 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       resumeSession: id => {
         const record = conversations.get(id);
         if (!record) throw new HannesError('NOT_FOUND');
-        const committed = committedMessages(record.messages);
+        const committed = committedMessages(record);
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
+        }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false, () => client?.turnBudget(),()=>['plan','review'].includes(client?.mode()??'chat'));
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -543,11 +546,11 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         if (!conv) {
           const record = conversations.get(sessionId);
           if (!record) throw new HannesError('NOT_FOUND');
-          const committed = committedMessages(record.messages);
+          const committed = committedMessages(record);
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
+          }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false, () => client?.turnBudget(),()=>['plan','review'].includes(client?.mode()??'chat'));
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);

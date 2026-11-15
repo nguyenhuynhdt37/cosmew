@@ -1,5 +1,7 @@
 # Điều hướng đặc tả Hannes
 
+Current conversation recovery: [ADR 0030](adr/0030-durable-conversation-recovery.md), [acceptance matrix](delivery/conversation-recovery.md). Contract 1.12 / SQLite 4 preserve interrupted evidence without replaying tools.
+
 Current tool execution architecture: [ADR 0024](adr/0024-tool-execution-architecture.md). Registry/router/handlers/orchestrator/runtimes share the existing ToolPort boundary; production exec_command remains closed.
 
 Task 03B: [decision](adr/0023-process-supervision.md), [native research](delivery/process-supervision-research.md), [acceptance and limitations](delivery/process-supervision-acceptance.md). Production exec_command remains CLOSED.

@@ -2,7 +2,8 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { MAX_TOOL_CALLS, MAX_TOOL_ROUNDS } from '@hannes/core';
+/** User budgets used by the budget tests (ADR 0030); there is no default ceiling. */
+const MAX_TOOL_ROUNDS = 16, MAX_TOOL_CALLS = 32;
 import type { ModelEvent } from '@hannes/contracts';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault, scriptedView, type ScriptedReply, type ScriptedView } from '../fixtures';
@@ -81,7 +82,7 @@ for (const protocol of ['chat', 'anthropic'] as const) test(`${protocol}: discov
   expect(final.results[1]!.content).toContain("from './service'");
   expect(final.results[2]!.content).toContain('SERVICE_MARKER');
   // Host guidance sits in the system channel of every round and holds no repository text.
-  for (const view of views) { expect(view.system).toContain('Investigate progressively'); expect(view.system).toContain(`at most ${MAX_TOOL_CALLS} tool calls`); expect(view.system).not.toContain('verifyToken'); }
+  for (const view of views) { expect(view.system).toContain('Investigate progressively'); expect(view.system).not.toContain('at most'); expect(view.system).toContain('Keep working with tools'); expect(view.system).not.toContain('verifyToken'); }
   // UI events pair up the same way.
   const calls = events.flatMap(e => e.type === 'toolCallComplete' ? [e.call.id] : []);
   expect(events.flatMap(e => e.type === 'toolResult' ? [e.result.callId] : [])).toEqual(calls);
@@ -162,25 +163,27 @@ const follow = (view: ScriptedView): ScriptedReply => {
   return { calls: [{ name: 'read', input: { path: read.length ? /next: (\S+)/.exec(read.at(-1)!.content)![1] : 'chain/f1.txt' } }] };
 };
 
-test(`round budget: after ${MAX_TOOL_ROUNDS} tool rounds the tools are withdrawn, the model is told, and it reports the gap`, async () => {
+test(`user round budget: after ${MAX_TOOL_ROUNDS} tool rounds the tools are withdrawn, the model is told, and it reports the gap`, async () => {
   const c = await make(follow, chain);
+  c.client.setTurnBudget({ maxSteps: MAX_TOOL_ROUNDS });
   const { answer } = await ask(c.client, 'follow the chain');
   const views = c.views();
   expect(views).toHaveLength(MAX_TOOL_ROUNDS + 1);
   expect(views.slice(0, -1).every(v => v.tools.length === OFFERED.length)).toBe(true);
   expect(views.at(-1)!.tools).toEqual([]);
-  expect(views.at(-1)!.system).toContain('tool budget for this turn is used up');
+  expect(views.at(-1)!.system).toContain('request-round budget the user set for this turn is used up');
   expect(views.slice(0, -1).some(v => v.system.includes('used up'))).toBe(false);
   expect(c.targets()).toEqual(Array.from({ length: MAX_TOOL_ROUNDS }, (_, i) => `read chain/f${i + 1}.txt`));
   expect(answer).toBe(`STOPPED after ${MAX_TOOL_ROUNDS} files; chain/f${MAX_TOOL_ROUNDS + 1}.txt and later were not inspected`);
   expect(views.at(-1)!.unansweredCalls).toBe(0);
 });
 
-test(`call budget: only ${MAX_TOOL_CALLS} calls run in a turn; the rest get a paired refusal and are never executed`, async () => {
+test(`user call budget: only ${MAX_TOOL_CALLS} calls run in a turn; the rest get a paired refusal and are never executed`, async () => {
   const wide = (view: ScriptedView): ScriptedReply => view.tools.length
     ? { calls: Array.from({ length: 5 }, (_, i) => ({ name: 'read', input: { path: `chain/f${view.results.length + i + 1}.txt` } })) }
     : { text: `STOPPED: ${view.results.filter(r => denied(r.content)).length} calls refused` };
   const c = await make(wide, chain);
+  c.client.setTurnBudget({ maxToolCalls: MAX_TOOL_CALLS });
   const { answer, events } = await ask(c.client, 'read widely');
   expect(c.targets()).toHaveLength(MAX_TOOL_CALLS);
   expect(c.targets().at(-1)).toBe(`read chain/f${MAX_TOOL_CALLS}.txt`);
@@ -228,5 +231,46 @@ for (const protocol of ['chat','anthropic'] as const) test(`${protocol}: migrate
  for(const view of c.views()){expect(view.tools).toEqual(['read','glob','grep','apply_patch']);expect(view.orphanResults).toBe(0);expect(view.unansweredCalls).toBe(0);}
  const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
  expect(saved.filter(m=>m.role==='tool').map(m=>m.toolCallId)).toEqual(results.map(r=>r.callId));
- const completed=c.audit().filter(r=>r.phase==='completed');expect(completed.map(r=>r.tool)).toEqual(calls.map(c=>c.name));
+ // Reads of one response run concurrently (ADR 0030), so audit completion order may differ; every call is audited once.
+ const completed=c.audit().filter(r=>r.phase==='completed');expect(completed.map(r=>r.tool).sort()).toEqual(calls.map(c=>c.name).sort());
+});
+
+/** ADR 0030: with no user budget, the loop keeps going while the model asks for tools. */
+test('no default ceiling: one turn runs 40 model rounds and 40+ tool calls until the model is done', async () => {
+  const toEnd = (view: ScriptedView): ScriptedReply => {
+    const last = view.results.at(-1);
+    if (last && denied(last.content)) return { text: `DONE after ${view.results.length - 1} files` };
+    return { calls: [{ name: 'read', input: { path: last ? /next: (\S+)/.exec(last.content)![1] : 'chain/f1.txt' } }] };
+  };
+  const c = await make(toEnd, chain);
+  const { answer, events } = await ask(c.client, 'follow the whole chain');
+  expect(answer).toBe('DONE after 40 files');
+  expect(c.views().length).toBe(42); // 41 tool rounds (40 reads + the missing f41) and the answer
+  expect(events.filter(e => e.type === 'toolResult')).toHaveLength(41);
+  expect(c.views().every(v => v.orphanResults === 0 && v.unansweredCalls === 0)).toBe(true);
+  const receipt = c.app.conversations.get(c.client.activeSession()!.id)!;
+  expect(receipt.messages.filter(m => m.role === 'tool')).toHaveLength(41);
+});
+
+test('several calls in one response: reads run together, results stay paired and ordered', async () => {
+  const wide = (view: ScriptedView): ScriptedReply => view.results.length
+    ? { text: view.results.map(r => r.input.path).join(',') }
+    : { calls: Array.from({ length: 6 }, (_, i) => ({ name: 'read', input: { path: `chain/f${6 - i}.txt` } })) };
+  const c = await make(wide, chain);
+  const { answer, events } = await ask(c.client, 'read six');
+  expect(answer).toBe('chain/f6.txt,chain/f5.txt,chain/f4.txt,chain/f3.txt,chain/f2.txt,chain/f1.txt');
+  const calls = events.flatMap(e => e.type === 'toolCallComplete' ? [e.call.id] : []);
+  expect(events.flatMap(e => e.type === 'toolResult' ? [e.result.callId] : [])).toEqual(calls);
+});
+
+test('a user time budget stops tool use with a named stop reason, not a hidden ceiling', async () => {
+  const c = await make(follow, chain);
+  c.client.setTurnBudget({ maxDurationMs: 1000 });
+  const slow = (view: ScriptedView): ScriptedReply => { const until = Date.now() + 120; while (Date.now() < until) { /* busy model */ } return follow(view); };
+  c.server.set({ script: slow });
+  const { answer } = await ask(c.client, 'follow slowly');
+  expect(answer).toStartWith('STOPPED after');
+  const id = c.client.activeSession()!.id;
+  const receipt = c.app.db.query('select data from turn_receipts where conversation = ? order by revision desc').get(id) as { data: string };
+  expect(JSON.parse(receipt.data).stopReason).toBe('budget_time');
 });
