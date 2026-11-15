@@ -230,6 +230,12 @@ for (const runtime of ['codex', 'copilot'] as const) test(`${runtime}: official 
   expect(another.status().reasoningEffort).toBe('high');
   expect(c.app.conversations.get(session)?.messages.some(m => m.content.includes('Provider supplied summary'))).toBe(false);
   expect(() => another.setReasoningEffort('invented')).toThrow();
+  // /usage limits: the plan snapshot belongs to this account and survives starting a new chat.
+  const accountId = c.client.status().activeAccount!.id;
+  c.client.clearSessionView();
+  const limits = c.client.limits().find(entry => entry.accountId === accountId)!;
+  expect(limits.source).toBe('last-turn');
+  expect(limits.items[0]?.usedPercent).toBe(25);
 });
 
 for (const runtime of ['gemini-cli', 'qwen-code'] as const) test(`${runtime}: ACP thought chunks stream separately before the answer`, async () => {

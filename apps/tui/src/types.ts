@@ -1,0 +1,49 @@
+import type { FutrynClient } from '@hannes/sdk';
+import type { ThemeEngine } from './theme/theme';
+
+export type ActiveOverlay =
+  | 'none'
+  | 'themes'
+  | 'theme-editor'
+  | 'models'
+  | 'connect'
+  | 'sessions'
+  | 'permissions'
+  | 'diff'
+  | 'palette'
+  | 'settings'
+  | 'effort'
+  | 'usage'
+  | 'context'
+  | 'status'
+  | 'help';
+
+export interface FrameCell {
+  ch: string;
+  fg: string;
+  bg: string;
+  bold: boolean;
+  selected?: boolean;
+}
+
+export interface FrameSnapshot {
+  cols: number;
+  rows: number;
+  cells: FrameCell[][];
+  plainLines: string[];
+  plainText: string;
+  activeOverlay: ActiveOverlay;
+  activeThemeId: string;
+  effectiveMode: 'dark' | 'light';
+  activeWallpaperId: string | null;
+  isPreviewing: boolean;
+  isStreaming: boolean;
+}
+
+export interface FutrynTuiOptions {
+  client: FutrynClient;
+  themeEngine?: ThemeEngine;
+  cols?: number;
+  rows?: number;
+  env?: Record<string, string | undefined>;
+}

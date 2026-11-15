@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { FutrynTuiApp, SLASH_COMMANDS, getMatchingSlashCommands, parseRawTerminalKey } from '@hannes/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { filterIntegrations } from '../../apps/tui/src/screens/connect';
+import { filterIntegrations } from '@hannes/tui';
 import { fixtureServer } from '../fixtures';
 
 const cleanups: (() => void)[] = [];

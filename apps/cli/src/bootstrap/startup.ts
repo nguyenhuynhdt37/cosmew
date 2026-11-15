@@ -20,6 +20,7 @@ import {
   ProviderRegistry,
   ProviderTransport,
   providerPresets,
+  parseOpenRouterKeyLimits,
 } from '@hannes/models';
 import {
   FileCustomThemeStore,
@@ -358,6 +359,15 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         try { await accounts.logout(target.id, remove); } finally { await subscriptions.revoke(target); }
       },
       validateAccount,
+      fetchAccountLimits: (account, signal) => {
+        const provider = registry.get(account.providerId);
+        // Only OpenRouter's official endpoint has a documented key-credit API; others report nothing.
+        if (provider.id !== 'openrouter' || provider.baseURL !== 'https://openrouter.ai/api/v1') return null;
+        return transport(account).json('key', signal).then(body => {
+          const { items, freeTier } = parseOpenRouterKeyLimits(body);
+          return { items, note: freeTier ? 'Free-tier key' : undefined };
+        });
+      },
       discoverModels,
       cachedModels: account => catalog(account).cached(),
       addManualModel: (account, modelId) => catalog(account).manual(modelId),

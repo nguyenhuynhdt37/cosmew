@@ -1,8 +1,5 @@
 import { expect, test } from 'bun:test';
-import { deriveTokensFromTriplet } from '@hannes/tui';
-import { renderFyn, type FynState } from '../../apps/tui/src/components/mascot';
-import { createInitialComposerState, renderPromptComposerLines } from '../../apps/tui/src/components/editor';
-import { renderMarkdownBody, renderTranscriptMessages } from '../../apps/tui/src/components/messages';
+import { deriveTokensFromTriplet, renderFyn, type FynState, createInitialComposerState, renderPromptComposerLines, renderMarkdownBody, renderTranscriptMessages } from '@hannes/tui';
 const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
 
 test('miniature Fyn retains both ears, eyes, feet and a complete tail throughout its animation', () => {

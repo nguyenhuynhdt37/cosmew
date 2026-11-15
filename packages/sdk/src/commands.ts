@@ -41,6 +41,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     command: '/logout', arguments: 'optional', aliases: [], title: 'Sign Out',
     description: 'Confirm sign-out of a named account and delete its local credential', category: 'Providers & Models',
   },
+  { command: '/switch', aliases: ['/account'], title: 'Switch Account', description: 'Use another connected account; the chat continues in a new session', category: 'Providers & Models', arguments: 'optional' },
   {
     command: '/doctor', aliases: [], title: 'Diagnose Connection',
     description: 'Validate active provider connectivity and runtime configuration', category: 'Providers & Models',
@@ -121,7 +122,6 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
 // Legacy FUTRYN-only commands remain parseable for existing users. They are
 // intentionally absent from the public discovery, autocomplete, and help list.
 const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
-  { command: '/switch', aliases: ['/account'], title: 'Switch Account', description: 'Switch accounts with an explicit context transfer', category: 'Providers & Models', arguments: 'optional' },
   { command: '/theme set', aliases: ['/themes set'], title: 'Legacy Theme Command', description: 'Use /theme', category: 'Appearance', arguments: 'optional', unavailable: 'Use /theme to choose Auto, Dark, or Light.' },
   {
     command: '/theme edit',

@@ -1,4 +1,5 @@
 import { summarizeUsage } from './telemetry';
+import { quotaItems, type AccountLimits, type FetchAccountLimits } from './limits';
 import { createHash } from 'node:crypto';
 import {
   HannesError,
@@ -88,6 +89,8 @@ export interface FutrynBackendPorts {
   renameAccount(idOrAlias: string, newAlias: string): Account;
   logoutAccount(idOrAlias: string, remove?: boolean): Promise<void>;
   validateAccount(account: Account, signal?: AbortSignal, generate?: boolean): Promise<{ models: number; validation: string }>;
+  /** Optional: live balance/quota from providers that expose one (e.g. OpenRouter key credit). */
+  fetchAccountLimits?: FetchAccountLimits;
   discoverModels(account: Account, signal?: AbortSignal): Promise<{ models: ModelInfo[]; stale: boolean; warning?: string }>;
   cachedModels(account: Account): ModelInfo[];
   addManualModel(account: Account, modelId: string): ModelInfo;
@@ -121,6 +124,10 @@ export class FutrynClient {
   private lastUsage: Usage | null = null;
   private sending = false;
   private streamingText = '';
+  /** Live limit results by account id, from the last refreshLimits(). */
+  private liveLimits = new Map<string, AccountLimits>();
+  private limitsRefresh: Promise<void> | null = null;
+  private limitsPending = new Set<string>();
   private eventSeq = 0;
   private latestEvent: ReactiveAgentEvent = { seq: 0, kind: 'idle', timestamp: Date.now() };
   private readonly eventListeners = new Set<(event: ReactiveAgentEvent) => void>();
@@ -546,6 +553,51 @@ export class FutrynClient {
     const turns = record?.turns ?? [];
     const completed = turns.filter(t => t.outcome === 'completed').length;
     return summarizeUsage(turns, Math.max(0, (record?.messages.filter(m => m.role === 'user' && m.state === 'committed').length ?? 0) - completed));
+  }
+
+  /**
+   * Limits for every connected account, from what is already known: the last live fetch, or the
+   * plan snapshot a subscription runtime attached to its latest reply. Sends no request.
+   */
+  limits(): AccountLimits[] {
+    const providers = new Map(this.ports.listProviders().map(p => [p.id, p]));
+    const sessions = this.ports.listSessions();
+    return this.ports.listAccounts().filter(account => account.status !== 'logged-out').map(account => {
+      const providerName = providers.get(account.providerId)?.name ?? account.providerId;
+      const base = { accountId: account.id, alias: account.alias, providerId: account.providerId, providerName };
+      const live = this.liveLimits.get(account.id);
+      const checking = this.limitsPending.has(account.id) || undefined;
+      if (live && (live.items.length || live.error)) return { ...live, checking };
+      for (const summary of sessions.filter(s => s.selection.accountId === account.id).slice(0, 20)) {
+        const turn = this.ports.getSession(summary.id)?.turns?.filter(t => t.accountId === account.id && t.usage?.quota?.length).at(-1);
+        const quota = turn?.usage?.quota;
+        if (quota?.length) return { ...base, source: 'last-turn' as const, observedAt: quota[0]!.observedAt, items: quotaItems(quota), checking };
+      }
+      return { ...base, source: 'unavailable' as const, observedAt: live?.observedAt ?? null, items: [], note: live?.note, checking };
+    });
+  }
+
+  /** Ask providers that have a balance/quota API for fresh numbers. Concurrent calls share one refresh. */
+  refreshLimits(signal?: AbortSignal): Promise<void> {
+    const fetchLimits = this.ports.fetchAccountLimits;
+    if (!fetchLimits) return Promise.resolve();
+    this.limitsRefresh ??= (async () => {
+      const providers = new Map(this.ports.listProviders().map(p => [p.id, p]));
+      await Promise.allSettled(this.ports.listAccounts().filter(account => account.status !== 'logged-out').map(async account => {
+        const base = { accountId: account.id, alias: account.alias, providerId: account.providerId, providerName: providers.get(account.providerId)?.name ?? account.providerId };
+        const request = fetchLimits(account, signal);
+        if (!request) { this.liveLimits.delete(account.id); return; }
+        this.limitsPending.add(account.id);
+        try {
+          const result = await request;
+          this.liveLimits.set(account.id, { ...base, source: 'live', observedAt: new Date().toISOString(), items: result.items, note: result.note });
+        } catch (error) {
+          this.liveLimits.set(account.id, { ...base, source: 'live', observedAt: new Date().toISOString(), items: [], error: error instanceof HannesError ? error.code : 'PROTOCOL' });
+        } finally { this.limitsPending.delete(account.id); }
+      }));
+      this.notifyStateChange();
+    })().finally(() => { this.limitsRefresh = null; });
+    return this.limitsRefresh;
   }
 
   context(draft = '') {

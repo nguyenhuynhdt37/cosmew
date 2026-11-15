@@ -1,0 +1,1 @@
+export { renderWelcomeScreen } from './view';

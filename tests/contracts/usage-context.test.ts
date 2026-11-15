@@ -8,10 +8,7 @@ import { Conversation } from '@hannes/core';
 import { openPrivateDatabase, SqliteConversations } from '@hannes/persistence';
 import { acceptSlashSelection, parseSlashCommand, SLASH_COMMANDS } from '@hannes/sdk';
 import { Redactor, redactModel } from '@hannes/security';
-import { deriveTokensFromTriplet, FutrynTuiApp } from '@hannes/tui';
-import { createInitialComposerState, getMatchingSlashCommands, renderPromptComposerLines } from '../../apps/tui/src/components/editor';
-import { reportRows, renderReportOverlay } from '../../apps/tui/src/screens/telemetry';
-import { filterPaletteCommands, renderHelpOverlay } from '../../apps/tui/src/screens/settings';
+import { deriveTokensFromTriplet, FutrynTuiApp, createInitialComposerState, getMatchingSlashCommands, renderPromptComposerLines, reportRows, renderReportOverlay, renderHelpOverlay, filterPaletteCommands } from '@hannes/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -35,7 +32,10 @@ test('every command alias resolves before arguments; selected slash rows beyond 
     const parsed = parseSlashCommand(alias + (definition.arguments === 'required' ? ' value' : ''));
     expect(parsed.error).toBeUndefined(); expect(parsed.definition?.command).toBe(definition.command);
   }
-  expect(SLASH_COMMANDS.some(c => ['/theme edit', '/theme set', '/switch', '/accounts', '/new'].includes(c.command))).toBe(false);
+  expect(SLASH_COMMANDS.some(c => ['/theme edit', '/theme set', '/accounts', '/new'].includes(c.command))).toBe(false);
+  // /switch is public again (ADR 0013 amendment): discoverable in autocomplete, help and the palette.
+  expect(SLASH_COMMANDS.find(c => c.command === '/switch')?.aliases).toEqual(['/account']);
+  expect(getMatchingSlashCommands('/sw').map(c => c.command)).toContain('/switch');
   expect(getMatchingSlashCommands('/').map(c => c.command)).not.toContain('/theme edit');
   expect(parseSlashCommand('/theme edit').definition?.unavailable).toContain('unavailable');
   expect(parseSlashCommand('/theme set dark').definition?.unavailable).toContain('Use /theme');
@@ -52,7 +52,8 @@ test('every command alias resolves before arguments; selected slash rows beyond 
   expect(filterPaletteCommands('theme').map(command => command.command)).toEqual(['/theme']);
   const help = renderHelpOverlay({width:120, height:80, tokens, borderStyle:'rounded'}).flatMap(row => row.spans.map(span => span.text)).join('\n');
   expect(help).toContain('/theme');
-  for (const hidden of ['/theme set', '/theme edit', '/switch', '/accounts']) expect(help).not.toContain(hidden);
+  for (const hidden of ['/theme set', '/theme edit', '/accounts']) expect(help).not.toContain(hidden);
+  expect(help).toContain('/switch');
   const state = { ...createInitialComposerState(), value: '/', slashMenuOpen: true };
   expect(getMatchingSlashCommands('/themes')[0]?.command).toBe('/theme');
   expect(getMatchingSlashCommands('/model')[0]?.command).toBe('/model');

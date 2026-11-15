@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test';
-import { FynCompanion, renderFyn, type FynState } from '../../apps/tui/src/components/mascot';
-import { deriveTokensFromTriplet } from '@hannes/tui';
+import { FynCompanion, renderFyn, type FynState, deriveTokensFromTriplet } from '@hannes/tui';
 
 test('Fyn never sleeps during a request, holds errors and approvals, settles terminal outcomes', () => {
   const pet = new FynCompanion();

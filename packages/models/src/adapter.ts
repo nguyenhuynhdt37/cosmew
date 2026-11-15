@@ -4,6 +4,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogle } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import Ajv, { type ValidateFunction } from 'ajv';
+import { parseRateLimitHeaders } from './limits';
 import { HannesError, requestSchema, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@hannes/contracts';
 import { normalizeError, ProviderTransport } from './http';
 
@@ -34,11 +35,13 @@ export class ProviderAdapter implements ModelPort {
     if (request.reasoningEffort && (!this.info?.reasoningEfforts?.includes(request.reasoningEffort) || this.transport.provider.protocol !== 'responses')) throw new HannesError('UNSUPPORTED');
     if (this.info?.contextLimit && Math.min(request.maxOutputTokens, this.info.outputLimit ?? request.maxOutputTokens) >= this.info.contextLimit) throw new HannesError('CONTEXT_LIMIT');
     const key = await this.transport.credential(); const p = this.transport.provider;
+    // Rate-limit headers of the latest response; read once the turn finishes.
+    const responseHeaders: { value?: Headers } = {};
     const customFetch = ((url: string | URL | Request, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       // Always resolve auth explicitly, never allow the SDK's environment fallback.
       if (!key) { headers.delete('authorization'); headers.delete('x-api-key'); headers.delete('x-goog-api-key'); }
-      return this.transport.request(url, { ...init, headers });
+      return this.transport.request(url, { ...init, headers }).then(response => { responseHeaders.value = response.headers; return response; });
     }) as typeof fetch;
     const settings = { baseURL: p.baseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch };
     let model: LanguageModel;
@@ -62,7 +65,7 @@ export class ProviderAdapter implements ModelPort {
     return { model, messages: request.messages, maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
       ...(request.reasoningEffort ? { providerOptions: { openai: { reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true } } } : {}),
       maxRetries: 0, abortSignal, tools: request.tools.length ? tools : undefined,
-      experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators };
+      experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators, responseHeaders };
   }
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
     const options = await this.options(request, signal); let bytes = 0; let complete = false; const calls = new Set<string>(); const pending = new Set<string>();
@@ -86,7 +89,8 @@ export class ProviderAdapter implements ModelPort {
           if (!validate || !validate(part.input) || calls.has(part.toolCallId) || calls.size >= 32 || JSON.stringify(part.input).length > 65536) throw new HannesError('PROTOCOL');
           calls.add(part.toolCallId); pending.delete(part.toolCallId); yield { type: 'toolCallComplete', call: { id: part.toolCallId, name: part.toolName, input: part.input } };
         } else if (part.type === 'finish') {
-          const reported = usageSchema.parse(usage(part.totalUsage, this.info));
+          const quota = options.responseHeaders.value ? parseRateLimitHeaders(options.responseHeaders.value) : [];
+          const reported = usageSchema.parse({ ...usage(part.totalUsage, this.info), ...(quota.length ? { quota } : {}) });
           yield { type: 'usage', usage: reported };
           if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new HannesError('PROTOCOL');
           complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported };

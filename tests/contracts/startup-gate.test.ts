@@ -105,3 +105,35 @@ test('cancelling the startup check exits and never reports successful access', a
   await c.tui.handleKey('Escape'); expect(c.tui.isExitRequested()).toBe(true);
   await c.tui.shutdown(); expect(c.tui.computeFrameSnapshot().plainText).not.toContain('Choose an account');
 });
+
+test('dismissing the model picker during startup never re-sends a billed check', async () => {
+  const c=await make(); await c.app.accounts.add('startup','primary',{kind:'none'});
+  c.tui.startStartupGate(); await c.tui.handleKey('ArrowUp'); await c.tui.handleKey('Enter');
+  await waitFor(()=>c.tui.getActiveOverlay()==='models');
+  const probes=()=>c.server.requests.filter(r=>r.body?.messages?.[0]?.content==='Reply with OK.').length;
+  expect(probes()).toBe(0); // choosing a model needs the list, not a generation
+  await c.tui.handleKey('Escape'); c.tui.advanceStartupGate();
+  for (let i=0;i<5;i++) { c.tui.advanceStartupGate(); await Bun.sleep(5); }
+  expect(c.tui.getActiveOverlay()).toBe('none');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('No model selected');
+  expect(probes()).toBe(0);
+});
+
+test('nothing is sent to the provider before consent and verification', async () => {
+  const c=await make(); await c.app.accounts.add('startup','primary',{kind:'none'}); await c.client.discoverModels(); c.client.selectModel('fixture-model');
+  c.tui.startStartupGate(); const before=c.server.requests.length;
+  await c.tui.submitPrompt('hello before consent');
+  expect(c.server.requests.length).toBe(before); expect(c.tui.getTranscript().length).toBe(0);
+});
+
+test('workspace-reading features stay locked until the folder is approved, and in non-interactive runs', async () => {
+  const c=await make(); await c.app.accounts.add('startup','primary',{kind:'none'}); await c.client.discoverModels(); c.client.selectModel('fixture-model');
+  c.tui.startStartupGate();
+  c.tui.openOverlay('diff');
+  expect(c.tui.getActiveOverlay()).toBe('none'); expect(c.tui.getStatusBanner()).toContain('Workspace access');
+  await c.tui.handleKey('ArrowUp'); await c.tui.handleKey('Enter'); // approve
+  await waitFor(()=>!c.tui.computeFrameSnapshot().plainText.includes('Checking account'));
+  c.tui.openOverlay('diff'); expect(c.tui.getActiveOverlay()).toBe('diff');
+  c.tui.openOverlay('none'); c.tui.denyWorkspaceAccess(); // what a non-TTY run does
+  c.tui.openOverlay('diff'); expect(c.tui.getActiveOverlay()).toBe('none');
+});

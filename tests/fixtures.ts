@@ -12,15 +12,16 @@ export function fixtureServer() {
   const requests: { path: string; body: any; authorization: string | null; apiKey: string | null }[] = [];
   let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let malformed = false; let dropped = false;
   let tools = false; let includeUsage = true; let modelName = 'fixture-model'; let pages = false; let streamDelay = 0; let invalidTool = false;
+  let rateLimitHeaders: Record<string, string> = {};
   const sse = (items: unknown[], anthropic = false) => {
     const chunks = items.map(x => anthropic ? `event: ${(x as any).type}\ndata: ${JSON.stringify(x)}\n\n` : `data: ${JSON.stringify(x)}\n\n`);
     if (!anthropic) chunks.push('data: [DONE]\n\n');
-    if (!streamDelay) return new Response(chunks.join(''), { headers: { 'content-type': 'text/event-stream' } });
+    if (!streamDelay) return new Response(chunks.join(''), { headers: { 'content-type': 'text/event-stream', ...rateLimitHeaders } });
     let timer: ReturnType<typeof setInterval>;
     return new Response(new ReadableStream({ start(controller) {
       let index = 0; controller.enqueue(new TextEncoder().encode(chunks[index++]!));
       timer = setInterval(() => { if (index >= chunks.length) { clearInterval(timer); controller.close(); } else controller.enqueue(new TextEncoder().encode(chunks[index++]!)); }, streamDelay);
-    }, cancel() { clearInterval(timer); } }), { headers: { 'content-type': 'text/event-stream' } });
+    }, cancel() { clearInterval(timer); } }), { headers: { 'content-type': 'text/event-stream', ...rateLimitHeaders } });
   };
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
     const url = new URL(req.url); const path = url.pathname;
@@ -84,8 +85,8 @@ export function fixtureServer() {
     provider(protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat', overrides = {}) {
       return providerSchema.parse({ id: 'fixture', name: 'Fixture', protocol, baseURL: `http://127.0.0.1:${server.port}/${protocol === 'gemini' ? 'gemini' : 'v1'}`, auth: 'api-key', catalog: protocol === 'gemini' ? 'gemini' : protocol === 'anthropic' ? 'anthropic' : 'openai', metadataVersion: 1, timeoutMs: 1000, ...overrides });
     },
-    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean }) {
-      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool;
+    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string> }) {
+      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders;
     },
   };
 }

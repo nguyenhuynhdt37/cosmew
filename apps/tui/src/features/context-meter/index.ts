@@ -1,0 +1,1 @@
+export { renderContextIndicator } from './view';
