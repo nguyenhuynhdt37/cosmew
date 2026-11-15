@@ -1,5 +1,7 @@
 # Bản đồ repository và ownership
 
+Approved patches ([ADR 0025](../adr/0025-apply-patch.md)): tools owns patch parsing, verification and orchestration; workspace `secure-files.ts` owns descriptor-relative source-file writes; security owns `fs.write` policy. Persistence retains interrupted write receipts without replay.
+
 Tool migration ([ADR 0024](../adr/0024-tool-execution-architecture.md)): tools owns registry/router, per-tool handlers, shared orchestrator and filesystem/process backends; dispatcher is a compatible ToolPort facade. Security/workspace/process ownership is unchanged.
 
 Task 03B: tools-private ProcessSupervisor owns run cancellation and bounded collectors; CLI caches runtimes per client and awaits shutdown before database close. Contracts expose optional lifecycle/shutdown; TUI reports descendant termination as unconfirmed. See [ADR 0023](../adr/0023-process-supervision.md). No new package edges.

@@ -1,7 +1,8 @@
 import type {ToolDispatcherOptions} from '../context';
 import {FileSystemRuntime} from '../runtimes/filesystem';
 import {fileHandlers} from './filesystem';
+import {ApplyPatchHandler} from './apply-patch';
 import {commandHandler} from './command';
 export function createHandlers(options: ToolDispatcherOptions, filesystem = new FileSystemRuntime(options)) {
-  return [...fileHandlers(options,filesystem),commandHandler(options)];
+  return [...fileHandlers(options,filesystem),commandHandler(options),new ApplyPatchHandler(options)];
 }

@@ -31,7 +31,7 @@ test('production command gate is closed on every platform, without an unsafe fal
     const commands=platformCommandRuntime({workspaceRoot:f.root,platform});
     expect(commands.availability().ok).toBe(false);
     const tools=new ToolDispatcher({workspace:f.workspace,grants:new SessionGrants(),commands,approve:async()=>{prompts++;return 'once';},redact:t=>t});
-    expect(tools.descriptors().map(t=>t.name)).toEqual(['read','glob','grep']);
+    expect(tools.descriptors().map(t=>t.name)).toEqual(['read','glob','grep','apply_patch']);
     expect(await invoke(tools,{cmd:'touch forbidden'})).toMatchObject({status:'error',code:'SANDBOX_UNAVAILABLE'});
   }
   expect(prompts).toBe(0);expect(existsSync(join(f.root,'forbidden'))).toBe(false);

@@ -9,7 +9,7 @@ export function explorationGuidance(toolNames: readonly string[], budget: { roun
   const has = (name: string) => toolNames.includes(name);
   const search = [has('grep') ? 'grep' : '', has('glob') ? 'glob' : ''].filter(Boolean).join('/');
   return [
-    `You can inspect the user's project with these read-only tools: ${toolNames.join(', ')}. Paths are relative to the project root. You cannot write files or use the network${has('exec_command') ? '' : ', and you cannot run commands'}.`,
+    `Available project tools: ${toolNames.join(', ')}. Paths are relative to the project root. ${has('apply_patch') ? 'Use apply_patch with a JSON patch string for approved file changes; never use native writes.' : 'You cannot write files.'} You cannot use the network${has('exec_command') ? '' : ' or run commands'}.`,
     'Investigate progressively:',
     `1. Start with targeted discovery${search ? ` (${search})` : ''} for the names, routes or symbols in the question. Do not read files mechanically or in bulk.`,
     '2. Read the code that discovery points to. Then follow what that code actually references: its imports, the functions it calls, the types it uses. Choose every next step from the tool results you already received, never from guessed paths or names.',

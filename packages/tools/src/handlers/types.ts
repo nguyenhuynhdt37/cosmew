@@ -1,15 +1,16 @@
 import type {CommandRuntime, ToolDescriptor} from '@hannes/contracts';
 import type {ResolvedPath} from '@hannes/workspace';
+import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ToolOutput} from '../context';
 
-/** Only the execution shapes needed by the four built-ins. No plugin or arbitrary runtime port. */
+/** Only the execution shapes needed by the registered built-ins. No plugin or arbitrary runtime port. */
 export type PreparedTool = {
-  file: ResolvedPath;
   execute(signal?: AbortSignal): ToolOutput | Promise<ToolOutput>;
 } & (
-  | {kind: 'read'}
-  | {kind: 'search'; reason: 'listing' | 'search-skips-secrets'}
-  | {kind: 'command'; command: string; workdir: string; label: string; runtime: CommandRuntime; runtimeId: string}
+  | {kind:'patch'; plan:PatchPlan; runtime:ApplyPatchRuntime}
+  | {kind: 'read'; file: ResolvedPath}
+  | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}
+  | {kind: 'command'; file: ResolvedPath; command: string; workdir: string; label: string; runtime: CommandRuntime; runtimeId: string}
 );
 export interface ToolHandler {
   readonly descriptor: ToolDescriptor;

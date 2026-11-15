@@ -32,7 +32,7 @@ function explorer(view: ScriptedView): ScriptedReply {
 }
 
 /** exec_command is offered only where its OS sandbox is verified (ADR 0022). */
-const OFFERED = ['read', 'glob', 'grep'];
+const OFFERED = ['read', 'glob', 'grep', 'apply_patch'];
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });
@@ -225,7 +225,7 @@ for (const protocol of ['chat','anthropic'] as const) test(`${protocol}: migrate
  const results=events.flatMap(e=>e.type==='toolResult'?[e.result]:[]);
  expect(results.map(r=>r.name)).toEqual(calls.map(c=>c.name));
  expect(results.every(r=>r.status==='ok')).toBe(true);
- for(const view of c.views()){expect(view.tools).toEqual(['read','glob','grep']);expect(view.orphanResults).toBe(0);expect(view.unansweredCalls).toBe(0);}
+ for(const view of c.views()){expect(view.tools).toEqual(['read','glob','grep','apply_patch']);expect(view.orphanResults).toBe(0);expect(view.unansweredCalls).toBe(0);}
  const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
  expect(saved.filter(m=>m.role==='tool').map(m=>m.toolCallId)).toEqual(results.map(r=>r.callId));
  const completed=c.audit().filter(r=>r.phase==='completed');expect(completed.map(r=>r.tool)).toEqual(calls.map(c=>c.name));

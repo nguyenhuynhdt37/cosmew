@@ -880,7 +880,7 @@ export class FutrynClient {
    * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
    * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
    */
-  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
+  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel']; scopeKey?: string; diffPreview?: string }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
     const request = this.enqueuePermissionRequest(input);
     if (request.status === 'approved_session') return Promise.resolve('session');

@@ -9,7 +9,7 @@ import { codexProjectInstructions, codexToolContent } from './project-context';
 import { CodexUsageTracker } from './codex-usage';
 
 /** Hannes-owned tools the Codex bridge may expose; each call still runs through the Hannes dispatcher (ADR 0018, 0022). */
-const HANNES_BRIDGE_TOOLS = ['read', 'glob', 'grep', 'exec_command'];
+const HANNES_BRIDGE_TOOLS = ['read', 'glob', 'grep', 'exec_command', 'apply_patch'];
 
 type RuntimeRef = Extract<CredentialRef, {kind:'runtime'}>;
 type Connection = { lease: string; profile: RuntimeProfile; rpc: SubscriptionRpc; recipe: SubscriptionRecipe };

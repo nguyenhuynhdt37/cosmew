@@ -1,8 +1,9 @@
 import {HannesError, toolResultSchema, type PermissionDecision, type ToolCall, type ToolResult} from '@hannes/contracts';
-import {evaluateRead, evaluateExec} from '@hannes/security';
-import {WorkspaceDenied, type ResolvedPath} from '@hannes/workspace';
+import {evaluateRead, evaluateExec, evaluateWrite} from '@hannes/security';
+import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@hannes/workspace';
 import {commandGrantTarget, type ApprovalRequest, type Audit, type ToolDispatcherOptions, type ToolOutput} from './context';
 import type {PreparedTool} from './handlers/types';
+import {join} from 'node:path';
 import {clipBytes} from './limits';
 import {ToolRouter} from './router';
 
@@ -30,8 +31,12 @@ export class ToolOrchestrator {
       const resolved=this.router.resolve(call.name);
       if (!('handler' in resolved)) return finish(resolved);
       const prepared=resolved.handler.prepare(call.input);
-      if (!('kind' in prepared)) return finish(prepared);
-      const authorization=prepared.kind==='command' ? await this.authorizeCommand(prepared,audit,signal)
+      if (!('kind' in prepared)) {
+        if(prepared.status==='denied')audit({target:null,phase:'decided',decision:'deny',reason:'write-boundary'});
+        return finish(prepared);
+      }
+      const authorization=prepared.kind==='patch' ? await this.authorizePatch(prepared,audit,signal)
+        : prepared.kind==='command' ? await this.authorizeCommand(prepared,audit,signal)
         : prepared.kind==='read' ? await this.authorizeRead(call.name,prepared.file,audit,signal)
         : {gate:this.authorizeSearch(prepared,audit),viaSession:false};
       if (authorization.gate) return finish(authorization.gate);
@@ -43,12 +48,17 @@ export class ToolOrchestrator {
       const revalidation=prepared.kind==='read' ? this.revalidateRead(prepared.file,authorization.viaSession,audit)
         : prepared.kind==='command' ? this.revalidateCommand(prepared,authorization.viaSession,audit) : null;
       if (revalidation) return finish(revalidation);
+      if(prepared.kind==='patch'){
+        if(authorization.viaSession&&!this.options.grants.has('fs.write',prepared.plan.scopeKey))return finish({status:'denied',code:'DENIED',content:'Patch approval was revoked. No changes were made.'});
+        prepared.runtime.revalidate(prepared.plan);
+      }
       return finish(await prepared.execute(signal));
     } catch (error) {
       if (signal?.aborted || error instanceof HannesError && error.code==='CANCELLED') {
         audit({target:null,phase:'completed',outcome:'error',code:'CANCELLED'});
         throw new HannesError('CANCELLED');
       }
+      if(error instanceof WriteBoundaryError)return finish({status:'error',code:error.code,content:'Patch targets changed or became unsafe. No changes were made.'});
       if (error instanceof WorkspaceDenied) {
         if (error.reason==='outside-workspace') {
           audit({target:null,phase:'decided',decision:'deny',reason:error.reason});
@@ -104,6 +114,15 @@ export class ToolOrchestrator {
     // Listing returns names; grep independently authorizes every content read and skips asks.
     audit({target:prepared.file.relative,phase:'decided',decision:'allow',reason:prepared.reason});
     return null;
+  }
+
+  private async authorizePatch(prepared:Extract<PreparedTool,{kind:'patch'}>,audit:Audit,signal?:AbortSignal):Promise<Authorization>{
+    const {plan}=prepared;
+    const denied=plan.changes.map(c=>evaluateWrite(c.snapshot.path,join(this.options.workspace.root,c.snapshot.path),{stateDirectory:this.options.stateDirectory})).find(d=>d.effect==='deny');
+    const decision=denied??{effect:'ask' as const,reason:'workspace-patch'};
+    const target=plan.changes.map(c=>c.snapshot.path).join(', ').slice(0,1024);
+    return this.permission(decision,{tool:'apply_patch',capability:'fs.write',target,reason:decision.reason,scopeKey:plan.scopeKey,diffPreview:this.options.redact(plan.diff.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,ch=>'\\u'+ch.charCodeAt(0).toString(16).padStart(4,'0')))},plan.scopeKey,target,audit,
+      'Patch writes are denied by policy. No changes were made.','The user denied this patch. No changes were made.',signal);
   }
 
   private async authorizeCommand(prepared: Extract<PreparedTool,{kind:'command'}>, audit: Audit, signal?: AbortSignal): Promise<Authorization> {

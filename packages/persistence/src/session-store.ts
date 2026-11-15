@@ -87,10 +87,14 @@ export class SqliteConversations implements ConversationStore {
   observeTurn(id: string, revision: number, receipt: TurnReceipt): void {
     try { this.writeReceipt(id, revision, receipt); } catch { throw new HannesError('STORAGE'); }
   }
-  interrupt(id: string, revision: number, receipt?: TurnReceipt): void {
+  interrupt(id: string, revision: number, receipt?: TurnReceipt, appliedSteps: Message[] = []): void {
     try {
       this.db.transaction(() => {
-        this.db.query("UPDATE messages SET state='interrupted' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
+        const state=appliedSteps.length?'committed':'interrupted';
+        const updated=this.db.query("UPDATE messages SET state=? WHERE conversation=? AND revision=? AND state='pending'").run(state,id,revision);
+        if(appliedSteps.length&&updated.changes!==1)throw new HannesError('STORAGE');
+        // Mutating receipts survive interrupted continuations; they are evidence, never replay jobs.
+        for(const step of appliedSteps)this.append(id,messageSchema.parse(step),'committed');
         if (receipt) this.writeReceipt(id, revision, receipt);
       }).immediate();
     } catch { throw new HannesError('STORAGE'); }

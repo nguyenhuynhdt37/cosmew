@@ -6,7 +6,7 @@ export type ApprovalDecision = 'once' | 'session' | 'deny';
 
 export interface ApprovalRequest {
   tool: string;
-  capability: 'fs.read' | 'process.execute';
+  capability: 'fs.read' | 'fs.write' | 'process.execute';
   /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
@@ -14,6 +14,7 @@ export interface ApprovalRequest {
   workdir?: string;
   sandbox?: string;
   scopeKey?: string;
+  diffPreview?: string;
 }
 
 /** One line of the tool audit trail. `requested` is written before any prompt or execution. */

@@ -397,7 +397,9 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       redact: (text,incomplete) => incomplete ? redactor.stream().push(text) : redactor.text(text),
       audit: record => toolAudit.append(record),
       approve: (request, signal) => client
-        ? client.requestPermission(request.capability === 'process.execute'
+        ? client.requestPermission(request.capability === 'fs.write'
+          ? {capability:'fs.write',action:'Apply verified workspace patch',target:request.target,reason:'Review the exact file changes before applying.',riskLevel:'high',scopeKey:request.scopeKey,diffPreview:request.diffPreview}
+          : request.capability === 'process.execute'
           // The action names directory and sandbox, so a "session" answer is bound to all three.
           ? { capability: request.capability, action: `Run in ${(request.workdir ?? '.').slice(0,80)} · ${request.sandbox ?? 'sandbox'}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'high', scopeKey: request.scopeKey }
           : { capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
@@ -424,7 +426,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
     client = new FutrynClient({
       getProjectContext: () => client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null,
-      toolGrants: { list: () => grants.list().map(grant => grant.capability === 'process.execute' ? commandGrantLabel(grant.target, workspaceTree()) : workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
+      toolGrants: { list: () => grants.list().map(grant => grant.capability === 'process.execute' ? commandGrantLabel(grant.target, workspaceTree()) : grant.capability === 'fs.write' ? 'Exact patch '+grant.target.slice(6,18) : workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),
       settings,
       listIntegrations: () => integrations.list().map(integration => ({ ...integration,

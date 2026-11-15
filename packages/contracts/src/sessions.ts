@@ -51,7 +51,7 @@ export interface ConversationStore {
   append(id: string, message: Message, state: 'pending' | 'committed', receipt?: import('./telemetry').TurnReceipt): number;
   /** Commit the pending user message, any tool rounds of this turn (`intermediate`) and the final answer atomically. */
   complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt, intermediate?: Message[]): void;
-  interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt): void;
+  interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt, appliedSteps?: Message[]): void;
   observeTurn?(id: string, revision: number, receipt: import('./telemetry').TurnReceipt): void;
   list?(): SessionSummary[];
   get?(id: string): SessionRecord | undefined;

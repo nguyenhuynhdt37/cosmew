@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
@@ -611,4 +611,21 @@ for(const name of ['read','glob','grep'] as const)test(`Codex migrated ${name} h
  const audit=c.app.db.query('SELECT tool, phase FROM tool_audit WHERE call_id = ? ORDER BY rowid').all(call.id) as {tool:string;phase:string}[];
  expect(audit.map(r=>r.phase)).toEqual(['requested','decided','completed']);
  expect(audit.every(r=>r.tool===name)).toBe(true);
+});
+
+for(const decision of ['once','deny'] as const)test(`Codex apply_patch JSON function: ${decision}, real writes and model continuation`,async()=>{
+ const c=await readContext('patch-add');const turn=c.tui.submitPrompt('Create patched.txt');
+ await waitForRead(()=>c.client.listPendingPermissions().length===1);
+ const request=c.client.listPendingPermissions()[0]!;expect(request.capability).toBe('fs.write');expect(request.diffPreview).toContain('+CODEX_PATCH_MARKER');
+ c.tui.advanceStartupGate();await c.tui.handleKey(decision==='once'?'1':'Escape');await turn;
+ const answer=c.tui.getTranscript().at(-1)!;expect(answer.toolResults![0]).toMatchObject({name:'apply_patch',status:decision==='once'?'ok':'denied'});
+ expect(answer.content).toContain('MODEL_CONTINUED');
+ if(decision==='once'){expect(readFileSync(join(c.ws,'patched.txt'),'utf8')).toBe('CODEX_PATCH_MARKER\n');expect(answer.content).toContain('CODEX_PATCH_MARKER');}
+ const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
+ expect(saved.some(m=>m.role==='tool'&&m.toolName==='apply_patch'&&m.toolCallId===answer.toolCalls![0]!.id)).toBe(true);
+});
+test('Codex native file-change requests stay denied while the Hannes patch tool is exposed',async()=>{
+ const c=await readContext('native-write-attempt');
+ await expect((async()=>{for await(const _event of c.client.sendMessage('Try native write')){}})()).rejects.toMatchObject({code:'POLICY'});
+ expect(c.client.listPendingPermissions()).toEqual([]);expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
 });

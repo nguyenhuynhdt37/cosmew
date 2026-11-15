@@ -22,7 +22,7 @@ test('registry rejects duplicate identities, owns descriptor snapshots and route
  const f=fixture(),registry=new ToolRegistry();const handlers=createHandlers(f.options);
  for(const handler of handlers)registry.register(handler);
  expect(()=>registry.register(handlers[0]!)).toThrow();
- expect(registry.descriptors().map(d=>d.name)).toEqual(['read','glob','grep','exec_command']);
+ expect(registry.descriptors().map(d=>d.name)).toEqual(['read','glob','grep','exec_command','apply_patch']);
  const descriptor=registry.descriptors()[0]!;descriptor.name='shell';descriptor.inputSchema.type='anything';
  expect(registry.descriptors()[0]).toMatchObject({name:'read',inputSchema:{type:'object'}});
  const router=new ToolRouter(registry);

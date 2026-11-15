@@ -85,3 +85,11 @@ export function evaluateExec(command: string, workdirRelative: string, workdirAb
   if (location.effect === 'deny') return location;
   return { effect: 'ask', reason: 'process-execute' };
 }
+
+/** Patch writes cannot modify credentials, Git internals or Hannes durable state. */
+export function evaluateWrite(relativePath:string,absolutePath:string,context:ReadPolicyContext={}):PermissionDecision {
+ const read=evaluateRead(relativePath,absolutePath,context);
+ if(read.effect!=='allow')return {effect:'deny',reason:read.reason};
+ if(relativePath.toLowerCase().split('/').some(p=>p==='.hannes'||p.startsWith('.hannes-patch-')))return {effect:'deny',reason:'protected-path'};
+ return {effect:'ask',reason:'workspace-patch'};
+}

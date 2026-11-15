@@ -62,6 +62,11 @@ if (copilot && process.argv.includes('login')) {
   }
   async function handle(message: any) {
     if (typeof message.id === 'string' && message.id.startsWith('read-tool-')) {
+      if(scenario.startsWith('patch-')) {
+        const data=JSON.parse(message.result.contentItems[0].text);
+        if(reads===1&&data.status==='ok'){call('read',{path:'patched.txt'});return;}
+        answer('MODEL_CONTINUED '+data.content);return;
+      }
       if (scenario === 'usage-three') {
         tokenUsage(reads);
         if (reads === 1) {requestRead(); return;}
@@ -120,7 +125,7 @@ if (copilot && process.argv.includes('login')) {
         if (!readFileSync(join(profile, 'config.toml'), 'utf8').includes('shell_tool = false')) process.exit(26);
         dynamicTools = p.dynamicTools ?? [];
         projectInstructions = p.developerInstructions ?? '';
-        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep', 'exec_command'].includes(t.name))) process.exit(47);
+        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep', 'exec_command', 'apply_patch'].includes(t.name))) process.exit(47);
         result = { thread: { id: session } }; break;
       case 'session.create':
         if (p.availableTools.length || !p.requestPermission || p.enableConfigDiscovery !== false || p.installedPlugins.length) process.exit(27);
@@ -137,7 +142,12 @@ if (copilot && process.argv.includes('login')) {
             send({id:message.id,result:{turn:{id:'fixture-turn'}}}); return;
           }
           send({id:message.id,result:{turn:{id:'fixture-turn'}}});
-          if (scenario === 'usage-three') {tokenUsage(0); requestRead(); return;}
+          if(scenario.startsWith('patch-')) {
+        const data=JSON.parse(message.result.contentItems[0].text);
+        if(reads===1&&data.status==='ok'){call('read',{path:'patched.txt'});return;}
+        answer('MODEL_CONTINUED '+data.content);return;
+      }
+      if (scenario === 'usage-three') {tokenUsage(0); requestRead(); return;}
           if (scenario === 'usage-partial') {
             tokenUsage(0);
             tokenUsage(2,{tokenUsage:{total:{totalTokens:690,inputTokens:600,reasoningOutputTokens:-1,cacheWriteInputTokens:1.5},last:{},modelContextWindow:null}});
@@ -154,6 +164,11 @@ if (copilot && process.argv.includes('login')) {
           }
           answer('Usage fixture complete'); return;
         }
+        if(runtime==='codex'&&scenario.startsWith('patch-')&&dynamicTools.length){
+          if(dynamicTools.some((t:any)=>t.type!=='function')||!dynamicTools.find((t:any)=>t.name==='apply_patch'&&t.inputSchema.properties.patch.type==='string'))process.exit(61);
+          send({id:message.id,result:{turn:{id:'fixture-turn'}}});
+          call('apply_patch',{patch:'*** Begin Patch\n*** Add File: patched.txt\n+CODEX_PATCH_MARKER\n*** End Patch'});return;
+        }
         if (runtime === 'codex' && scenario === 'read-project-instructions') {
           const prompt = p.input[0].text as string;
           const history = JSON.parse(prompt.slice(prompt.indexOf('\n')+1));
@@ -168,12 +183,12 @@ if (copilot && process.argv.includes('login')) {
           if (!dynamicTools.map((t: any) => t.name).join(',').startsWith('read,glob,grep')) process.exit(48);
           send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); requestRead(); return;
         }
-        if (scenario === 'tool-attempt') {
-          send({ id: 'denied-tool', method: copilot ? 'permission.request' : runtime === 'codex' ? 'item/commandExecution/requestApproval' : 'session/request_permission', params: {} });
+        if ((scenario === 'tool-attempt'||scenario === 'native-write-attempt')) {
+          send({ id: 'denied-tool', method: copilot ? 'permission.request' : runtime === 'codex' ? scenario==='native-write-attempt'?'item/fileChange/requestApproval':'item/commandExecution/requestApproval' : 'session/request_permission', params: {} });
           await Bun.sleep(20);
           if (!permissionReply) process.exit(28);
           if (copilot) notifyCopilot('tool.execution_start');
-          else if (runtime === 'codex') event('item/started', { item: { type: 'commandExecution' } });
+          else if (runtime === 'codex') event('item/started', { item: { type: scenario==='native-write-attempt'?'fileChange':'commandExecution' } });
           else event('session/update', { update: { sessionUpdate: 'tool_call' } });
           result = { stopReason: 'end_turn' }; break;
         }

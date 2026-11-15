@@ -63,6 +63,7 @@ export class Conversation {
     this.running = true; let revision: number | undefined; let completed = false;
     /** Tool rounds of this turn: assistant tool-call messages and their tool results. */
     const steps: Message[] = [];
+    const appliedSteps: Message[] = [];
     let totalText = 0;
     /** True while round 0 offered tools and nothing has come back yet. */
     let rejectionCandidate = false;
@@ -75,8 +76,10 @@ export class Conversation {
     const run = async (call: ToolCall, toolSignal?: AbortSignal): Promise<ToolResult> => {
       if (executed >= MAX_TOOL_CALLS) return { callId: call.id, name: call.name, status: 'error', code: 'TOOL_BUDGET', content: BUDGET };
       executed++;
+      const capability=this.tools!.descriptors().find(d=>d.name===call.name)?.capability;
       const result = await this.tools!.invoke(call, toolSignal);
-      if (result.status !== 'ok') return result;
+      if(capability==='fs.write'&&result.status!=='denied')appliedSteps.push({role:'assistant',content:'',toolCalls:[call]},toolMessage(call,result));
+      if (result.status !== 'ok' || capability !== 'fs.read') return result;
       const key = call.name + '\0' + stable(call.input);
       // The tool did run (and was permission-checked and audited); only the duplicate text is dropped.
       if (seen.get(key) === result.content) return { ...result, content: UNCHANGED };
@@ -150,7 +153,7 @@ export class Conversation {
         return;
       }
     } catch (e) {
-      if (revision !== undefined && !completed) { receipt.outcome = signal?.aborted || (e instanceof HannesError && e.code === 'CANCELLED') ? 'cancelled' : 'failed'; receipt.finishedAt = new Date().toISOString(); this.store.interrupt(this.id, revision, receipt); }
+      if (revision !== undefined && !completed) { receipt.outcome = signal?.aborted || (e instanceof HannesError && e.code === 'CANCELLED') ? 'cancelled' : 'failed'; receipt.finishedAt = new Date().toISOString(); this.store.interrupt(this.id, revision, receipt, appliedSteps); if(appliedSteps.length)this.messages.push(user,...appliedSteps); }
       // A 400 before any output, right after offering tools, means the provider refused the tool definitions.
       if (rejectionCandidate && !signal?.aborted && e instanceof HannesError && e.code === 'INVALID_INPUT' && this.onToolsRejected) {
         this.onToolsRejected();

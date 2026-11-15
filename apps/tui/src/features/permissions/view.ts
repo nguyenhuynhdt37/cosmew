@@ -29,14 +29,14 @@ export function renderPermissionDialogOverlay(options: {
     wrap(command ? `Command: ${request.target}` : `Target: ${JSON.stringify(request.target)}`);
     wrap(`${command ? 'Where' : 'Action'}: ${request.action}`);
     wrap(`Why: ${request.reason}`);
-    wrap(command ? 'Once runs it now. Session allows this exact command in this directory until revoked.' : 'Once applies to this request. Session allows this target until revoked.');
+    wrap(request.capability==='fs.write' ? 'Once applies this exact diff. Session remembers only this patch and original file versions.' : command ? 'Once runs it now. Session allows this exact command in this directory until revoked.' : 'Once applies to this request. Session allows this target until revoked.');
     if (request.diffPreview) wrap('Preview:\n' + request.diffPreview);
   } else {
     wrap('No requests waiting.');
     wrap(options.workspaceReading === 'read-only' ? 'Workspace reading is enabled for this model.' : options.workspaceReading === 'disabled' ? 'Workspace reads are disabled for this session.' : 'Workspace reads are unavailable for this model.');
     wrap('Project files: allowed after folder consent.');
     wrap('Secret files: ask. Outside workspace: denied.');
-    wrap('Implemented: read, glob, grep. No writes.');
+    wrap('Tools: read, glob, grep; apply_patch asks before writes.');
     wrap('Commands unavailable: process cleanup safety check failed.');
     if (grants.length) {
       wrap(`Allowed this session (${grants.length}, Ctrl+X revokes):`);
