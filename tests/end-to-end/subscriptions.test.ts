@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HannesError, type SubscriptionRuntime } from '@hannes/contracts';
-import { FutrynTuiApp } from '@hannes/tui';
+import { HannesError, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
+import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet } from '@hannes/tui';
 import { RuntimeProfile } from '@hannes/persistence';
 import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
@@ -298,3 +298,179 @@ test.skipIf(process.platform === 'win32')('actual PTY: Esc cancels redirected su
     expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
   } finally { child.kill('SIGKILL'); await child.exited; terminal.close(); }
 }, 15000);
+
+async function readContext(scenario: string, enabled = true) {
+  const c = await context(scenario); await connect(c, 'codex');
+  const ws = mkdtempSync(join(tmpdir(), 'futryn-codex-read-')); cleanup.push(() => rmSync(ws, {recursive: true, force: true}));
+  writeFileSync(join(ws, 'README.md'), 'Project NFY fixture: a banana inventory service.\n');
+  writeFileSync(join(ws, '.env'), 'PRIVATE_KEY=never-send-this-value\n');
+  const client = c.app.createFutrynClient(ws); client.setToolsEnabled(enabled);
+  const tui = new FutrynTuiApp({client, cols: 100, rows: 30}); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  return {...c, client, tui, ws};
+}
+async function waitForRead(check: () => boolean) { const end = Date.now() + 4000; while (!check() && Date.now() < end) await Bun.sleep(10); expect(check()).toBe(true); }
+
+test('Codex subscription reads the actual workspace through Hannes and persists the result', async () => {
+  const c = await readContext('read-file');
+  await c.tui.submitPrompt('Read README.md and describe this project');
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.content).toContain('banana inventory service');
+  expect(answer.toolResults?.[0]).toMatchObject({name: 'read', status: 'ok', target: 'README.md'});
+  const id = c.client.activeSession()!.id;
+  const saved = c.app.conversations.get(id)!;
+  expect(saved.messages.some(m => m.role === 'tool' && m.content.includes('banana inventory service'))).toBe(true);
+  expect((c.app.db.query('SELECT phase FROM tool_audit ORDER BY rowid').all() as {phase: string}[]).map(r => r.phase)).toEqual(['requested','decided','completed']);
+  const estimate = c.client.context().estimateTokens;
+  const another = c.app.createFutrynClient(c.ws); another.setToolsEnabled(true); another.resumeSession(id);
+  expect(another.context().estimateTokens).toBe(estimate);
+  expect(another.activeSession()!.messages.some(m => m.role === 'tool')).toBe(true);
+});
+
+test('Codex read bridge offers no tools before workspace consent', async () => {
+  const c = await readContext('read-file', false);
+  await c.tui.submitPrompt('Read README.md');
+  expect(c.tui.getTranscript().at(-1)!.toolResults ?? []).toHaveLength(0);
+  expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
+});
+
+test('Codex secret read asks; Esc denies without sending the file content', async () => {
+  const c = await readContext('read-secret');
+  const turn = c.tui.submitPrompt('Read .env');
+  await waitForRead(() => c.client.listPendingPermissions().length === 1);
+  c.tui.advanceStartupGate(); expect(c.tui.getActiveOverlay()).toBe('permissions');
+  await c.tui.handleKey('Escape'); await turn;
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.toolResults?.[0]).toMatchObject({status: 'denied'});
+  expect(answer.content).not.toContain('never-send-this-value');
+  expect(c.app.conversations.get(c.client.activeSession()!.id)!.messages.find(m => m.role === 'tool')?.content).toContain('[denied:');
+  expect(c.client.listPendingPermissions()).toHaveLength(0);
+});
+
+test('Codex read outside the workspace is denied by the same dispatcher', async () => {
+  const c = await readContext('read-outside'); await c.tui.submitPrompt('Read outside');
+  expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]).toMatchObject({status: 'denied', code: 'DENIED'});
+});
+
+for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 'read-namespace', 'read-duplicate', 'read-repeat']) test(`Codex dynamic request fails closed: ${scenario}`, async () => {
+  const c = await readContext(scenario);
+  const events: ModelEvent[] = [];
+  await expect((async () => { for await (const event of c.client.sendMessage('Inspect project')) events.push(event); })()).rejects.toBeInstanceOf(HannesError);
+  expect(events.some(e => e.type === 'completed')).toBe(false);
+  expect(events.filter(e => e.type === 'toolResult').length).toBeLessThanOrEqual(32);
+  if (scenario === 'read-repeat') expect(events.filter(e => e.type === 'toolResult')).toHaveLength(32);
+  expect(c.client.listPendingPermissions()).toHaveLength(0);
+});
+
+test('cancelling Codex while it awaits a read approval drains the pending tool', async () => {
+  const c = await readContext('read-secret'); const abort = new AbortController();
+  const operation = (async () => { for await (const _event of c.client.sendMessage('Read .env', {signal: abort.signal})) {} })().then(() => null, error => error);
+  await waitForRead(() => c.client.listPendingPermissions().length === 1);
+  abort.abort(); expect(await operation).toMatchObject({code: 'CANCELLED'});
+  expect(c.client.listPendingPermissions()).toHaveLength(0);
+  expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
+});
+
+test('Codex builtin shell stays denied even when dynamic workspace reads are enabled', async () => {
+  const c = await readContext('tool-attempt');
+  await expect((async () => { for await (const _event of c.client.sendMessage('Attempt shell')) {} })()).rejects.toMatchObject({code: 'POLICY'});
+  expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
+});
+
+test('Codex read content is redacted before runtime output and durable tool messages', async () => {
+  const c = await readContext('read-file');
+  const secret = 'fixture-private-registered-value'; c.app.redactor.register(secret);
+  writeFileSync(join(c.ws, 'README.md'), 'Public text with registered token ' + secret);
+  await c.tui.submitPrompt('Read README.md');
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.content).toContain('[REDACTED]');
+  expect(answer.content).not.toContain(secret);
+  expect(JSON.stringify(c.app.conversations.get(c.client.activeSession()!.id))).not.toContain(secret);
+});
+
+for (const name of ['glob', 'grep'] as const) test(`Codex ${name} searches actual workspace data through the shared dispatcher`, async () => {
+  const c = await readContext('read-' + name); await c.tui.submitPrompt('Inspect project');
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.toolResults?.[0]).toMatchObject({name, status: 'ok'});
+  expect(answer.content).toContain('README.md');
+  if (name === 'grep') expect(answer.content).toContain('banana inventory service');
+});
+
+test.skipIf(process.platform === 'win32')('actual PTY: approve project, login ChatGPT, read README and show a successful read card', async () => {
+  const c = await context('read-file');
+  const ws = mkdtempSync(join(tmpdir(), 'futryn-pty-read-')); cleanup.push(() => rmSync(ws, {recursive: true, force: true}));
+  writeFileSync(join(ws, 'README.md'), 'PTY project is a banana inventory service.\n');
+  let output = '';
+  const terminal = new Bun.Terminal({cols: 100, rows: 30, data(_t, bytes) { output += Buffer.from(bytes).toString('utf8'); }});
+  const child = Bun.spawn([process.execPath, resolve('tests/subscription-fixtures/tui.ts')], {terminal, env: {...process.env, FUTRYN_TEST_HOME: c.dir, FUTRYN_TEST_WORKSPACE: ws, FUTRYN_TEST_SCENARIO: 'read-file', NO_COLOR: '1'}});
+  const plain = () => output.replace(/\x1b\[[0-9;]*m/g, '');
+  const wait = async (text: string) => {const end = Date.now() + 5000; while (!plain().includes(text) && Date.now() < end) await Bun.sleep(10); expect(plain()).toContain(text);};
+  try {
+    await wait('Trust this folder?'); terminal.write('\x1b[A\r');
+    await wait('Sign in to another account'); terminal.write('\r'); await wait('Choose your provider'); terminal.write('\r');
+    await wait('Sign in to OpenAI'); terminal.write('\r'); await wait('runtime-model'); terminal.write('\r'); await wait('Ask anything');
+    terminal.write('Read README.md and summarize the project\r');
+    await wait('banana inventory service'); await wait('✓ read README.md'); await wait('Completed turn');
+    terminal.write('\x03');
+    expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
+    expect(output).not.toContain('fixture-runtime-secret');
+  } finally {child.kill('SIGKILL'); await child.exited; terminal.close();}
+}, 15000);
+
+test('Codex receives actual project context and source metadata on new and resumed conversations', async () => {
+  const c = await readContext('read-context');
+  await c.tui.submitPrompt('Inspect this project');
+  const id = c.client.activeSession()!.id;
+  const another = c.app.createFutrynClient(c.ws); another.setToolsEnabled(true); another.resumeSession(id);
+  const results = [];
+  for await (const event of another.sendMessage('Recheck the README')) if (event.type === 'toolResult') results.push(event.result);
+  expect(results[0]).toMatchObject({status:'ok', target:'README.md'});
+  expect(c.tui.getTranscript().at(-1)!.content).not.toContain('runtime-tmp/');
+});
+
+for (const runtime of ['codex','copilot'] as const) test(`${runtime}: typing keeps local context separate from the last runtime measurement`, async () => {
+  const c = await context('telemetry'); await connect(c, runtime); c.client.setReasoningEffort('high');
+  for await (const _event of c.client.sendMessage('Short reply')) {}
+  const tokens = deriveTokensFromTriplet('#101520','#edf2ff','#f69e6f');
+  const line = (draft: string) => renderContextIndicator(c.client.context(draft), 100, tokens).spans.map(span => span.text).join('');
+  const baseline = c.client.context().estimateTokens;
+  expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+  for (const draft of ['', 'a', 'ab', 'abc', '']) {
+    expect(line(draft)).toContain('Context  ~');
+    expect(line(draft)).toContain('local estimate');
+    expect(line(draft)).toContain('last runtime 120');
+    expect(c.client.context(draft).estimateTokens).toBeGreaterThanOrEqual(baseline);
+  }
+  expect(c.client.context('/context').estimateTokens).toBe(baseline);
+  expect(c.client.context('/permissions').estimateTokens).toBe(baseline);
+  expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+  const abort = new AbortController();
+  const next = c.client.sendMessage('Next turn', {signal: abort.signal})[Symbol.asyncIterator]();
+  expect((await next.next()).value?.type).toBe('started');
+  expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+  expect(c.client.context().measuredCurrentHistory).toBe(false);
+  abort.abort(); await expect(next.next()).rejects.toMatchObject({code: 'CANCELLED'});
+  expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
+});
+
+test.skipIf(process.platform === 'win32')('actual PTY: pending read permission denies on Esc and returns to a compact empty manager', async () => {
+  const c = await context('read-secret');
+  const ws = mkdtempSync(join(tmpdir(),'futryn-permission-pty-')); cleanup.push(() => rmSync(ws,{recursive:true,force:true}));
+  writeFileSync(join(ws,'.env'),'PRIVATE_TOKEN=fixture-do-not-disclose\n');
+  let output = '';
+  const terminal = new Bun.Terminal({cols:100,rows:30,data(_t,bytes){output+=Buffer.from(bytes).toString('utf8');}});
+  const child = Bun.spawn([process.execPath,resolve('tests/subscription-fixtures/tui.ts')],{terminal,env:{...process.env,FUTRYN_TEST_HOME:c.dir,FUTRYN_TEST_WORKSPACE:ws,FUTRYN_TEST_SCENARIO:'read-secret',NO_COLOR:'1'}});
+  const plain = () => output.replace(/\x1b\[[0-9;]*m/g,'');
+  const wait = async(text:string, from=0)=>{const end=Date.now()+5000;while(!plain().slice(from).includes(text)&&Date.now()<end)await Bun.sleep(10);expect(plain().slice(from)).toContain(text);};
+  try {
+    await wait('Trust this folder?');terminal.write('\x1b[A\r');
+    await wait('Sign in to another account');terminal.write('\r');await wait('Choose your provider');terminal.write('\r');
+    await wait('Sign in to OpenAI');terminal.write('\r');await wait('runtime-model');terminal.write('\r');await wait('Ask anything');
+    terminal.write('Read .env\r');await wait('Permission request');await wait('Target: ".env"');
+    terminal.write('\x1b');await wait('Completed turn');
+    expect(output).not.toContain('fixture-do-not-disclose');
+    const mark=plain().length;terminal.write('/permissions\r');await wait('No requests waiting',mark);
+    expect(plain().slice(mark)).not.toContain('Allow once');
+    terminal.write('\x1b');await Bun.sleep(60);terminal.write('\x03');
+    expect(await Promise.race([child.exited,Bun.sleep(4000).then(()=>-1)])).toBe(0);
+  } finally {child.kill('SIGKILL');await child.exited;terminal.close();}
+},15000);

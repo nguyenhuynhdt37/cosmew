@@ -87,9 +87,10 @@ export function terminalText(value: string): string {
 /** Redact normalized model text before it reaches durable transcripts or UI sinks. */
 export function redactModel(model: import('@hannes/contracts').ModelPort, redactor: Redactor): import('@hannes/contracts').ModelPort {
   return {
-    async *stream(request, signal) {
+    inlineTools: model.inlineTools,
+    async *stream(request, signal, executeTool) {
       const filter = redactor.stream(); const reasoning = redactor.stream();
-      for await (const event of model.stream(request, signal)) {
+      for await (const event of model.stream(request, signal, executeTool)) {
         if (event.type === 'textDelta') { const text = filter.push(event.text); if (text) yield { type: 'textDelta', text: terminalText(text) }; }
         else if (event.type === 'reasoningDelta') { const text = reasoning.push(event.text); if (text) yield { type: 'reasoningDelta', text: terminalText(text) }; }
         else if (event.type === 'completed') { const summary = reasoning.finish(); if (summary) yield { type: 'reasoningDelta', text: terminalText(summary) }; const text = filter.finish(); if (text) yield { type: 'textDelta', text: terminalText(text) }; yield event; }

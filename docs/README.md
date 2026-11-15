@@ -84,3 +84,5 @@ Kết quả kiểm kê 2026-11-14: **77 thư mục con (78 nếu tính root), 11
 Current subscription and simplified login: [usage, prerequisites and evidence](delivery/subscription-auth.md), [ADR 0008](adr/0008-subscription-runtime-auth.md).
 
 Commands/usage/context and continued multi-account chat: [usage and verification](delivery/commands-usage-context-acceptance.md), [ADR 0009](adr/0009-command-telemetry-and-account-continuation.md). This supersedes direct logout with a named confirmation and adds `/switch`, `/usage` (`/cost`) and `/context` within PA1/TUI1/SUB1.
+
+ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [usage and live evidence](delivery/subscription-auth.md). The bridge exposes only Hannes read/glob/grep after folder consent; native runtime tools remain denied.

@@ -4,10 +4,8 @@ import type { ReportKind } from './types';
 export const count = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : value.toLocaleString('en-US');
 export const money = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : `$${value.toFixed(6)}`;
 export function contextDisplay(context: ReturnType<FutrynClient['context']>) {
-  const measured = context.measuredCurrentHistory;
-  const used = measured ? context.lastMeasured!.usedTokens! : context.estimateTokens;
-  const total = measured ? context.lastMeasured!.limitTokens! : context.limitTokens;
-  return { used, total, measured, ratio: measured && total ? Math.round(used / total * 1000) / 10 : context.estimatedPercent };
+  // Current local estimate and last runtime snapshot are different measurements.
+  return {used: context.estimateTokens, total: context.limitTokens, measured: false, ratio: context.estimatedPercent};
 }
 export const compactTokens = (value: number) => value >= 1_000_000 ? `${+(value / 1_000_000).toFixed(2)}M` : value >= 1000 ? `${+(value / 1000).toFixed(1)}k` : String(value);
 
@@ -77,10 +75,12 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       const filled = ratio == null ? 0 : Math.round(Math.min(100, ratio) / 100 * 16);
       return [
         field(display.measured ? 'Last measured' : 'Local estimate', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} tokens`),
+        field('Last reported', context.lastMeasured?.usedTokens == null ? 'Not reported' : `${short(context.lastMeasured.usedTokens)} / ${short(context.lastMeasured.limitTokens)} tokens`),
         field('Window', context.limitTokens == null ? '—' : `${short(context.limitTokens)} tokens`),
         field('Output reserve', context.outputReserve == null ? 'Runtime default' : `${short(context.outputReserve)} tokens`),
         ...(ratio == null ? [] : ['', `${'━'.repeat(filled)}${'─'.repeat(16 - filled)}  ${display.measured ? '' : '~'}${ratio}%`]),
-        '', display.measured ? 'Reported by runtime.' : context.runtimeHiddenContext ? 'Local history only; runtime adds context.' : 'Estimate includes chat history and draft.',
+        '', context.runtimeHiddenContext ? 'Local history only; runtime adds hidden context.' : 'Estimate includes chat history and draft.',
+        'Last reported is a historical snapshot, not the next request.',
       ];
     }
     const display = contextDisplay(context);
@@ -89,6 +89,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Account', status.activeAccount?.alias ?? 'Not connected'),
       field('Provider', status.activeProvider?.name ?? '—'),
       field('Model', status.selection?.modelId ?? 'Not selected'),
+      field('Workspace read', status.workspaceReadStatus === 'read-only' ? 'read · glob · grep' : status.workspaceReadStatus === 'disabled' ? 'Disabled · folder consent required' : 'Unavailable for this model/runtime'),
       '', field('Request', phase), field('Reasoning', status.reasoningEffort ?? 'Provider default'),
       field('Context', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} ${display.measured ? 'measured' : 'local'}`),
       field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),
@@ -122,6 +123,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
   const contextRows = [
     'CONTEXT WINDOW',
     `Model: ${status.selection?.modelId ?? 'None'}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Hannes permissions' : status.workspaceReadStatus}`,
     `Window: ${count(context.limitTokens)} · Output reserve: ${count(context.outputReserve)}`,
     `Model output ceiling: ${count(context.outputLimit)}`,
     `Current local history + draft: ~${count(context.estimateTokens)} tokens (${context.messages} messages)`,
@@ -145,6 +147,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Provider: ${status.activeProvider?.name ?? 'None'} · Account: ${status.activeAccount?.alias ?? 'None'}`,
     `Authentication: ${status.activeProvider?.runtime ?? status.activeAccount?.credential.kind ?? 'None'}`,
     `Model: ${status.selection?.modelId ?? 'None'}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Hannes permissions' : status.workspaceReadStatus}`,
     `Session: ${status.activeSessionId ?? 'None'} · Messages: ${status.messageCount}`,
     `Account state: ${status.activeAccount?.status ?? 'None'}`,
     `Connectivity: historical validation at ${status.activeAccount?.validatedAt ?? 'never'}`,

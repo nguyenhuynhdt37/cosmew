@@ -10,6 +10,8 @@ export class SubscriptionRpc {
   private closed = false;
   private buffer = Buffer.alloc(0);
   private readonly pending = new Map<number, { resolve(value: any): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout> }>();
+  private dynamicToolHandler?: (params: any) => Promise<unknown>;
+  onDynamicTool(handler: (params: any) => Promise<unknown>): () => void { this.dynamicToolHandler = handler; return () => { this.dynamicToolHandler = undefined; }; }
   private readonly listeners = new Set<(message: RpcMessage) => void>();
   constructor(command: string, args: string[], env: Record<string, string>, cwd: string, private readonly framing: 'lines' | 'content-length', private readonly stderr: (line: string) => void = () => {}) {
     this.child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
@@ -45,6 +47,11 @@ export class SubscriptionRpc {
       const message = JSON.parse(bytes.toString('utf8')) as RpcMessage;
       if (!message || typeof message !== 'object' || Array.isArray(message)) throw new HannesError('PROTOCOL');
       if (message.method && message.id !== undefined) {
+        if (message.method === 'item/tool/call' && this.dynamicToolHandler) {
+          const id = message.id;
+          void this.dynamicToolHandler(message.params).then(result => { if (!this.closed) this.write({id, result}); }, () => { if (!this.closed) this.write({id, error: {code: -32601, message: 'Tool request denied.'}}); }).catch(() => {});
+          continue;
+        }
         try { this.write({ id: message.id, result: denyRuntimeRequest(message.method) }); }
         catch { this.write({ id: message.id, error: { code: -32601, message: 'FUTRYN does not authorize runtime tools or filesystem access.' } }); }
         continue;

@@ -7,5 +7,5 @@ const app = startup(process.env.FUTRYN_TEST_HOME!, { vault: memoryVault(), subsc
   openURL: async () => {},
   resolveCommand: runtime => ({ command: process.execPath, prefix: [resolve('tests/subscription-fixtures/runtime.ts'), runtime, process.env.FUTRYN_TEST_SCENARIO ?? 'normal'] }),
 } });
-try { await runInteractiveTui({ client: app.createFutrynClient(process.env.FUTRYN_TEST_HOME!) }); }
+try { await runInteractiveTui({ client: app.createFutrynClient(process.env.FUTRYN_TEST_WORKSPACE ?? process.env.FUTRYN_TEST_HOME!) }); }
 finally { await app.subscriptions.shutdown(); app.db.close(); }

@@ -1,3 +1,4 @@
+import { deliverClipboard, writeMacClipboard } from './clipboard';
 import { HannesError } from '@hannes/contracts';
 import { FutrynTuiApp } from './app';
 import { TerminalInputDecoder } from './input/terminal-keys';
@@ -25,6 +26,7 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
   }
 
   let cleanedUp = false;
+  let clipboardTask = Promise.resolve();
   let timer: ReturnType<typeof setInterval> | null = null;
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
   let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,7 +66,10 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
   const renderNow = (force = false) => {
     if (cleanedUp) return;
     app.advanceStartupGate();
-    const clipboard = app.takeClipboardSequence(); if (clipboard) stdout.write(clipboard);
+    const clipboard = app.takeClipboardSequence();
+    if (clipboard) clipboardTask = clipboardTask.then(() => deliverClipboard(clipboard,
+      sequence => { if (!cleanedUp) stdout.write(sequence); },
+      process.platform === 'darwin' && !process.env.SSH_CONNECTION && !process.env.SSH_TTY ? writeMacClipboard : undefined));
     const ansi = app.renderAnsiFrame(force);
     if (ansi) stdout.write(ansi);
   };
@@ -131,5 +136,6 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
     cleanup();
     // Drain cancellation/credential rollback before composition closes the database.
     await app.shutdown();
+    await clipboardTask;
   }
 }

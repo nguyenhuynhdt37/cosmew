@@ -252,22 +252,23 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
     if (!info) throw new HannesError('NOT_FOUND');
-    // Subscription runtimes reject every tool request (ADR 0008); only direct API providers get tools.
+    // Only direct APIs and the explicitly authorized Codex dynamic read bridge receive tools (ADR 0018).
     const runtime = !!registry.get(account.providerId).runtime;
+    const codexReads = registry.get(account.providerId).runtime === 'codex';
     // Re-read the catalog each turn so a model marked 'unsupported' stops receiving tools at once.
-    const modelTools: ToolPort | undefined = tools && !runtime ? {
+    const modelTools: ToolPort | undefined = tools && (!runtime || codexReads) ? {
       descriptors: () => catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
       invoke: (call, signal) => tools.invoke(call, signal),
     } : undefined;
     return new Conversation(
       selection,
       redactModel(registry.get(account.providerId).runtime
-        ? new SubscriptionAdapter(selection.modelId, (request, signal) => subscriptions.stream(registry.get(account.providerId), account, request, signal))
+        ? new SubscriptionAdapter(selection.modelId, (request, signal, executeTool) => subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot), codexReads)
         : new ProviderAdapter(transport(account), selection.modelId, info), redactor),
       conversations,
       existingSession,
@@ -440,12 +441,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
         const messages = committedMessages(record.messages);
-        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort);
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot));
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort);
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot));
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -457,7 +458,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        }, toolPort);
+        }, toolPort, resolve(workspaceRoot));
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -474,7 +475,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          }, toolPort);
+          }, toolPort, resolve(workspaceRoot));
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);

@@ -126,6 +126,7 @@ export class FutrynClient {
   private lastUsage: Usage | null = null;
   private sending = false;
   private streamingText = '';
+  private streamingSteps: Message[] = [];
   /** Live limit results by account id, from the last refreshLimits(). */
   private liveLimits = new Map<string, AccountLimits>();
   private limitsRefresh: Promise<void> | null = null;
@@ -156,7 +157,7 @@ export class FutrynClient {
   }
 
   /** Allow or withhold workspace tools for this client (the TUI enables them after folder consent). */
-  setToolsEnabled(enabled: boolean): void { this.toolsAllowed = enabled; }
+  setToolsEnabled(enabled: boolean): void { this.toolsAllowed = enabled; this.notifyStateChange(); }
 
   toolsEnabled(): boolean { return this.toolsAllowed; }
 
@@ -261,6 +262,7 @@ export class FutrynClient {
       activeProvider,
       selection,
       activeModel,
+      workspaceReadStatus: !this.toolsAllowed ? 'disabled' : !activeModel || (activeProvider?.runtime && activeProvider.runtime !== 'codex') || activeModel.capabilities.tools === 'unsupported' ? 'unavailable' : 'read-only',
       activeSessionId: this.currentSession?.id ?? null,
       messageCount: this.currentSession?.messages.length ?? 0,
       lastUsage: this.usage().last?.usage ?? this.lastUsage,
@@ -528,7 +530,7 @@ export class FutrynClient {
       this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
     }
     const session = this.currentSession;
-    this.sending = true; this.streamingText = ''; this.lastUsage = null;
+    this.sending = true; this.streamingText = ''; this.streamingSteps = []; this.lastUsage = null;
     this.emitReactiveEvent('thinking', 'Preparing request');
     let assistantText = '';
     try {
@@ -560,13 +562,16 @@ export class FutrynClient {
         } else if (event.type === 'usage') {
           this.lastUsage = event.usage; this.notifyStateChange();
         } else if (event.type === 'toolCallComplete') {
+          this.streamingSteps.push({role: 'assistant', content: '', toolCalls: [event.call]});
           this.emitReactiveEvent('tool', event.call.name);
+        } else if (event.type === 'toolResult') {
+          this.streamingSteps.push({role: 'tool', content: event.result.content, toolCallId: event.result.callId, toolName: event.result.name});
+          this.notifyStateChange();
         } else if (event.type === 'completed') {
-          this.lastUsage = event.usage; this.streamingText = '';
-          session.messages.push(
-            { role: 'user', content: trimmed },
-            { role: 'assistant', content: assistantText },
-          );
+          this.lastUsage = event.usage; this.streamingText = ''; this.streamingSteps = [];
+          const stored = this.ports.getSession(session.id);
+          if (stored) session.messages = stored.messages.filter(m => m.state === 'committed').map(({role, content, toolCalls, toolCallId, toolName}) => ({role, content, toolCalls, toolCallId, toolName}));
+          else session.messages.push({role: 'user', content: trimmed}, {role: 'assistant', content: assistantText});
           this.emitReactiveEvent('done', event.finishReason);
         }
         yield event;
@@ -574,7 +579,7 @@ export class FutrynClient {
     } catch (err) {
       this.emitReactiveEvent('error', err instanceof HannesError ? err.code : 'ERROR');
       throw err;
-    } finally { this.sending = false; this.streamingText = ''; }
+    } finally { this.sending = false; this.streamingText = ''; this.streamingSteps = []; }
   }
 
   usage() {
@@ -632,20 +637,23 @@ export class FutrynClient {
   context(draft = '') {
     const status = this.status();
     const history = this.currentSession?.messages ?? [];
-    const pending = this.currentSession && this.sending
-      ? this.ports.getSession(this.currentSession.id)?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
-    const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(pending && this.streamingText ? [{ role: 'assistant', content: this.streamingText }] : []), ...(draft ? [{ role: 'user', content: draft }] : [])];
+    const record = this.currentSession ? this.ports.getSession(this.currentSession.id) : undefined;
+    const pending = this.sending ? record?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
+    const trimmedDraft = draft.trim();
+    const requestDraft = /^[\/!]/.test(trimmedDraft) ? '' : trimmedDraft;
+    const components = [...history, ...(pending ? [{role: pending.role, content: pending.content}] : []), ...(pending ? this.streamingSteps : []), ...(pending && this.streamingText ? [{ role: 'assistant', content: this.streamingText }] : []), ...(requestDraft ? [{ role: 'user', content: requestDraft }] : [])];
     const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
     const estimate = components.length ? Math.ceil(bytes / 4) + components.length * 16 + 64 : 0;
     const runtime = !!status.activeProvider?.runtime;
     const latest = this.usage().last;
-    const last = latest?.context && latest.context.source !== 'estimate' ? latest.context : null;
+    const observation = record?.turns?.findLast(turn => turn.context && turn.context.source !== 'estimate');
+    const last = observation?.context ?? null;
     const limit = last?.limitTokens ?? status.activeModel?.contextLimit ?? null;
     const reserve = Math.min(4096, status.activeModel?.outputLimit ?? 4096);
     return { estimateTokens: estimate, estimateMethod: 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
       limitTokens: limit, outputReserve: runtime ? null : reserve, outputLimit: status.activeModel?.outputLimit ?? null, runtimeHiddenContext: runtime,
       estimatedPercent: limit && !runtime ? Math.round(estimate / limit * 1000) / 10 : null,
-      measuredCurrentHistory: !draft.trim() && (!this.sending || latest?.outcome === 'pending') && last?.usedTokens != null && last.limitTokens != null,
+      measuredCurrentHistory: observation?.requestId === latest?.requestId && !requestDraft.trim() && (!this.sending || latest?.outcome === 'pending') && last?.usedTokens != null && last.limitTokens != null,
       lastMeasured: last, metadataSource: status.activeModel?.metadataSource ?? null,
       metadataAt: status.activeModel?.metadataFetchedAt ?? null, messages: components.length };
   }

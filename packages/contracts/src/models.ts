@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.4' as const;
+export const CONTRACT_VERSION = '1.6' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
@@ -127,8 +127,10 @@ export type ModelEvent =
   | { type: 'toolCallComplete'; call: ToolCall }
   | { type: 'toolResult'; result: import('./tools').ToolResult }
   | { type: 'completed'; finishReason: string; usage: Usage };
+export type InlineToolExecutor = (call: ToolCall, signal?: AbortSignal) => Promise<import('./tools').ToolResult>;
 export interface ModelPort {
-  stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;
+  readonly inlineTools?: boolean;
+  stream(request: ModelRequest, signal?: AbortSignal, executeTool?: InlineToolExecutor): AsyncIterable<ModelEvent>;
   generate(request: ModelRequest, signal?: AbortSignal): Promise<{ text: string; calls: ToolCall[]; usage: Usage; finishReason: string }>;
 }
 export interface CredentialVault {

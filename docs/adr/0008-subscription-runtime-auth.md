@@ -14,3 +14,5 @@ Claude subscription sign-in is not offered without Anthropic approval; API key a
 ## UX follow-up in the same increment
 
 The user rejected the initial account-name prompts and split API/subscription provider rows. Registry family metadata now groups each vendor once and methods carry their target provider identity. Sign-in starts immediately after method choice; account aliases are generated, with optional rename later. Device-code and environment alternatives are secondary options. Login modal background covers the underlying composer/sidebar, sizes to content and preserves the draft. Browser startup itself is cancellable; account rollback/profile cleanup drains before shutdown. No arbitrary OAuth-client/endpoint/token fields enter the ordinary login flow.
+
+2026-11-15 scoped supersession: [ADR 0018](0018-codex-read-tool-bridge.md) permits only Hannes read/glob/grep callbacks for ChatGPT/Codex after folder consent. Runtime builtin execution and filesystem access are still denied; other subscription runtimes remain chat-only.

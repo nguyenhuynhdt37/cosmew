@@ -1,70 +1,63 @@
-import type { BorderStyle, PermissionPromptRequest, PermissionResolutionScope, ThemeTokens } from '@hannes/contracts';
+import type { FutrynClient } from '@hannes/sdk';
+import type { BorderStyle, PermissionPromptRequest, ThemeTokens } from '@hannes/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
 import type { PermissionDialogState } from './types';
 
 export function renderPermissionDialogOverlay(options: {
-  width: number;
-  height: number;
-  requests: PermissionPromptRequest[];
-  /** Files allowed for the rest of the session. */
-  grants?: string[];
-  state: PermissionDialogState;
-  tokens: ThemeTokens;
-  borderStyle: BorderStyle;
+  workspaceReading?: ReturnType<FutrynClient['status']>['workspaceReadStatus'];
+  width: number; height: number; requests: PermissionPromptRequest[]; grants?: string[];
+  state: PermissionDialogState; tokens: ThemeTokens; borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
-  const { width, height, requests, state, tokens, borderStyle } = options;
-  const modal = new Modal({
-    width, height, tokens, borderStyle,
-    borderColor: tokens.warning,
-    titleStyle: { fg: tokens.accentForeground, bg: tokens.warning },
-  });
-  const row = (text: string, fg = tokens.foreground, bg = modal.bg, bold = false) => modal.text(text, { fg, bg, bold });
-
-  const pendingCount = requests.filter(r => r.status === 'pending').length;
-  modal.top(` SECURITY PERMISSION GATE (${pendingCount} Pending) `, ' Esc Dismiss (Never Grants) ');
-
-  if (requests.length === 0) {
-    row(' No permission requests in the current session.', tokens.foregroundMuted);
-    row(' Tools ask before reading secret files (.env, keys).', tokens.info);
-    row(' Note: Closing or cancelling a permission prompt never grants permission.', tokens.info);
-  } else {
-    const idx = clampIndex(state.selectedIndex, requests.length);
-    const req = requests[idx]!;
-    const riskColor = req.riskLevel === 'high' ? tokens.error : req.riskLevel === 'medium' ? tokens.warning : tokens.info;
-
-    row(` Request ${idx + 1}/${requests.length} · ID: ${req.approvalId.slice(0, 12)} · Status: ${req.status.toUpperCase()}`, tokens.foregroundMuted, tokens.backgroundElevated, true);
-    row(` Capability : ${req.capability}   │   Risk Level: ${req.riskLevel.toUpperCase()}`, riskColor, modal.bg, true);
-    row(` Action     : ${req.action}`, tokens.foreground, modal.bg, true);
-    row(` Target     : ${req.target}`, tokens.info);
-    row(` Reason     : ${req.reason}`, tokens.foregroundMuted);
-    row(` Scope Hash : ${req.scopeHash}`, tokens.foregroundSubtle);
-
-    if (req.diffPreview) {
-      row(' Diff Preview:', tokens.foregroundMuted, modal.bg, true);
-      for (const line of req.diffPreview.split('\n').slice(0, 4)) {
-        const fg = line.startsWith('+') ? tokens.diffAdded : line.startsWith('-') ? tokens.diffRemoved : tokens.diffContext;
-        row(`   ${line}`, fg, tokens.backgroundElevated);
-      }
-    }
-
-    modal.blank();
-    if (req.status === 'pending') {
-      const choices: { key: PermissionResolutionScope; label: string }[] = [
-        { key: 'once', label: '[1] Allow Once' },
-        { key: 'session', label: '[2] Allow for Session' },
-        { key: 'deny', label: '[3] Deny' },
-      ];
-      const buttons = choices.map(c => (c.key === state.selectedAction ? ` ▸ ${c.label} ◂ ` : `   ${c.label}   `)).join('  ');
-      row(` Decision: ${buttons}`, state.selectedAction === 'deny' ? tokens.error : tokens.success, tokens.selection, true);
-    } else {
-      row(` Decision Finalized: ${req.status.toUpperCase()}`, tokens.foregroundMuted);
-    }
-  }
-
+  const {width, height, requests, state, tokens, borderStyle} = options;
+  const pending = requests.filter(r => r.status === 'pending');
+  const request = pending[clampIndex(state.selectedIndex, pending.length)];
   const grants = options.grants ?? [];
-  if (grants.length) {
-    modal.blank();
-    row(` Allowed for this session (Ctrl+X revokes all): ${grants.join(', ')}`, tokens.foregroundMuted);
+  const modal = new Modal({width, height, minInner: 1, tokens, borderStyle, borderColor: request ? tokens.warning : tokens.borderFocused});
+  const title = request ? ' Permission request ' : ' Permissions ';
+  modal.top(title.slice(0, modal.innerWidth));
+  const body: string[] = [];
+  const wrap = (text: string) => {
+    const size = Math.max(1, modal.innerWidth - 2);
+    for (const line of text.split('\n')) {
+      if (!line) body.push('');
+      else for (let i = 0; i < line.length; i += size) body.push(' ' + line.slice(i, i + size));
+    }
+  };
+  if (request) {
+    wrap(`${state.selectedIndex + 1}/${pending.length} waiting · ${request.capability}`);
+    wrap(`Target: ${JSON.stringify(request.target)}`);
+    wrap(`Action: ${request.action}`);
+    wrap(`Why: ${request.reason}`);
+    wrap('Once applies to this request. Session allows this target until revoked.');
+    if (request.diffPreview) wrap('Preview:\n' + request.diffPreview);
+  } else {
+    wrap('No requests waiting.');
+    wrap(options.workspaceReading === 'read-only' ? 'Workspace reading is enabled for this model.' : options.workspaceReading === 'disabled' ? 'Workspace reads are disabled for this session.' : 'Workspace reads are unavailable for this model.');
+    wrap('Project files: allowed after folder consent.');
+    wrap('Secret files: ask. Outside workspace: denied.');
+    wrap('Implemented: read, glob, grep. No shell or writes.');
+    if (grants.length) {
+      wrap(`Allowed this session (${grants.length}, Ctrl+X revokes):`);
+      for (const grant of grants) wrap('  ' + JSON.stringify(grant));
+    } else wrap('No file access remembered for this session.');
+    const resolved = requests.filter(r => r.status !== 'pending');
+    if (resolved.length) wrap(`Recent decisions: ${resolved.slice(0, 3).map(r => r.status).join(', ')}`);
   }
-  return modal.fillTo(Math.max(6, height - 2)).bottom(' ←/→ Select Action · Enter Confirm · 1 Allow Once · 2 Session · 3/Esc Deny ').lines;
+  const actionRows = request ? 3 : 0;
+  const capacity = Math.max(0, height - 2 - actionRows);
+  const offset = Math.max(0, Math.min(state.scrollOffset ?? 0, Math.max(0, body.length - capacity)));
+  // Remember the visible origin, so PageUp responds immediately after reaching the end.
+  state.scrollOffset = offset;
+  for (const line of body.slice(offset, offset + capacity)) modal.text(line, {fg: tokens.foregroundMuted});
+  modal.fillTo(height - 1 - actionRows);
+  if (request) {
+    for (const [action, label] of [['once', '[1] Allow once'], ['session', '[2] Allow this session'], ['deny', '[3] Deny']] as const) {
+      modal.text(`${state.selectedAction === action ? ' ›' : '  '} ${label}`, {fg: state.selectedAction === action ? tokens.foreground : tokens.foregroundMuted, bg: state.selectedAction === action ? tokens.selection : modal.bg, bold: state.selectedAction === action});
+    }
+  }
+  const scrolling = body.length > capacity;
+  const footer = request
+    ? width < 55 ? ' Esc Deny · Enter Apply ' : ' ←/→ Choose · Enter Apply · Esc Deny '
+    : grants.length ? ' Ctrl+X Revoke · Esc Close ' : ' Esc Close ';
+  return modal.bottom(scrolling ? (width < 55 ? ' PgUp/PgDn · Esc ' : ' PgUp/PgDn Scroll · ' + footer.trim()) : footer).lines;
 }

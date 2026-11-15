@@ -35,3 +35,32 @@ test('terminal mouse input survives split PTY chunks; malformed and expired sequ
   const bytes = new TextEncoder().encode('ữ');
   expect(decoder.feed(bytes.slice(0,1))).toEqual([]); expect(decoder.feed(bytes.slice(1))).toEqual(['ữ']);
 });
+
+test('clipboard delivery prefers native UTF-8 and falls back on host failure without leaking controls', async () => {
+  const { deliverClipboard } = await import('../../apps/tui/src/clipboard');
+  const text = '  giữ thụt dòng\n日本語';
+  const sequence = `\x1b]52;c;${Buffer.from(text).toString('base64')}\x07`;
+  const terminal: string[] = []; const native: string[] = [];
+  await deliverClipboard(sequence, value => terminal.push(value), async value => { native.push(value); return true; });
+  expect(native).toEqual([text]); expect(terminal).toEqual([]);
+  await deliverClipboard(sequence, value => terminal.push(value), async () => false);
+  await deliverClipboard(sequence, value => terminal.push(value), async () => { throw new Error('unavailable'); });
+  await deliverClipboard(sequence, value => terminal.push(value));
+  expect(terminal).toEqual([sequence, sequence, sequence]);
+  await deliverClipboard('malformed', value => terminal.push(value));
+  await deliverClipboard(`\x1b]52;c;${Buffer.alloc(65537).toString('base64')}\x07`, value => terminal.push(value));
+  expect(terminal).toHaveLength(3);
+});
+
+test('native clipboard bridge uses stdin, handles failure and bounds a stuck write', async () => {
+  const { writeMacClipboard } = await import('../../apps/tui/src/clipboard');
+  let input = '', ended = false, killed = false;
+  const process = (code: number) => ({stdin: {write: (value: string) => { input = value; }, end: () => { ended = true; }}, exited: Promise.resolve(code), kill: () => { killed = true; }});
+  expect(await writeMacClipboard('giữ\nindent', () => process(0))).toBe(true);
+  expect(input).toBe('giữ\nindent'); expect(ended).toBe(true);
+  expect(await writeMacClipboard('text', () => process(1))).toBe(false);
+  expect(await writeMacClipboard('text', () => { throw new Error('unavailable'); })).toBe(false);
+  expect(await writeMacClipboard('text', () => ({...process(0), stdin: {write: () => new Promise(() => {}), end: () => {} }}), 10)).toBe(false);
+  expect(killed).toBe(true);
+  expect(await writeMacClipboard('x'.repeat(65537), () => { throw new Error('must not launch'); })).toBe(false);
+});

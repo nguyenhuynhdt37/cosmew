@@ -20,7 +20,7 @@ if (copilot && process.argv.includes('login')) {
   process.stdout.write('https://github.com/login/device\nDevice code: ABCD-1234\n');
   setTimeout(() => { save(); process.exit(scenario === 'reject' ? 1 : 0); }, scenario === 'slow-auth' ? 20000 : 30);
 } else {
-  let input = Buffer.alloc(0); let session = 'fixture-session'; let permissionReply = false;
+  let input = Buffer.alloc(0); let session = 'fixture-session'; let permissionReply = false; let dynamicTools: any[] = []; let reads = 0; let projectInstructions = '';
   function send(value: unknown) {
     const body = JSON.stringify(value);
     const text = copilot ? `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}` : body + '\n';
@@ -28,7 +28,22 @@ if (copilot && process.argv.includes('login')) {
   }
   const event = (method: string, params: unknown) => send({ jsonrpc: '2.0', method, params });
   const notifyCopilot = (type: string, data = {}) => event('session.event', { sessionId: session, event: { type, data } });
+  function requestRead() {
+    const id = scenario === 'read-duplicate' ? 'same-call' : 'read-' + ++reads;
+    send({id: 'read-tool-' + reads, method: 'item/tool/call', params: {threadId: scenario === 'read-wrong-thread' ? 'foreign-thread' : session, turnId: scenario === 'read-wrong-turn' ? 'foreign-turn' : 'fixture-turn', callId: id, namespace: scenario === 'read-namespace' ? 'mcp' : null, tool: scenario === 'read-unknown' ? 'shell' : scenario === 'read-glob' ? 'glob' : scenario === 'read-grep' ? 'grep' : 'read', arguments: scenario === 'read-glob' ? {pattern: '**/*.md'} : scenario === 'read-grep' ? {pattern: 'banana'} : {path: scenario === 'read-secret' ? '.env' : scenario === 'read-outside' ? '../outside.txt' : 'README.md'}}});
+    if (scenario === 'read-duplicate' && !reads) { reads++; requestRead(); }
+  }
   async function handle(message: any) {
+    if (typeof message.id === 'string' && message.id.startsWith('read-tool-')) {
+      if (scenario === 'read-repeat' && reads < 34) { requestRead(); return; }
+      const result = message.result;
+      if (scenario === 'read-context') {
+        const data = JSON.parse(result.contentItems[0].text);
+        if (!data.workspaceRoot || data.workspaceRoot.startsWith(profile) || !projectInstructions.includes(JSON.stringify(data.workspaceRoot)) || data.source !== 'README.md' || !projectInstructions.includes('representative tests')) process.exit(49);
+      }
+      event('item/agentMessage/delta', {delta: result?.contentItems?.[0]?.text ?? 'Read denied'});
+      event('turn/completed', {turn: {status: 'completed'}}); return;
+    }
     if (message.id === 'denied-tool') {
       permissionReply = message.error?.code === -32601 || message.result?.decision === 'decline' || message.result?.kind === 'denied-by-rules' || message.result?.outcome?.outcome === 'cancelled';
       if (!permissionReply) process.exit(23);
@@ -62,6 +77,9 @@ if (copilot && process.argv.includes('login')) {
       case 'thread/start':
         if (p.approvalPolicy !== 'never' || p.sandbox !== 'read-only' || !p.ephemeral) process.exit(25);
         if (!readFileSync(join(profile, 'config.toml'), 'utf8').includes('shell_tool = false')) process.exit(26);
+        dynamicTools = p.dynamicTools ?? [];
+        projectInstructions = p.developerInstructions ?? '';
+        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep'].includes(t.name))) process.exit(47);
         result = { thread: { id: session } }; break;
       case 'session.create':
         if (p.availableTools.length || !p.requestPermission || p.enableConfigDiscovery !== false || p.installedPlugins.length) process.exit(27);
@@ -69,6 +87,10 @@ if (copilot && process.argv.includes('login')) {
         result = { sessionId: session }; break;
       case 'turn/start': case 'session.send': case 'session/prompt': {
         if (!valid()) { send({ id: message.id, error: { code: -32000, message: 'Expired secret' } }); return; }
+        if (runtime === 'codex' && scenario.startsWith('read-') && dynamicTools.length) {
+          if (dynamicTools.map((t: any) => t.name).join(',') !== 'read,glob,grep') process.exit(48);
+          send({id: message.id, result: {turn: {id: 'fixture-turn'}}}); requestRead(); return;
+        }
         if (scenario === 'tool-attempt') {
           send({ id: 'denied-tool', method: copilot ? 'permission.request' : runtime === 'codex' ? 'item/commandExecution/requestApproval' : 'session/request_permission', params: {} });
           await Bun.sleep(20);
@@ -105,7 +127,7 @@ if (copilot && process.argv.includes('login')) {
         if (scenario === 'no-terminal') { process.exit(0); }
         if (copilot) notifyCopilot('session.idle');
         else if (runtime === 'codex') event('turn/completed', { turn: { status: 'completed' } });
-        result = { stopReason: 'end_turn', messageId: 'fixture-message' }; break;
+        result = { stopReason: 'end_turn', messageId: 'fixture-message', turn: {id: 'fixture-turn'} }; break;
       }
       case 'session/set_model': break;
       default: send({ id: message.id, error: { code: -32601, message: 'Unknown fixture method' } }); return;

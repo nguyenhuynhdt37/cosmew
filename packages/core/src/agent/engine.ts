@@ -45,6 +45,7 @@ export class Conversation {
     let totalText = 0;
     /** True while round 0 offered tools and nothing has come back yet. */
     let rejectionCandidate = false;
+    const inlineIds = new Set<string>();
     try {
       signal?.throwIfAborted();
       revision = this.store.append(this.id, user, 'pending', receipt);
@@ -57,7 +58,15 @@ export class Conversation {
         let text = ''; const calls: ToolCall[] = [];
         const before = receipt.usage; // totals of earlier rounds
         let terminal: Extract<ModelEvent, { type: 'completed' }> | undefined;
-        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools }, signal)) {
+        for await (const event of this.model.stream({ requestId: round === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: [...this.messages, user, ...steps], maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools }, signal, this.model.inlineTools && this.tools ? async (call, toolSignal) => {
+          if (this.messages.length + steps.length > 196 || !available.some(d => d.name === call.name) || inlineIds.size >= 32 || inlineIds.has(call.id)) throw new HannesError('POLICY');
+          inlineIds.add(call.id);
+          if (signal?.aborted) throw new HannesError('CANCELLED');
+          const result = await this.tools!.invoke(call, toolSignal ?? signal);
+          if (signal?.aborted) throw new HannesError('CANCELLED');
+          steps.push({role: 'assistant', content: '', toolCalls: [call]}, {role: 'tool', content: result.status === 'ok' ? result.content || '(empty)' : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`, toolCallId: call.id, toolName: call.name});
+          return result;
+        } : undefined)) {
           if (signal?.aborted) throw new HannesError('CANCELLED');
           if (terminal) throw new HannesError('PROTOCOL');
           if (event.type === 'textDelta' || event.type === 'toolCallComplete') rejectionCandidate = false;
@@ -71,7 +80,7 @@ export class Conversation {
           if (event.type === 'toolCallComplete') {
             if (!offerTools) throw new HannesError('UNSUPPORTED');
             if (calls.length >= 32 || calls.some(c => c.id === event.call.id)) throw new HannesError('PROTOCOL');
-            calls.push(event.call);
+            if (!this.model.inlineTools) calls.push(event.call);
           }
           if (event.type === 'completed') terminal = event;
           else yield event.type === 'usage' ? { type: 'usage', usage: receipt.usage! } : event;

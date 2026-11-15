@@ -205,7 +205,11 @@ export class FutrynTuiApp {
       const point = {row:Number(mouse[2]), col:Number(mouse[3])};
       if (mouse[1] === 'MouseDown') { this.textSelection.clear(); this.textSelection.begin(this.computeFrameSnapshot(), point); }
       else if (mouse[1] === 'MouseDrag') this.textSelection.move(point);
-      else this.textSelection.release(point);
+      else {
+        this.textSelection.release(point);
+        const sequence = this.textSelection.copySequence();
+        if (sequence) this.clipboardSequence = sequence;
+      }
       return;
     }
     if (this.textSelection.active() && (key === 'Ctrl+C' || key === 'Ctrl+Y')) {

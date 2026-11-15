@@ -81,3 +81,7 @@ Reactive/streaming clarification (ADR 0009 follow-up, no schema change): support
 ## Contract 1.5: interactive startup verification
 
 [ADR 0014](../adr/0014-interactive-startup-verification.md) adds optional `generate` to SDK `diagnose(signal, generate)`. `true` probes the active model with a small real request; `false` or omitted retains the prior discovery-only diagnostic. The TUI requires session-scoped workspace consent and a successful probe before interactive chat; no write or tool grants are implied. Existing settings and durable schemas need no migration; callers omitting the new parameter retain their behavior.
+
+## Contract 1.6: Codex inline read bridge
+
+[ADR 0018](../adr/0018-codex-read-tool-bridge.md) adds optional `ModelPort.inlineTools` and optional `InlineToolExecutor` as the third `stream` argument. It is an in-process callback supplied by core, never part of serialized ModelRequest, events or persisted messages. The security stream wrapper forwards it. Direct API adapters retain the existing round-based loop; Codex uses one runtime turn with at most 32 validated callbacks and the existing ToolPort. Calls/results use existing ModelEvent/Message shapes and commit atomically with the final answer. Other subscription runtimes reject tool descriptors. No database/settings migration; consumers migrate together to the new adapter/core/security composition. SDK status also reports `workspaceReadStatus` (`disabled`, `unavailable`, `read-only`) and invalidates projections after folder-consent changes. General execution remains Not implemented.

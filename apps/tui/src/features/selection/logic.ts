@@ -48,7 +48,7 @@ export class TextSelection {
         const from = y === start.row ? start.col : 0; const to = y === end.row ? end.col + 1 : base.cols;
         for (let x = from; x < to; x++) cells[y]![x] = {...cells[y]![x]!, fg: tokens.selectionForeground, bg: tokens.selection, selected: true};
       }
-      const hint = this.tooLarge ? 'Selection too large · select fewer lines' : this.copied ? 'Copy sent · Esc Clear' : base.cols < 36 ? 'Ctrl+C Copy · Esc' : 'Ctrl+C Copy · Esc Clear';
+      const hint = this.tooLarge ? 'Selection too large · select fewer lines' : this.copied ? 'Copy requested · Ctrl+C Retry · Esc Clear' : base.cols < 36 ? 'Ctrl+C Copy · Esc' : 'Ctrl+C Copy · Esc Clear';
       cells[base.rows - 1] = Array.from({length:base.cols}, (_, x) => ({ch: hint[x] ?? ' ', fg: tokens.foregroundMuted, bg: tokens.background, bold:false}));
     }
     const plainLines = cells.map(row => row.map(cell => cell.ch).join(''));

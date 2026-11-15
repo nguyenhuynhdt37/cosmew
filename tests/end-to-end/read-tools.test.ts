@@ -77,7 +77,13 @@ test('"Allow for session" reads the secret once approved and is remembered until
   expect(c.client.listToolGrants()).toEqual(['.env']);
   await c.tui.submitPrompt('again'); // no second prompt
   expect(c.client.listPermissions().filter(p => p.status === 'pending')).toHaveLength(0);
-  c.client.revokeToolGrants(); expect(c.client.listToolGrants()).toEqual([]);
+  await c.tui.executeSlashCommand('/permissions');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Allowed this session (1');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('.env');
+  await c.tui.handleKey('Ctrl+X');
+  expect(c.client.listToolGrants()).toEqual([]);
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('No file access remembered');
+  await c.tui.handleKey('Escape');
 });
 
 test('paths outside the workspace are denied without a prompt or any outside path in the reply', async () => {

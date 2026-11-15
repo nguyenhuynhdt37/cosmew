@@ -26,7 +26,7 @@ The model can read and search the trusted workspace. It cannot write, run comman
 | `glob` | `pattern?` (glob), `path?` | Up to 100 paths, sorted. Skips `.git` and `.gitignore`d entries unless the path is named explicitly. 30 s deadline. |
 | `grep` | `pattern` (regex), `path?`, `glob?` | Up to 100 matching lines with path and line number. Pattern length capped; files over 1 MiB and binary files skipped; 30 s deadline and per-file time budget against pathological regexes. No ripgrep dependency in this slice. |
 
-`@file` mentions in the composer attach content through the same dispatcher, with the user as principal. No second read path exists.
+`@file` autocomplete inserts a path reference. The model must call read through the dispatcher to obtain contents; it is not an eager attachment. No second read path exists.
 
 ## Permission model
 
@@ -89,3 +89,7 @@ Write, edit, patch, shell, network, MCP, plugins, subagents, external directorie
 ## Evidence
 
 `tests/security/read-tools.test.ts` covers traversal, absolute paths, file and directory symlinks, secret files (ask / once / session / deny), policy order, audit order, glob/grep secret skipping, invalid input, binary files, directories, paging and the catastrophic-regex deadline. `tests/end-to-end/read-tools.test.ts` drives the real app against a fixture provider: no tools before consent; read → result → answer; stored tool parts on resume; `.env` dialog with Esc deny (secret never sent); session grant and revoke; outside-workspace denial; provider rejection marking the model `unsupported`. The full suite passed with 227 tests at the time of writing.
+
+Supersession 2026-11-15: [ADR 0018](0018-codex-read-tool-bridge.md), explicitly authorized by the user, adds Hannes-owned read/glob/grep for ChatGPT/Codex only. Other subscription runtimes retain chat-only restrictions. `@file` autocomplete currently inserts a path reference; it is not an eager file attachment. The model must call read to obtain contents through the dispatcher. Earlier wording about unconditional content attachment was a design requirement, not implementation evidence.
+
+Permission UI follow-up (2026-11-15): `/permissions` is a compact modal manager with an actual workspace-read availability indicator, remembered target grants and Ctrl+X revocation. Empty/resolved history shows no grant actions. Only pending requests are selectable; selection is bound to approval ID across queue insertions, and each newly selected request defaults to Deny. Long targets/reasons can be scrolled while decision controls remain visible. Esc or leaving a pending dialog denies that selected request. This changes presentation and safe defaults only; execution, scope hashing, policy order and permission boundaries are unchanged.

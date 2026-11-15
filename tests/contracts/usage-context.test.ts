@@ -217,7 +217,7 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
   c.app.settings.update(settings => { const model = settings.catalogs[0]!.models[0]!; model.contextLimit = 128000; model.reasoningEfforts = ['low', 'high']; });
   let output = '';
   const terminal = new Bun.Terminal({ cols: 100, rows: 30, data(_terminal, bytes) { output += Buffer.from(bytes).toString('utf8'); } });
-  const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], { terminal, env: { ...process.env, HANNES_HOME: c.dir, NO_COLOR: '1' } });
+  const child = Bun.spawn([process.execPath, 'apps/cli/src/index.ts', 'tui'], { terminal, env: { ...process.env, HANNES_HOME: c.dir, NO_COLOR: '1', SSH_CONNECTION: 'fixture-clipboard' } });
   const wait = async (text: string, from = 0) => { const until = Date.now() + 4000; while (!output.slice(from).includes(text) && Date.now() < until) await Bun.sleep(10); expect(output.slice(from)).toContain(text); };
   try {
     await wait('Trust this folder?'); terminal.write('\x1b[A\r');
@@ -233,7 +233,10 @@ test.skipIf(process.platform === 'win32')('actual PTY: usage/context/status pagi
     let selectionMark = output.length;
     terminal.write(`\x1b[<0;${start};`); await Bun.sleep(5); terminal.write(`${painted.row}M`);
     terminal.write(`\x1b[<32;${end};${painted.row}M\x1b[<0;${end};${painted.row}m`);
-    await wait('Ctrl+C Copy', selectionMark); expect(output.slice(selectionMark)).toContain('\x1b[7m');
+    await wait('Copy requested', selectionMark);
+    await wait('\x1b]52;c;', selectionMark);
+    const automaticPayload = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(output.slice(selectionMark))![1]!;
+    expect(Buffer.from(automaticPayload,'base64').toString()).toBe('Hello fixture'); expect(output.slice(selectionMark)).toContain('\x1b[7m');
     selectionMark = output.length; terminal.write('\x19'); await wait('\x1b]52;c;', selectionMark); await wait('\x07', selectionMark);
     const payload = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(output.slice(selectionMark))![1]!;
     expect(Buffer.from(payload,'base64').toString()).toBe('Hello fixture');
@@ -370,6 +373,8 @@ test('dragging chat text highlights and copies rendered content without exiting 
   for (const key of parseMouse(row,col,row,col + 12)) await c.tui.handleKey(key);
   expect(c.tui.selectedText()).toBe('Hello fixture');
   expect(c.tui.computeFrameSnapshot().cells[row]![col]!.selected).toBe(true);
+  const automatic = c.tui.takeClipboardSequence();
+  expect(Buffer.from(automatic.slice(7,-1),'base64').toString()).toBe('Hello fixture');
   await c.tui.handleKey('Ctrl+C');
   const clipboard = c.tui.takeClipboardSequence();
   expect(Buffer.from(clipboard.slice(7,-1),'base64').toString()).toBe('Hello fixture');
@@ -654,4 +659,81 @@ test('cancelled reconnect of the current account clears the unusable selection b
   expect(c.client.status().selection).toBeNull();
   expect(c.client.activeSession()).toBeNull();
   expect(c.app.conversations.get(session)?.messages).toHaveLength(2);
+});
+
+test('empty permissions is a compact manager with no grant actions or transcript bleed', async () => {
+  const c = await setup(); await c.tui.submitPrompt('Visible private transcript');
+  await c.tui.executeSlashCommand('/permissions');
+  const frame = c.tui.computeFrameSnapshot();
+  expect(frame.plainText).toContain('No requests waiting');
+  expect(frame.plainText).not.toContain('Allow once');
+  expect(frame.plainText).not.toContain('Visible private transcript');
+  expect(frame.plainLines.filter(line => line.includes('│')).length).toBeLessThan(12);
+  for (const key of ['1','2','3','Enter']) await c.tui.handleKey(key);
+  expect(c.client.listPermissions()).toHaveLength(0);
+  await c.tui.handleKey('Escape'); expect(c.tui.getActiveOverlay()).toBe('none');
+});
+
+test('permissions ignores resolved history, defaults to deny and binds decisions to the selected request', async () => {
+  const c = await setup();
+  const old = c.client.enqueuePermissionRequest({capability:'fs.read', action:'read old.env', target:'old.env', reason:'Old'});
+  c.client.resolvePermission(old.approvalId, old.scopeHash, 'once');
+  const first = c.client.enqueuePermissionRequest({capability:'fs.read', action:'read first.env', target:'first.env', reason:'Secret'});
+  await c.tui.executeSlashCommand('/permissions');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('first.env');
+  await c.tui.handleKey('ArrowRight'); // deny -> once, for the selected request only
+  const second = c.client.enqueuePermissionRequest({capability:'fs.read', action:'read second.env', target:'second.env', reason:'Secret'});
+  await c.tui.handleKey('Enter');
+  expect(c.client.listPermissions().find(r => r.approvalId === first.approvalId)?.status).toBe('approved_once');
+  expect(c.client.listPermissions().find(r => r.approvalId === second.approvalId)?.status).toBe('pending');
+  await c.tui.handleKey('Enter'); // new selection resets to deny
+  expect(c.client.listPermissions().find(r => r.approvalId === second.approvalId)?.status).toBe('denied');
+  expect(c.tui.getActiveOverlay()).toBe('none');
+});
+
+test('slash command drafts do not add model context and permission dialogs fit tiny terminals', async () => {
+  const c = await setup();
+  expect(c.client.context('/context').estimateTokens).toBe(c.client.context().estimateTokens);
+  expect(c.client.context('/permissions').estimateTokens).toBe(c.client.context().estimateTokens);
+  expect(c.client.context('   ').estimateTokens).toBe(c.client.context().estimateTokens);
+  expect(c.client.context('hi   ').estimateTokens).toBe(c.client.context('hi').estimateTokens);
+  expect(c.client.context('hi').estimateTokens).toBeGreaterThan(0);
+  c.client.enqueuePermissionRequest({capability:'fs.read',action:'read secret',target:'deep/'.repeat(100)+'secret.env',reason:'Sensitive file'});
+  for (const [width,height] of [[20,8],[44,14],[80,24],[160,50]]) {
+    c.tui.resize(width!,height!); await c.tui.executeSlashCommand('/permissions');
+    await c.tui.handleKey('PageDown'); await c.tui.handleKey('PageUp');
+    const frame = c.tui.computeFrameSnapshot();
+    expect(frame.plainLines).toHaveLength(height!);
+    expect(frame.plainLines.every(line => line.length <= width!)).toBe(true);
+    expect(frame.plainText).toContain('Deny');
+    for (let i=0;i<80;i++) await c.tui.handleKey('PageDown');
+    const bottom = c.tui.computeFrameSnapshot().plainText;
+    await c.tui.handleKey('PageUp');
+    if (width! < 80) expect(c.tui.computeFrameSnapshot().plainText).not.toBe(bottom);
+    else expect(c.tui.computeFrameSnapshot().plainText).toBe(bottom);
+  }
+  await c.tui.handleKey('Escape'); expect(c.client.listPendingPermissions()).toHaveLength(0);
+});
+
+test('leaving a pending permission for another overlay denies rather than hiding an active prompt', async () => {
+  const c = await setup();
+  const request = c.client.enqueuePermissionRequest({capability:'fs.read',action:'read secret',target:'.env',reason:'Secret file'});
+  await c.tui.executeSlashCommand('/permissions'); await c.tui.handleKey('Ctrl+P');
+  expect(c.tui.getActiveOverlay()).toBe('palette');
+  expect(c.client.listPermissions().find(r => r.approvalId === request.approvalId)?.status).toBe('denied');
+});
+
+test('a permission expiring at confirmation cannot grant or terminate the TUI', async () => {
+  const c = await setup();
+  const request = c.client.enqueuePermissionRequest({capability:'fs.read',action:'read secret',target:'.env',reason:'Secret'});
+  await c.tui.executeSlashCommand('/permissions');
+  const resolve = c.client.resolvePermission;
+  c.client.resolvePermission = function(id, hash, decision) {
+    request.expiresAt = new Date(Date.now()-1).toISOString();
+    return resolve.call(this,id,hash,decision);
+  };
+  try { await c.tui.handleKey('1'); } finally { c.client.resolvePermission = resolve; }
+  expect(c.client.listPermissions().find(r => r.approvalId === request.approvalId)?.status).toBe('expired');
+  expect(c.tui.getActiveOverlay()).toBe('none');
+  expect(c.tui.isExitRequested()).toBe(false);
 });
