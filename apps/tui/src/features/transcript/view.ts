@@ -97,7 +97,7 @@ export function renderTranscriptMessages(options: {
   awaitingApproval?: (call: ToolCall) => boolean;
 }): RenderedBoxLine[] {
   const { items, width, tokens, syntaxHighlighting = true } = options;
-  const innerWidth = Math.max(16, width - 4);
+  const innerWidth = Math.max(16, width - 2);
   const lines: RenderedBoxLine[] = [];
   const bg = tokens.background;
 
@@ -105,7 +105,7 @@ export function renderTranscriptMessages(options: {
     const item = items[idx]!;
     const isUser = item.role === 'user';
 
-    if (idx > 0) lines.push({ spans: [] });
+    if (idx > 0 && (isUser || !options.compactActivities)) lines.push({ spans: [] });
 
     if (isUser) {
       const questionBg = mixHex(tokens.background, tokens.accent, 0.09);
@@ -193,7 +193,7 @@ export function renderTranscriptMessages(options: {
         }
         flush();
       } else {
-        const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 4), tokens, bg, syntaxHighlighting });
+        const body = renderMarkdownBody({ content: part.text, width: Math.max(8, innerWidth - 2), tokens, bg, syntaxHighlighting });
         for (const [row, bLine] of body.entries()) {
           if (bLine.spans.length === 0) { lines.push({ spans: [] }); continue; }
           lines.push({ spans: [{ text: row === 0 && !options.compactActivities ? '• ' : '  ', fg: tokens.foregroundSubtle, bg }, ...bLine.spans] });

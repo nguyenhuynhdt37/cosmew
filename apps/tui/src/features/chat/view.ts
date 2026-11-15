@@ -45,8 +45,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     ? v.client.listWorkspaceFiles(v.composer.fileQuery)
     : [];
   const chatting = v.transcript.length > 0;
-  const wantPad = mainWidth >= 150 ? 6 : mainWidth >= 110 ? 4 : 2;
-  const framePad = !chatting || mainWidth < 32 ? 0 : Math.min(wantPad, Math.max(1, Math.floor((rows - 12) / 2)));
+  const framePad = chatting && mainWidth >= 32 ? 1 : 0;
   const contentWidth = chatting
     ? Math.max(18, mainWidth - framePad * 2)
     : Math.min(56, colWidth);
@@ -121,7 +120,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
         companionState: companionView.state,
       });
       canvas.spans(framePad, contentLeft, headerSpans, contentWidth);
-      transcriptStartRow = framePad + 2;
+      transcriptStartRow = framePad + 1;
     }
     // Live model/tool status remains above the composer, without companion artwork.
     const statusRow = v.isStreaming ? composerStartRow - 1 : -1;
