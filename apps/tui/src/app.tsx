@@ -75,7 +75,7 @@ export class FutrynTuiApp {
       get overlay() { return app.overlay; },
       get composerDraft() { return app.chat.composer.value; },
       get workspaceAccess() { return app.workspaceAccess; },
-      grantWorkspaceAccess: () => { this.workspaceAccess = true; },
+      grantWorkspaceAccess: () => { this.workspaceAccess = true; this.client.setToolsEnabled(true); },
       openOverlay: target => this.openOverlay(target),
       closeOverlay: () => { this.overlay = 'none'; },
       setBanner: message => { this.statusBanner = message; },
@@ -120,13 +120,18 @@ export class FutrynTuiApp {
   /** Startup consent is scoped to this interactive session and never grants tool permissions. */
   public startStartupGate(initialCommand?: string): void {
     this.workspaceAccess = false;
+    this.client.setToolsEnabled(false);
     this.gate.start(initialCommand);
   }
 
   /** Non-interactive runs have no way to ask, so they must not read the workspace. */
-  public denyWorkspaceAccess(): void { this.workspaceAccess = false; }
+  public denyWorkspaceAccess(): void { this.workspaceAccess = false; this.client.setToolsEnabled(false); }
 
-  public advanceStartupGate(): void { this.gate.advance(); }
+  public advanceStartupGate(): void {
+    this.gate.advance();
+    // A tool of the running turn waiting for approval brings up the permission dialog once nothing else is open.
+    if (!this.gate.active && this.chat.isStreaming && this.overlay === 'none' && this.client.listPendingPermissions().length) this.openOverlay('permissions');
+  }
 
   public isExitRequested(): boolean {
     return this.exitRequested;

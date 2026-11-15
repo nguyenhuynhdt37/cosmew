@@ -12,6 +12,25 @@ import {
   type StoredMessage,
 } from '@hannes/contracts';
 
+type StoredRow = { revision: number; role: Message['role']; content: string; state: StoredMessage['state']; parts: string | null };
+
+/** Tool fields live in the `parts` JSON column; plain text messages store NULL. */
+function encodeParts(message: Message): string | null {
+  const parts = { toolCalls: message.toolCalls, toolCallId: message.toolCallId, toolName: message.toolName };
+  return message.toolCalls || message.toolCallId ? JSON.stringify(parts) : null;
+}
+
+function decodeRow(row: StoredRow): StoredMessage {
+  const parts = row.parts ? JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName'> : {};
+  const message = messageSchema.parse({ role: row.role, content: row.content, ...parts });
+  return { ...message, revision: row.revision, state: row.state };
+}
+
+function toMessage(stored: StoredMessage): Message {
+  const { revision: _revision, state: _state, ...message } = stored;
+  return message;
+}
+
 export class SqliteConversations implements ConversationStore {
   constructor(private readonly db: Database) {}
   create(selection: Selection): string {
@@ -27,7 +46,7 @@ export class SqliteConversations implements ConversationStore {
     return this.db.transaction(() => {
       const source = this.get(id); if (!source) throw new HannesError('NOT_FOUND');
       const next = this.create(selection);
-      for (const message of source.messages.filter(m => m.state === 'committed')) this.append(next, { role: message.role, content: message.content }, 'committed');
+      for (const message of source.messages.filter(m => m.state === 'committed')) this.append(next, toMessage(message), 'committed');
       return this.get(next)!;
     }).immediate();
   }
@@ -37,7 +56,7 @@ export class SqliteConversations implements ConversationStore {
         messageSchema.parse(message);
         const row = this.db.query('UPDATE conversations SET revision=revision+1 WHERE id=? RETURNING revision').get(id) as { revision: number } | null;
         if (!row) throw new HannesError('STORAGE');
-        this.db.query('INSERT INTO messages VALUES(?,?,?,?,?)').run(id, row.revision, message.role, message.content, state);
+        this.db.query('INSERT INTO messages (conversation, revision, role, content, state, parts) VALUES(?,?,?,?,?,?)').run(id, row.revision, message.role, message.content, state, encodeParts(message));
         if (receipt) this.db.query('INSERT INTO turn_receipts VALUES(?,?,?)').run(id, row.revision, JSON.stringify(turnReceiptSchema.parse(receipt)));
         return row.revision;
       }).immediate();
@@ -45,13 +64,15 @@ export class SqliteConversations implements ConversationStore {
       throw new HannesError('STORAGE');
     }
   }
-  complete(id: string, revision: number, message: Message, receipt?: TurnReceipt): void {
+  complete(id: string, revision: number, message: Message, receipt?: TurnReceipt, intermediate: Message[] = []): void {
     try {
       this.db.transaction(() => {
         const row = this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as { revision: number } | null;
         if (row?.revision !== revision) throw new HannesError('STORAGE');
         const result = this.db.query("UPDATE messages SET state='committed' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
         if (result.changes !== 1) throw new HannesError('STORAGE');
+        // Tool rounds of this turn are committed together with the final answer, never on their own.
+        for (const step of intermediate) this.append(id, messageSchema.parse(step), 'committed');
         this.append(id, messageSchema.parse(message), 'committed');
         if (receipt) this.writeReceipt(id, revision, receipt);
       }).immediate();
@@ -84,9 +105,9 @@ export class SqliteConversations implements ConversationStore {
       }[];
       return rows.map(row => {
         const selection = selectionSchema.parse(JSON.parse(row.selection));
-        const msgs = this.db
-          .query('SELECT revision, role, content, state FROM messages WHERE conversation=? ORDER BY revision ASC')
-          .all(row.id) as StoredMessage[];
+        const msgs = (this.db
+          .query('SELECT revision, role, content, state, parts FROM messages WHERE conversation=? ORDER BY revision ASC')
+          .all(row.id) as StoredRow[]).map(decodeRow);
         const firstUser = msgs.find(m => m.role === 'user')?.content ?? '';
         const lastMsg = msgs.at(-1);
         const title = firstUser
@@ -118,9 +139,9 @@ export class SqliteConversations implements ConversationStore {
       } | null;
       if (!row) return undefined;
       const selection = selectionSchema.parse(JSON.parse(row.selection));
-      const messages = this.db
-        .query('SELECT revision, role, content, state FROM messages WHERE conversation=? ORDER BY revision ASC')
-        .all(row.id) as StoredMessage[];
+      const messages = (this.db
+        .query('SELECT revision, role, content, state, parts FROM messages WHERE conversation=? ORDER BY revision ASC')
+        .all(row.id) as StoredRow[]).map(decodeRow);
       const firstUser = messages.find(m => m.role === 'user')?.content ?? '';
       const lastMsg = messages.at(-1);
       return {

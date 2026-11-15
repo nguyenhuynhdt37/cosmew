@@ -174,7 +174,8 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.query('INSERT INTO messages VALUES(?,?,?,?,?)').run(legacyId, 2, 'assistant', 'Old answer', 'committed');
   legacy.close();
   const db = openPrivateDatabase(dir); cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(2);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(3);
+  expect((db.query('PRAGMA table_info(messages)').all() as { name: string }[]).some(column => column.name === 'parts')).toBe(true); // v3 tool parts
   const store = new SqliteConversations(db);
   expect(store.get(legacyId)?.messages.map(message => message.content)).toEqual(['Old question', 'Old answer']);
   expect(store.get(legacyId)?.turns).toEqual([]);
@@ -193,7 +194,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
     expect(JSON.stringify(record.turns)).not.toContain('Private prompt');
     expect(record.messages[0]!.state).toBe('interrupted');
   }
-  const future = directory(); const invalid = new Database(join(future, 'provider-auth.sqlite')); invalid.exec('PRAGMA user_version=3'); invalid.close();
+  const future = directory(); const invalid = new Database(join(future, 'provider-auth.sqlite')); invalid.exec('PRAGMA user_version=4'); invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });
 

@@ -1,11 +1,20 @@
-import { generateText, streamText, jsonSchema, type LanguageModel, type ToolSet } from 'ai';
+import { generateText, streamText, jsonSchema, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogle } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import Ajv, { type ValidateFunction } from 'ajv';
 import { parseRateLimitHeaders } from './limits';
-import { HannesError, requestSchema, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@hannes/contracts';
+import { HannesError, requestSchema, type Message, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@hannes/contracts';
+
+/** Hannes messages → AI SDK messages, including assistant tool calls and tool results. */
+export function toModelMessages(messages: Message[]): ModelMessage[] {
+  return messages.map((m): ModelMessage => {
+    if (m.role === 'tool') return { role: 'tool', content: [{ type: 'tool-result', toolCallId: m.toolCallId!, toolName: m.toolName!, output: { type: 'text', value: m.content } }] };
+    if (m.role === 'assistant' && m.toolCalls) return { role: 'assistant', content: [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...m.toolCalls.map(c => ({ type: 'tool-call' as const, toolCallId: c.id, toolName: c.name, input: c.input }))] };
+    return { role: m.role, content: m.content } as ModelMessage;
+  });
+}
 import { normalizeError, ProviderTransport } from './http';
 
 const usage = (u: { inputTokens?: number; outputTokens?: number; inputTokenDetails?: {cacheReadTokens?: number; cacheWriteTokens?: number}; outputTokenDetails?: {reasoningTokens?: number} }, info?: ModelInfo): Usage => ({
@@ -24,7 +33,8 @@ export class ProviderAdapter implements ModelPort {
     let request: ModelRequest;
     try { request = requestSchema.parse(input); } catch { throw new HannesError('INVALID_INPUT'); }
     if (request.modelId !== this.modelId || JSON.stringify(request).length > 1048576) throw new HannesError('INVALID_INPUT');
-    if (request.tools.length && this.info?.capabilities.tools !== 'supported') throw new HannesError('UNSUPPORTED');
+    // Unknown capability is tried (ADR 0017); only a model known to reject tools is refused up front.
+    if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new HannesError('UNSUPPORTED');
     if (request.maxEstimatedCostUSD !== undefined) {
       const prices = this.info?.pricing; if (!prices) throw new HannesError('BUDGET');
       // Deliberately an estimate guard, not an exact tokenizer or provider billing ceiling.
@@ -62,7 +72,7 @@ export class ProviderAdapter implements ModelPort {
     }
     const controller = new AbortController();
     const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), AbortSignal.timeout(p.timeoutMs)]);
-    return { model, messages: request.messages, maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
+    return { model, messages: toModelMessages(request.messages), maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
       ...(request.reasoningEffort ? { providerOptions: { openai: { reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true } } } : {}),
       maxRetries: 0, abortSignal, tools: request.tools.length ? tools : undefined,
       experimental_telemetry: { isEnabled: false, recordInputs: false, recordOutputs: false }, controller, validators, responseHeaders };

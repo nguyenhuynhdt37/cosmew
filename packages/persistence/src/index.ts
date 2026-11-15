@@ -28,6 +28,7 @@ import {
 } from '@hannes/contracts';
 export { openPrivateDatabase } from './database';
 export { SqliteConversations } from './session-store';
+export { ToolAuditStore, type ToolAuditEntry } from './tool-audit';
 
 export class SqliteSettings implements SettingsStore {
   constructor(private readonly db: Database) {}

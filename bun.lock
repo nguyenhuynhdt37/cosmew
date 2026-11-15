@@ -11,7 +11,9 @@
         "@hannes/persistence": "workspace:*",
         "@hannes/sdk": "workspace:*",
         "@hannes/security": "workspace:*",
+        "@hannes/tools": "workspace:*",
         "@hannes/tui": "workspace:*",
+        "@hannes/workspace": "workspace:*",
         "@types/bun": "1.4.4",
         "typescript": "7.0.2",
       },
@@ -30,7 +32,9 @@
         "@hannes/persistence": "workspace:*",
         "@hannes/sdk": "workspace:*",
         "@hannes/security": "workspace:*",
+        "@hannes/tools": "workspace:*",
         "@hannes/tui": "workspace:*",
+        "@hannes/workspace": "workspace:*",
       },
     },
     "apps/tui": {
@@ -90,6 +94,23 @@
         "@napi-rs/keyring": "2.1.2",
       },
     },
+    "packages/tools": {
+      "name": "@hannes/tools",
+      "version": "0.1.0",
+      "dependencies": {
+        "@hannes/contracts": "workspace:*",
+        "@hannes/security": "workspace:*",
+        "@hannes/workspace": "workspace:*",
+        "zod": "4.6.7",
+      },
+    },
+    "packages/workspace": {
+      "name": "@hannes/workspace",
+      "version": "0.1.0",
+      "dependencies": {
+        "@hannes/contracts": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@ai-sdk/anthropic": ["@ai-sdk/anthropic@4.0.105", "", { "dependencies": { "@ai-sdk/provider": "4.0.38", "@ai-sdk/provider-utils": "5.0.81" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-i6kmv6y+FGTBxOPtLRrb5I+92WcFFGubhd33CD0JeaSyFOnLJ8my4a9olkAgyR9fACHMzxFBmoEHd0uO4i72bA=="],
@@ -120,7 +141,11 @@
 
     "@hannes/security": ["@hannes/security@workspace:packages/security"],
 
+    "@hannes/tools": ["@hannes/tools@workspace:packages/tools"],
+
     "@hannes/tui": ["@hannes/tui@workspace:apps/tui"],
+
+    "@hannes/workspace": ["@hannes/workspace@workspace:packages/workspace"],
 
     "@napi-rs/keyring": ["@napi-rs/keyring@2.1.2", "", { "optionalDependencies": { "@napi-rs/keyring-darwin-arm64": "2.1.2", "@napi-rs/keyring-darwin-x64": "2.1.2", "@napi-rs/keyring-freebsd-x64": "2.1.2", "@napi-rs/keyring-linux-arm-gnueabihf": "2.1.2", "@napi-rs/keyring-linux-arm64-gnu": "2.1.2", "@napi-rs/keyring-linux-arm64-musl": "2.1.2", "@napi-rs/keyring-linux-riscv64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-musl": "2.1.2", "@napi-rs/keyring-win32-arm64-msvc": "2.1.2", "@napi-rs/keyring-win32-ia32-msvc": "2.1.2", "@napi-rs/keyring-win32-x64-msvc": "2.1.2" } }, "sha512-9i1SR6tYeQ3o1beLeVMxhN6Fq513m9TZlTs+46+4JgvSNkaFoW9S4WrpV5MjzE+0CzVoC+dZ4RfZDIgW6+afnQ=="],
 

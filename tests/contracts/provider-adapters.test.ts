@@ -37,11 +37,13 @@ for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
     const call = events.find(e => e.type === 'toolCallComplete'); expect(call?.type === 'toolCallComplete' && call.call.input).toEqual({ query: 'hello' }); x.db.close();
   });
 }
-test('missing keys do not invoke HTTP; unsupported tool capability fails before network', async () => {
+test('missing keys do not invoke HTTP; a model known to reject tools fails before network', async () => {
   const x = setup(); x.vault.values.clear();
   await expect(new ProviderAdapter(x.transport, 'fixture-model').generate(x.request)).rejects.toMatchObject({ code: 'AUTH' });
   expect(x.f.requests).toHaveLength(0);
-  await expect(new ProviderAdapter(x.transport, 'fixture-model').generate({ ...x.request, tools: [{ name: 'a', description: '', inputSchema: {} }] })).rejects.toMatchObject({ code: 'UNSUPPORTED' }); x.db.close();
+  const info = normalizeModel('fixture-model', 'fixture'); info.capabilities.tools = 'unsupported';
+  await expect(new ProviderAdapter(x.transport, 'fixture-model', info).generate({ ...x.request, tools: [{ name: 'a', description: '', inputSchema: {} }] })).rejects.toMatchObject({ code: 'UNSUPPORTED' });
+  expect(x.f.requests).toHaveLength(0); x.db.close(); // ADR 0017: only 'unsupported' is refused up front; 'unknown' is tried
 });
 test('auth, invalid model, rate limit errors are safe; generation never retries uncertain acceptance', async () => {
   const x = setup(); const adapter = new ProviderAdapter(x.transport, 'fixture-model');

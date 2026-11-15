@@ -18,15 +18,20 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, { strict: true });
     db.exec('PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as { user_version: number }).user_version;
-    if (version > 2) { db.close(); throw new HannesError('STORAGE'); }
+    if (version > 3) { db.close(); throw new HannesError('STORAGE'); }
     db.transaction(() => {
       db.exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, selection TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS messages (conversation TEXT NOT NULL REFERENCES conversations(id), revision INTEGER NOT NULL,
           role TEXT NOT NULL, content TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(conversation,revision));
         CREATE TABLE IF NOT EXISTS turn_receipts (conversation TEXT NOT NULL REFERENCES conversations(id), revision INTEGER NOT NULL,
-          data TEXT NOT NULL, PRIMARY KEY(conversation,revision));
-        PRAGMA user_version=2;`);
+          data TEXT NOT NULL, PRIMARY KEY(conversation,revision));`);
+      // v3 (ADR 0017): tool calls and tool results are stored as JSON next to the message text.
+      const columns = db.query('PRAGMA table_info(messages)').all() as { name: string }[];
+      if (!columns.some(column => column.name === 'parts')) db.exec('ALTER TABLE messages ADD COLUMN parts TEXT');
+      db.exec(`CREATE TABLE IF NOT EXISTS tool_audit (at TEXT NOT NULL, call_id TEXT NOT NULL, tool TEXT NOT NULL, target TEXT,
+        phase TEXT NOT NULL, decision TEXT, reason TEXT, outcome TEXT, code TEXT);`);
+      db.exec('PRAGMA user_version=3;');
     })();
     return db;
   } catch { throw new HannesError('STORAGE'); }

@@ -49,7 +49,8 @@ export interface WorkspaceDiffReport {
 export interface ConversationStore {
   create(selection: Selection): string;
   append(id: string, message: Message, state: 'pending' | 'committed', receipt?: import('./telemetry').TurnReceipt): number;
-  complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt): void;
+  /** Commit the pending user message, any tool rounds of this turn (`intermediate`) and the final answer atomically. */
+  complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt, intermediate?: Message[]): void;
   interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt): void;
   observeTurn?(id: string, revision: number, receipt: import('./telemetry').TurnReceipt): void;
   list?(): SessionSummary[];

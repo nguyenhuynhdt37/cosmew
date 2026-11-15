@@ -1,4 +1,4 @@
-import type { Message, ToolCall, Usage } from '@hannes/contracts';
+import type { Message, ToolCall, ToolResult, Usage } from '@hannes/contracts';
 
 export interface TranscriptItem {
   id: string;
@@ -8,6 +8,8 @@ export interface TranscriptItem {
   accountAlias?: string;
   usage?: Usage | null;
   toolCalls?: ToolCall[];
+  /** Results matched to `toolCalls` by call id; a call without a result is still running. */
+  toolResults?: ToolResult[];
   streaming?: boolean;
   errorText?: string;
   durationMs?: number;
@@ -17,7 +19,7 @@ export interface TranscriptItem {
 
 export interface ToolExecutionSummary {
   call: ToolCall;
-  status: 'completed' | 'denied' | 'not-implemented';
+  status: 'running' | 'completed' | 'denied' | 'failed' | 'not-implemented';
   expanded?: boolean;
   note?: string;
 }

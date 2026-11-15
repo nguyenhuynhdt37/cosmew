@@ -89,6 +89,8 @@ export interface FutrynBackendPorts {
   renameAccount(idOrAlias: string, newAlias: string): Account;
   logoutAccount(idOrAlias: string, remove?: boolean): Promise<void>;
   validateAccount(account: Account, signal?: AbortSignal, generate?: boolean): Promise<{ models: number; validation: string }>;
+  /** Optional: session-scoped tool grants ('Allow for session'), as workspace-relative targets. */
+  toolGrants?: { list(): string[]; clear(): void };
   /** Optional: live balance/quota from providers that expose one (e.g. OpenRouter key credit). */
   fetchAccountLimits?: FetchAccountLimits;
   discoverModels(account: Account, signal?: AbortSignal): Promise<{ models: ModelInfo[]; stale: boolean; warning?: string }>;
@@ -134,15 +136,35 @@ export class FutrynClient {
   private readonly permissions = new Map<string, PermissionPromptRequest>();
   private readonly sessionGrants = new Set<string>();
   private readonly permissionWaiters = new Map<string, (resolution: PermissionPromptResolution) => void>();
+  /** Workspace tools are offered only after the UI obtained folder consent (ADR 0014/0017). */
+  private toolsAllowed = false;
 
   constructor(private readonly ports: FutrynBackendPorts) {}
 
   private clearSessionAuthorization(): void {
     this.sessionGrants.clear();
+    this.ports.toolGrants?.clear();
     for (const request of this.permissions.values()) {
-      if (request.status === 'pending') request.status = 'denied';
+      if (request.status === 'pending') {
+        request.status = 'denied';
+        // Wake any tool call waiting on this prompt; a cleared session never grants.
+        const waiter = this.permissionWaiters.get(request.approvalId);
+        this.permissionWaiters.delete(request.approvalId);
+        waiter?.({ approvalId: request.approvalId, scopeHash: request.scopeHash, decision: 'deny', resolvedAt: new Date().toISOString() });
+      }
     }
   }
+
+  /** Allow or withhold workspace tools for this client (the TUI enables them after folder consent). */
+  setToolsEnabled(enabled: boolean): void { this.toolsAllowed = enabled; }
+
+  toolsEnabled(): boolean { return this.toolsAllowed; }
+
+  /** Files the user allowed tools to read for the rest of this session. */
+  listToolGrants(): string[] { return this.ports.toolGrants?.list() ?? []; }
+
+  /** Revoke every session tool grant; the next read asks again. */
+  revokeToolGrants(): void { this.ports.toolGrants?.clear(); this.notifyStateChange(); }
 
   workspace(): string {
     return this.ports.workspace;
@@ -827,6 +849,29 @@ export class FutrynClient {
     }
     this.emitReactiveEvent(decision === 'deny' ? 'error' : 'done', `Permission ${req.status}`);
     return resolution;
+  }
+
+  /**
+   * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
+   * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
+   */
+  requestPermission(input: { capability: PermissionPromptRequest['capability']; action: string; target: string; reason: string; riskLevel?: PermissionPromptRequest['riskLevel'] }, signal?: AbortSignal): Promise<PermissionResolutionScope> {
+    if (signal?.aborted) return Promise.resolve('deny');
+    const request = this.enqueuePermissionRequest(input);
+    if (request.status === 'approved_session') return Promise.resolve('session');
+    return new Promise(resolve => {
+      const settle = (decision: PermissionResolutionScope) => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); resolve(decision); };
+      const expire = () => {
+        if (request.status === 'pending') request.status = 'expired';
+        this.permissionWaiters.delete(request.approvalId);
+        this.notifyStateChange();
+        settle('deny');
+      };
+      const onAbort = () => { if (request.status === 'pending') this.dismissPermissionDialog(request.approvalId); else expire(); };
+      const timer = setTimeout(expire, Math.max(0, Date.parse(request.expiresAt) - Date.now()));
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.permissionWaiters.set(request.approvalId, resolution => settle(resolution.decision));
+    });
   }
 
   /**

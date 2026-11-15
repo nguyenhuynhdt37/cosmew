@@ -20,6 +20,8 @@
     "packages/security/src/**/*.ts",
     "packages/persistence/src/**/*.ts",
     "packages/sdk/src/**/*.ts",
+    "packages/tools/src/**/*.ts",
+    "packages/workspace/src/**/*.ts",
     "apps/cli/src/**/*.ts",
     "apps/tui/src/**/*.ts",
     "apps/tui/src/**/*.tsx",

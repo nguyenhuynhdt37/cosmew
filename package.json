@@ -11,7 +11,9 @@
     "packages/models",
     "packages/security",
     "packages/persistence",
-    "packages/sdk"
+    "packages/sdk",
+    "packages/tools",
+    "packages/workspace"
   ],
   "scripts": {
     "hannes": "bun apps/cli/src/index.ts",
@@ -32,6 +34,8 @@
     "@hannes/models": "workspace:*",
     "@hannes/core": "workspace:*",
     "@hannes/sdk": "workspace:*",
-    "@hannes/tui": "workspace:*"
+    "@hannes/tui": "workspace:*",
+    "@hannes/tools": "workspace:*",
+    "@hannes/workspace": "workspace:*"
   }
 }

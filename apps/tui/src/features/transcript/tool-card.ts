@@ -1,5 +1,6 @@
 import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
 import type { RenderedBoxLine } from '../../ui';
+import { toolTarget } from './logic';
 import type { ToolExecutionSummary } from './types';
 
 export function renderToolExecutionCard(options: {
@@ -10,22 +11,12 @@ export function renderToolExecutionCard(options: {
 }): RenderedBoxLine[] {
   const { width, summary, tokens } = options;
   const inner = Math.max(12, width - 4);
-  const icon = summary.status === 'denied' ? '✖' : summary.status === 'completed' ? '✓' : '○';
-  const color =
-    summary.status === 'denied' ? tokens.error : summary.status === 'completed' ? tokens.info : tokens.warning;
-  const note =
-    summary.note ??
-    (summary.status === 'not-implemented'
-      ? 'Not implemented in PA1/TUI1'
-      : 'recorded in transcript');
-  let args = '';
-  try {
-    args = JSON.stringify(summary.call.input) ?? '';
-  } catch {
-    args = '';
-  }
-  const head = `${icon} ${summary.call.name}`;
-  const rest = `  ${args}  — ${note}`;
+  const icon = ({ running: '…', completed: '✓', denied: '✖', failed: '!', 'not-implemented': '○' } as const)[summary.status];
+  const color = summary.status === 'denied' || summary.status === 'failed' ? tokens.error : summary.status === 'completed' ? tokens.info : tokens.warning;
+  const note = summary.note ?? (summary.status === 'not-implemented' ? 'Not implemented' : '');
+  const target = toolTarget(summary.call);
+  const head = `${icon} ${summary.call.name.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')}`;
+  const rest = ` ${target}${note ? `  — ${note}` : ''}`;
   const text = `${head}${rest}`.slice(0, inner).padEnd(inner, ' ');
   return [
     {

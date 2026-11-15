@@ -1,6 +1,6 @@
 # Tools và permission contracts
 
-**Đề xuất v1; Not implemented.** Allow/Ask/Deny là quyết định policy, không là nhãn do tool/plugin tự khai. Dispatcher là enforcement point, security là decision owner; executor không nhận raw bypass path.
+**Đề xuất v1. TOOLS1 đã triển khai một phần con chỉ đọc (`read`/`glob`/`grep`, quyết định allow/ask/deny, approval once/session/deny, audit) theo [ADR 0017](../adr/0017-read-only-tools-and-permission-engine.md); phần còn lại (write, shell, lease, revision, artifact) vẫn Not implemented.** Allow/Ask/Deny là quyết định policy, không là nhãn do tool/plugin tự khai. Dispatcher là enforcement point, security là decision owner; executor không nhận raw bypass path.
 
 | Record | Fields | Invariants |
 |---|---|---|

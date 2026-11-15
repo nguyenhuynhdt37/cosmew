@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import {
@@ -6,10 +6,16 @@ import {
   type Account,
   type CredentialVault,
   type DiffLine,
+  type Message,
+  type StoredMessage,
+  type ToolPort,
+  type ToolResult,
   type WorkspaceDiffFile,
   type WorkspaceDiffReport,
 } from '@hannes/contracts';
 import { Conversation } from '@hannes/core';
+import { ToolDispatcher } from '@hannes/tools';
+import { WorkspaceRoot } from '@hannes/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -27,11 +33,12 @@ import {
   RuntimeLeases,
   SqliteConversations,
   SqliteSettings,
+  ToolAuditStore,
   openPrivateDatabase,
 } from '@hannes/persistence';
 import { SubscriptionHost, type SubscriptionHostOptions } from '../subscriptions/host';
 import { FutrynClient } from '@hannes/sdk';
-import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, redactModel, terminalText, validateEndpoint } from '@hannes/security';
+import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, SessionGrants, redactModel, terminalText, validateEndpoint } from '@hannes/security';
 
 const IGNORED_DIRS = new Set(['.git', 'node_modules', '.hannes', 'dist', '.DS_Store', '.codegraph']);
 
@@ -196,11 +203,20 @@ export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffRep
   }
 }
 
+/** Committed history as conversation messages, keeping tool calls and tool results. */
+function committedMessages(messages: StoredMessage[]): Message[] {
+  return messages.filter(m => m.state === 'committed').map(({ revision: _revision, state: _state, ...message }) => message);
+}
+
+/** Why a read needs approval, in words the permission dialog can show. */
+const APPROVAL_REASONS: Record<string, string> = { 'secret-file': 'This file usually holds secrets (keys, passwords, tokens).' };
+
 export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions } = {}) {
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
   const conversations = new SqliteConversations(db);
+  const toolAudit = new ToolAuditStore(db);
   const customThemes = new FileCustomThemeStore(directory);
   const redactor = new Redactor();
   const vault = services.vault ?? new SecureVault(redactor);
@@ -236,11 +252,18 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: { role: 'user' | 'assistant'; content: string }[] }) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
     if (!info) throw new HannesError('NOT_FOUND');
+    // Subscription runtimes reject every tool request (ADR 0008); only direct API providers get tools.
+    const runtime = !!registry.get(account.providerId).runtime;
+    // Re-read the catalog each turn so a model marked 'unsupported' stops receiving tools at once.
+    const modelTools: ToolPort | undefined = tools && !runtime ? {
+      descriptors: () => catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
+      invoke: (call, signal) => tools.invoke(call, signal),
+    } : undefined;
     return new Conversation(
       selection,
       redactModel(registry.get(account.providerId).runtime
@@ -248,6 +271,8 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         : new ProviderAdapter(transport(account), selection.modelId, info), redactor),
       conversations,
       existingSession,
+      modelTools,
+      runtime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
     );
   };
 
@@ -258,7 +283,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
   const resumeConversation = (id: string) => {
     const record = conversations.get(id); if (!record) throw new HannesError('NOT_FOUND');
-    return createConversationForSelection(record.selection, { id, messages: record.messages.filter(m => m.state === 'committed').map(m => ({ role: m.role, content: m.content })) });
+    return createConversationForSelection(record.selection, { id, messages: committedMessages(record.messages) });
   };
 
   const discoverModels = async (account: Account, signal?: AbortSignal) => {
@@ -314,8 +339,32 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
   const createFutrynClient = (workspaceRoot = resolve('.')): FutrynClient => {
     const activeConvMap = new Map<string, Conversation>();
+    // Read-only workspace tools (ADR 0017). Offered only while the client allows them, i.e. after
+    // the TUI obtained folder consent; approvals go through the client's permission dialog.
+    let client: FutrynClient | undefined;
+    let dispatcher: ToolDispatcher | undefined;
+    let workspace: WorkspaceRoot | undefined;
+    const grants = new SessionGrants();
+    const workspaceTree = () => workspace ??= new WorkspaceRoot(workspaceRoot);
+    const tools = () => dispatcher ??= new ToolDispatcher({
+      workspace: workspaceTree(),
+      grants,
+      stateDirectory: realpathSync.native(resolve(directory)),
+      redact: text => redactor.text(text),
+      audit: record => toolAudit.append(record),
+      approve: (request, signal) => client
+        ? client.requestPermission({ capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
+        : Promise.resolve('deny'),
+    });
+    const toolPort: ToolPort = {
+      descriptors: () => (client?.toolsEnabled() ? tools().descriptors() : []),
+      invoke: async (call, signal): Promise<ToolResult> => client?.toolsEnabled()
+        ? tools().invoke(call, signal)
+        : { callId: call.id, name: call.name, status: 'denied', code: 'TOOLS_DISABLED', content: 'Workspace tools are not enabled for this session.' },
+    };
 
-    return new FutrynClient({
+    client = new FutrynClient({
+      toolGrants: { list: () => grants.list().map(grant => workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),
       settings,
       listIntegrations: () => integrations.list().map(integration => ({ ...integration,
@@ -390,13 +439,13 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         // Validate the target account/model before creating any durable copy.
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
-        const messages = record.messages.map(m => ({ role: m.role, content: m.content }));
-        const conv = createConversationForSelection(selection, { id: record.id, messages });
+        const messages = committedMessages(record.messages);
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = conversation(project);
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort);
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -404,13 +453,11 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       resumeSession: id => {
         const record = conversations.get(id);
         if (!record) throw new HannesError('NOT_FOUND');
-        const committed = record.messages
-          .filter(m => m.state === 'committed')
-          .map(m => ({ role: m.role, content: m.content }));
+        const committed = committedMessages(record.messages);
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        });
+        }, toolPort);
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -423,13 +470,11 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         if (!conv) {
           const record = conversations.get(sessionId);
           if (!record) throw new HannesError('NOT_FOUND');
-          const committed = record.messages
-            .filter(m => m.state === 'committed')
-            .map(m => ({ role: m.role, content: m.content }));
+          const committed = committedMessages(record.messages);
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          });
+          }, toolPort);
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
@@ -441,6 +486,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       getWorkspaceDiff: () => computeWorkspaceGitDiff(workspaceRoot),
       sanitizeText: text => terminalText(redactor.text(text)),
     });
+    return client;
   };
 
   return {

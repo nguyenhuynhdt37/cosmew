@@ -6,7 +6,7 @@ import {
   applyFileReferenceSelection, createInitialComposerState, getMatchingSlashCommands, navigateComposerHistory,
   recordComposerHistory, updateComposerValue, type ComposerState,
 } from '../composer';
-import type { TranscriptItem } from '../transcript';
+import { messagesToTranscript, type TranscriptItem } from '../transcript';
 
 /**
  * The main screen: prompt composer, transcript and the streaming turn. Owns their state so
@@ -34,13 +34,7 @@ export class ChatController {
       return;
     }
     const status = this.host.client.status();
-    this.transcript = active.messages.map((m, idx) => ({
-      id: `${active.id}-${idx}`,
-      role: m.role,
-      content: m.content,
-      modelId: active.selection.modelId,
-      accountAlias: status.activeAccount?.alias,
-    }));
+    this.transcript = messagesToTranscript(active.messages, { idPrefix: active.id, modelId: active.selection.modelId, accountAlias: status.activeAccount?.alias });
   }
 
   clear(): void { this.transcript = []; }
@@ -110,6 +104,8 @@ export class ChatController {
           const calls: ToolCall[] = assistantItem.toolCalls ?? [];
           calls.push(event.call);
           assistantItem.toolCalls = calls;
+        } else if (event.type === 'toolResult') {
+          assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
         } else if (event.type === 'completed') {
           completed = true;
           assistantItem.usage = event.usage;
@@ -135,7 +131,9 @@ export class ChatController {
             ? 'No active provider account or model selected. Run /login or /model.'
             : err.code === 'CANCELLED'
               ? 'Generation cancelled by user.'
-              : err.code
+              : err.code === 'UNSUPPORTED'
+                ? 'This model does not accept workspace tools. Tools are now off for it; send your message again.'
+                : err.code
         }`;
         this.banner = assistantItem.errorText;
       } else {

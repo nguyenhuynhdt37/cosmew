@@ -1,6 +1,6 @@
 import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { highlightCodeLine, wrapTextToWidth } from './logic';
+import { highlightCodeLine, toolSummary, wrapTextToWidth } from './logic';
 import { renderToolExecutionCard } from './tool-card';
 import type { TranscriptItem } from './types';
 
@@ -116,6 +116,12 @@ export function renderTranscriptMessages(options: {
         }
       }
     }
+    // Tool use happens before the answer, so its cards come first.
+    if (item.toolCalls && item.toolCalls.length > 0) {
+      for (const call of item.toolCalls) {
+        lines.push(...renderToolExecutionCard({ width, summary: toolSummary(call, item.toolResults), tokens, borderStyle: options.borderStyle }));
+      }
+    }
     if (item.content || item.streaming) {
       const body = renderMarkdownBody({
         content: item.content || '▍',
@@ -141,19 +147,6 @@ export function renderTranscriptMessages(options: {
           { text: `  ${item.errorText}`.slice(0, innerWidth), fg: tokens.error, bg },
         ],
       });
-    }
-
-    if (item.toolCalls && item.toolCalls.length > 0) {
-      for (const call of item.toolCalls) {
-        lines.push(
-          ...renderToolExecutionCard({
-            width,
-            summary: { call, status: 'not-implemented' },
-            tokens,
-            borderStyle: options.borderStyle,
-          }),
-        );
-      }
     }
 
     const metaParts: string[] = [];

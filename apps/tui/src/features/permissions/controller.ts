@@ -15,7 +15,7 @@ export class PermissionsFeature implements OverlayFeature {
   layout(_overlay: 'permissions', cols: number, rows: number) { return wideLayout(cols, rows); }
 
   render(_overlay: 'permissions', size: { width: number; height: number }, theme: ThemeFrame) {
-    return renderPermissionDialogOverlay({ ...size, requests: this.host.client.listPermissions(), state: this.state, tokens: theme.tokens, borderStyle: theme.borderStyle });
+    return renderPermissionDialogOverlay({ ...size, requests: this.host.client.listPermissions(), grants: this.host.client.listToolGrants(), state: this.state, tokens: theme.tokens, borderStyle: theme.borderStyle });
   }
 
   handleKey(_overlay: 'permissions', key: string): void {
@@ -30,6 +30,12 @@ export class PermissionsFeature implements OverlayFeature {
         host.setBanner(`Permission request ${current.approvalId.slice(0, 8)} denied on dialog dismiss.`);
       }
       host.closeOverlay();
+      return;
+    }
+    if (key === 'Ctrl+X') {
+      const count = host.client.listToolGrants().length;
+      host.client.revokeToolGrants();
+      host.setBanner(count ? `Revoked ${count} session grant(s); tools will ask again.` : 'No session grants to revoke.');
       return;
     }
     if (key === 'ArrowDown' || key === 'ArrowUp') {
@@ -50,6 +56,8 @@ export class PermissionsFeature implements OverlayFeature {
       const decision = key === '1' ? 'once' : key === '2' ? 'session' : key === '3' ? 'deny' : state.selectedAction;
       host.client.resolvePermission(current.approvalId, current.scopeHash, decision);
       host.setBanner(`Permission ${current.approvalId.slice(0, 8)}: ${decision.toUpperCase()}.`);
+      // The dialog was opened for this request; return to the chat once nothing else waits.
+      if (!host.client.listPendingPermissions().length) host.closeOverlay();
     }
   }
 }

@@ -1,6 +1,6 @@
 # ADR 0017: Read-only workspace tools and permission engine (TOOLS1)
 
-**Status: Accepted 2026-11-15 by the user; implementation in progress.** `AGENTS.md` now authorizes this slice (TOOLS1) and nothing beyond it. Design inputs: the Phase 0 [tools and permissions contract](../contracts/tools-and-permissions.md), the [tools and workspace subsystem spec](../subsystems/tools-and-workspace.md) and the [upstream comparison](../delivery/tools-permissions-research.md).
+**Status: Accepted 2026-11-15 by the user; implemented and fixture-tested (live provider tool use: Needs verification).** `AGENTS.md` authorizes this slice (TOOLS1) and nothing beyond it. Design inputs: the Phase 0 [tools and permissions contract](../contracts/tools-and-permissions.md), the [tools and workspace subsystem spec](../subsystems/tools-and-workspace.md) and the [upstream comparison](../delivery/tools-permissions-research.md).
 
 ## Goal
 
@@ -73,3 +73,19 @@ Write, edit, patch, shell, network, MCP, plugins, subagents, external directorie
 1. Reads outside the workspace are **denied**, not prompted.
 2. **Built-in default rules only** in this slice; no user-editable rule file.
 3. Tool names are **`read` / `glob` / `grep`**, matching OpenCode and Claude Code conventions.
+
+4. Tools are offered to models whose tool capability is `supported` **or `unknown`**. When the provider rejects the tool definitions (HTTP 400 before any output in the first round), the model is marked `unsupported` in the catalog, the user is told, and later turns chat without tools. Nothing is re-sent automatically. Rediscovering the catalog resets the mark.
+5. A tool waiting for approval during a running turn **opens the permission dialog automatically**.
+
+## Implementation notes
+
+- **Packages.** `@hannes/workspace` (`WorkspaceRoot`, `listWorkspaceFiles`), `@hannes/tools` (`ToolDispatcher` and the `read`/`glob`/`grep` builtins), `@hannes/security` (`evaluateRead`, `SessionGrants`), `@hannes/persistence` (`ToolAuditStore`, schema **v3**: `messages.parts` JSON and the `tool_audit` table). Builds older than v3 refuse a v3 database (fail closed).
+- **Contracts (additive).** `Message` gains role `tool` with `toolCallId`/`toolName`, and assistant `toolCalls`. Plain text messages are unchanged. `ModelEvent` gains `toolResult`. `ConversationStore.complete` takes the turn's tool rounds, so they commit atomically with the final answer. `ToolPort` and `ToolResult` are in `contracts/tools.ts`.
+- **Who gets tools.** Only clients that called `setToolsEnabled(true)`. The TUI does that when the user approves the folder; non-TTY runs, `hannes run` and the line chat have no consent step and offer no tools. Subscription runtimes never get tools.
+- **Approvals.** `FutrynClient.requestPermission` resolves to `deny` on dismiss, on expiry (5 min) and on abort. Clearing session authorization (account switch, new session) also clears tool grants and wakes any waiting call with `deny`. `/permissions` lists session grants; `Ctrl+X` revokes them all.
+- **Grep.** Runs in a Worker with a hard deadline, because JavaScript cannot interrupt a running RegExp. JavaScriptCore caps one backtracking match at about 0.5 s, but many such lines add up. JS regex syntax, not ripgrep.
+- **Known limits.** The symlink-swap check is realpath plus inode comparison after open, not handle-based path resolution. A swap of an intermediate directory between the check and `open` within the same inode window is not fully excluded (Needs verification on each OS). The output redactor only knows registered secrets and common token shapes.
+
+## Evidence
+
+`tests/security/read-tools.test.ts` covers traversal, absolute paths, file and directory symlinks, secret files (ask / once / session / deny), policy order, audit order, glob/grep secret skipping, invalid input, binary files, directories, paging and the catastrophic-regex deadline. `tests/end-to-end/read-tools.test.ts` drives the real app against a fixture provider: no tools before consent; read → result → answer; stored tool parts on resume; `.env` dialog with Esc deny (secret never sent); session grant and revoke; outside-workspace denial; provider rejection marking the model `unsupported`. The full suite passed with 227 tests at the time of writing.

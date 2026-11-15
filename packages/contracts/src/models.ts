@@ -84,7 +84,28 @@ export const modelSchema = z.strictObject({
 export type ModelInfo = z.infer<typeof modelSchema>;
 export const selectionSchema = z.strictObject({ accountId: z.string().uuid(), modelId: modelIdSchema });
 export type Selection = z.infer<typeof selectionSchema>;
-export const messageSchema = z.strictObject({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(262144) });
+export const toolCallSchema = z.strictObject({ id: z.string().min(1).max(200), name: idSchema, input: z.unknown() });
+/**
+ * Conversation message. `assistant` may carry `toolCalls` (then `content` may be empty);
+ * `tool` carries one tool result for `toolCallId`. Plain user/assistant text messages are
+ * unchanged, so stored sessions from before tool support still parse.
+ */
+export const messageSchema = z.strictObject({
+  role: z.enum(['user', 'assistant', 'tool']),
+  content: z.string().max(262144),
+  toolCalls: z.array(toolCallSchema).min(1).max(32).optional(),
+  toolCallId: z.string().min(1).max(200).optional(),
+  toolName: idSchema.optional(),
+}).superRefine((m, ctx) => {
+  const issue = (message: string) => ctx.addIssue({ code: 'custom', message });
+  if (m.role === 'tool') {
+    if (!m.toolCallId || !m.toolName || m.toolCalls) issue('tool message needs toolCallId and toolName only');
+  } else {
+    if (m.toolCallId || m.toolName) issue('only tool messages carry toolCallId/toolName');
+    if (m.role === 'user' && (m.toolCalls || !m.content)) issue('user message needs text and no tool calls');
+    if (m.role === 'assistant' && !m.content && !m.toolCalls) issue('assistant message needs text or tool calls');
+  }
+});
 export type Message = z.infer<typeof messageSchema>;
 export const requestSchema = z.strictObject({
   requestId: z.string().uuid(), modelId: modelIdSchema,
@@ -96,7 +117,7 @@ export const requestSchema = z.strictObject({
 });
 export type ModelRequest = z.infer<typeof requestSchema>;
 export type Usage = z.infer<typeof import('./telemetry').usageSchema>;
-export interface ToolCall { id: string; name: string; input: unknown }
+export type ToolCall = z.infer<typeof toolCallSchema>;
 export type ModelEvent =
   | { type: 'started'; requestId: string }
   | { type: 'textDelta'; text: string }
@@ -104,6 +125,7 @@ export type ModelEvent =
   | { type: 'usage'; usage: Usage }
   | { type: 'context'; context: import('./telemetry').ContextMeasurement }
   | { type: 'toolCallComplete'; call: ToolCall }
+  | { type: 'toolResult'; result: import('./tools').ToolResult }
   | { type: 'completed'; finishReason: string; usage: Usage };
 export interface ModelPort {
   stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;

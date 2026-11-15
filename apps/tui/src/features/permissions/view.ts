@@ -6,6 +6,8 @@ export function renderPermissionDialogOverlay(options: {
   width: number;
   height: number;
   requests: PermissionPromptRequest[];
+  /** Files allowed for the rest of the session. */
+  grants?: string[];
   state: PermissionDialogState;
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
@@ -22,8 +24,8 @@ export function renderPermissionDialogOverlay(options: {
   modal.top(` SECURITY PERMISSION GATE (${pendingCount} Pending) `, ' Esc Dismiss (Never Grants) ');
 
   if (requests.length === 0) {
-    row(' Tool policy configuration: Not implemented in PA1/TUI1.', tokens.warning);
     row(' No permission requests in the current session.', tokens.foregroundMuted);
+    row(' Tools ask before reading secret files (.env, keys).', tokens.info);
     row(' Note: Closing or cancelling a permission prompt never grants permission.', tokens.info);
   } else {
     const idx = clampIndex(state.selectedIndex, requests.length);
@@ -59,5 +61,10 @@ export function renderPermissionDialogOverlay(options: {
     }
   }
 
+  const grants = options.grants ?? [];
+  if (grants.length) {
+    modal.blank();
+    row(` Allowed for this session (Ctrl+X revokes all): ${grants.join(', ')}`, tokens.foregroundMuted);
+  }
   return modal.fillTo(Math.max(6, height - 2)).bottom(' ←/→ Select Action · Enter Confirm · 1 Allow Once · 2 Session · 3/Esc Deny ').lines;
 }

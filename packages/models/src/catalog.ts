@@ -24,6 +24,10 @@ export class ModelCatalog {
       s.catalogs.push({ accountId: this.transport.account.id, providerFingerprint: providerFingerprint(this.transport), fetchedAt: new Date().toISOString(), models });
     });
   }
+  /** Remember that the provider rejected tool use for this model (ADR 0017); rediscovery resets it. */
+  markToolsUnsupported(id: string): void {
+    this.save(this.cached().map(model => model.id === id ? modelSchema.parse({ ...model, capabilities: { ...model.capabilities, tools: 'unsupported' } }) : model));
+  }
   manual(id: string): ModelInfo {
     const model = normalizeModel(id, id, 'manual'); const cache = this.cached().filter(m => m.id !== id); this.save([...cache, model]); return model;
   }

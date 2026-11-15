@@ -13,6 +13,8 @@ export function fixtureServer() {
   let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let malformed = false; let dropped = false;
   let tools = false; let includeUsage = true; let modelName = 'fixture-model'; let pages = false; let streamDelay = 0; let invalidTool = false;
   let rateLimitHeaders: Record<string, string> = {};
+  /** Chat protocol: call this tool until a tool result comes back, then answer with that result. */
+  let toolCall: { name: string; args: string } | undefined;
   const sse = (items: unknown[], anthropic = false) => {
     const chunks = items.map(x => anthropic ? `event: ${(x as any).type}\ndata: ${JSON.stringify(x)}\n\n` : `data: ${JSON.stringify(x)}\n\n`);
     if (!anthropic) chunks.push('data: [DONE]\n\n');
@@ -75,6 +77,18 @@ export function fixtureServer() {
     const usage = includeUsage ? { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } : undefined;
     if (!body.stream) return Response.json({ id: 'fixture', object: 'chat.completion', created: 1234567890, model: modelName, choices: [{ index: 0, message: { role: 'assistant', content: 'Hello fixture' }, finish_reason: 'stop' }], usage });
     const base = { id: 'fixture', object: 'chat.completion.chunk', created: 1234567890, model: modelName };
+    if (toolCall) {
+      const results = (body.messages ?? []).filter((m: any) => m.role === 'tool');
+      if (!results.length) return sse([
+        { ...base, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: `call_${requests.length}`, type: 'function', function: { name: toolCall.name, arguments: toolCall.args } }] }, finish_reason: null }] },
+        { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage },
+      ]);
+      const seen = results.map((m: any) => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).join(' | ');
+      return sse([
+        { ...base, choices: [{ index: 0, delta: { role: 'assistant', content: `Saw: ${seen}` }, finish_reason: null }] },
+        { ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage },
+      ]);
+    }
     return sse([
       { ...base, choices: [{ index: 0, delta: tools ? { tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'lookup', arguments: '{"query":' } }] } : { role: 'assistant', content: 'Hello ' }, finish_reason: null }] },
       { ...base, choices: [{ index: 0, delta: tools ? { tool_calls: [{ index: 0, function: { arguments: invalidTool ? '7}' : '"hello"}' } }] } : { content: 'fixture' }, finish_reason: null }] },
@@ -85,8 +99,8 @@ export function fixtureServer() {
     provider(protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat', overrides = {}) {
       return providerSchema.parse({ id: 'fixture', name: 'Fixture', protocol, baseURL: `http://127.0.0.1:${server.port}/${protocol === 'gemini' ? 'gemini' : 'v1'}`, auth: 'api-key', catalog: protocol === 'gemini' ? 'gemini' : protocol === 'anthropic' ? 'anthropic' : 'openai', metadataVersion: 1, timeoutMs: 1000, ...overrides });
     },
-    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string> }) {
-      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders;
+    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string>; toolCall?: { name: string; args: string } | null }) {
+      cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders; toolCall = options.toolCall === null ? undefined : options.toolCall ?? toolCall;
     },
   };
 }

@@ -1,6 +1,6 @@
 # Tools và workspace
 
-**Trạng thái: Not implemented.** Mọi lifecycle và acceptance dưới đây là đặc tả cho phase tương lai.
+**Trạng thái: một phần (TOOLS1).** Đã có `WorkspaceRoot` (canonical path, chặn thoát workspace, kiểm lại khi mở), liệt kê file theo `.gitignore`, và ba tool chỉ đọc qua dispatcher — xem [ADR 0017](../adr/0017-read-only-tools-and-permission-engine.md). Ghi/sửa/patch/shell/git, snapshot, watcher và worktree vẫn Not implemented.
 
 ## 1. Mục đích và phạm vi
 
