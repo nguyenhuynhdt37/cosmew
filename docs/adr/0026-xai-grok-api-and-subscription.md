@@ -1,6 +1,6 @@
 # ADR 0026 — xAI Grok API key và SuperGrok subscription qua Grok Build
 
-Accepted 2026-11-15 theo yêu cầu của người dùng "cấu hình login bằng grok api + subscription". Phần chat-only/`deny = ["*"]` chỉ còn áp dụng khi chưa có folder consent; sau consent xem [ADR 0027](0027-permission-modes-and-native-runtime-tools.md). Mở rộng ADR 0005/0007 (preset API) và ADR 0008 (subscription runtime chính thức); không thay đổi ADR 0017/0018 (tool chỉ đi qua Hannes, runtime subscription không có tool).
+Accepted 2026-11-15 theo yêu cầu của người dùng "cấu hình login bằng grok api + subscription". Phần chat-only/`deny = ["*"]` chỉ còn áp dụng khi chưa có folder consent; sau consent vẫn là chat-only, trừ khi người dùng opt-in delegated ([ADR 0029](0029-hannes-owned-agent-and-delegated-backends.md)). Mở rộng ADR 0005/0007 (preset API) và ADR 0008 (subscription runtime chính thức); không thay đổi ADR 0017/0018 (tool chỉ đi qua Hannes, runtime subscription không có tool).
 
 ## Quyết định
 

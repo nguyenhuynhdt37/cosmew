@@ -76,10 +76,15 @@ test('malformed catalog rejects without replacing known manual cache', async () 
   x.f.set({ malformed: true }); await expect(catalog.discover()).rejects.toMatchObject({ code: 'PROTOCOL' });
   expect(catalog.cached()[0]?.id).toBe('explicit-model'); x.db.close();
 });
-test('invalid tool-call input fails validation rather than producing an executable call', async () => {
+test('invalid tool-call input is passed to the Hannes router, never executed or validated by the adapter (ADR 0029)', async () => {
   const x = setup(); x.f.set({ tools: true, invalidTool: true });
   const info = normalizeModel('fixture-model', 'fixture'); info.capabilities.tools = 'supported';
-  await expect(Array.fromAsync(new ProviderAdapter(x.transport, 'fixture-model', info).stream({ ...request, tools: [{ name: 'lookup', description: 'fixture', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } }] }))).rejects.toMatchObject({ code: 'PROTOCOL' }); x.db.close();
+  const events = await Array.fromAsync(new ProviderAdapter(x.transport, 'fixture-model', info).stream({ ...request, tools: [{ name: 'lookup', description: 'fixture', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } }] }));
+  // The adapter only converts: the call arrives as data, and the ToolRouter answers INVALID_INPUT
+  // to the model (tests/end-to-end/hannes-agent-matrix.test.ts proves the round trip).
+  const call = events.find(e => e.type === 'toolCallComplete');
+  expect(call?.type === 'toolCallComplete' && typeof (call.call.input as { query?: unknown }).query === 'string').toBe(false);
+  x.db.close();
 });
 test('reauthentication preserves ID and refuses another account credential reference', async () => {
   const x = setup(); const manager = new AccountManager(x.settings, x.vault); const replacement = crypto.randomUUID();

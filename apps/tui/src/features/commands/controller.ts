@@ -31,6 +31,7 @@ export class CommandRouter {
       host.setBanner(`Permission mode: ${mode}. ${PERMISSION_MODE_HINTS[mode]}`);
       return;
     }
+    if (command === '/backend') { this.backend(parsed.args.trim().toLowerCase()); return; }
     if (command === '/switch') { host.features.accounts.beginSwitch(parsed.args); return; }
 
     if (lower.startsWith('/model ')) {
@@ -79,6 +80,25 @@ export class CommandRouter {
       return;
     }
     host.setBanner(`Unknown slash command "${trimmed}". Type /help or press Ctrl+P for commands.`);
+  }
+
+  /** `/backend [hannes|delegated]` (ADR 0029): delegation is always an explicit, per-session choice. */
+  private backend(args: string): void {
+    const { host } = this; const client = host.client;
+    try {
+      if (args === 'delegated' || args === 'delegate' || args === 'on') {
+        const backend = client.setDelegatedAgent(true);
+        host.setBanner(`${backend?.label ?? 'Delegated'}. The runtime now runs its own loop and tools here, unconfined by any Hannes sandbox; Hannes only answers the permission requests it chooses to send and keeps no receipts for its work. /backend hannes returns.`);
+      } else if (args === 'hannes' || args === 'off') {
+        const backend = client.setDelegatedAgent(false);
+        host.setBanner(`Backend: ${backend?.label ?? 'no model selected'}.`);
+      } else if (!args) {
+        const backend = client.status().executionBackend;
+        host.setBanner(backend ? `Backend: ${backend.label}. Loop: ${backend.loopOwner}; project tools: ${backend.toolOwner}.${backend.runtime && backend.kind !== 'delegated' ? ' /backend delegated lets the runtime use its own tools (opt-in).' : ''}` : 'No model selected.');
+      } else host.setBanner('Usage: /backend, /backend hannes or /backend delegated.');
+    } catch (error) {
+      host.setBanner(error instanceof Error && 'code' in error && error.code === 'POLICY' ? 'Delegation needs folder consent first.' : error instanceof Error && 'code' in error && error.code === 'UNSUPPORTED' ? 'Only subscription runtimes can be delegated; direct API models always run through Hannes.' : host.describeError(error));
+    }
   }
 
   private effort(args: string): void {

@@ -277,7 +277,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return accounts.get(selected);
   };
 
-  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover) => {
+  const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover, delegated: () => boolean = () => false) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new HannesError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
@@ -287,15 +287,16 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     const codexReads = registry.get(account.providerId).runtime === 'codex';
     // Re-read the catalog each turn so a model marked 'unsupported' stops receiving tools at once.
     const modelTools: ToolPort | undefined = tools && (!runtime || codexReads) ? {
-      descriptors: () => catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
+      // A delegated runtime uses its own tools; Hannes tools are not offered alongside them (ADR 0029).
+      descriptors: () => runtime && delegated() ? [] : catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
       invoke: (call, signal) => tools.invoke(call, signal),
     } : undefined;
     return new Conversation(
       selection,
       redactModel(registry.get(account.providerId).runtime
         ? new SubscriptionAdapter(selection.modelId, (request, signal, executeTool) => subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot,
-            // Full-access native tools only after this session's workspace consent (ADR 0027).
-            workspaceRoot && tools?.descriptors().length ? workspaceRoot : undefined, approve), codexReads)
+            // Native runtime tools only after folder consent AND an explicit delegation opt-in (ADR 0029).
+            workspaceRoot && delegated() && tools?.descriptors().length ? workspaceRoot : undefined, approve), codexReads)
         : new ProviderAdapter(transport(account), selection.modelId, info), redactor),
       conversations,
       existingSession,
@@ -434,6 +435,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     }};
 
     client = new FutrynClient({
+      availableTools: () => client?.toolsEnabled() ? tools().descriptors().map(d => d.name) : [],
       getProjectContext: () => client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null,
       toolGrants: { list: () => grants.list().map(grant => grant.capability === 'process.execute' ? commandGrantLabel(grant.target, workspaceTree()) : grant.capability === 'fs.write' ? 'Exact patch '+grant.target.slice(6,18) : workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),
@@ -511,12 +513,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         createConversationForSelection(selection, { id, messages: [] });
         const record = conversations.fork(id, selection);
         const messages = committedMessages(record.messages);
-        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
+        const conv = createConversationForSelection(selection, { id: record.id, messages }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages };
       },
       startSession: project => {
-        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
+        const conv = createConversationForSelection(router.resolve(project), undefined, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
         const selection = router.resolve(project);
         activeConvMap.set(conv.id, conv);
         return { id: conv.id, selection, messages: [] };
@@ -528,7 +530,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
           messages: committed,
-        }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
+        }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
         activeConvMap.set(conv.id, conv);
         return {
           id: conv.id,
@@ -545,7 +547,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           conv = createConversationForSelection(record.selection, {
             id: record.id,
             messages: committed,
-          }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover);
+          }, toolPort, resolve(workspaceRoot), projectContext, runtimeApprover, () => client?.delegatedAgent() ?? false);
           activeConvMap.set(conv.id, conv);
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);

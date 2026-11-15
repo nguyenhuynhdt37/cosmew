@@ -1,3 +1,5 @@
+> **Ghi chú ADR 0029 (2026-11-16):** đây là backend `codex-bridge`: Codex app-server giữ vòng lặp model, mọi tool dự án là tool của Hannes. Đây không phải vòng lặp do Hannes sở hữu như với API trực tiếp.
+
 # ADR 0018: Codex subscription read-only tool bridge
 
 Accepted 2026-11-15 after explicit user approval to extend ChatGPT/Codex reads. Supersedes the all-tools-denied restriction in ADR 0008/0017 and AGENTS.md only for Hannes-owned `read`, `glob`, `grep` callbacks. Other subscription runtimes remain chat-only. Builtin runtime shell/filesystem, write, MCP, plugins and delegated tools stay denied.

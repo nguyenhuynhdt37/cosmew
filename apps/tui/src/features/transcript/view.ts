@@ -265,7 +265,8 @@ function renderActivity(options: { item: TranscriptItem; activity: RuntimeActivi
   const key = `activity:${activity.id}`;
   const expanded = Boolean(item.expandedActivities?.includes(key));
   const state = activity.status === 'running' ? (item.streaming ? 'running' : 'muted') : activity.status === 'completed' ? 'ok' : 'error';
-  const lines = callHeader(activity.name, activity.label, state, width, tokens, bg, { itemId: item.id, key }, expanded);
+  // Delegated work is labelled with its runtime: Hannes did not run it and holds no receipt for it.
+  const lines = callHeader(`${activity.runtime ?? 'runtime'} · ${activity.name}`, activity.label, state, width, tokens, bg, { itemId: item.id, key }, expanded);
   if (activity.status === 'denied') lines.push({ spans: [{ text: '  ⎿  ', fg: tokens.foregroundSubtle, bg }, { text: 'Permission denied', fg: tokens.error, bg }] });
   else if (activity.output) lines.push(...outputRows(activity.output, width, expanded, tokens, bg, activity.status === 'failed' ? tokens.error : tokens.foregroundMuted));
   else lines.push({ spans: [{ text: '  ⎿  ', fg: tokens.foregroundSubtle, bg }, { text: activity.status === 'running' ? (item.streaming ? 'Running…' : 'Stopped') : activity.status === 'failed' ? 'Failed' : 'Done', fg: activity.status === 'failed' ? tokens.error : tokens.foregroundMuted, bg, italic: activity.status === 'running' }] });

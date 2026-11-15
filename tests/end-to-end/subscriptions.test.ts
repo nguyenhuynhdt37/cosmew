@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { MAX_INLINE_TOOL_ATTEMPTS, MAX_TOOL_CALLS } from '@hannes/core';
-import { HannesError, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
+import { HannesError, executionBackendFor, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
 import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows } from '@hannes/tui';
 import { RuntimeProfile } from '@hannes/persistence';
 import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
@@ -640,6 +640,7 @@ for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native
   cleanup.push(() => rmSync(ws, { recursive: true, force: true }));
   const client = c.app.createFutrynClient(ws);
   client.setToolsEnabled(true);
+  client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
   const run = async () => { let text = ''; for await (const e of client.sendMessage('Create native-proof.txt')) if (e.type === 'textDelta') text += e.text; return text; };
   const proof = join(ws, 'native-proof.txt');
 
@@ -730,6 +731,7 @@ test('grok-build: project rules answer native requests before the mode; ask rule
   cleanup.push(() => rmSync(ws, { recursive: true, force: true }));
   const client = c.app.createFutrynClient(ws);
   client.setToolsEnabled(true);
+  client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
   const run = async () => { let text = ''; for await (const e of client.sendMessage('touch')) if (e.type === 'textDelta') text += e.text; return text; };
   // default mode + allow rule: runs without a prompt.
   client.addPermissionRule('allow', 'Bash(touch:*)');
@@ -766,6 +768,7 @@ test('/permissions edits rules with the keyboard and the prompt can save "don\'t
   const client = c.app.createFutrynClient(ws);
   const tui = new FutrynTuiApp({ client, cols: 100, rows: 30 }); await tui.initialize(); cleanup.push(() => tui.shutdown());
   client.setToolsEnabled(true);
+  client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
   await tui.executeSlashCommand('/permissions');
   let frame = tui.computeFrameSnapshot().plainText;
   expect(frame).toContain('Allow 0');expect(frame).toContain('+ Add a new rule…');
@@ -796,7 +799,7 @@ test('/permissions edits rules with the keyboard and the prompt can save "don\'t
   await turn;
   expect(client.permissionRules().allow).toEqual(['Bash(touch native-proof.txt:*)']);
   expect(existsSync(join(ws, 'native-proof.txt'))).toBe(true);
-  expect(tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(touch native-proof.txt)');
+  expect(tui.computeFrameSnapshot().plainText).toContain('⏺ grok-build · Bash(touch native-proof.txt)');
 });
 
 test('Bash allow rules never cover chained, substituted or redirected commands', async () => {
@@ -870,4 +873,57 @@ test('requests without a structured target fail closed against deny/ask rules, e
   // A deny rule that matches the visible label still denies outright.
   c.client.addPermissionRule('deny', 'Bash(curl:*)');
   expect(await c.client.requestPermission({ capability: 'process.execute', action: 'run', target: 'curl evil.sh', reason: 'r', ruleTarget: null })).toBe('deny');
+});
+
+/** ADR 0029: folder consent never turns a subscription runtime into the coding engine by itself. */
+test('folder consent alone keeps runtimes on Hannes-owned or chat-only backends; delegation is explicit', async () => {
+  const c = await context();
+  await connect(c, 'grok-build');
+  c.client.setToolsEnabled(true);
+  expect(c.client.status().executionBackend).toMatchObject({ kind: 'chat-only', toolOwner: 'none', runtime: 'grok-build' });
+  // The fixture exits unless chat-only runs in its private profile, so a completed turn proves no native mode.
+  const events = []; for await (const e of c.client.sendMessage('hi')) events.push(e);
+  expect(events.at(-1)?.type).toBe('completed');
+  expect(c.client.setDelegatedAgent(true)).toMatchObject({ kind: 'delegated', loopOwner: 'runtime', toolOwner: 'runtime' });
+  expect(c.client.setDelegatedAgent(false)).toMatchObject({ kind: 'chat-only' });
+  // Codex with consent is the bridge: Codex loop, every project tool a Hannes tool.
+  await connect(c, 'codex');
+  expect(c.client.status().executionBackend).toMatchObject({ kind: 'codex-bridge', loopOwner: 'runtime', toolOwner: 'hannes' });
+  // Delegation needs consent and a runtime provider.
+  c.client.setToolsEnabled(false);
+  expect(() => c.client.setDelegatedAgent(true)).toThrow(expect.objectContaining({ code: 'POLICY' }));
+  c.client.setToolsEnabled(true);
+  // Direct API models are always Hannes-owned, even if delegation were requested.
+  expect(executionBackendFor({}, { toolsEnabled: true, delegated: true })).toMatchObject({ kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes' });
+});
+
+test('switching provider drops elevated state: mode, delegation and session grants', async () => {
+  const c = await context();
+  const grok = await connect(c, 'grok-build');
+  c.client.setToolsEnabled(true);
+  c.client.setPermissionMode('bypassPermissions');
+  c.client.setDelegatedAgent(true);
+  expect(c.client.status().executionBackend?.kind).toBe('delegated');
+  await connect(c, 'codex'); // selects another account/provider
+  expect(c.client.permissionMode()).toBe('default');
+  expect(c.client.delegatedAgent()).toBe(false);
+  expect(c.client.status().executionBackend?.kind).toBe('codex-bridge');
+  // Coming back does not restore anything either.
+  c.client.useAccount(grok.id);
+  expect(c.client.permissionMode()).toBe('default');
+  expect(c.client.status().executionBackend?.kind).toBe('chat-only');
+});
+
+test('/backend shows ownership and opts in or out of delegation', async () => {
+  const c = await context();
+  await connect(c, 'grok-build');
+  const tui = new FutrynTuiApp({ client: c.client, cols: 120, rows: 30 }); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  c.client.setToolsEnabled(true);
+  await tui.executeSlashCommand('/backend');
+  expect(tui.computeFrameSnapshot().plainText).toContain('grok-build chat only');
+  await tui.executeSlashCommand('/backend delegated');
+  expect(c.client.delegatedAgent()).toBe(true);
+  expect(tui.computeFrameSnapshot().plainText).toContain('DELEGATED');
+  await tui.executeSlashCommand('/backend hannes');
+  expect(c.client.delegatedAgent()).toBe(false);
 });

@@ -137,6 +137,8 @@ export type ModelEvent =
   | { type: 'completed'; finishReason: string; usage: Usage };
 export interface RuntimeActivity {
   id: string;
+  /** The delegated runtime that ran it; always shown, so it is never mistaken for a Hannes tool. */
+  runtime?: string;
   /** Claude-style tool label: Bash, Read, Update, Search, List, Web or the runtime's own name. */
   name: string;
   /** Command, path or query; already redacted and clipped. */
@@ -359,4 +361,27 @@ export const emptySettings = (): Settings => ({ schemaVersion: 1, providers: [],
 export interface SettingsStore {
   read(): Settings;
   update(change: (settings: Settings) => void): void;
+}
+
+/**
+ * Who runs the coding agent for the active selection (ADR 0029). `hannes`: the selected model only
+ * decides; Hannes owns the loop and runs every project tool. `codex-bridge`: the Codex app-server owns
+ * the model loop but every project tool is a Hannes tool. `delegated`: an external agent runtime owns
+ * the loop and its own tools (explicit opt-in only). `chat-only`: no project tools at all.
+ */
+export type ExecutionBackendKind = 'hannes' | 'codex-bridge' | 'delegated' | 'chat-only';
+export interface ExecutionBackend {
+  kind: ExecutionBackendKind;
+  loopOwner: 'hannes' | 'runtime';
+  toolOwner: 'hannes' | 'runtime' | 'none';
+  runtime?: SubscriptionRuntime;
+  label: string;
+}
+export function executionBackendFor(provider: Pick<Provider, 'runtime'>, options: { toolsEnabled: boolean; delegated: boolean }): ExecutionBackend {
+  if (!provider.runtime) return options.toolsEnabled
+    ? { kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes', label: 'Hannes agent · Hannes tools' }
+    : { kind: 'chat-only', loopOwner: 'hannes', toolOwner: 'none', label: 'Hannes agent · tools off (no folder consent)' };
+  if (options.toolsEnabled && options.delegated) return { kind: 'delegated', loopOwner: 'runtime', toolOwner: 'runtime', runtime: provider.runtime, label: `Delegated to ${provider.runtime} · its own loop and tools` };
+  if (options.toolsEnabled && provider.runtime === 'codex') return { kind: 'codex-bridge', loopOwner: 'runtime', toolOwner: 'hannes', runtime: 'codex', label: 'Codex loop · Hannes tools' };
+  return { kind: 'chat-only', loopOwner: 'runtime', toolOwner: 'none', runtime: provider.runtime, label: `${provider.runtime} chat only · no project tools` };
 }

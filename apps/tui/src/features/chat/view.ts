@@ -57,7 +57,8 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     state: v.composer,
     mode: status.mode,
     permissionMode: status.permissionMode,
-    activeModelLabel: `${status.selection?.modelId ?? 'chưa chọn model'}${status.reasoningEffort ? ` · effort: ${status.reasoningEffort}` : ''}`,
+    // The backend is named whenever Hannes does not own both the loop and the tools (ADR 0029).
+    activeModelLabel: `${status.selection?.modelId ?? 'chưa chọn model'}${status.reasoningEffort ? ` · effort: ${status.reasoningEffort}` : ''}${status.executionBackend?.runtime ? ` · ${status.executionBackend.kind === 'delegated' ? 'DELEGATED' : status.executionBackend.kind === 'codex-bridge' ? 'Codex loop + Hannes tools' : 'chat only'}` : ''}`,
     activeAccountLabel: status.activeAccount?.alias ?? 'chưa kết nối',
     isStreaming: v.isStreaming,
     focused: v.focused,

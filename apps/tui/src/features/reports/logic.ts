@@ -91,7 +91,9 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Account', status.activeAccount?.alias ?? 'Not connected'),
       field('Provider', status.activeProvider?.name ?? '—'),
       field('Model', status.selection?.modelId ?? 'Not selected'),
-      field('Workspace read', status.workspaceReadStatus === 'read-only' ? 'read · glob · grep' : status.workspaceReadStatus === 'disabled' ? 'Disabled · folder consent required' : 'Unavailable for this model/runtime'),
+      // ADR 0029: say who runs the loop and the tools, and whether a Hannes terminal exists at all.
+      field('Backend', status.executionBackend?.label ?? (status.workspaceReadStatus === 'disabled' ? 'Tools off · folder consent required' : '—')),
+      field('Terminal', status.executionBackend?.kind === 'delegated' ? 'Runtime\'s own shell (not Hannes-contained)' : client.availableTools().includes('exec_command') ? 'Hannes exec_command · sandboxed, approval per command' : 'Unavailable · OS containment not proven (ADR 0022)'),
       '', field('Request', phase), field('Reasoning', status.reasoningEffort ?? 'Provider default'),
       field('Context', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} ${display.measured ? 'measured' : 'local'}`),
       field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),

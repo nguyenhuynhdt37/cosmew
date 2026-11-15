@@ -74,6 +74,13 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     category: 'Workspace & Security',
   },
   {
+    command: '/backend', arguments: 'optional',
+    aliases: ['/delegate'],
+    title: 'Execution Backend',
+    description: 'Who runs the agent and tools; /backend delegated opts into the runtime\'s own agent, /backend hannes returns',
+    category: 'Workspace & Security',
+  },
+  {
     command: '/diff',
     aliases: [],
     title: 'Workspace Diff Viewer',

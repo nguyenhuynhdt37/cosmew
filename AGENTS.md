@@ -2,6 +2,8 @@
 
 ## Phạm vi đã cho phép
 
+- **Hannes-owned agent (2026-11-16):** model chỉ quyết định, Hannes sở hữu Agent Loop và chạy mọi tool dự án qua dispatcher/orchestrator của mình cho mọi model backend. Runtime subscription chỉ là `codex-bridge` (Codex loop + tool Hannes) hoặc `chat-only`; `delegated` (runtime tự chạy loop và tool, không có sandbox của Hannes) chỉ khi user opt-in tường minh từng phiên. Không bao giờ âm thầm dùng CLI ngoài làm engine chính. [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
+
 - **apply_patch (2026-11-15):** user cho phép Add/Update/Delete/Move và multi-file Codex patches qua registry/handler/orchestrator/runtime hiện có, workspace-owned writes, `fs.write` approval/diff, stale/race/partial-failure tests và JSON function transport tới direct providers/Codex. [ADR 0025](docs/adr/0025-apply-patch.md). Không bật native runtime writes hoặc shell.
 
 - **Tool architecture migration (2026-11-15):** refactor `read`, `glob`, `grep`, `exec_command` theo registry → router → handler → orchestrator → runtime; giữ `ToolPort` làm boundary của core. Cho phép sửa `packages/tools`, consumers cần thiết, tests và docs liên quan; không thêm dependency hay package mới; apply_patch được phép riêng theo ADR 0025. [ADR 0024](docs/adr/0024-tool-execution-architecture.md).
@@ -10,7 +12,7 @@
 - **Context/exploration/activity:** bounded AGENTS loading qua injected authorized reader; 16 vòng/32 calls mỗi lượt và unchanged-read notices; ordered TUI transcript/Explored/thinking/status. [ADR 0019](docs/adr/0019-project-context-loader.md), [ADR 0020](docs/adr/0020-progressive-code-exploration.md), [ADR 0021](docs/adr/0021-codex-style-activity-presentation.md).
 - **Task 03A/03B:** one-shot read-only/no-network process foundation, supervision, bounded output, truthful lifecycle reporting và adversarial OS tests. **Production exec_command vẫn CLOSED** cho đến khi chứng minh kernel/container lifetime containment, kể cả detached/reparented descendants và supervisor crash. killpg, enumeration hay process riêng không phải containment. Không signal process ngoài run sở hữu. [ADR 0022](docs/adr/0022-sandboxed-exec-command-foundation.md), [ADR 0023](docs/adr/0023-process-supervision.md).
 
-Migration không mở PTY, write_stdin, write/edit tools khác apply_patch, network tools, MCP, plugins, code-intel, RAG, memory hay delegated agents. Các subsystem này vẫn **Not implemented**; giữ source placeholders ngoài scope rỗng. Official subscription transports không phải delegated-task scheduler.
+Migration không mở PTY, write_stdin, write/edit tools khác apply_patch, network tools, MCP, plugins, code-intel, RAG, memory hay subagents; runtime delegated chỉ có theo ADR 0029 (opt-in, gắn nhãn, không phải tool Hannes). Các subsystem này vẫn **Not implemented**; giữ source placeholders ngoài scope rỗng. Official subscription transports không phải delegated-task scheduler.
 
 ## Security và ownership bắt buộc
 

@@ -25,6 +25,8 @@ import {
   type PermissionMode,
   type PermissionKind,
   PERMISSION_MODES,
+  executionBackendFor,
+  type ExecutionBackend,
   permissionModeDecision,
   permissionRuleDecision,
   permissionRuleSchema,
@@ -79,6 +81,8 @@ export interface ConnectAccountInput {
 
 export interface FutrynBackendPorts {
   workspace: string;
+  /** Names of the Hannes tools actually offered now (folder consent + runtime availability). */
+  availableTools?(): string[];
   getProjectContext?(): ProjectContextReport | null;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
@@ -136,6 +140,8 @@ export class FutrynClient {
   private currentMode: AgentMode = 'chat';
   /** Session permission mode (ADR 0027); never persisted, every session starts in `default`. */
   private permissionModeValue: PermissionMode = 'default';
+  /** Explicit opt-in to a delegated agent runtime (ADR 0029); never implied by folder consent. */
+  private delegatedAgentValue = false;
   private lastUsage: Usage | null = null;
   private sending = false;
   private streamingText = '';
@@ -202,6 +208,20 @@ export class FutrynClient {
   }
 
   permissionMode(): PermissionMode { return this.permissionModeValue; }
+  /** True only after an explicit opt-in for this session and while folder consent holds. */
+  delegatedAgent(): boolean { return this.delegatedAgentValue && this.toolsAllowed; }
+  /**
+   * Opt in/out of letting the selected subscription runtime run its own agent loop and tools in the
+   * workspace (ADR 0029). Requires folder consent and a runtime provider; switching account ends it.
+   */
+  setDelegatedAgent(enabled: boolean): ExecutionBackend | null {
+    if (enabled) {
+      if (!this.toolsAllowed) throw new HannesError('POLICY');
+      if (!this.status().activeProvider?.runtime) throw new HannesError('UNSUPPORTED');
+    }
+    this.delegatedAgentValue = enabled; this.notifyStateChange();
+    return this.status().executionBackend;
+  }
   setPermissionMode(mode: PermissionMode): PermissionMode {
     if (!PERMISSION_MODES.includes(mode)) throw new HannesError('INVALID_INPUT');
     this.permissionModeValue = mode; this.notifyStateChange(); return mode;
@@ -252,6 +272,9 @@ export class FutrynClient {
     return this.setMode(order[(idx + 1) % order.length]!);
   }
 
+  /** Hannes tools offered right now; exec_command appears only when its OS containment is proven. */
+  availableTools(): string[] { try { return this.ports.availableTools?.() ?? []; } catch { return []; } }
+
   capabilities(): BackendCapabilitiesReport {
     return {
       providerAuth: 'implemented',
@@ -286,7 +309,31 @@ export class FutrynClient {
   }
 
   private notifyStateChange(): void {
+    this.guardElevation();
     this.emitReactiveEvent(this.sending ? this.latestEvent.kind : 'idle');
+  }
+
+  /** Account the elevated state (mode, delegation, session grants) was granted under (ADR 0029). */
+  private elevatedFor: string | null | undefined;
+  private guarding = false;
+  private currentAccountId(): string | null {
+    try { return (this.currentSession?.selection ?? this.ports.resolveSelection(undefined))?.accountId ?? null; } catch { return null; }
+  }
+  /** Switching account or provider drops elevated state: it never carries over to another backend. */
+  private guardElevation(): void {
+    if (this.guarding) return;
+    const account = this.currentAccountId();
+    const elevated = this.permissionModeValue !== 'default' || this.delegatedAgentValue || this.listToolGrants().length > 0 || this.sessionGrants.size > 0;
+    if (!elevated) { this.elevatedFor = undefined; return; }
+    if (this.elevatedFor === undefined) { this.elevatedFor = account; return; }
+    if (this.elevatedFor === account) return;
+    this.guarding = true;
+    try {
+      this.permissionModeValue = 'default'; this.delegatedAgentValue = false;
+      this.ports.toolGrants?.clear(); this.sessionGrants.clear();
+      this.elevatedFor = undefined;
+      this.emitReactiveEvent('done', 'Provider changed: permission mode reset to default, delegation off, session grants revoked.');
+    } finally { this.guarding = false; }
   }
 
   currentReactiveEvent(): ReactiveAgentEvent {
@@ -322,6 +369,7 @@ export class FutrynClient {
       workspace: this.ports.workspace,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
+      executionBackend: activeProvider ? executionBackendFor(activeProvider, { toolsEnabled: this.toolsAllowed, delegated: this.delegatedAgentValue }) : null,
       providers: state.providers,
       accounts: state.accounts,
       activeAccount,

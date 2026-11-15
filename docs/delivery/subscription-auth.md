@@ -27,9 +27,9 @@ The line-mode wizard follows the same vendor grouping and automatic account nami
 
 No runtime is silently downloaded, updated or authenticated using other apps' credentials. Missing runtime is a real prerequisite, not successful integration evidence. In particular, Gemini/Qwen fixture success is not a claim that their installed/vendor flows were observed here. Model access and quota depend on the actual account. Subscription usage/cost stays unknown unless reported; no invented zero-cost or entitlement guarantee.
 
-## Native runtime tools (ADR 0027)
+## Native runtime tools (ADR 0027, opt-in since ADR 0029)
 
-After folder consent each runtime works in the real workspace with its own tools; their permission requests become Hannes prompts answered by the session permission mode (Shift+Tab / `/permissions <mode>`). Live 2026-11-15: Grok 4.7 and Codex `gpt-6-luna` ran shell commands in `auto` and showed one `process.execute` prompt in `default` (denied → no file). Copilot/Gemini/Qwen native mode is fixture/design only. The rules below describe chat-only mode (no consent).
+Folder consent alone keeps subscriptions on `codex-bridge` (Codex loop, Hannes tools) or `chat-only`. Only after an explicit per-session `/backend delegated` does the runtime work in the real workspace with its own, unconfined tools; their permission requests become Hannes prompts answered by the session permission mode (Shift+Tab / `/permissions <mode>`). Live 2026-11-15: Grok 4.7 and Codex `gpt-6-luna` ran shell commands in `auto` and showed one `process.execute` prompt in `default` (denied → no file). Copilot/Gemini/Qwen native mode is fixture/design only. The rules below describe chat-only mode (no consent).
 
 ## Security and persistence
 
