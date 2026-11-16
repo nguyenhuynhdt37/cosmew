@@ -158,6 +158,14 @@ export interface FutrynBackendPorts {
   sanitizeText(text: string): string;
 }
 
+/** The committed history of a stored session: the journal reconstruction when present. */
+function committedSessionMessages(stored: SessionRecord): Message[] {
+  if (stored.recovery?.messages) return stored.recovery.messages;
+  return stored.messages
+    .filter(m => m.state === 'committed')
+    .map(({role, content, toolCalls, toolCallId, toolName}) => ({role, content, toolCalls, toolCallId, toolName}));
+}
+
 export class FutrynClient {
   private currentSession: {id: string; selection: Selection; messages: Message[]} | null = null;
   private currentMode: AgentMode = 'chat';
@@ -832,86 +840,71 @@ export class FutrynClient {
         options?.maxEstimatedCostUSD,
         this.status().reasoningEffort ?? undefined,
       )) {
-        if (event.type === 'started') {
-          this.activeTurnId ??= event.requestId;
-          responseStart = assistantText.length;
-          this.emitReactiveEvent('waiting', 'Waiting for provider');
-        } else if (event.type === 'textDelta') {
-          assistantText += event.text;
-          this.streamingText = assistantText;
-          this.emitReactiveEvent('streaming');
-        } else if (event.type === 'reasoningDelta') {
-          this.emitReactiveEvent('reasoning', 'Provider thinking');
-        } else if (event.type === 'context') {
-          if (event.context.source !== 'estimate' && event.context.limitTokens != null) {
-            // Remember only an observed runtime limit for this exact model/account.
-            this.ports.settings.update(settings => {
-              if (
-                !settings.accounts.some(
-                  account => account.id === session.selection.accountId && account.status !== 'logged-out',
-                )
-              )
-                return;
-              const model = settings.catalogs
-                .find(cache => cache.accountId === session.selection.accountId)
-                ?.models.find(model => model.id === session.selection.modelId);
-              if (model && (model.contextLimit == null || model.metadataSource?.endsWith(':observed-context'))) {
-                model.contextLimit = event.context.limitTokens;
-                model.metadataSource = `${event.context.source}:observed-context`;
-                model.metadataFetchedAt = event.context.measuredAt;
-              }
+        switch (event.type) {
+          case 'started':
+            this.activeTurnId ??= event.requestId;
+            responseStart = assistantText.length;
+            this.emitReactiveEvent('waiting', 'Waiting for provider');
+            break;
+          case 'textDelta':
+            assistantText += event.text;
+            this.streamingText = assistantText;
+            this.emitReactiveEvent('streaming');
+            break;
+          case 'reasoningDelta':
+            this.emitReactiveEvent('reasoning', 'Provider thinking');
+            break;
+          case 'context':
+            this.rememberObservedContext(session.selection, event.context);
+            this.notifyStateChange();
+            break;
+          case 'usage':
+            this.lastUsage = event.usage;
+            this.notifyStateChange();
+            break;
+          case 'toolCallComplete':
+            this.streamingSteps.push({role: 'assistant', content: '', toolCalls: [event.call]});
+            this.emitReactiveEvent('tool', event.call.name);
+            break;
+          case 'toolResult':
+            this.streamingSteps.push({
+              role: 'tool',
+              content: event.result.content,
+              toolCallId: event.result.callId,
+              toolName: event.result.name,
             });
+            this.notifyStateChange();
+            break;
+          case 'responseDiscarded':
+            // Provisional text of a retried or preempted response is void (ADR 0033).
+            assistantText = assistantText.slice(0, responseStart);
+            this.streamingText = assistantText;
+            this.notifyStateChange();
+            break;
+          case 'inputDeferred':
+            this.emitReactiveEvent(
+              'thinking',
+              `${event.steerIds.length} accepted instruction(s) deferred to the next turn (${event.reason})`,
+            );
+            break;
+          case 'steered':
+            // The steering message became model-visible here; text before it belongs to the earlier response.
+            if (assistantText) this.streamingSteps.push({role: 'assistant', content: assistantText});
+            this.streamingSteps.push({role: 'user', content: event.content});
+            assistantText = '';
+            this.streamingText = '';
+            this.notifyStateChange();
+            break;
+          case 'completed': {
+            this.lastUsage = event.usage;
+            this.streamingText = '';
+            this.streamingSteps = [];
+            const stored = this.ports.getSession(session.id);
+            if (stored) session.messages = committedSessionMessages(stored);
+            else session.messages.push({role: 'user', content: trimmed}, {role: 'assistant', content: assistantText});
+            this.emitReactiveEvent('done', event.finishReason);
+            break;
           }
-          this.notifyStateChange();
-        } else if (event.type === 'usage') {
-          this.lastUsage = event.usage;
-          this.notifyStateChange();
-        } else if (event.type === 'toolCallComplete') {
-          this.streamingSteps.push({role: 'assistant', content: '', toolCalls: [event.call]});
-          this.emitReactiveEvent('tool', event.call.name);
-        } else if (event.type === 'toolResult') {
-          this.streamingSteps.push({
-            role: 'tool',
-            content: event.result.content,
-            toolCallId: event.result.callId,
-            toolName: event.result.name,
-          });
-          this.notifyStateChange();
-        } else if (event.type === 'responseDiscarded') {
-          // Provisional text of a retried or preempted response is void (ADR 0033).
-          assistantText = assistantText.slice(0, responseStart);
-          this.streamingText = assistantText;
-          this.notifyStateChange();
-        } else if (event.type === 'inputDeferred') {
-          this.emitReactiveEvent(
-            'thinking',
-            `${event.steerIds.length} accepted instruction(s) deferred to the next turn (${event.reason})`,
-          );
-        } else if (event.type === 'steered') {
-          if (assistantText) this.streamingSteps.push({role: 'assistant', content: assistantText});
-          this.streamingSteps.push({role: 'user', content: event.content});
-          assistantText = '';
-          this.streamingText = '';
-          this.notifyStateChange();
-        } else if (event.type === 'completed') {
-          this.lastUsage = event.usage;
-          this.streamingText = '';
-          this.streamingSteps = [];
-          const stored = this.ports.getSession(session.id);
-          if (stored)
-            session.messages =
-              stored.recovery?.messages ??
-              stored.messages
-                .filter(m => m.state === 'committed')
-                .map(({role, content, toolCalls, toolCallId, toolName}) => ({
-                  role,
-                  content,
-                  toolCalls,
-                  toolCallId,
-                  toolName,
-                }));
-          else session.messages.push({role: 'user', content: trimmed}, {role: 'assistant', content: assistantText});
-          this.emitReactiveEvent('done', event.finishReason);
         }
         yield event;
       }
@@ -926,6 +919,27 @@ export class FutrynClient {
       this.streamingText = '';
       this.streamingSteps = [];
     }
+  }
+
+  /** Remember a context window the runtime actually reported, for this exact account and model only. */
+  private rememberObservedContext(
+    selection: Selection,
+    context: Extract<ModelEvent, {type: 'context'}>['context'],
+  ): void {
+    if (context.source === 'estimate' || context.limitTokens == null) return;
+    this.ports.settings.update(settings => {
+      const signedIn = settings.accounts.some(a => a.id === selection.accountId && a.status !== 'logged-out');
+      if (!signedIn) return;
+      const model = settings.catalogs
+        .find(cache => cache.accountId === selection.accountId)
+        ?.models.find(m => m.id === selection.modelId);
+      // Never override a limit the provider's catalog reported; only refresh earlier observations.
+      if (model && (model.contextLimit == null || model.metadataSource?.endsWith(':observed-context'))) {
+        model.contextLimit = context.limitTokens;
+        model.metadataSource = `${context.source}:observed-context`;
+        model.metadataFetchedAt = context.measuredAt;
+      }
+    });
   }
 
   /**
