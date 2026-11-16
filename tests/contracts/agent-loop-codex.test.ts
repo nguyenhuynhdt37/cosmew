@@ -1366,3 +1366,24 @@ test('V: command output beyond the progress bound is dropped from live deltas on
   );
   await expect(flood.send()).rejects.toMatchObject({code: 'PROTOCOL'});
 });
+
+test('closing the turn stream surfaces a failure to close the model stream and records the turn as failed', async () => {
+  const h = harness(
+    [
+      async function* () {
+        try {
+          yield text('partial');
+          await new Promise(() => {});
+        } finally {
+          // e.g. the account was logged out while the response was streaming
+          throw new FutrynError('POLICY');
+        }
+      },
+    ],
+    [],
+  );
+  const iterator = h.conversation.send('go')[Symbol.asyncIterator]();
+  expect((await iterator.next()).value).toMatchObject({type: 'textDelta', text: 'partial'});
+  await expect(iterator.return!()).rejects.toMatchObject({code: 'POLICY'});
+  expect(h.receipt().outcome).toBe('failed');
+});

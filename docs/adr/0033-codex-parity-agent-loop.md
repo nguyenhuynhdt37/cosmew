@@ -68,3 +68,16 @@ Ownership: `send` is the task and owns one `ActiveTurn`; each iteration is one m
 - Running calls interrupted by cancellation are `EXECUTION_UNKNOWN` (Codex: `aborted by user after Xs`).
 - `parallelTools = 4` bounds shared holders. Live `toolOutputDelta` progress is bounded (64 000 queued bytes, 128 events) and may drop deltas; final results are never dropped.
 - Deferred input is carried into the next turn's input instead of being written into history at finish; the observable result (the next request sees it, once) is the same.
+
+## Code layout (refactor 2026-11-16, no behavior change)
+The former 760-line `Conversation.send` is split along Codex's structure (`packages/core/src/agent/`):
+
+| File | Responsibility | Codex counterpart |
+|---|---|---|
+| `engine.ts` | `Conversation`: history, steering, one turn at a time | `Session` |
+| `turn.ts` | `TurnRun`: `begin` → per request `prepareRequest` → `sample` (`readStream`, `handleEvent`) → `prepareRetry` / `nextStep` → `complete`, or `failure`; `cleanup` always | `run_turn`, `run_sampling_request`, `try_run_sampling_request`, `needs_follow_up` |
+| `turn-tools.ts` | `TurnTools`: budget refusals, shared/exclusive gate, journaling, reread check, ordered drain | `ToolCallRuntime`, `drain_in_flight` |
+| `progress-queue.ts` | bounded live command output between events | — |
+| `turn-types.ts` | `SAFETY_LIMITS`, options, shared state and host interfaces | — |
+
+Generator subtlety kept explicit: when the caller closes the stream and closing the model stream fails, that error is the turn's outcome. Nested generators in closing mode would otherwise swallow it, so `readStream` marks `closedByConsumer` and `sample` rethrows (test: "closing the turn stream surfaces a failure…").
