@@ -84,7 +84,8 @@ nativeTest('C 16-24: exit codes, timeout, cancellation, sessions, polling, stdin
  const timed=await h.exec({cmd:'sleep 10',timeout_ms:1000,yield_time_ms:5000});expect(timed.code).toBe('TIMEOUT');
  const abort=new AbortController();setTimeout(()=>abort.abort(),800);const cancelled=await h.exec({cmd:'echo STARTED; sleep 20'},abort.signal);expect(cancelled.code).toBe('CANCELLED');expect(cancelled.content).toContain('STARTED');
  const running=await h.exec({cmd:'sleep 1; echo DONE',yield_time_ms:250});const id=sessionOf(running)!;expect(id).toBeDefined();
- expect((await until(h,id,r=>r.content.includes('DONE'))).exitCode).toBe(0);expect((await h.stdin({session_id:id})).code).toBe('SESSION_NOT_FOUND');
+ // Each poll returns only new output: collect until the process has really exited.
+ let seen='';const done=await until(h,id,r=>{seen+=r.content;return r.exitCode!==undefined;});expect(done.exitCode).toBe(0);expect(seen).toContain('DONE');expect((await h.stdin({session_id:id})).code).toBe('SESSION_NOT_FOUND');
  const reader=await h.exec({cmd:'read v; echo "got:$v"',yield_time_ms:250});const answered=await h.stdin({session_id:sessionOf(reader)!,chars:'hello\n',yield_time_ms:2000});expect(answered.content).toContain('got:hello');
  const trap=await h.exec({cmd:"trap 'echo TRAPPED; exit 3' INT; echo READY; while true; do sleep 0.1; done",yield_time_ms:500});const interrupted=await h.stdin({session_id:sessionOf(trap)!,signal:'SIGINT',yield_time_ms:2000});expect(interrupted.content).toContain('TRAPPED');expect(interrupted.exitCode).toBe(3);
 },60000);

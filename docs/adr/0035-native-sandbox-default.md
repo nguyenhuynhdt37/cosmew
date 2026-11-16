@@ -23,3 +23,16 @@ Accepted 2026-11-16 on the user's explicit decision ("làm native support all h�
 
 ## Evidence (Darwin 24.6.0 arm64)
 `tests/security/native-exec.test.ts` (8 tests, real Seatbelt) and `tests/end-to-end/native-agent.test.ts` (fixture model → Bash write → failing test → Bash fix → passing rerun). Measured after hardening: self-test ~200 ms, commands ~25–45 ms, `git status` ~190 ms (Docker: 0.45–1.5 s). See [acceptance](../delivery/unified-exec-acceptance.md).
+
+## Code layout (`packages/tools/src/exec/`)
+| File | Responsibility |
+|---|---|
+| `native.ts` | Native runtime: sessions, PTY/pipes, stdin, leases, outcomes |
+| `native-sandbox.ts` | The `NativeSandbox` interface (wrap a command in an OS sandbox) |
+| `seatbelt-profile.ts` | macOS profile, section by section (processes, terminals, reads, writes, protected paths, network) |
+| `bubblewrap.ts` | Linux bubblewrap arguments (untested) |
+| `sandbox-denial.ts` | Codex `is_likely_sandbox_denied` heuristic |
+| `container.ts` | Optional Docker runtime: engine/self-tests, launch, sessions |
+| `container-mounts.ts` | Docker mount plan and masks |
+| `container-protocol.ts` | Supervisor frame reader and created-container policy check |
+| `container-supervisor.js` | Trusted PID1 script run inside the container |

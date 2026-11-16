@@ -105,7 +105,8 @@ containerTest('C 16-25: exit codes, timeout, cancellation, detached children, se
  const abort=new AbortController();setTimeout(()=>abort.abort(),1500);const cancelled=await h.exec({cmd:'echo STARTED; sleep 20'},abort.signal);expect(cancelled.code).toBe('CANCELLED');expect(cancelled.content).toContain('STARTED');expect(cancelled.content).toContain('Descendant termination: terminated.');
  const detached=await h.exec({cmd:'setsid sh -c "sleep 60" >/dev/null 2>&1 & echo LEADER'});expect(detached.exitCode).toBe(0);expect(detached.content).toContain('Descendant termination: terminated.');
  const running=await h.exec({cmd:'sleep 1; echo DONE',yield_time_ms:250});const id=sessionOf(running)!;expect(id).toBeDefined();sessions.push(id);expect(running.content).not.toContain('Timed out');
- const done=await until(h,id,r=>r.content.includes('DONE'));expect(done.exitCode).toBe(0);expect((await h.stdin({session_id:id})).code).toBe('SESSION_NOT_FOUND');
+ // Each poll returns only new output: collect until the process has really exited.
+ let seen='';const done=await until(h,id,r=>{seen+=r.content;return r.exitCode!==undefined;});expect(done.exitCode).toBe(0);expect(seen).toContain('DONE');expect((await h.stdin({session_id:id})).code).toBe('SESSION_NOT_FOUND');
  const reader=await h.exec({cmd:'read v; echo "got:$v"',yield_time_ms:250});const rid=sessionOf(reader)!;sessions.push(rid);const answered=await h.stdin({session_id:rid,chars:'hello\n',yield_time_ms:2000});expect(answered.content).toContain('got:hello');
  const trap=await h.exec({cmd:"trap 'echo TRAPPED; exit 3' INT; echo READY; while true; do sleep 0.1; done",yield_time_ms:500});const tid=sessionOf(trap)!;sessions.push(tid);expect(trap.content).toContain('READY');
  const interrupted=await h.stdin({session_id:tid,signal:'SIGINT',yield_time_ms:2000});expect(interrupted.content).toContain('TRAPPED');expect(interrupted.exitCode).toBe(3);
