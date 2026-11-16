@@ -463,6 +463,19 @@ test('I: partial text then a retryable failure is discarded and re-sampled; a te
   // An output-token cut-off is Codex ResponseIncomplete: terminal, not a final answer, not retried.
   const cut = harness([reply(text('truncated'), done('length'))], []);
   await expect(cut.send()).rejects.toMatchObject({ code: 'PROTOCOL' }); expect(cut.requests).toHaveLength(1);
+  // The cut-off text is never committed as a complete answer, in recovery or in the next turn's history.
+  const cutLast = paired(cut).at(-1)!; expect(cutLast.role).toBe('assistant'); expect(cutLast.content).toStartWith('[incomplete response'); expect(cutLast.content).toContain('truncated');
+  expect(paired(cut).some(m => m.role === 'assistant' && m.content === 'truncated')).toBe(false);
+  const after = harness([reply(text('Fresh answer.'), done())], [], { conversations: cut.conversations, existing: cut.conversation.id });
+  await after.send('continue');
+  expect(after.requests[0]!.messages.some(m => m.role === 'assistant' && m.content === 'truncated')).toBe(false);
+  // A completed call in a cut-off response keeps its call and result; only the text is provisional.
+  const cutTool = harness([reply(text('Reading first'), call('r', 'read'), done('length'))], [tool('read')]);
+  await expect(cutTool.send()).rejects.toMatchObject({ code: 'PROTOCOL' });
+  const cutToolHistory = paired(cutTool);
+  expect(cutToolHistory.find(m => m.toolCallId === 'r')!.content).toBe('read result r');
+  expect(cutToolHistory.some(m => m.role === 'assistant' && m.content === 'Reading first')).toBe(false);
+  expect(cutToolHistory.at(-1)!.content).toStartWith('[incomplete response');
 });
 
 test('J + L: a stream failure after one confirmed mutation retries with its recorded result and never re-runs it', async () => {

@@ -62,7 +62,7 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 
 [ADR 0033](../adr/0033-codex-parity-agent-loop.md), additive:
 
-- `model.requested.protocol: 2` + journal event `model.completed(stepId)`: streamed text of a protocol-2 request is provisional until its response completed. Reconstruction drops a superseded (retried/preempted) response's text and labels text of a turn that ended mid-response `[incomplete response …]`. Legacy requests stay committed.
+- `model.requested.protocol: 2` + journal event `model.completed(stepId)`: streamed text of a protocol-2 request is provisional until its response completed. Reconstruction drops a superseded (retried/preempted) response's text and labels text of a turn that ended mid-response `[incomplete response …]`. A response cut by the output-token limit (`finishReason: 'length'`) is never committed: the engine does not record `model.completed` for it, so its text is reconstructed as `[incomplete response …]`, not as a final answer. Legacy requests stay committed.
 - `user.accepted.carried[]`: undelivered steering of earlier turns that this turn consumed, placed before its user message. Undelivered steering of finished turns is `RecoveredConversation.pendingInput`, never history. A stale or duplicate carry is refused.
 - Model events `completed.endTurn` (only `false` from a provider signal such as Anthropic `pause_turn`), `responseDiscarded(reason: retry|preempted, attempt?)`, `inputDeferred(steerIds, reason)`.
 - SDK: `submitWhileBusy` (steer or queue for the next turn), `takeQueuedMessage`, `queuedMessages`, `queuedInput`; port `queuedInput`.

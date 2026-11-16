@@ -408,7 +408,9 @@ export class Conversation {
                   if (!this.model.inlineTools) { calls.push(event.call); flights.push(dispatch(event.call)); }
                 }
                 if(event.type==='toolResult'&&(!this.model.inlineTools||stable(outcomes.get(event.result.callId))!==stable(event.result)))throw new FutrynError('PROTOCOL');
-                if (event.type === 'completed') { terminal = event; record({ type: 'model.completed', stepId }); }
+                // Codex ResponseIncomplete: output cut by the token limit never commits its text, so
+                // recovery keeps it labelled incomplete instead of replaying it as a final answer.
+                if (event.type === 'completed') { terminal = event; if (event.finishReason !== 'length') record({ type: 'model.completed', stepId }); }
                 else yield event.type === 'usage' ? { type: 'usage', usage: receipt.usage! } : event;
               }
             } catch (error) { failed = true; throw error; } finally {
@@ -424,7 +426,7 @@ export class Conversation {
             const { results, failure } = yield* drain(flights); drained = true;
             // Unfinished text of a response that did not complete is not history (Codex discards items
             // that never reached OutputItemDone); its completed calls and their results are.
-            steps.push({ role: 'assistant', content: terminal ? text : '', toolCalls: calls }, ...calls.map((call, index) => toolMessage(call, results[index]!)));
+            steps.push({ role: 'assistant', content: terminal && terminal.finishReason !== 'length' ? text : '', toolCalls: calls }, ...calls.map((call, index) => toolMessage(call, results[index]!)));
             if (failure && !streamError) streamError = failure;
             stagnant=results.some(result=>result.status==='ok'&&!result.content.startsWith('[unchanged]'))?0:stagnant+1;
           }
