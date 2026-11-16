@@ -2,7 +2,7 @@ import {turnBudgetSchema} from './telemetry';
 import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 
-export const CONTRACT_VERSION = '1.18' as const;
+export const CONTRACT_VERSION = '1.19' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -482,20 +482,20 @@ export interface SettingsStore {
 /**
  * Who runs the coding agent for the active selection (ADR 0029). `hannes`: the selected model only
  * decides; Futryn owns the loop and runs every project tool. `codex-bridge`: the Codex app-server owns
- * the model loop but every project tool is a Futryn tool. `delegated`: an external agent runtime owns
- * the loop and its own tools (explicit opt-in only). `chat-only`: no project tools at all.
+ * the model loop but every project tool is a Futryn tool. `chat-only`: no project tools at all.
+ * No runtime ever runs tools of its own: delegation was removed in contract 1.19.
  */
-export type ExecutionBackendKind = 'hannes' | 'codex-bridge' | 'delegated' | 'chat-only';
+export type ExecutionBackendKind = 'hannes' | 'codex-bridge' | 'chat-only';
 export interface ExecutionBackend {
   kind: ExecutionBackendKind;
   loopOwner: 'hannes' | 'runtime';
-  toolOwner: 'hannes' | 'runtime' | 'none';
+  toolOwner: 'hannes' | 'none';
   runtime?: SubscriptionRuntime;
   label: string;
 }
 export function executionBackendFor(
   provider: Pick<Provider, 'runtime'>,
-  options: {toolsEnabled: boolean; delegated: boolean},
+  options: {toolsEnabled: boolean},
 ): ExecutionBackend {
   if (!provider.runtime)
     return options.toolsEnabled
@@ -506,14 +506,6 @@ export function executionBackendFor(
           toolOwner: 'none',
           label: 'Futryn agent · tools off (no folder consent)',
         };
-  if (options.toolsEnabled && options.delegated)
-    return {
-      kind: 'delegated',
-      loopOwner: 'runtime',
-      toolOwner: 'runtime',
-      runtime: provider.runtime,
-      label: `Delegated to ${provider.runtime} · its own loop and tools`,
-    };
   if (options.toolsEnabled && provider.runtime === 'codex')
     return {
       kind: 'codex-bridge',

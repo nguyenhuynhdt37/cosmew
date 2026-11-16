@@ -58,8 +58,8 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     state: v.composer,
     mode: status.mode,
     permissionMode: status.permissionMode,
-    // The backend is named whenever Futryn does not own both the loop and the tools (ADR 0029).
-    activeModelLabel: `${status.selection?.modelId ?? 'chưa chọn model'}${status.reasoningEffort ? ` · effort: ${status.reasoningEffort}` : ''}${status.executionBackend?.runtime ? ` · ${status.executionBackend.kind === 'delegated' ? 'DELEGATED' : status.executionBackend.kind === 'codex-bridge' ? 'Codex loop + Futryn tools' : 'chat only'}` : ''}`,
+    // The backend is named whenever a subscription runtime owns the loop (ADR 0029).
+    activeModelLabel: `${status.selection?.modelId ?? 'chưa chọn model'}${status.reasoningEffort ? ` · effort: ${status.reasoningEffort}` : ''}${status.executionBackend?.runtime ? ` · ${status.executionBackend.kind === 'codex-bridge' ? 'Codex loop + Futryn tools' : 'chat only'}` : ''}`,
     activeAccountLabel: status.activeAccount?.alias ?? 'chưa kết nối',
     isStreaming: v.isStreaming,
     focused: v.focused,

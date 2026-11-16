@@ -30,7 +30,6 @@ import {
   turnBudgetSchema,
   type TurnBudget,
   executionBackendFor,
-  type ExecutionBackend,
   permissionModeDecision,
   permissionRuleDecision,
   permissionRuleSchema,
@@ -187,8 +186,6 @@ export class FutrynClient {
   private currentMode: AgentMode = 'chat';
   /** Session permission mode (ADR 0027); never persisted, every session starts in `default`. */
   private permissionModeValue: PermissionMode = 'default';
-  /** Explicit opt-in to a delegated agent runtime (ADR 0029); never implied by folder consent. */
-  private delegatedAgentValue = false;
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
   private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
@@ -246,7 +243,6 @@ export class FutrynClient {
 
   private clearSessionAuthorization(): void {
     this.permissionModeValue = 'default';
-    this.delegatedAgentValue = false;
     this.sessionGrants.clear();
     this.ports.toolGrants?.clear();
     for (const request of this.permissions.values()) {
@@ -304,14 +300,14 @@ export class FutrynClient {
 
   setMode(mode: AgentMode): AgentMode {
     if (!['chat', 'plan', 'review'].includes(mode)) throw new FutrynError('INVALID_INPUT');
-    if (this.sending || (mode !== 'chat' && this.delegatedAgentValue)) throw new FutrynError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     if (this.currentSession) this.rememberSessionMode(this.currentSession.id, mode);
     this.currentMode = mode;
     this.notifyStateChange();
     return this.currentMode;
   }
 
-  /** Modes restrict behavior; unlike grants or delegation, they are safe to restore with a session. */
+  /** Modes restrict behavior; unlike grants, they are safe to restore with a session. */
   private rememberSessionMode(sessionId: string, mode: AgentMode): void {
     this.ports.settings.update(settings => {
       settings.sessionModes ??= {};
@@ -335,25 +331,6 @@ export class FutrynClient {
     }
     this.notifyStateChange();
     return this.turnBudget();
-  }
-  /** True only after an explicit opt-in for this session and while folder consent holds. */
-  delegatedAgent(): boolean {
-    return this.delegatedAgentValue && this.toolsAllowed;
-  }
-  /**
-   * Opt in/out of letting the selected subscription runtime run its own agent loop and tools in the
-   * workspace (ADR 0029). Requires folder consent and a runtime provider; switching account ends it.
-   */
-  setDelegatedAgent(enabled: boolean): ExecutionBackend | null {
-    if (this.sending) throw new FutrynError('POLICY');
-    if (enabled) {
-      if (!this.toolsAllowed) throw new FutrynError('POLICY');
-      if (!this.status().activeProvider?.runtime) throw new FutrynError('UNSUPPORTED');
-    }
-    if (enabled && this.currentMode !== 'chat') throw new FutrynError('POLICY');
-    this.delegatedAgentValue = enabled;
-    this.notifyStateChange();
-    return this.status().executionBackend;
   }
   setPermissionMode(mode: PermissionMode): PermissionMode {
     if (!PERMISSION_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
@@ -419,7 +396,7 @@ export class FutrynClient {
     command: string,
     options: {signal?: AbortSignal; onOutput?: (chunk: CommandOutputChunk) => void; callId?: string} = {},
   ): Promise<ToolResult> {
-    if (this.currentMode !== 'chat' || this.delegatedAgentValue || this.sending) throw new FutrynError('POLICY');
+    if (this.currentMode !== 'chat' || this.sending) throw new FutrynError('POLICY');
     if (!this.toolsAllowed || !this.ports.runShellCommand) throw new FutrynError('UNSUPPORTED');
     if (!command.trim()) throw new FutrynError('INVALID_INPUT');
     if (!this.currentSession) {
@@ -487,7 +464,7 @@ export class FutrynClient {
     this.emitReactiveEvent(this.sending ? this.latestEvent.kind : 'idle');
   }
 
-  /** Account the elevated state (mode, delegation, session grants) was granted under (ADR 0029). */
+  /** Account the elevated state (mode, session grants) was granted under (ADR 0029). */
   private elevatedFor: string | null | undefined;
   private guarding = false;
   private currentAccountId(): string | null {
@@ -502,10 +479,7 @@ export class FutrynClient {
     if (this.guarding) return;
     const account = this.currentAccountId();
     const elevated =
-      this.permissionModeValue !== 'default' ||
-      this.delegatedAgentValue ||
-      this.listToolGrants().length > 0 ||
-      this.sessionGrants.size > 0;
+      this.permissionModeValue !== 'default' || this.listToolGrants().length > 0 || this.sessionGrants.size > 0;
     if (!elevated) {
       this.elevatedFor = undefined;
       return;
@@ -518,14 +492,10 @@ export class FutrynClient {
     this.guarding = true;
     try {
       this.permissionModeValue = 'default';
-      this.delegatedAgentValue = false;
       this.ports.toolGrants?.clear();
       this.sessionGrants.clear();
       this.elevatedFor = undefined;
-      this.emitReactiveEvent(
-        'done',
-        'Provider changed: permission mode reset to default, delegation off, session grants revoked.',
-      );
+      this.emitReactiveEvent('done', 'Provider changed: permission mode reset to default, session grants revoked.');
     } finally {
       this.guarding = false;
     }
@@ -580,9 +550,7 @@ export class FutrynClient {
       workspace: this.ports.workspace,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
-      executionBackend: activeProvider
-        ? executionBackendFor(activeProvider, {toolsEnabled: this.toolsAllowed, delegated: this.delegatedAgentValue})
-        : null,
+      executionBackend: activeProvider ? executionBackendFor(activeProvider, {toolsEnabled: this.toolsAllowed}) : null,
       providers: state.providers,
       accounts: state.accounts,
       activeAccount,

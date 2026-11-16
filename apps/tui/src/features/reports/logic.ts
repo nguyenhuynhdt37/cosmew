@@ -178,18 +178,11 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Backend', status.executionBackend?.label ?? 'No model selected'),
       field(
         'Terminal',
-        status.executionBackend?.kind === 'delegated'
-          ? "Runtime's own shell; Futryn sandbox not applied"
-          : status.terminalRuntime.available
-            ? status.terminalRuntime.label
-            : (status.terminalRuntime.reason ?? 'Unavailable'),
+        status.terminalRuntime.available
+          ? status.terminalRuntime.label
+          : (status.terminalRuntime.reason ?? 'Unavailable'),
       ),
-      field(
-        'Sandbox',
-        status.executionBackend?.kind === 'delegated'
-          ? 'Runtime-owned policy'
-          : `${status.terminalRuntime.sandbox} · network ${status.terminalRuntime.escalation}`,
-      ),
+      field('Sandbox', `${status.terminalRuntime.sandbox} · network ${status.terminalRuntime.escalation}`),
       field('Request', `${phase} · effort ${status.reasoningEffort ?? 'provider default'}`),
       field('Context', `~${short(display.used)} / ${short(display.total)} local`),
       field(

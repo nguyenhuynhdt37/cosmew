@@ -12,7 +12,7 @@
 
 - **Conversation recovery (2026-11-16):** cho phép journal turn/event, SQLite schema 4, contract 1.12, reconstruction, task/context checkpoints, compaction và bounded progress theo [ADR 0030](docs/adr/0030-durable-conversation-recovery.md). Không replay mutations hoặc phục hồi quyền từ lịch sử.
 
-- **Hannes-owned agent (2026-11-16):** model chỉ quyết định, Hannes sở hữu Agent Loop và chạy mọi tool dự án qua dispatcher/orchestrator của mình cho mọi model backend. Runtime subscription chỉ là `codex-bridge` (Codex loop + tool Hannes) hoặc `chat-only`; `delegated` (runtime tự chạy loop và tool, không có sandbox của Hannes) chỉ khi user opt-in tường minh từng phiên. Không bao giờ âm thầm dùng CLI ngoài làm engine chính. [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
+- **Hannes-owned agent (2026-11-16):** model chỉ quyết định, Hannes sở hữu Agent Loop và chạy mọi tool dự án qua dispatcher/orchestrator của mình cho mọi model backend. Runtime subscription chỉ là `codex-bridge` (Codex loop + tool Hannes) hoặc `chat-only`. **Cấm tuyệt đối chế độ delegated** (đã xoá 2026-11-17 theo yêu cầu người dùng): runtime ngoài không bao giờ được chạy tool của chính nó; mọi lần thử đều làm turn thất bại đóng và mọi yêu cầu quyền của runtime bị từ chối. Không bao giờ dùng CLI ngoài làm engine chính. [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
 
 - **apply_patch (2026-11-15):** user cho phép Add/Update/Delete/Move và multi-file Codex patches qua registry/handler/orchestrator/runtime hiện có, workspace-owned writes, `fs.write` approval/diff, stale/race/partial-failure tests và JSON function transport tới direct providers/Codex. [ADR 0025](docs/adr/0025-apply-patch.md). Không bật native runtime writes hoặc shell.
 

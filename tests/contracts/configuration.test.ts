@@ -158,7 +158,7 @@ test('config never renders vault credentials and rejects permission-bearing pref
       }),
     ).toThrow();
     expect(app.settings.read()).toEqual(before);
-    expect(client.delegatedAgent()).toBe(false);
+    expect('delegatedAgent' in client).toBe(false);
     expect(client.toolsEnabled()).toBe(false);
   } finally {
     app.db.close();
@@ -249,7 +249,6 @@ test('session modes persist per conversation and forks across restart while sess
     client.setPermissionMode('auto');
     client.clearSessionView();
     expect(client.permissionMode()).toBe('default');
-    expect(client.delegatedAgent()).toBe(false);
   } finally {
     app.db.close();
     server.server.stop(true);
@@ -296,7 +295,7 @@ test('failed session deletion preserves selected history and authorization; resu
   }
 });
 
-test('new and resumed subscription sessions revoke delegated execution while invalid resume leaves opt-in intact', async () => {
+test('new and resumed subscription sessions revoke elevated permission mode while invalid resume leaves it intact', async () => {
   const {providerPresets} = await import('@futryn/models');
   const dir = mkdtempSync(join(tmpdir(), 'futryn-session-delegation-'));
   const app = startup(dir, {vault: memoryVault()});
@@ -312,21 +311,18 @@ test('new and resumed subscription sessions revoke delegated execution while inv
     client.selectModel('gpt-5');
     const first = client.createSession();
     client.setToolsEnabled(true);
-    client.setDelegatedAgent(true);
     client.setPermissionMode('bypassPermissions');
     expect(() => client.resumeSession('invalid-session')).toThrow();
-    expect(client.delegatedAgent()).toBe(true);
     expect(client.permissionMode()).toBe('bypassPermissions');
     client.createSession();
-    expect(client.delegatedAgent()).toBe(false);
     expect(client.permissionMode()).toBe('default');
-    client.setDelegatedAgent(true);
+    client.setPermissionMode('bypassPermissions');
     client.resumeSession(first.id);
-    expect(client.delegatedAgent()).toBe(false);
     expect(client.permissionMode()).toBe('default');
-    client.setDelegatedAgent(true);
+    client.setPermissionMode('bypassPermissions');
     client.clearSessionView();
-    expect(client.delegatedAgent()).toBe(false);
+    expect(client.permissionMode()).toBe('default');
+    expect(client.status().executionBackend?.kind).toBe('codex-bridge');
   } finally {
     await app.subscriptions.shutdown();
     app.db.close();

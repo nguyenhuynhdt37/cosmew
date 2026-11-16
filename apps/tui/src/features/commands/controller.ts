@@ -129,10 +129,6 @@ export class CommandRouter {
     const {host} = this;
     const client = host.client;
     const mode = command === '/plan' ? 'plan' : command === '/review' ? 'review' : 'chat';
-    if (mode !== 'chat' && client.status().executionBackend?.kind === 'delegated') {
-      host.setBanner('Plan and Review require Futryn-owned tool policy. Use /backend hannes first.');
-      return;
-    }
     if (mode === 'review') {
       if (!host.workspaceAccess) {
         host.setBanner(
@@ -200,36 +196,19 @@ export class CommandRouter {
       );
   }
 
-  /** `/backend [hannes|delegated]` (ADR 0029): delegation is always an explicit, per-session choice. */
+  /** `/backend` (ADR 0029): shows who runs the loop; project tools are always Futryn's own. */
   private backend(args: string): void {
     const {host} = this;
-    const client = host.client;
-    try {
-      if (args === 'delegated' || args === 'delegate' || args === 'on') {
-        const backend = client.setDelegatedAgent(true);
-        host.setBanner(
-          `${backend?.label ?? 'Delegated'}. The runtime now runs its own loop and tools here, unconfined by any Futryn sandbox; Futryn only answers the permission requests it chooses to send and keeps no receipts for its work. /backend hannes returns.`,
-        );
-      } else if (args === 'hannes' || args === 'off') {
-        const backend = client.setDelegatedAgent(false);
-        host.setBanner(`Backend: ${backend?.label ?? 'no model selected'}.`);
-      } else if (!args) {
-        const backend = client.status().executionBackend;
-        host.setBanner(
-          backend
-            ? `Backend: ${backend.label}. Loop: ${backend.loopOwner}; project tools: ${backend.toolOwner}.${backend.runtime && backend.kind !== 'delegated' ? ' /backend delegated lets the runtime use its own tools (opt-in).' : ''}`
-            : 'No model selected.',
-        );
-      } else host.setBanner('Usage: /backend, /backend hannes or /backend delegated.');
-    } catch (error) {
-      host.setBanner(
-        error instanceof Error && 'code' in error && error.code === 'POLICY'
-          ? 'Delegation needs folder consent first.'
-          : error instanceof Error && 'code' in error && error.code === 'UNSUPPORTED'
-            ? 'Only subscription runtimes can be delegated; direct API models always run through Futryn.'
-            : host.describeError(error),
-      );
+    if (args) {
+      host.setBanner('Not implemented: runtime delegation was removed; Futryn always runs the project tools.');
+      return;
     }
+    const backend = host.client.status().executionBackend;
+    host.setBanner(
+      backend
+        ? `Backend: ${backend.label}. Loop: ${backend.loopOwner}; project tools: ${backend.toolOwner}.`
+        : 'No model selected.',
+    );
   }
 
   private effort(args: string): void {

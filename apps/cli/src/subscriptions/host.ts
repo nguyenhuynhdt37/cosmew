@@ -16,17 +16,10 @@ import {
 } from '@futryn/contracts';
 import {normalizeModel} from '@futryn/models';
 import {RuntimeProfile, type RuntimeLeases} from '@futryn/persistence';
-import {
-  authorizeSubscription,
-  subscriptionEnvironment,
-  subscriptionWorkspaceEnvironment,
-  type SubscriptionRecipe,
-} from '@futryn/security';
+import {authorizeSubscription, subscriptionEnvironment, type SubscriptionRecipe} from '@futryn/security';
 
 import {SubscriptionRpc} from './rpc';
-import {RuntimeTurn, type Connection, type RuntimeApprover} from './runtime-turn';
-
-export type {RuntimeApprover} from './runtime-turn';
+import {RuntimeTurn, type Connection} from './runtime-turn';
 
 /** Futryn-owned tools the Codex bridge may expose; each call still runs through the Futryn dispatcher (ADR 0018, 0022). */
 const HANNES_BRIDGE_TOOLS = ['read', 'glob', 'grep', 'exec_command', 'write_stdin', 'apply_patch'];
@@ -48,8 +41,6 @@ interface Login {
   error?: FutrynError;
 }
 export interface SubscriptionHostOptions {
-  /** Runtimes use their own tools in the consented workspace, asking Futryn for permission (ADR 0027). Default true; false keeps the chat-only/Codex-bridge behavior. */
-  nativeRuntimeTools?: boolean;
   openURL?(url: string): Promise<void>;
   resolveCommand?(runtime: SubscriptionRuntime): {command: string; prefix?: string[]} | undefined;
 }
@@ -327,8 +318,8 @@ export class SubscriptionHost {
     })();
     return login.closing;
   }
-  /** `workspace`: consented project root for a runtime with a full-access mode (ADR 0027). */
-  private async connect(provider: Provider, account: Account, workspace?: string): Promise<Connection> {
+  /** A runtime process for the account, used only as a model transport in a private empty directory. */
+  private async connect(provider: Provider, account: Account): Promise<Connection> {
     this.assertAccount(account);
     if (this.busyAccounts.has(account.id)) throw new FutrynError('POLICY');
     if (account.credential.kind !== 'runtime' || account.credential.runtime !== provider.runtime)
@@ -343,21 +334,12 @@ export class SubscriptionHost {
       const record = await this.vault.getRuntime?.(account.credential);
       if (!record) throw new FutrynError('AUTH');
       this.assertAccount(account);
-      const native =
-        workspace && recipe.workspace && this.options.nativeRuntimeTools !== false ? recipe.workspace : undefined;
-      profile = new RuntimeProfile(
-        this.root,
-        recipe.credentialFiles,
-        native?.settingsFiles ?? recipe.settingsFiles,
-        record,
-      );
+      profile = new RuntimeProfile(this.root, recipe.credentialFiles, recipe.settingsFiles, record);
       rpc = new SubscriptionRpc(
         executable.command,
-        [...executable.prefix, ...(native?.args ?? recipe.args)],
-        native
-          ? subscriptionWorkspaceEnvironment(recipe, profile.directory)
-          : subscriptionEnvironment(recipe, profile.directory),
-        native ? workspace! : profile.workspace,
+        [...executable.prefix, ...recipe.args],
+        subscriptionEnvironment(recipe, profile.directory),
+        profile.workspace,
         recipe.framing,
       );
       const active = this.active.get(account.id) ?? new Set<SubscriptionRpc>();
@@ -373,7 +355,7 @@ export class SubscriptionHost {
       } else if (recipe.runtime === 'gemini-cli' || recipe.runtime === 'grok-build')
         await rpc.request('authenticate', {methodId: recipe.authMethod});
       this.assertAccount(account);
-      return {profile, rpc, recipe, lease, cwd: native ? workspace! : profile.workspace, native: !!native};
+      return {profile, rpc, recipe, lease, cwd: profile.workspace};
     } catch (error) {
       await rpc?.close();
       profile?.close();
@@ -477,8 +459,6 @@ export class SubscriptionHost {
     signal?: AbortSignal,
     executeTool?: InlineToolExecutor,
     workspaceRoot?: string,
-    nativeWorkspace?: string,
-    approve?: RuntimeApprover,
   ): AsyncIterable<ModelEvent> {
     // Only the Codex bridge receives tools, and only Futryn's own bridge tools.
     const unsupportedTools =
@@ -488,7 +468,7 @@ export class SubscriptionHost {
       throw new FutrynError('UNSUPPORTED');
     }
 
-    const connection = await this.connect(provider, account, nativeWorkspace);
+    const connection = await this.connect(provider, account);
     const turn = new RuntimeTurn({
       provider,
       account,
@@ -497,7 +477,6 @@ export class SubscriptionHost {
       signal,
       executeTool,
       workspaceRoot,
-      approve,
       assertAccount: a => this.assertAccount(a),
       acpModels: session => this.acpModels(session),
     });

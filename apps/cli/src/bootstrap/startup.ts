@@ -53,8 +53,8 @@ import {
   terminalText,
   validateEndpoint,
 } from '@futryn/security';
-import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} from '../subscriptions/host';
-import {grantLabel, runtimeApprover, toolPermissionRequest} from './approvals';
+import {SubscriptionHost, type SubscriptionHostOptions} from '../subscriptions/host';
+import {grantLabel, toolPermissionRequest} from './approvals';
 import {CommandRuntimes, createCommandRuntime, sandboxSettingsFromEnv} from './commands';
 import {defaultStateDirectory} from './paths';
 import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
@@ -91,9 +91,6 @@ interface ConversationWiring {
   tools?: ToolPort;
   workspaceRoot?: string;
   projectContext?: ProjectContextPort;
-  approve?: RuntimeApprover;
-  /** The user opted this session into the runtime's own loop and tools (ADR 0029). */
-  delegated?: () => boolean;
   budget?: () => TurnBudget | undefined;
   /** Plan/review modes cannot be turned into mutating artifact recovery. */
   analysisOnly?: () => boolean;
@@ -165,15 +162,14 @@ export function startup(
 
   /**
    * Tools the model may see. Only direct APIs and the authorized Codex dynamic read bridge receive
-   * Futryn tools (ADR 0018); a delegated runtime uses its own tools instead (ADR 0029).
+   * Futryn tools (ADR 0018). No runtime ever uses tools of its own (ADR 0029).
    */
   const modelTools = (account: Account, modelId: string, wiring: ConversationWiring): ToolPort | undefined => {
-    const {tools, delegated = () => false} = wiring;
+    const {tools} = wiring;
     const runtime = registry.get(account.providerId).runtime;
     if (!tools || (runtime && runtime !== 'codex')) return undefined;
     return {
       descriptors: () => {
-        if (runtime && delegated()) return [];
         if (cachedModel(account, modelId)?.capabilities.tools === 'unsupported') return [];
         return tools.descriptors();
       },
@@ -185,21 +181,11 @@ export function startup(
   const modelPort = (account: Account, selection: Selection, info: ModelInfo, wiring: ConversationWiring) => {
     const provider = registry.get(account.providerId);
     if (!provider.runtime) return new ProviderAdapter(transport(account), selection.modelId, info);
-    const {tools, workspaceRoot, approve, delegated = () => false} = wiring;
+    const {workspaceRoot} = wiring;
     return new SubscriptionAdapter(
       selection.modelId,
       (request, signal, executeTool) =>
-        subscriptions.stream(
-          registry.get(account.providerId),
-          account,
-          request,
-          signal,
-          executeTool,
-          workspaceRoot,
-          // Native runtime tools only after folder consent AND an explicit delegation opt-in (ADR 0029).
-          workspaceRoot && delegated() && tools?.descriptors().length ? workspaceRoot : undefined,
-          approve,
-        ),
+        subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot),
       provider.runtime === 'codex',
     );
   };
@@ -469,8 +455,6 @@ export function startup(
       tools: toolPort,
       workspaceRoot: resolve(workspaceRoot),
       projectContext,
-      approve: runtimeApprover(() => client),
-      delegated: () => client?.delegatedAgent() ?? false,
       budget: () => client?.turnBudget(),
       analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
       modeInstructions: () =>
