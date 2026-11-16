@@ -1,4 +1,4 @@
-import type { ThemeTokens } from '@hannes/contracts';
+import type { ThemeTokens } from '@futryn/contracts';
 import { Canvas } from '../../ui/canvas';
 import type { FrameSnapshot, TranscriptViewport } from '../../types';
 export interface CellPoint { row: number; col: number }

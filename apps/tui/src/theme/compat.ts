@@ -1,5 +1,5 @@
 import {
-  HannesError,
+  FutrynError,
   WALLPAPER_PRESET_IDS,
   compatibilityReportSchema,
   hexColorSchema,
@@ -9,7 +9,7 @@ import {
   type CompatibilityReport,
   type ThemeManifest,
   type ThemeTokens,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 import { ALL_BUILTIN_THEMES, deriveTokensFromTriplet, mixHex, relativeLuminance } from './presets';
 
 export interface ThemeImportResult {
@@ -489,6 +489,6 @@ export function validateHexColor(value: string): string {
   try {
     return hexColorSchema.parse(value);
   } catch {
-    throw new HannesError('INVALID_INPUT');
+    throw new FutrynError('INVALID_INPUT');
   }
 }

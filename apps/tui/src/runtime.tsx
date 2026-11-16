@@ -1,5 +1,5 @@
 import { deliverClipboard, writeMacClipboard } from './clipboard';
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 import { FutrynTuiApp } from './app';
 import { TerminalInputDecoder } from './input/terminal-keys';
 import type { FutrynTuiOptions } from './types';
@@ -92,10 +92,10 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
         refreshTimer = setTimeout(() => {
           refreshTimer = null;
           try { renderNow(false); }
-          catch { finish(new HannesError('INVALID_INPUT')); }
+          catch { finish(new FutrynError('INVALID_INPUT')); }
         }, 16);
       });
-      const onSignal = () => finish(new HannesError('CANCELLED'));
+      const onSignal = () => finish(new FutrynError('CANCELLED'));
       const onResize = () => {
         app.resize(stdout.columns || 110, stdout.rows || 32);
         renderNow(true);
@@ -109,14 +109,14 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
             void (async () => {
               for (const key of inputDecoder.flush()) await app.handleKey(key);
               if (app.isExitRequested()) finish(); else renderNow(false);
-            })().catch(error => finish(error instanceof HannesError ? error : new HannesError('INVALID_INPUT')));
+            })().catch(error => finish(error instanceof FutrynError ? error : new FutrynError('INVALID_INPUT')));
           }, 30);
           for (const key of keys) {
             await app.handleKey(key);
             if (app.isExitRequested()) { finish(); return; }
           }
           renderNow(false);
-        } catch (error) { finish(error instanceof HannesError ? error : new HannesError('INVALID_INPUT')); }
+        } catch (error) { finish(error instanceof FutrynError ? error : new FutrynError('INVALID_INPUT')); }
       };
       stdout.on('resize', onResize);
       stdin.on('data', onData);
@@ -129,7 +129,7 @@ export async function runInteractiveTui(options: FutrynTuiOptions & { initialCom
           }
           app.stepAnimation(0.08); renderNow(false);
         }
-        catch { finish(new HannesError('INVALID_INPUT')); }
+        catch { finish(new FutrynError('INVALID_INPUT')); }
       }, 80);
     });
   } finally {

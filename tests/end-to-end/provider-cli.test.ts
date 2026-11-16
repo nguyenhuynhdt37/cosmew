@@ -174,15 +174,15 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
     notify();
   });
   try {
-    await waitFor('hannes> '); terminal.write('/login\r');
+    await waitFor('fyn> '); terminal.write('/login\r');
     await waitFor('Provider ['); terminal.write('gateway\r');
     await waitFor('Cách đăng nhập [keyring]: '); terminal.write('\r');
     await waitFor('API key (hidden): '); terminal.write('fixture-e2e-sensitive-value\r');
     await waitFor('Model [fixture-model]: '); terminal.write('\r');
-    await waitFor('Đã đăng nhập gateway'); await waitFor('hannes> ');
-    terminal.write('\x1b[AHello after hidden login\r'); await waitFor('Hello fixture'); await waitFor('hannes> ');
-    terminal.write('/logout\r'); await waitFor('Sign out of gateway?'); terminal.write('y\r'); await waitFor('Đã đăng xuất gateway'); await waitFor('hannes> ');
-    terminal.write('/status\r'); await waitFor('"selection": null'); await waitFor('hannes> ');
+    await waitFor('Đã đăng nhập gateway'); await waitFor('fyn> ');
+    terminal.write('\x1b[AHello after hidden login\r'); await waitFor('Hello fixture'); await waitFor('fyn> ');
+    terminal.write('/logout\r'); await waitFor('Sign out of gateway?'); terminal.write('y\r'); await waitFor('Đã đăng xuất gateway'); await waitFor('fyn> ');
+    terminal.write('/status\r'); await waitFor('"selection": null'); await waitFor('fyn> ');
     terminal.write('/exit\r'); expect(await child.exited).toBe(0);
     expect(transcript).not.toContain('fixture-e2e-sensitive-value');
     expect(readFileSync(join(x.dir, 'provider-auth.sqlite')).includes(Buffer.from('fixture-e2e-sensitive-value'))).toBe(false);
@@ -194,7 +194,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
 test.skipIf(process.platform === 'win32')('Ctrl-C at the hidden login prompt exits cleanly without creating credentials or sending a request', async () => {
   const x = context();
   expect((await x.cli(['providers', 'add', 'gateway', '--url', x.server.url + '/v1', '--protocol', 'chat', '--catalog', 'openai'])).code).toBe(0);
-  const steps = [['hannes> ', '/login\r'], ['Provider [', 'gateway\r'], ['Cách đăng nhập [keyring]: ', '\r'], ['API key (hidden): ', '\x03']];
+  const steps = [['fyn> ', '/login\r'], ['Provider [', 'gateway\r'], ['Cách đăng nhập [keyring]: ', '\r'], ['API key (hidden): ', '\x03']];
   let transcript = ''; let cursor = 0; let step = 0; const decoder = new TextDecoder();
   const terminal = new Bun.Terminal({ data(term, data) {
     transcript += decoder.decode(data, { stream: true }); const next = steps[step]; if (!next) return;

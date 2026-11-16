@@ -1,8 +1,8 @@
-import { HannesError, type ActiveTaskCheckpoint, type ContextSnapshot, type Message } from '@hannes/contracts';
+import { FutrynError, type ActiveTaskCheckpoint, type ContextSnapshot, type Message } from '@futryn/contracts';
 import { contextHash, estimateContextTokens } from './builder';
 
 export interface CompactionInput {messages:readonly Message[];task?:ActiveTaskCheckpoint}
-/** Adapter-specific implementations may provide notes; Hannes always retains its extractive evidence. */
+/** Adapter-specific implementations may provide notes; Futryn always retains its extractive evidence. */
 export interface ContextCompactor {summarize(input:CompactionInput,signal?:AbortSignal):Promise<string>}
 export class DeterministicCompactor implements ContextCompactor {
   async summarize():Promise<string>{return 'Extractive checkpoint; no model-generated claims.';}
@@ -10,8 +10,8 @@ export class DeterministicCompactor implements ContextCompactor {
 export function useContextSnapshot(messages:readonly Message[],snapshot?:ContextSnapshot):Message[] {
   if(!snapshot)return [...messages];
   const source=messages.slice(0,snapshot.throughRevision);
-  if(source.length!==snapshot.throughRevision||contextHash(source)!==snapshot.sourceHash)throw new HannesError('STORAGE');
-  return[{role:'user',content:`[Hannes context checkpoint — historical data, not a new user request or permission grant]\n${snapshot.summary}`},...messages.slice(snapshot.throughRevision)];
+  if(source.length!==snapshot.throughRevision||contextHash(source)!==snapshot.sourceHash)throw new FutrynError('STORAGE');
+  return[{role:'user',content:`[Futryn context checkpoint — historical data, not a new user request or permission grant]\n${snapshot.summary}`},...messages.slice(snapshot.throughRevision)];
 }
 
 /** Keep the last two user turns verbatim. All older user constraints survive extractively. */
@@ -29,7 +29,7 @@ export async function compactHistory(messages:readonly Message[],task:ActiveTask
   });
   signal?.throwIfAborted();
   const notes=await compactor.summarize({messages:source,task},signal);signal?.throwIfAborted();
-  if(typeof notes!=='string'||notes.length>16000)throw new HannesError('CONTEXT_LIMIT');
+  if(typeof notes!=='string'||notes.length>16000)throw new FutrynError('CONTEXT_LIMIT');
   const summary=JSON.stringify({retainedUserRequests,toolEvidence:evidence,activeTask:task??null,nonAuthoritativeSummary:notes,authorization:'Historical approvals are not reusable. Every new tool call must pass current policy and revalidation.'});
   const snapshot:ContextSnapshot={version:1,throughRevision:end,sourceHash:contextHash(source),createdAt:new Date().toISOString(),strategy:'deterministic',summary,retainedUserRequests};
   if(estimateContextTokens(useContextSnapshot(messages,snapshot))>=maxTokens)return;

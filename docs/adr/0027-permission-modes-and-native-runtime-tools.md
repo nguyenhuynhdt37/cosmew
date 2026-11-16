@@ -6,7 +6,7 @@ Accepted 2026-11-15 theo yêu cầu của người dùng: subscription runtime p
 
 ## Chế độ quyền
 
-`PermissionMode` (contract 1.11, `@hannes/contracts`): `default`, `acceptEdits`, `auto`, `plan`, `bypassPermissions`. Chế độ áp dụng cho từng phiên, không lưu xuống đĩa, mỗi phiên bắt đầu ở `default`. Đổi bằng Shift+Tab (thứ tự default → acceptEdits → auto → plan → bypassPermissions) hoặc `/permissions <mode>`. Chế độ hiện ở chip của composer.
+`PermissionMode` (contract 1.11, `@futryn/contracts`): `default`, `acceptEdits`, `auto`, `plan`, `bypassPermissions`. Chế độ áp dụng cho từng phiên, không lưu xuống đĩa, mỗi phiên bắt đầu ở `default`. Đổi bằng Shift+Tab (thứ tự default → acceptEdits → auto → plan → bypassPermissions) hoặc `/permissions <mode>`. Chế độ hiện ở chip của composer.
 
 Chế độ chỉ trả lời các quyết định `ask`. Các luật `deny` không bao giờ đổi: đường dẫn ngoài workspace, `.git`, thư mục state của Hannes.
 

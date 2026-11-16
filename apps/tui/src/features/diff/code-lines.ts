@@ -1,4 +1,4 @@
-import type { DiffLine, ThemeTokens } from '@hannes/contracts';
+import type { DiffLine, ThemeTokens } from '@futryn/contracts';
 import type { RenderedBoxLine } from '../../ui';
 import { mixHex } from '../../theme/presets';
 

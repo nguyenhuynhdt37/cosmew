@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 
 /** Serializes rotating credential use across CLI processes. Dead-process claims
  * are reclaimed inside the same SQLite transaction; no time-based takeover can
@@ -15,7 +15,7 @@ export class RuntimeLeases {
       if (existing) {
         let alive = true;
         try { process.kill(existing.pid, 0); } catch (error) { alive = (error as {code?:string}).code !== 'ESRCH'; }
-        if (alive) throw new HannesError('POLICY');
+        if (alive) throw new FutrynError('POLICY');
         this.db.query('DELETE FROM runtime_leases WHERE account=? AND owner=?').run(accountId, existing.owner);
       }
       this.db.query('INSERT INTO runtime_leases VALUES(?,?,?)').run(accountId, owner, process.pid);

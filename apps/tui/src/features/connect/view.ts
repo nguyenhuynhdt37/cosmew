@@ -1,4 +1,4 @@
-import type { Account, BorderStyle, Integration, ThemeTokens } from '@hannes/contracts';
+import type { Account, BorderStyle, Integration, ThemeTokens } from '@futryn/contracts';
 import type { RenderedBoxLine } from '../../ui';
 import { connectionChoices } from './logic';
 import type { ConnectProviderState, ConnectStep } from './types';

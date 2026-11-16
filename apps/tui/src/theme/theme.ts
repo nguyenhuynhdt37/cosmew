@@ -1,5 +1,5 @@
 import {
-  HannesError,
+  FutrynError,
   THEME_TOKEN_KEYS,
   appearanceSchema,
   defaultAnimationConfig,
@@ -15,8 +15,8 @@ import {
   type ThemeMode,
   type ThemeTokenKey,
   type ThemeTokens,
-} from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+} from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import {
   ALL_BUILTIN_THEMES,
   BUILTIN_COLOR_THEMES,
@@ -447,9 +447,9 @@ export class ThemeEngine {
     const norm = this.normalizeThemeId(id);
     const manifest = this.getTheme(norm);
     if (!manifest) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
-    if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
+    if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
     this.previewThemeId = manifest.id;
     this.previewMode = THEME_MODES[manifest.id] ?? 'system';
     this.previewDraft = null;
@@ -465,7 +465,7 @@ export class ThemeEngine {
   }
 
   public previewDraftManifest(_manifest: ThemeManifest): void {
-    throw new HannesError('UNSUPPORTED');
+    throw new FutrynError('UNSUPPORTED');
   }
 
   public cancelPreview(): AppearanceConfig {
@@ -505,15 +505,15 @@ export class ThemeEngine {
     scope: 'global' | 'project' = 'global',
   ): Promise<AppearanceConfig> {
     const normalizedPatch: PartialAppearanceConfig = { ...patch };
-    if (normalizedPatch.wallpaper != null) throw new HannesError('UNSUPPORTED');
+    if (normalizedPatch.wallpaper != null) throw new FutrynError('UNSUPPORTED');
     if (normalizedPatch.mode && normalizedPatch.theme === undefined) normalizedPatch.theme = MODE_THEME_IDS[normalizedPatch.mode];
     if (normalizedPatch.theme !== undefined) {
       const normId = this.normalizeThemeId(normalizedPatch.theme);
       const manifest = this.getTheme(normId);
       if (!manifest) {
-        throw new HannesError('NOT_FOUND');
+        throw new FutrynError('NOT_FOUND');
       }
-      if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
+      if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
       normalizedPatch.theme = manifest.id;
       normalizedPatch.mode = THEME_MODES[manifest.id] ?? 'system';
       if (manifest.wallpaper && normalizedPatch.wallpaper === undefined) {
@@ -547,9 +547,9 @@ export class ThemeEngine {
     const norm = this.normalizeThemeId(id);
     const manifest = this.getTheme(norm);
     if (!manifest) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
-    if (!manifest.builtIn) throw new HannesError('UNSUPPORTED');
+    if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
     const patch: PartialAppearanceConfig = {
       theme: manifest.id,
     };
@@ -574,7 +574,7 @@ export class ThemeEngine {
     enabled = wallpaper !== null,
     scope: 'global' | 'project' = 'global',
   ): Promise<AppearanceConfig> {
-    if (wallpaper !== null) throw new HannesError('UNSUPPORTED');
+    if (wallpaper !== null) throw new FutrynError('UNSUPPORTED');
     return this.updateAppearance(
       {
         wallpaper: wallpaper === 'clawd' ? 'futryn-spark' : wallpaper,
@@ -615,7 +615,7 @@ export class ThemeEngine {
   public async saveCustomTheme(manifest: ThemeManifest): Promise<ThemeManifest> {
     const id = themeIdSchema.parse(manifest.id);
     if (this.builtInMap.has(id)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const validated = themeManifestSchema.parse({
       ...manifest,
@@ -638,11 +638,11 @@ export class ThemeEngine {
   ): Promise<ThemeManifest> {
     const source = this.getTheme(sourceId);
     if (!source) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     const cleanId = themeIdSchema.parse(newId);
     if (this.builtInMap.has(cleanId)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const copy: ThemeManifest = themeManifestSchema.parse({
       ...source,
@@ -660,15 +660,15 @@ export class ThemeEngine {
   public async renameCustomTheme(id: string, newName: string): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const existing = this.customMap.get(norm);
     if (!existing) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     const trimmed = newName.trim().slice(0, 80);
     if (!trimmed) {
-      throw new HannesError('INVALID_INPUT');
+      throw new FutrynError('INVALID_INPUT');
     }
     return this.saveCustomTheme({
       ...existing,
@@ -684,11 +684,11 @@ export class ThemeEngine {
   ): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const existing = this.customMap.get(norm);
     if (!existing) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     const validHex = validateHexColor(hexValue).toLowerCase();
     const updated: ThemeManifest = {
@@ -709,11 +709,11 @@ export class ThemeEngine {
   ): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const existing = this.customMap.get(norm);
     if (!existing) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('auto')!;
     const updated: ThemeManifest = {
@@ -732,11 +732,11 @@ export class ThemeEngine {
   ): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     const existing = this.customMap.get(norm);
     if (!existing) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('auto')!;
     const updated: ThemeManifest = {
@@ -752,10 +752,10 @@ export class ThemeEngine {
   public async removeCustomTheme(id: string): Promise<void> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     }
     if (!this.customMap.has(norm)) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     if (this.client) {
       this.client.removeCustomTheme(norm);
@@ -792,7 +792,7 @@ export class ThemeEngine {
     const targetId = id ? this.normalizeThemeId(id) : this.getActiveThemeManifest().id;
     const manifest = this.getTheme(targetId);
     if (!manifest) {
-      throw new HannesError('NOT_FOUND');
+      throw new FutrynError('NOT_FOUND');
     }
     return JSON.parse(JSON.stringify(manifest)) as ThemeManifest;
   }

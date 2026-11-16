@@ -1,8 +1,8 @@
-import { SecureVault } from '@hannes/security';
+import { SecureVault } from '@futryn/security';
 
-// Opt-in OS backend probe. Uses only a new Hannes-owned entry and always deletes it.
+// Opt-in OS backend probe. Uses only a new Futryn-owned entry and always deletes it.
 if (process.env.HANNES_VERIFY_KEYRING !== '1') {
-  console.error('Set HANNES_VERIFY_KEYRING=1 to create/read/delete one disposable Hannes keyring entry.');
+  console.error('Set HANNES_VERIFY_KEYRING=1 to create/read/delete one disposable Futryn keyring entry.');
   process.exit(1);
 }
 const vault = new SecureVault(); const key = crypto.randomUUID(); const secret = crypto.randomUUID();

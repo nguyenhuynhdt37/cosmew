@@ -1,5 +1,5 @@
-import type {CommandRuntime, ToolDescriptor} from '@hannes/contracts';
-import type {ResolvedPath} from '@hannes/workspace';
+import type {CommandRuntime, ToolDescriptor} from '@futryn/contracts';
+import type {ResolvedPath} from '@futryn/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ToolOutput} from '../context';
 

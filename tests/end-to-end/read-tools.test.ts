@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FutrynTuiApp } from '@hannes/tui';
+import { FutrynTuiApp } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 

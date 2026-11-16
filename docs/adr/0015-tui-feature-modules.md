@@ -1,6 +1,6 @@
 # ADR 0015: TUI feature modules and shared UI kit
 
-Accepted 2026-11-15 at the user's request. Internal restructuring of `apps/tui`; no public contract, package boundary, dependency or storage change. `@hannes/tui` still exports the same names, now from `src/index.ts`.
+Accepted 2026-11-15 at the user's request. Internal restructuring of `apps/tui`; no public contract, package boundary, dependency or storage change. `@futryn/tui` still exports the same names, now from `src/index.ts`.
 
 ## Decision
 

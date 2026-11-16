@@ -1,4 +1,4 @@
-import type { TurnReceipt, Usage } from '@hannes/contracts';
+import type { TurnReceipt, Usage } from '@futryn/contracts';
 export function summarizeUsage(turns: TurnReceipt[], historicalTurns: number) {
   const known = (field: keyof Usage, subset = turns): number | null => {
     const values = subset.map(t => t.usage?.[field]).filter((n): n is number => typeof n === 'number');

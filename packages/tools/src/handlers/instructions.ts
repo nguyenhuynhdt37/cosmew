@@ -1,5 +1,5 @@
-import {HannesError, type ProjectInstructionReadResult} from '@hannes/contracts';
-import {WorkspaceDenied} from '@hannes/workspace';
+import {FutrynError, type ProjectInstructionReadResult} from '@futryn/contracts';
+import {WorkspaceDenied} from '@futryn/workspace';
 import type {ToolAuditRecord, ToolDispatcherOptions} from '../context';
 import {ToolOrchestrator} from '../orchestrator';
 import {FileSystemRuntime} from '../runtimes/filesystem';
@@ -38,7 +38,7 @@ export class InstructionReader {
       signal?.throwIfAborted();
       return finish({status:'ok',content,canonicalPath:file.relative,fileBytes:size,truncated:truncated || Buffer.byteLength(safe)>maxBytes});
     } catch (error) {
-      if (signal?.aborted || error instanceof HannesError && error.code === 'CANCELLED') throw new HannesError('CANCELLED');
+      if (signal?.aborted || error instanceof FutrynError && error.code === 'CANCELLED') throw new FutrynError('CANCELLED');
       if (error instanceof WorkspaceDenied && error.reason === 'not-found' && !requested) return {status:'missing',code:'NOT_FOUND'};
       start();
       if (error instanceof WorkspaceDenied && error.reason === 'outside-workspace') {audit({target:null,phase:'decided',decision:'deny',reason:error.reason}); return finish({status:'denied',code:'DENIED'});}

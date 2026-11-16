@@ -17,9 +17,12 @@ const safeMessages: Record<ErrorCode, string> = {
   CONTEXT_LIMIT: 'The conversation plus the output reserve no longer fits the model context window. Critical user constraints and recent execution evidence cannot be safely compacted further. Reduce output reserve, explicitly narrow the task, or choose a larger context window.',
   BUDGET: 'Estimated cost guard denied the request: pricing is unknown or the estimate exceeds your limit. Refresh metadata or explicitly change the limit; this is not a billing guarantee.',
 };
-export class HannesError extends Error {
+export class FutrynError extends Error {
   constructor(public readonly code: ErrorCode, public readonly retryable = false, public readonly retryAfterMs: number | null = null) {
-    super(safeMessages[code]); this.name = 'HannesError';
+    super(safeMessages[code]); this.name = 'FutrynError';
   }
   toJSON() { return { code: this.code, message: this.message, retryable: this.retryable, retryAfterMs: this.retryAfterMs }; }
 }
+
+/** Compatibility alias for consumers before the Futryn rename. */
+export { FutrynError as HannesError };

@@ -1,5 +1,5 @@
 /** Disposable research supervisor; parent test intentionally crashes this process. */
-import {SeatbeltRuntime} from '@hannes/tools';
+import {SeatbeltRuntime} from '@futryn/tools';
 const [root,nonce]=process.argv.slice(2);
 if(!root||!nonce||!/^[a-f0-9]{32}$/.test(nonce))process.exit(2);
 const runtime=new SeatbeltRuntime({workspaceRoot:root});

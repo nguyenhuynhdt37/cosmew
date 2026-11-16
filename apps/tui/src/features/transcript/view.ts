@@ -1,4 +1,4 @@
-import type { BorderStyle, RuntimeActivity, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
+import type { BorderStyle, RuntimeActivity, ThemeTokens, ToolCall, ToolResult } from '@futryn/contracts';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
 import { commandSummary, reasoningTitle, toolTarget, explorationActive, explorationRows, highlightCodeLine, transcriptParts, wrapTextToWidth } from './logic';
 import type { TranscriptItem, TranscriptPart } from './types';
@@ -219,7 +219,7 @@ function callHeader(name: string, args: string, state: 'running' | 'ok' | 'error
 
 const TOOL_NAMES: Record<string, string> = { read: 'Read', glob: 'Glob', grep: 'Search', exec_command: 'Bash', apply_patch: 'Update' };
 
-/** One Hannes tool call with its paired result. */
+/** One Futryn tool call with its paired result. */
 function renderToolCall(options: { item: TranscriptItem; call: ToolCall; result: ToolResult | undefined; width: number; tokens: ThemeTokens; bg: string; awaiting: boolean }): RenderedBoxLine[] {
   const { item, call, result, width, tokens, bg } = options;
   const key = `tools:${call.id}`;
@@ -259,13 +259,13 @@ function renderToolCall(options: { item: TranscriptItem; call: ToolCall; result:
   return [...lines, ...outputRows(expanded ? `${summary}\n${result.content}` : summary, width, expanded, tokens, bg)];
 }
 
-/** A runtime's own tool (ADR 0027), drawn exactly like a Hannes call. */
+/** A runtime's own tool (ADR 0027), drawn exactly like a Futryn call. */
 function renderActivity(options: { item: TranscriptItem; activity: RuntimeActivity; width: number; tokens: ThemeTokens; bg: string }): RenderedBoxLine[] {
   const { item, activity, width, tokens, bg } = options;
   const key = `activity:${activity.id}`;
   const expanded = Boolean(item.expandedActivities?.includes(key));
   const state = activity.status === 'running' ? (item.streaming ? 'running' : 'muted') : activity.status === 'completed' ? 'ok' : 'error';
-  // Delegated work is labelled with its runtime: Hannes did not run it and holds no receipt for it.
+  // Delegated work is labelled with its runtime: Futryn did not run it and holds no receipt for it.
   const lines = callHeader(`${activity.runtime ?? 'runtime'} · ${activity.name}`, activity.label, state, width, tokens, bg, { itemId: item.id, key }, expanded);
   if (activity.status === 'denied') lines.push({ spans: [{ text: '  ⎿  ', fg: tokens.foregroundSubtle, bg }, { text: 'Permission denied', fg: tokens.error, bg }] });
   else if (activity.output) lines.push(...outputRows(activity.output, width, expanded, tokens, bg, activity.status === 'failed' ? tokens.error : tokens.foregroundMuted));

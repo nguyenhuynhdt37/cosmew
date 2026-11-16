@@ -2,9 +2,9 @@ import { test, expect } from 'bun:test';
 import { mkdtempSync, rmSync, chmodSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { emptySettings, providerSchema, requestSchema, modelIdSchema, HannesError } from '@hannes/contracts';
-import { ConfiguredNetworkPolicy, Redactor, SecureVault, fetchModelsDev, terminalText, validateEndpoint } from '@hannes/security';
-import { openPrivateDatabase, SqliteSettings, SqliteConversations } from '@hannes/persistence';
+import { emptySettings, providerSchema, requestSchema, modelIdSchema, FutrynError } from '@futryn/contracts';
+import { ConfiguredNetworkPolicy, Redactor, SecureVault, fetchModelsDev, terminalText, validateEndpoint } from '@futryn/security';
+import { openPrivateDatabase, SqliteSettings, SqliteConversations } from '@futryn/persistence';
 
 test('strict contract rejects executable fields, unknown versions and invalid requests', () => {
   expect(() => providerSchema.parse({ ...provider, execute: 'shell' })).toThrow();
@@ -25,7 +25,7 @@ test('environment references remain isolated; redaction and diagnostics exclude 
   expect(await vault.get({ kind: 'env', name: 'MISSING' })).toBeUndefined();
   await vault.delete({ kind: 'env', name: 'KEY_A' });
   expect(redactor.text('Bearer secret private-value sk-testkey')).toBe('Bearer [REDACTED] [REDACTED] [REDACTED]');
-  expect(JSON.stringify(new HannesError('AUTH'))).not.toContain('private-value');
+  expect(JSON.stringify(new FutrynError('AUTH'))).not.toContain('private-value');
   expect(terminalText('\x1b]52;attack\x07hello')).not.toContain('\x1b');
 });
 test('private SQLite settings survive restart, reject malformed updates and fence conversation outcomes', () => {

@@ -1,4 +1,4 @@
-import type { AuthMethod, Provider, ProviderAuthChallenge } from '@hannes/contracts';
+import type { AuthMethod, Provider, ProviderAuthChallenge } from '@futryn/contracts';
 
 export type ConnectStep = 'provider' | 'method' | 'secret' | 'env' | 'custom-id' | 'url' | 'protocol' | 'auth' | 'catalog' | 'manual' | 'accounts' | 'actions' | 'rename' | 'confirm' | 'busy' | 'oauth';
 export interface ConnectProviderState {

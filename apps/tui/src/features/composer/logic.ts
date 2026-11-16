@@ -1,4 +1,4 @@
-import { SLASH_COMMANDS, type SlashCommandDef } from '@hannes/sdk';
+import { SLASH_COMMANDS, type SlashCommandDef } from '@futryn/sdk';
 import { createInitialComposerState, type ComposerState } from './types';
 
 export { SLASH_COMMANDS, type SlashCommandDef };

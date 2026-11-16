@@ -306,7 +306,7 @@ The Phase 0 file table above is retained as the original roadmap. Actual nonempt
 | apps/cli | index/input/auth-wizard/bootstrap/startup: command parsing, shared chat/wizard input, hidden secret input, guided login/logout and root wiring |
 | tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
 
-New package-internal files are private; all cross-package imports use `@hannes/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
+New package-internal files are private; all cross-package imports use `@futryn/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
 
 
 ## PA1/TUI1 Provider Connect rebuild (ADR 0007)

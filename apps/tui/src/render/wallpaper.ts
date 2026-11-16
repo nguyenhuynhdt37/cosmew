@@ -1,5 +1,5 @@
-import type { AppearanceConfig, ThemeTokens } from '@hannes/contracts';
-import type { ReactiveAgentEvent } from '@hannes/sdk';
+import type { AppearanceConfig, ThemeTokens } from '@futryn/contracts';
+import type { ReactiveAgentEvent } from '@futryn/sdk';
 import type { ThemeEngine } from '../theme/theme';
 import type { Canvas } from '../ui';
 import type { ScreenMetrics } from './metrics';

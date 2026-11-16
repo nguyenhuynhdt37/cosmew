@@ -2,7 +2,7 @@ import {
   WALLPAPER_PRESET_IDS,
   type AnimationConfig,
   type WallpaperPresetId,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 import { formatRgbHex, mixHex, parseHexRgb } from './presets';
 
 export interface SceneCell {

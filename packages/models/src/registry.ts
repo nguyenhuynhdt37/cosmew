@@ -1,4 +1,4 @@
-import { HannesError, providerSchema, type Provider, type SettingsStore } from '@hannes/contracts';
+import { FutrynError, providerSchema, type Provider, type SettingsStore } from '@futryn/contracts';
 
 export const providerPresets: readonly Provider[] = [
   { id: 'openai', name: 'OpenAI', protocol: 'responses', baseURL: 'https://api.openai.com/v1', auth: 'api-key', catalog: 'openai', metadataVersion: 1, timeoutMs: 60000 },
@@ -17,15 +17,15 @@ export class ProviderRegistry {
   constructor(private readonly store: SettingsStore) {}
   list(): Provider[] { return this.store.read().providers; }
   get(id: string): Provider {
-    const p = this.list().find(p => p.id === id); if (!p) throw new HannesError('NOT_FOUND'); return p;
+    const p = this.list().find(p => p.id === id); if (!p) throw new FutrynError('NOT_FOUND'); return p;
   }
   add(input: unknown): Provider {
-    let p: Provider; try { p = providerSchema.parse(input); } catch { throw new HannesError('INVALID_INPUT'); }
-    this.store.update(s => { if (s.providers.some(x => x.id === p.id)) throw new HannesError('INVALID_INPUT'); s.providers.push(p); }); return p;
+    let p: Provider; try { p = providerSchema.parse(input); } catch { throw new FutrynError('INVALID_INPUT'); }
+    this.store.update(s => { if (s.providers.some(x => x.id === p.id)) throw new FutrynError('INVALID_INPUT'); s.providers.push(p); }); return p;
   }
   remove(id: string): void {
     this.get(id); this.store.update(s => {
-      if (s.accounts.some(a => a.providerId === id)) throw new HannesError('POLICY');
+      if (s.accounts.some(a => a.providerId === id)) throw new FutrynError('POLICY');
       s.providers = s.providers.filter(p => p.id !== id);
     });
   }
@@ -36,12 +36,12 @@ export class ProviderRegistry {
  * provider-scoped registrar, never SettingsStore or CredentialVault. No plugin
  * loading or delegated authentication is enabled by this metadata registry. */
 export class AuthMethodRegistry {
-  methods(provider: Provider): import('@hannes/contracts').AuthMethod[] {
+  methods(provider: Provider): import('@futryn/contracts').AuthMethod[] {
     if (provider.runtime) return [
       { id: 'subscription-browser', name: ({ codex: 'Sign in with ChatGPT', copilot: 'Sign in with GitHub', 'gemini-cli': 'Sign in with Google', 'qwen-code': 'Sign in with Qwen', 'grok-build': 'Sign in with Grok' })[provider.runtime], description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.', autoComplete: true },
       ...(provider.runtime === 'codex' ? [{ id: 'subscription-device' as const, name: 'Sign in with device code', description: 'Official Codex device-code flow.', autoComplete: true, advanced: true }] : []),
     ];
-    const methods: import('@hannes/contracts').AuthMethod[] = provider.auth === 'none'
+    const methods: import('@futryn/contracts').AuthMethod[] = provider.auth === 'none'
       ? [{ id: 'none', name: 'No authentication', description: 'For explicitly configured local or public endpoints.' }]
       : [
           { id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.' },
@@ -61,13 +61,13 @@ export class IntegrationRegistry {
     for (const p of this.providers.list()) merged.set(p.id, p);
     return [...merged.values()];
   }
-  get(id: string): import('@hannes/contracts').Integration {
+  get(id: string): import('@futryn/contracts').Integration {
     const provider = this.sources().find(p => p.id === id);
-    if (!provider) throw new HannesError('NOT_FOUND');
+    if (!provider) throw new FutrynError('NOT_FOUND');
     return { provider, providerIds: [provider.id], methods: this.auth.methods(provider).map(method => ({ ...method, providerId: provider.id })), notice: provider.id === 'anthropic' ? 'Claude subscription sign-in requires Anthropic approval. Use API key.' : '' };
   }
-  list(): import('@hannes/contracts').Integration[] {
-    const groups = new Map<string, import('@hannes/contracts').Integration>();
+  list(): import('@futryn/contracts').Integration[] {
+    const groups = new Map<string, import('@futryn/contracts').Integration>();
     for (const provider of this.sources()) {
       const source = this.get(provider.id);
       const groupId = provider.family ?? provider.id;

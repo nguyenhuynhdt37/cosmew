@@ -1,6 +1,6 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 
 export interface ResolvedPath {
   /** Canonical absolute path (symlinks resolved), always inside the root. */
@@ -11,7 +11,7 @@ export interface ResolvedPath {
 }
 
 /** A denial the dispatcher reports to the model without revealing paths outside the root. */
-export class WorkspaceDenied extends HannesError {
+export class WorkspaceDenied extends FutrynError {
   constructor(readonly reason: 'outside-workspace' | 'not-found' | 'invalid-path' | 'inaccessible') {
     super(reason === 'not-found' ? 'NOT_FOUND' : reason === 'invalid-path' ? 'INVALID_INPUT' : 'POLICY');
   }

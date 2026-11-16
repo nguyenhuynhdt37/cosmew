@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
 import { Modal, clampIndex, windowTrailing, type RenderedBoxLine } from '../../ui';
 import { filterPaletteCommands } from './logic';
 import type { CommandPaletteState } from './types';

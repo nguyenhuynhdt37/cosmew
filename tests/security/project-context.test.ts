@@ -3,10 +3,10 @@ import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,chmodSync,statSyn
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {ProjectContextLoader,WorkspaceRoot} from '@hannes/workspace';
-import {ToolDispatcher} from '@hannes/tools';
-import {SessionGrants,Redactor,evaluateRead} from '@hannes/security';
-import {HannesError,type ProjectContextOptions} from '@hannes/contracts';
+import {ProjectContextLoader,WorkspaceRoot} from '@futryn/workspace';
+import {ToolDispatcher} from '@futryn/tools';
+import {SessionGrants,Redactor,evaluateRead} from '@futryn/security';
+import {FutrynError,type ProjectContextOptions} from '@futryn/contracts';
 const cleanup:(()=>void)[]=[];
 afterEach(()=>{for(const f of cleanup.splice(0).reverse())f();});
 function setup(options:ProjectContextOptions={}) {
@@ -49,7 +49,7 @@ test('complete rendered context fits its byte budget without broken UTF-8',async
  expect(result.sources[0]?.truncated).toBe(true);expect(result.content).not.toContain('�');expect(result.diagnostics.some(d=>d.code==='TRUNCATED')).toBe(true);
  const source=docs(result.content)[0]!;expect(source.hash).toBe(createHash('sha256').update(source.content).digest('hex'));
  const disabled=setup({maxBytes:0});writeFileSync(join(disabled.root,'AGENTS.md'),'Never read');expect((await disabled.loader.load()).sources).toHaveLength(0);
- expect(()=>setup({maxBytes:65537})).toThrow(HannesError);
+ expect(()=>setup({maxBytes:65537})).toThrow(FutrynError);
 });
 
 test.skipIf(process.platform==='win32')('escape/symlink/secret/state targets cannot bypass policy or prompt automatically',async()=>{

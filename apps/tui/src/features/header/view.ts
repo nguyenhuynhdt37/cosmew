@@ -1,5 +1,5 @@
-import type { ThemeManifest, ThemeTokens } from '@hannes/contracts';
-import type { FutrynClient, ReactiveAgentEvent } from '@hannes/sdk';
+import type { ThemeManifest, ThemeTokens } from '@futryn/contracts';
+import type { FutrynClient, ReactiveAgentEvent } from '@futryn/sdk';
 import { FYN_LABELS, type FynState } from '../companion/types';
 import type { StyledSpan } from '../../ui';
 

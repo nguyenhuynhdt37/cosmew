@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Canvas } from '@hannes/tui';
+import { Canvas } from '@futryn/tui';
 import { computeWorkspaceGitDiff } from '../../apps/cli/src/bootstrap/startup';
 
 const cleanup: (() => void)[] = [];

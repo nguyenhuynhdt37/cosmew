@@ -1,4 +1,4 @@
-import type {ToolDescriptor} from '@hannes/contracts';
+import type {ToolDescriptor} from '@futryn/contracts';
 import type {ToolHandler} from './handlers/types';
 export {globDescriptor, grepDescriptor} from './builtin/search';
 export {readDescriptor} from './builtin/read';

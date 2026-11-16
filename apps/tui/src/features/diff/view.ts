@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens, WorkspaceDiffReport } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens, WorkspaceDiffReport } from '@futryn/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
 import type { DiffViewState } from './types';
 import { renderDiffCodeLine } from './code-lines';

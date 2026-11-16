@@ -2,10 +2,10 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HannesError } from '@hannes/contracts';
-import { RuntimeProfile } from '@hannes/persistence';
-import { SecureVault, Redactor, SUBSCRIPTION_RECIPES, authorizeSubscription, subscriptionEnvironment, denyRuntimeRequest } from '@hannes/security';
-import { providerPresets } from '@hannes/models';
+import { FutrynError } from '@futryn/contracts';
+import { RuntimeProfile } from '@futryn/persistence';
+import { SecureVault, Redactor, SUBSCRIPTION_RECIPES, authorizeSubscription, subscriptionEnvironment, denyRuntimeRequest } from '@futryn/security';
+import { providerPresets } from '@futryn/models';
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn(); });
 function directory() { const root = mkdtempSync(join(tmpdir(), 'futryn-sub-security-')); cleanups.push(() => rmSync(root, { recursive: true, force: true })); return root; }
@@ -57,7 +57,7 @@ test('Copilot managed credential headers normalize to strict JSON without alteri
   expect(restored.snapshot()).toBe(snapshot);
   for (const invalid of [header + '{"token":"private",}', '// unknown format\n{}', header + '{"token":"private"} trailing']) {
     writeFileSync(join(profile.directory, 'config.json'), invalid);
-    expect(() => profile.snapshot()).toThrow(HannesError);
+    expect(() => profile.snapshot()).toThrow(FutrynError);
   }
 });
 

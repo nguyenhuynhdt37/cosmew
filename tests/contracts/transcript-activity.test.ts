@@ -2,8 +2,8 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Message, ToolCall, ToolResult } from '@hannes/contracts';
-import { FutrynTuiApp, deriveTokensFromTriplet, explorationRows, formatElapsed, messagesToTranscript, reasoningTitle, renderTranscriptMessages, type TranscriptItem } from '@hannes/tui';
+import type { Message, ToolCall, ToolResult } from '@futryn/contracts';
+import { FutrynTuiApp, deriveTokensFromTriplet, explorationRows, formatElapsed, messagesToTranscript, reasoningTitle, renderTranscriptMessages, type TranscriptItem } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault, type ScriptedView } from '../fixtures';
 

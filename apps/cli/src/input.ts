@@ -1,12 +1,12 @@
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 
 /** One reader owns chat and wizard input; secret answers never enter terminal history. */
 export class ChatInput {
   private hidden = false;
   private ended = false;
-  private failure?: HannesError;
+  private failure?: FutrynError;
   private queue: string[] = [];
   private queuedBytes = 0;
   private waiting?: (line: string | undefined) => void;
@@ -20,7 +20,7 @@ export class ChatInput {
       if (this.waiting) { const consume = this.waiting; this.waiting = undefined; consume(line); }
       else {
         this.queuedBytes += Buffer.byteLength(line);
-        if (this.queue.length >= 200 || this.queuedBytes > 1048576) { this.failure = new HannesError('INVALID_INPUT'); this.close(); }
+        if (this.queue.length >= 200 || this.queuedBytes > 1048576) { this.failure = new FutrynError('INVALID_INPUT'); this.close(); }
         else this.queue.push(line);
       }
     });
@@ -41,20 +41,20 @@ export class ChatInput {
     const prompt = label + (defaultValue ? ` [${defaultValue}]` : '') + ': ';
     if (!process.stdin.isTTY) process.stderr.write(prompt);
     const answer = await this.line(prompt);
-    if (answer === undefined || answer.trim() === '/cancel') throw new HannesError('CANCELLED');
+    if (answer === undefined || answer.trim() === '/cancel') throw new FutrynError('CANCELLED');
     return answer.trim() || defaultValue || '';
   }
   async secret(): Promise<string> {
     if (!process.stdin.isTTY || this.queue.length) {
-      this.queue = []; this.queuedBytes = 0; throw new HannesError('INVALID_INPUT');
+      this.queue = []; this.queuedBytes = 0; throw new FutrynError('INVALID_INPUT');
     }
     process.stderr.write('API key (hidden): '); this.hidden = true;
     try {
       const answer = await this.line();
-      if (answer === undefined) throw new HannesError('CANCELLED');
-      if (this.queue.length) { this.queue = []; this.queuedBytes = 0; throw new HannesError('INVALID_INPUT'); }
-      if (answer === '/cancel') throw new HannesError('CANCELLED');
-      if (!answer || answer.length > 8192 || /[\x00-\x20\x7f]/.test(answer)) throw new HannesError('INVALID_INPUT');
+      if (answer === undefined) throw new FutrynError('CANCELLED');
+      if (this.queue.length) { this.queue = []; this.queuedBytes = 0; throw new FutrynError('INVALID_INPUT'); }
+      if (answer === '/cancel') throw new FutrynError('CANCELLED');
+      if (!answer || answer.length > 8192 || /[\x00-\x20\x7f]/.test(answer)) throw new FutrynError('INVALID_INPUT');
       return answer;
     } finally { this.hidden = false; process.stderr.write('\n'); }
   }
@@ -62,13 +62,13 @@ export class ChatInput {
 }
 
 export async function ask(label: string, defaultValue?: string): Promise<string> {
-  if (!process.stdin.isTTY) throw new HannesError('INVALID_INPUT');
+  if (!process.stdin.isTTY) throw new FutrynError('INVALID_INPUT');
   const input = createInterface({ input: process.stdin, output: process.stderr });
   try { return (await input.question(label + (defaultValue ? ` [${defaultValue}]` : '') + ': ')).trim() || defaultValue || ''; }
   finally { input.close(); }
 }
 export async function secretInput(): Promise<string> {
-  if (!process.stdin.isTTY || !process.stdin.setRawMode) throw new HannesError('INVALID_INPUT');
+  if (!process.stdin.isTTY || !process.stdin.setRawMode) throw new FutrynError('INVALID_INPUT');
   process.stderr.write('API key (hidden): '); process.stdin.setRawMode(true); process.stdin.setEncoding('utf8'); process.stdin.resume();
   try {
     return await new Promise<string>((resolve, reject) => {
@@ -76,11 +76,11 @@ export async function secretInput(): Promise<string> {
       const cleanup = () => { process.stdin.removeListener('data', onData); };
       const onData = (chunk: string) => {
         for (const char of chunk) {
-          if (char === '\u0003' || char === '\u0004') { cleanup(); reject(new HannesError('CANCELLED')); return; }
+          if (char === '\u0003' || char === '\u0004') { cleanup(); reject(new FutrynError('CANCELLED')); return; }
           if (char === '\r' || char === '\n') { cleanup(); resolve(value); return; }
           if (char === '\u007f' || char === '\b') value = value.slice(0, -1);
           else if (char >= ' ' && char !== '\u007f') value += char;
-          if (value.length > 8192) { cleanup(); reject(new HannesError('INVALID_INPUT')); return; }
+          if (value.length > 8192) { cleanup(); reject(new FutrynError('INVALID_INPUT')); return; }
         }
       };
       process.stdin.on('data', onData);
@@ -89,6 +89,6 @@ export async function secretInput(): Promise<string> {
 }
 export async function readSecretStdin(): Promise<string> {
   let result = '';
-  for await (const data of process.stdin) { result += data.toString(); if (result.length > 8192) throw new HannesError('INVALID_INPUT'); }
+  for await (const data of process.stdin) { result += data.toString(); if (result.length > 8192) throw new FutrynError('INVALID_INPUT'); }
   return result.trim();
 }

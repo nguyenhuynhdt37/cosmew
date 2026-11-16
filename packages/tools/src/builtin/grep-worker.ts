@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
-import { evaluateRead } from '@hannes/security';
-import { WorkspaceRoot, looksBinary } from '@hannes/workspace';
+import { evaluateRead } from '@futryn/security';
+import { WorkspaceRoot, looksBinary } from '@futryn/workspace';
 import { LIMITS } from '../limits';
 
 /**

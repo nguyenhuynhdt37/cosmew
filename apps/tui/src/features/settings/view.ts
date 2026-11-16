@@ -1,4 +1,4 @@
-import { WALLPAPER_PRESET_IDS, type AppearanceConfig, type BorderStyle, type ThemeTokens } from '@hannes/contracts';
+import { WALLPAPER_PRESET_IDS, type AppearanceConfig, type BorderStyle, type ThemeTokens } from '@futryn/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
 import { settingsRows } from './logic';
 

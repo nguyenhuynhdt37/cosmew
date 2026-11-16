@@ -10,8 +10,8 @@
 The user authorized building the production-oriented **FUTRYN Terminal UI (TUI)** and **Advanced Theme & Live ASCII Wallpaper Engine** as a complete Product MVP (`TUI1`), using `anomalyco/opencode` (`024a1462f55aa64243b859729b2d0816b42b17e3`) as the primary UI/UX reference and `0toshigami/claude-desktop-themes` (`1ac84ea764028dd1be6f8bc808ca18b622bcad2a`) as the personalization and live ASCII wallpaper reference.
 
 Key architectural constraints from [ADR 0002](0002-contracts-first.md), [ADR 0004](0004-security-boundary.md), [ADR 0005](0005-provider-auth-product.md), and [dependency-rules.md](../architecture/dependency-rules.md):
-- `apps/tui` may only depend on `@hannes/sdk` and `@hannes/contracts`. It must never directly import `@hannes/persistence`, `@hannes/models`, `@hannes/security`, `@hannes/core`, or third-party AI SDKs.
-- `packages/sdk` may only depend on `@hannes/contracts`.
+- `apps/tui` may only depend on `@futryn/sdk` and `@futryn/contracts`. It must never directly import `@futryn/persistence`, `@futryn/models`, `@futryn/security`, `@futryn/core`, or third-party AI SDKs.
+- `packages/sdk` may only depend on `@futryn/contracts`.
 - `apps/cli` acts as the composition root wiring `persistence`, `security`, `models`, `core`, `sdk`, and `tui`.
 - No arbitrary JavaScript or CSS from imported themes may ever be executed.
 

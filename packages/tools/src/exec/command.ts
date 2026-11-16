@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { MAX_COMMAND_CHARS } from '@hannes/security';
+import { MAX_COMMAND_CHARS } from '@futryn/security';
 import { plainTerminalText } from './output';
-import type { CommandOutcome } from '@hannes/contracts';
+import type { CommandOutcome } from '@futryn/contracts';
 
 /** Bounds for one exec_command call (ADR 0022). Output tokens are approximated as 4 bytes each. */
 export const EXEC_LIMITS = {

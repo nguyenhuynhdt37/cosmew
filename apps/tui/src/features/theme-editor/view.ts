@@ -1,4 +1,4 @@
-import { THEME_TOKEN_KEYS, type BorderStyle, type ThemeTokenKey, type ThemeTokens } from '@hannes/contracts';
+import { THEME_TOKEN_KEYS, type BorderStyle, type ThemeTokenKey, type ThemeTokens } from '@futryn/contracts';
 import type { ThemeEngine } from '../../theme/theme';
 import { Modal, clampIndex, windowCentered, type RenderedBoxLine } from '../../ui';
 import type { ThemeEditorState } from './types';

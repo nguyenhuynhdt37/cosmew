@@ -1,4 +1,4 @@
-import type { Message, RuntimeActivity, ToolCall, ToolResult, Usage } from '@hannes/contracts';
+import type { Message, RuntimeActivity, ToolCall, ToolResult, Usage } from '@futryn/contracts';
 
 export interface TranscriptItem {
   id: string;

@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { FutrynTuiApp, type ActiveOverlay } from '@hannes/tui';
+import { FutrynTuiApp, type ActiveOverlay } from '@futryn/tui';
 import { fixtureServer, memoryVault } from '../fixtures';
 
 /**

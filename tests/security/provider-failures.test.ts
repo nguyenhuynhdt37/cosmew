@@ -1,10 +1,10 @@
 import { afterEach, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { HannesError, type Account, type ConversationStore, type ModelPort, type ModelRequest, type Selection } from '@hannes/contracts';
-import { Conversation } from '@hannes/core';
-import { AccountManager, ModelCatalog, ProviderAdapter, ProviderTransport, normalizeModel } from '@hannes/models';
-import { SqliteSettings } from '@hannes/persistence';
-import { ConfiguredNetworkPolicy, Redactor } from '@hannes/security';
+import { FutrynError, type Account, type ConversationStore, type ModelPort, type ModelRequest, type Selection } from '@futryn/contracts';
+import { Conversation } from '@futryn/core';
+import { AccountManager, ModelCatalog, ProviderAdapter, ProviderTransport, normalizeModel } from '@futryn/models';
+import { SqliteSettings } from '@futryn/persistence';
+import { ConfiguredNetworkPolicy, Redactor } from '@futryn/security';
 import { fixtureServer, memoryVault } from '../fixtures';
 
 const fixtures: ReturnType<typeof fixtureServer>[] = [];
@@ -51,7 +51,7 @@ test('model/account mismatch and foreign origin fail before fetch; no fallback r
 });
 test('failed key deletion fences account immediately and removal remains retryable', async () => {
   const x = setup(); let fail = true;
-  const vault = { ...x.vault, async delete() { if (fail) throw new HannesError('STORAGE'); } };
+  const vault = { ...x.vault, async delete() { if (fail) throw new FutrynError('STORAGE'); } };
   const accounts = new AccountManager(x.settings, vault);
   await expect(accounts.logout(x.account.id, true)).rejects.toMatchObject({ code: 'STORAGE' });
   expect(accounts.get(x.account.id).status).toBe('logged-out'); expect(x.settings.read().accounts).toHaveLength(1);
@@ -76,7 +76,7 @@ test('malformed catalog rejects without replacing known manual cache', async () 
   x.f.set({ malformed: true }); await expect(catalog.discover()).rejects.toMatchObject({ code: 'PROTOCOL' });
   expect(catalog.cached()[0]?.id).toBe('explicit-model'); x.db.close();
 });
-test('invalid tool-call input is passed to the Hannes router, never executed or validated by the adapter (ADR 0029)', async () => {
+test('invalid tool-call input is passed to the Futryn router, never executed or validated by the adapter (ADR 0029)', async () => {
   const x = setup(); x.f.set({ tools: true, invalidTool: true });
   const info = normalizeModel('fixture-model', 'fixture'); info.capabilities.tools = 'supported';
   const events = await Array.fromAsync(new ProviderAdapter(x.transport, 'fixture-model', info).stream({ ...request, tools: [{ name: 'lookup', description: 'fixture', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } }] }));
@@ -110,7 +110,7 @@ test('core persists intent before provider request; failed user intent remains v
     inputs.push(input); expect(r.actions.at(-1)).toBe('pending'); attempts++;
     yield { type: 'started', requestId: input.requestId };
     yield { type: 'textDelta', text: 'hello' };
-    if (attempts === 1) throw new HannesError('TRANSPORT');
+    if (attempts === 1) throw new FutrynError('TRANSPORT');
     yield { type: 'completed', finishReason: 'stop', usage: { inputTokens: null, outputTokens: null, costUSD: null } };
   } };
   const conversation = new Conversation({ accountId: crypto.randomUUID(), modelId: 'fixture-model' }, model, r.store);

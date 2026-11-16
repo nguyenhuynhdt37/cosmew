@@ -2,7 +2,7 @@ import {afterEach,expect,test} from 'bun:test';
 import {mkdtempSync,readFileSync,writeFileSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {FutrynTuiApp} from '@hannes/tui';
+import {FutrynTuiApp} from '@futryn/tui';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer,memoryVault,scriptedView} from '../fixtures';
 const cleanup:(()=>void|Promise<void>)[]=[];

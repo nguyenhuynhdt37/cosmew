@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer,memoryVault} from '../fixtures';
-import type {ProjectContextOptions} from '@hannes/contracts';
+import type {ProjectContextOptions} from '@futryn/contracts';
 const cleanup:(()=>void|Promise<void>)[]=[];
 afterEach(async()=>{for(const f of cleanup.splice(0).reverse())await f();});
 async function setup(options:ProjectContextOptions={}, protocol: 'chat'|'responses'|'anthropic'|'gemini'='chat') {

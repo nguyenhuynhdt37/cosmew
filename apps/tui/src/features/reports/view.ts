@@ -1,4 +1,4 @@
-import type { ThemeTokens } from '@hannes/contracts';
+import type { ThemeTokens } from '@futryn/contracts';
 import type { RenderedBoxLine } from '../../ui';
 
 export function renderReportOverlay(options: { title: string; rows: string[]; width: number; height: number; offset: number; details?: boolean; footer?: string; tokens: ThemeTokens }): { lines: RenderedBoxLine[]; offset: number } {

@@ -1,4 +1,4 @@
-import type { PermissionDecision } from '@hannes/contracts';
+import type { PermissionDecision } from '@futryn/contracts';
 
 /**
  * Built-in read policy for TOOLS1 (ADR 0017). Evaluation order is deny → ask → allow: the first
@@ -24,7 +24,7 @@ const SECRET_NAMES = SECRET_FILE_RULES.map(rule => new RegExp(rule.match === 'ex
 const SECRET_EXCEPTIONS = SECRET_FILE_EXCEPTIONS.map(name => new RegExp(`^${escape(name)}$`, 'i'));
 
 export interface ReadPolicyContext {
-  /** Absolute path of Hannes's own state directory (credentials metadata, sessions). */
+  /** Absolute path of Futryn's own state directory (credentials metadata, sessions). */
   stateDirectory?: string;
 }
 
@@ -86,10 +86,10 @@ export function evaluateExec(command: string, workdirRelative: string, workdirAb
   return { effect: 'ask', reason: 'process-execute' };
 }
 
-/** Patch writes cannot modify credentials, Git internals or Hannes durable state. */
+/** Patch writes cannot modify credentials, Git internals or Futryn durable state. */
 export function evaluateWrite(relativePath:string,absolutePath:string,context:ReadPolicyContext={}):PermissionDecision {
  const read=evaluateRead(relativePath,absolutePath,context);
  if(read.effect!=='allow')return {effect:'deny',reason:read.reason};
- if(relativePath.toLowerCase().split('/').some(p=>p==='.hannes'||p.startsWith('.hannes-patch-')))return {effect:'deny',reason:'protected-path'};
+ if(relativePath.toLowerCase().split('/').some(p=>p==='.hannes'||p==='.futryn'||p.startsWith('.hannes-patch-')||p.startsWith('.futryn-patch-')))return {effect:'deny',reason:'protected-path'};
  return {effect:'ask',reason:'workspace-patch'};
 }

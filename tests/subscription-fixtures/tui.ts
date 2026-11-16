@@ -1,7 +1,7 @@
 /** Actual TUI launcher with deterministic provider runtime/vault fixtures for CI. */
 import { resolve } from 'node:path';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { runInteractiveTui } from '@hannes/tui';
+import { runInteractiveTui } from '@futryn/tui';
 import { memoryVault } from '../fixtures';
 const app = startup(process.env.FUTRYN_TEST_HOME!, { vault: memoryVault(), subscriptions: {
   nativeRuntimeTools: process.env.FUTRYN_TEST_NATIVE === '1',

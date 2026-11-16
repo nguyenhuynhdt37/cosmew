@@ -1,4 +1,4 @@
-import type { Account, ThemeTokens } from '@hannes/contracts';
+import type { Account, ThemeTokens } from '@futryn/contracts';
 import type { GateRow, StartupPhase } from './types';
 
 /** A verification request that takes longer than this is reported as a timeout. */
@@ -60,7 +60,7 @@ export function gateRows(c: GateContent): GateRow[] {
     const path = c.workspace.replace(/[\x00-\x1f\x7f-\x9f]/g, '');
     const available = Math.max(1, w - 4);
     add(path.length > available ? '…' + path.slice(-(available - 1)) : path, tokens.foregroundMuted);
-    if (h >= 9) add('Hannes may read files here and send them to the model.');
+    if (h >= 9) add('Futryn may read files here and send them to the model.');
     add(w < 35 ? 'May incur cost.' : 'Account check sends a small, potentially billed request.', tokens.warning);
     option(c.index === 0, 'Allow for this session');
     option(c.index === 1, 'Exit');

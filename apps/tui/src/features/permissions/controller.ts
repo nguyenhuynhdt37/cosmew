@@ -1,6 +1,6 @@
 import type { OverlayFeature, ThemeFrame, TuiHost } from '../../core/feature';
 import { stepIndex } from '../../ui';
-import { PERMISSION_MODES } from '@hannes/contracts';
+import { PERMISSION_MODES } from '@futryn/contracts';
 import { PERMISSION_ACTIONS, PERMISSION_RULE_TABS, createInitialPermissionDialogState, createInitialRulesState, suggestedRule, type PermissionDialogState, type PermissionRulesState } from './types';
 import { renderPermissionDialogOverlay, renderPermissionRulesOverlay } from './view';
 

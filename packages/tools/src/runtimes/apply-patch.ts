@@ -1,6 +1,6 @@
 import {join} from 'node:path';
-import {SecureFiles,WriteBoundaryError,contentHash,writePath,type FileSnapshot} from '@hannes/workspace';
-import {evaluateWrite} from '@hannes/security';
+import {SecureFiles,WriteBoundaryError,contentHash,writePath,type FileSnapshot} from '@futryn/workspace';
+import {evaluateWrite} from '@futryn/security';
 import type {ToolDispatcherOptions,ToolOutput} from '../context';
 import {PatchError,unifiedDiff,updateFile,type PatchOperation} from '../patch/parser';
 export interface PatchChange {snapshot:FileSnapshot;after:string|null;diff:string;action:'add'|'update'|'delete';mode?:number}

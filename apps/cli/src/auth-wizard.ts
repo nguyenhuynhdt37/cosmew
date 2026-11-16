@@ -1,5 +1,5 @@
-import { HannesError, modelIdSchema, providerSchema, type Account, type Provider } from '@hannes/contracts';
-import { terminalText, validateEndpoint } from '@hannes/security';
+import { FutrynError, modelIdSchema, providerSchema, type Account, type Provider } from '@futryn/contracts';
+import { terminalText, validateEndpoint } from '@futryn/security';
 import { loginSubscription } from './subscriptions/login';
 import type { Application } from './bootstrap/startup';
 import type { ChatInput } from './input';
@@ -14,7 +14,7 @@ async function choose(input: ChatInput, print: Print, label: string, choices: { 
     const choice = choices.find(c => c.id === answer || c.aliases?.includes(answer)) ?? (/^\d+$/.test(answer) ? visible.slice(0, 20)[Number(answer) - 1] : undefined);
     if (choice) return choice.id;
     const filtered = choices.filter(c => (c.id + ' ' + c.name).toLowerCase().includes(answer.toLowerCase()));
-    if (!answer || !filtered.length) throw new HannesError('INVALID_INPUT');
+    if (!answer || !filtered.length) throw new FutrynError('INVALID_INPUT');
     visible = filtered; fallback = undefined;
   }
 }
@@ -31,7 +31,7 @@ export async function loginWizard(app: Application, input: ChatInput, signal: Ab
     const id = await choose(input, print, 'Provider', [...available, { id: '@custom', aliases: ['custom'], name: 'Gateway riêng / 9Router (URL + model)' }], '1');
     if (id === '@custom') {
       const id = await input.ask('Tên cấu hình gateway', 'my-9router');
-      if (app.registry.list().some(p => p.id === id)) throw new HannesError('INVALID_INPUT');
+      if (app.registry.list().some(p => p.id === id)) throw new FutrynError('INVALID_INPUT');
       const baseURL = validateEndpoint(await input.ask('Base URL (thường kết thúc bằng /v1)'));
       const protocol = await choose(input, print, 'Protocol', [
         { id: 'responses', name: 'OpenAI Responses' }, { id: 'chat', name: 'OpenAI Chat Completions' },
@@ -39,7 +39,7 @@ export async function loginWizard(app: Application, input: ChatInput, signal: Ab
       ], 'responses');
       const auth = await choose(input, print, 'Xác thực', [{ id: 'api-key', name: 'API key' }, { id: 'none', name: 'Không cần key (local/public)' }], 'api-key');
       const discover = await input.ask('Gateway có API liệt kê models? (y/n)', 'n');
-      if (!['y', 'n'].includes(discover.toLowerCase())) throw new HannesError('INVALID_INPUT');
+      if (!['y', 'n'].includes(discover.toLowerCase())) throw new FutrynError('INVALID_INPUT');
       provider = app.registry.add(providerSchema.parse({ id, name: id, baseURL, protocol, auth,
         catalog: discover.toLowerCase() === 'y' ? protocol === 'anthropic' ? 'anthropic' : protocol === 'gemini' ? 'gemini' : 'openai' : 'manual', metadataVersion: 1 }));
     } else provider = app.registry.list().find(p => p.id === id) ?? app.registry.add(available.find(p => p.id === id)!);
@@ -95,7 +95,7 @@ export async function loginWizard(app: Application, input: ChatInput, signal: Ab
   }
   account = app.accounts.get(account.id);
   const models = app.catalog(account).cached();
-  if (!models.length) throw new HannesError('NOT_FOUND');
+  if (!models.length) throw new FutrynError('NOT_FOUND');
   const defaultModel = models.find(m => m.id === account.defaultModel)?.id ?? models[0]!.id;
   const selected = manualModel ?? await choose(input, print, 'Model', models.map(m => ({ id: m.id, name: `${m.name} · ${m.id}` })), defaultModel);
   app.router.select(account, models.find(m => m.id === selected)!, project);

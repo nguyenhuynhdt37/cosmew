@@ -1,4 +1,4 @@
-import type { FutrynClient } from '@hannes/sdk';
+import type { FutrynClient } from '@futryn/sdk';
 import type { ThemeEngine } from './theme/theme';
 import type { RenderedBoxLine } from './ui/types';
 

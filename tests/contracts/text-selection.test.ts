@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseRawTerminalKey, TerminalInputDecoder, deriveTokensFromTriplet, type FrameSnapshot, TextSelection } from '@hannes/tui';
+import { parseRawTerminalKey, TerminalInputDecoder, deriveTokensFromTriplet, type FrameSnapshot, TextSelection } from '@futryn/tui';
 const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
 function frame(): FrameSnapshot {
   const plainLines = ['  Hello world       ', '  giữ thụt dòng     ', '  third line        ', '                    ', '                    ', '                    ', '                    ', 'status footer       '].map(line => line.padEnd(20).slice(0,20));

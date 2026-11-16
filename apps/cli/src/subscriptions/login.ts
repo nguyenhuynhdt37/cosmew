@@ -1,4 +1,4 @@
-import { HannesError, type Account, type Provider } from '@hannes/contracts';
+import { FutrynError, type Account, type Provider } from '@futryn/contracts';
 import type { Application } from '../bootstrap/startup';
 
 /** Shared line/administration subscription UX. Prints public authorization
@@ -10,7 +10,7 @@ export async function loginSubscription(app: Application, provider: Provider, al
   const method = integration?.methods.find(m => m.id === methodId);
   if (method?.available === false) {
     process.stderr.write((method.diagnostic ?? 'Install the official runtime.') + '\n');
-    throw new HannesError('RUNTIME_UNAVAILABLE');
+    throw new FutrynError('RUNTIME_UNAVAILABLE');
   }
   const challenge = await client.beginProviderAuth(provider.id, methodId);
   let previous = '';

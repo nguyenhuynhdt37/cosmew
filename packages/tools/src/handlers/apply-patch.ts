@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {WriteBoundaryError} from '@hannes/workspace';
+import {WriteBoundaryError} from '@futryn/workspace';
 import type {ToolDispatcherOptions,ToolOutput} from '../context';
 import {PatchError,parsePatch} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';

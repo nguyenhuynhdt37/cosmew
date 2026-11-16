@@ -1,5 +1,5 @@
-import { HannesError, type Account, type Integration } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import { FutrynError, type Account, type Integration } from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import type { ConnectProviderState } from './types';
 
 export function filterIntegrations(integrations: Integration[], query: string): Integration[] {
@@ -50,7 +50,7 @@ const PROVIDER_HINTS: Record<string, string> = {
 
 /** Redacted, actionable text for a provider failure; never includes response bodies. */
 export function describeProviderError(client: FutrynClient, error: unknown, providerId: string | undefined): string {
-  const code = error instanceof HannesError ? error.code : 'INVALID_INPUT';
+  const code = error instanceof FutrynError ? error.code : 'INVALID_INPUT';
   const provider = client.listProviders().find(p => p.id === providerId) ?? client.listIntegrations().find(i => i.provider.id === providerId)?.provider;
   if (provider?.runtime) {
     const name = provider.runtime === 'copilot' ? 'GitHub' : provider.name;

@@ -1,9 +1,9 @@
-import { HannesError, modelSchema, type ModelInfo, type SettingsStore } from '@hannes/contracts';
+import { FutrynError, modelSchema, type ModelInfo, type SettingsStore } from '@futryn/contracts';
 import { ProviderTransport } from './http';
 
 export const providerFingerprint = (transport: ProviderTransport) => JSON.stringify(transport.provider);
 const object = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HannesError('PROTOCOL');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new FutrynError('PROTOCOL');
   return value as Record<string, unknown>;
 };
 export function normalizeModel(id: unknown, name: unknown, source: 'provider' | 'manual' = 'provider'): ModelInfo {
@@ -11,7 +11,7 @@ export function normalizeModel(id: unknown, name: unknown, source: 'provider' | 
     return modelSchema.parse({ id, name: typeof name === 'string' ? name : id,
       capabilities: {}, contextLimit: null, outputLimit: null, pricing: null, source,
       fetchedAt: new Date().toISOString(), metadataSource: null, metadataFetchedAt: null });
-  } catch { throw new HannesError('PROTOCOL'); }
+  } catch { throw new FutrynError('PROTOCOL'); }
 }
 export class ModelCatalog {
   constructor(private readonly store: SettingsStore, private readonly transport: ProviderTransport) {}
@@ -40,7 +40,7 @@ export class ModelCatalog {
         const path = kind === 'ollama' ? '/api/tags' : 'models' + (cursor ? kind === 'gemini' ? '?pageToken=' + encodeURIComponent(cursor) : '?after_id=' + encodeURIComponent(cursor) : '');
         const data = object(await this.transport.json(path, signal));
         const items = kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
-        if (!Array.isArray(items) || items.length > 10000) throw new HannesError('PROTOCOL');
+        if (!Array.isArray(items) || items.length > 10000) throw new FutrynError('PROTOCOL');
         for (const value of items) {
           const item = object(value);
           // Gemini lists embedding and generation models together; only expose generateContent models.
@@ -65,17 +65,17 @@ export class ModelCatalog {
           }
           models.push(model);
         }
-        if (models.length > 10000) throw new HannesError('PROTOCOL');
+        if (models.length > 10000) throw new FutrynError('PROTOCOL');
         const next = kind === 'gemini' ? data.nextPageToken : data.has_more === true ? data.last_id : undefined;
         if (!next) break;
-        if (typeof next !== 'string' || cursors.has(next) || page === 19) throw new HannesError('PROTOCOL');
+        if (typeof next !== 'string' || cursors.has(next) || page === 19) throw new FutrynError('PROTOCOL');
         cursors.add(next); cursor = next;
       }
       const merged = new Map(this.cached().filter(m => m.source === 'manual').map(m => [m.id, m]));
       for (const model of models) merged.set(model.id, model);
       const result = [...merged.values()]; this.save(result); return { models: result, stale: false };
     } catch (error) {
-      if (error instanceof HannesError && ['TRANSPORT', 'TIMEOUT'].includes(error.code) && this.cached().length && !signal?.aborted) {
+      if (error instanceof FutrynError && ['TRANSPORT', 'TIMEOUT'].includes(error.code) && this.cached().length && !signal?.aborted) {
         return { models: this.cached(), stale: true, warning: 'Offline cached catalog; availability and entitlements may have changed.' };
       }
       throw error;
@@ -87,7 +87,7 @@ export class ModelCatalog {
   // Advisory metadata never elevates a capability to verified support.
   enrichModelsDev(data: unknown): void {
     const provider = object(data)[this.transport.provider.id];
-    if (!provider) throw new HannesError('NOT_FOUND');
+    if (!provider) throw new FutrynError('NOT_FOUND');
     const entries = object(object(provider).models);
     const positive = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
     this.save(this.cached().map(model => {

@@ -17,7 +17,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
-  HannesError,
+  FutrynError,
   emptySettings,
   settingsSchema,
   themeIdSchema,
@@ -25,7 +25,7 @@ import {
   type Settings,
   type SettingsStore,
   type ThemeManifest,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 export { openPrivateDatabase } from './database';
 export { SqliteConversations } from './session-store';
 export { ToolAuditStore, type ToolAuditEntry } from './tool-audit';
@@ -37,7 +37,7 @@ export class SqliteSettings implements SettingsStore {
       const row = this.db.query('SELECT data FROM settings WHERE id=1').get() as { data: string } | null;
       return settingsSchema.parse(row ? JSON.parse(row.data) : emptySettings());
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   update(change: (settings: Settings) => void): void {
@@ -49,8 +49,8 @@ export class SqliteSettings implements SettingsStore {
         this.db.query('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(validated));
       }).immediate();
     } catch (e) {
-      if (e instanceof HannesError) throw e;
-      throw new HannesError('STORAGE');
+      if (e instanceof FutrynError) throw e;
+      throw new FutrynError('STORAGE');
     }
   }
 }
@@ -69,7 +69,7 @@ export class FileCustomThemeStore {
   private ensureSafeDirectory(): void {
     mkdirSync(this.themesDir, { recursive: true, mode: 0o700 });
     const stat = lstatSync(this.themesDir);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new HannesError('STORAGE');
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new FutrynError('STORAGE');
     if (process.platform !== 'win32' && (stat.mode & 0o077)) chmodSync(this.themesDir, 0o700);
   }
   loadAll(): CustomThemeStoreResult {
@@ -100,8 +100,8 @@ export class FileCustomThemeStore {
       }
       return { themes, errors };
     } catch (e) {
-      if (e instanceof HannesError) throw e;
-      throw new HannesError('STORAGE');
+      if (e instanceof FutrynError) throw e;
+      throw new FutrynError('STORAGE');
     }
   }
   save(manifest: ThemeManifest): ThemeManifest {
@@ -109,12 +109,12 @@ export class FileCustomThemeStore {
     try {
       validated = themeManifestSchema.parse({ ...manifest, builtIn: false, category: 'custom' });
     } catch {
-      throw new HannesError('INVALID_INPUT');
+      throw new FutrynError('INVALID_INPUT');
     }
     try {
       this.ensureSafeDirectory();
       const targetPath = join(this.themesDir, `${validated.id}.json`);
-      if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) throw new HannesError('STORAGE');
+      if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) throw new FutrynError('STORAGE');
       const tempPath = join(this.themesDir, `.${validated.id}.${crypto.randomUUID()}.tmp`);
       const serialized = JSON.stringify(validated, null, 2) + '\n';
       writeFileSync(tempPath, serialized, { encoding: 'utf8', mode: 0o600 });
@@ -128,8 +128,8 @@ export class FileCustomThemeStore {
       if (process.platform !== 'win32') chmodSync(targetPath, 0o600);
       return validated;
     } catch (e) {
-      if (e instanceof HannesError) throw e;
-      throw new HannesError('STORAGE');
+      if (e instanceof FutrynError) throw e;
+      throw new FutrynError('STORAGE');
     }
   }
   remove(id: string): boolean {
@@ -137,7 +137,7 @@ export class FileCustomThemeStore {
     try {
       validId = themeIdSchema.parse(id);
     } catch {
-      throw new HannesError('INVALID_INPUT');
+      throw new FutrynError('INVALID_INPUT');
     }
     try {
       this.ensureSafeDirectory();
@@ -150,7 +150,7 @@ export class FileCustomThemeStore {
       rmSync(targetPath, { force: true });
       return true;
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
 }

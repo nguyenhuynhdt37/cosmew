@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
 import { SLASH_COMMANDS } from '../composer';
 import { Modal, type RenderedBoxLine } from '../../ui';
 

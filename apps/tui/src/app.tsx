@@ -1,4 +1,4 @@
-import type { FutrynClient } from '@hannes/sdk';
+import type { FutrynClient } from '@futryn/sdk';
 import type { FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost } from './core/feature';
 import { ChatController, drawChatScreen } from './features/chat';
 import { CommandRouter } from './features/commands';

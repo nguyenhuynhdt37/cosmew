@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { FutrynTuiApp } from '@hannes/tui';
+import { FutrynTuiApp } from '@futryn/tui';
 import { fixtureServer } from '../fixtures';
 
 const cleanup: (() => void)[] = [];

@@ -1,24 +1,24 @@
-import { HannesError, type Account, type CredentialVault, type NetworkPolicy, type Provider } from '@hannes/contracts';
+import { FutrynError, type Account, type CredentialVault, type NetworkPolicy, type Provider } from '@futryn/contracts';
 
-export function normalizeError(error: unknown, signal?: AbortSignal): HannesError {
-  if (signal?.aborted) return new HannesError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
-  if (error instanceof HannesError) return error;
+export function normalizeError(error: unknown, signal?: AbortSignal): FutrynError {
+  if (signal?.aborted) return new FutrynError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
+  if (error instanceof FutrynError) return error;
   const status = typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : undefined;
   if (status) return statusError(status, null);
-  return new HannesError('PROTOCOL');
+  return new FutrynError('PROTOCOL');
 }
 export function retryAfter(value: string | null, now = Date.now()): number | null {
   if (value === null) return null;
   const n = Number(value); const ms = Number.isFinite(n) ? n * 1000 : Date.parse(value) - now;
   return Number.isFinite(ms) ? Math.max(0, Math.min(30000, ms)) : null;
 }
-export function statusError(status: number, retry: string | null): HannesError {
-  if (status === 401) return new HannesError('AUTH');
-  if (status === 403) return new HannesError('FORBIDDEN');
-  if (status === 404) return new HannesError('NOT_FOUND');
-  if (status === 429) return new HannesError('RATE_LIMIT', true, retryAfter(retry));
-  if (status >= 500) return new HannesError('TRANSPORT', true, retryAfter(retry));
-  return new HannesError('INVALID_INPUT');
+export function statusError(status: number, retry: string | null): FutrynError {
+  if (status === 401) return new FutrynError('AUTH');
+  if (status === 403) return new FutrynError('FORBIDDEN');
+  if (status === 404) return new FutrynError('NOT_FOUND');
+  if (status === 429) return new FutrynError('RATE_LIMIT', true, retryAfter(retry));
+  if (status >= 500) return new FutrynError('TRANSPORT', true, retryAfter(retry));
+  return new FutrynError('INVALID_INPUT');
 }
 export async function wait(ms: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
@@ -37,7 +37,7 @@ export class ProviderTransport {
   async credential(): Promise<string | undefined> {
     this.policy.authorize(this.provider, this.account);
     const key = await this.vault.get(this.account.credential);
-    if (this.provider.auth === 'api-key' && !key) throw new HannesError('AUTH');
+    if (this.provider.auth === 'api-key' && !key) throw new FutrynError('AUTH');
     return key;
   }
   async request(url: string | URL | Request, init: RequestInit = {}, limit = 4 * 1024 * 1024): Promise<Response> {
@@ -45,12 +45,12 @@ export class ProviderTransport {
     const target = new URL(url instanceof Request ? url.url : url.toString()); const base = new URL(this.provider.baseURL);
     const allowedPath = target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/') ||
       (this.provider.catalog === 'ollama' && target.pathname === '/api/tags');
-    if (target.origin !== base.origin || !allowedPath || target.username || target.password || target.hash || target.searchParams.has('key')) throw new HannesError('POLICY');
+    if (target.origin !== base.origin || !allowedPath || target.username || target.password || target.hash || target.searchParams.has('key')) throw new FutrynError('POLICY');
     let response: Response;
     try { response = await this.fetchImpl(target, { ...init, redirect: 'error' }); }
-    catch { throw init.signal?.aborted ? normalizeError(null, init.signal) : new HannesError('TRANSPORT', true); }
+    catch { throw init.signal?.aborted ? normalizeError(null, init.signal) : new FutrynError('TRANSPORT', true); }
     if (!response.ok) { await response.body?.cancel(); throw statusError(response.status, response.headers.get('retry-after')); }
-    if (!response.body) throw new HannesError('PROTOCOL');
+    if (!response.body) throw new FutrynError('PROTOCOL');
     const reader = response.body.getReader(); let size = 0;
     const authorize = () => this.policy.authorize(this.provider, this.account);
     const body = new ReadableStream<Uint8Array>({
@@ -60,9 +60,9 @@ export class ProviderTransport {
           authorize();
           if (chunk.done) { controller.close(); return; }
           size += chunk.value.byteLength;
-          if (size > limit) { await reader.cancel(); controller.error(new HannesError('PROTOCOL')); return; }
+          if (size > limit) { await reader.cancel(); controller.error(new FutrynError('PROTOCOL')); return; }
           controller.enqueue(chunk.value);
-        } catch (e) { await reader.cancel().catch(() => {}); controller.error(e instanceof HannesError ? e : init.signal?.aborted ? normalizeError(null, init.signal) : new HannesError('PROTOCOL')); }
+        } catch (e) { await reader.cancel().catch(() => {}); controller.error(e instanceof FutrynError ? e : init.signal?.aborted ? normalizeError(null, init.signal) : new FutrynError('PROTOCOL')); }
       },
       cancel(reason) { return reader.cancel(reason); },
     });

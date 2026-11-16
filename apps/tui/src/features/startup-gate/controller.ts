@@ -1,4 +1,4 @@
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 import type { ThemeFrame, TuiHost } from '../../core/feature';
 import {
   CHECK_TIMEOUT_SECONDS, GATE_BLOCKED_KEYS, GATE_OVERLAYS, TIMEOUT_MESSAGE, clampOption, failureMessage, optionCount, selectableAccounts, suggestedAlternative,
@@ -148,7 +148,7 @@ export class StartupGate {
         if (this.reportTimeout(abort, account.id)) return;
         if (abort.signal.aborted) return;
         const alternatives = selectableAccounts(client.listAccounts());
-        this.toChooser(suggestedAlternative(alternatives, account.id), failureMessage(error instanceof HannesError ? error.code : 'PROTOCOL'));
+        this.toChooser(suggestedAlternative(alternatives, account.id), failureMessage(error instanceof FutrynError ? error.code : 'PROTOCOL'));
       } finally { this.endRequest(); }
     })();
   }
@@ -170,7 +170,7 @@ export class StartupGate {
       } catch (error) {
         if (this.reportTimeout(abort, accountId)) return;
         if (abort.signal.aborted) return;
-        this.toChooser(suggestedAlternative(selectableAccounts(host.client.listAccounts()), accountId), failureMessage(error instanceof HannesError ? error.code : 'PROTOCOL'));
+        this.toChooser(suggestedAlternative(selectableAccounts(host.client.listAccounts()), accountId), failureMessage(error instanceof FutrynError ? error.code : 'PROTOCOL'));
       } finally { this.endRequest(); }
     })();
   }

@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SessionGrants, evaluateRead } from '@hannes/security';
-import { ToolDispatcher, type ApprovalDecision, type ApprovalRequest, type ToolAuditRecord } from '@hannes/tools';
-import { WorkspaceRoot } from '@hannes/workspace';
+import { SessionGrants, evaluateRead } from '@futryn/security';
+import { ToolDispatcher, type ApprovalDecision, type ApprovalRequest, type ToolAuditRecord } from '@futryn/tools';
+import { WorkspaceRoot } from '@futryn/workspace';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const f of cleanup.splice(0)) f(); });

@@ -1,5 +1,5 @@
 {
-  "name": "@hannes/tools",
+  "name": "@futryn/tools",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,9 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@hannes/contracts": "workspace:*",
-    "@hannes/security": "workspace:*",
-    "@hannes/workspace": "workspace:*",
+    "@futryn/contracts": "workspace:*",
+    "@futryn/security": "workspace:*",
+    "@futryn/workspace": "workspace:*",
     "zod": "4.6.7"
   }
 }

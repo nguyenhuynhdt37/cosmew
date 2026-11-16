@@ -1,6 +1,6 @@
-import type {ToolResult, CommandRuntime} from '@hannes/contracts';
-import type {SessionGrants} from '@hannes/security';
-import type {WorkspaceRoot} from '@hannes/workspace';
+import type {ToolResult, CommandRuntime} from '@futryn/contracts';
+import type {SessionGrants} from '@futryn/security';
+import type {WorkspaceRoot} from '@futryn/workspace';
 
 export type ApprovalDecision = 'once' | 'session' | 'deny';
 

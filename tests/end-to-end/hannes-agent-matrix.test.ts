@@ -1,6 +1,6 @@
 /**
  * ADR 0029 acceptance: changing the model provider does not change who owns the coding-agent tools.
- * Two independent wire formats (OpenAI Chat Completions and Anthropic Messages) drive the same Hannes
+ * Two independent wire formats (OpenAI Chat Completions and Anthropic Messages) drive the same Futryn
  * Conversation loop; every project tool runs through the shared ToolDispatcher/ToolOrchestrator.
  * Deterministic fixtures only: this is not live provider evidence.
  */
@@ -8,7 +8,7 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { messagesToTranscript } from '@hannes/tui';
+import { messagesToTranscript } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault, type ScriptedReply, type ScriptedView } from '../fixtures';
 
@@ -43,7 +43,7 @@ const audit = (c: Ctx) => (c.app.db.query('select tool, phase, decision, outcome
 async function waitPrompt(c: Ctx) { const end = Date.now() + 4000; while (!c.client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5); return c.client.listPendingPermissions()[0]!; }
 
 for (const protocol of ['chat', 'anthropic'] as const) {
-  test(`${protocol}: read → model continuation runs through the Hannes dispatcher`, async () => {
+  test(`${protocol}: read → model continuation runs through the Futryn dispatcher`, async () => {
     const c = await make(protocol, v => v.results.length ? { text: `SAW ${v.results[0]!.content.trim()}` } : { calls: [{ name: 'read', input: { path: 'notes.txt' } }] });
     const r = await turn(c, 'read notes');
     expect(r.results).toEqual([{ name: 'read', status: 'ok', code: undefined }]);

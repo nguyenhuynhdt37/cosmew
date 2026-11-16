@@ -1,6 +1,6 @@
-import { PERMISSION_MODE_HINTS } from '@hannes/contracts';
-import { HannesError, type ToolCall } from '@hannes/contracts';
-import { acceptSlashSelection } from '@hannes/sdk';
+import { PERMISSION_MODE_HINTS } from '@futryn/contracts';
+import { FutrynError, type ToolCall } from '@futryn/contracts';
+import { acceptSlashSelection } from '@futryn/sdk';
 import type { TuiHost } from '../../core/feature';
 import { FynCompanion } from '../companion';
 import {
@@ -135,8 +135,8 @@ export class ChatController {
           assistantItem.durationMs = Date.now() - startTime;
         }
       }
-      if (abortController.signal.aborted) throw new HannesError('CANCELLED');
-      if (!completed) throw new HannesError('PROTOCOL');
+      if (abortController.signal.aborted) throw new FutrynError('CANCELLED');
+      if (!completed) throw new FutrynError('PROTOCOL');
       assistantItem.streaming = false;
       assistantItem.reasoningExpanded = this.showReasoning;
       const totalTok =
@@ -147,9 +147,9 @@ export class ChatController {
       if (notes) this.banner += ` Project context: ${notes} note(s); /context.`;
       this.companion.transition('done');
     } catch (err) {
-      this.companion.transition(abortController.signal.aborted || (err instanceof HannesError && err.code === 'CANCELLED') ? 'cancelled' : 'error');
+      this.companion.transition(abortController.signal.aborted || (err instanceof FutrynError && err.code === 'CANCELLED') ? 'cancelled' : 'error');
       assistantItem.streaming = false;
-      if (err instanceof HannesError) {
+      if (err instanceof FutrynError) {
         assistantItem.errorText = `Error [${err.code}]: ${
           err.code === 'AUTH'
             ? 'No active provider account or model selected. Run /login or /model.'

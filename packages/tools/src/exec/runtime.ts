@@ -3,9 +3,9 @@ import { existsSync, realpathSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
-import { SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES } from '@hannes/security';
+import { SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES } from '@futryn/security';
 import { ProcessSupervisor } from './process';
-import type { CommandRequest, CommandOutcome, CommandRuntime, RuntimeAvailability } from '@hannes/contracts';
+import type { CommandRequest, CommandOutcome, CommandRuntime, RuntimeAvailability } from '@futryn/contracts';
 
 /** Used on platforms without a tested sandbox: the tool is never offered and nothing runs. */
 export class UnsupportedRuntime implements CommandRuntime {
@@ -33,7 +33,7 @@ const SYSTEM_EXEC_MAPS = ['/usr/lib', '/System/Library', '/Library/Apple'];
 export interface SeatbeltOptions {
   /** Canonical workspace root; the only user tree the command may read. */
   workspaceRoot: string;
-  /** Hannes's state directory; always denied, even if it lies inside the workspace. */
+  /** Futryn's state directory; always denied, even if it lies inside the workspace. */
   stateDirectory?: string;
   /** Extra programs (by name, looked up on the host PATH) the sandbox may execute, e.g. `rg`. */
   extraExecutables?: string[];
@@ -46,7 +46,7 @@ export interface SeatbeltOptions {
 /**
  * macOS Seatbelt runtime (ADR 0022), modelled on Codex's `sandbox-exec` launcher: deny by default,
  * read-only, no network, reads limited to system locations, the workspace and named executables;
- * Hannes state, `.git` internals and secret-looking files are denied. The shell is
+ * Futryn state, `.git` internals and secret-looking files are denied. The shell is
  * `bash --noprofile --norc` with a fixed environment, so project files cannot inject startup code.
  */
 export class SeatbeltRuntime implements CommandRuntime {

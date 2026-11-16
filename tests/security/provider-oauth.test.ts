@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from 'bun:test';
-import { OpenRouterPKCE, Redactor } from '@hannes/security';
-import { HannesError } from '@hannes/contracts';
+import { OpenRouterPKCE, Redactor } from '@futryn/security';
+import { FutrynError } from '@futryn/contracts';
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const fn of cleanup.splice(0)) fn(); });
 
@@ -56,7 +56,7 @@ test('OAuth expired/cancelled/unknown challenges fail before network; exchange f
   expect(f.requests()).toBe(0);
   const failed = await f.begin(); f.fail(403);
   try { await f.driver.complete(failed.id, 'one-time-fixture-code'); throw new Error('must reject'); }
-  catch (error) { expect(error).toBeInstanceOf(HannesError); expect(JSON.stringify(error)).not.toContain('raw-sensitive'); }
+  catch (error) { expect(error).toBeInstanceOf(FutrynError); expect(JSON.stringify(error)).not.toContain('raw-sensitive'); }
   expect(f.requests()).toBe(1);
   await expect(f.driver.complete(failed.id, 'one-time-fixture-code')).rejects.toMatchObject({ code: 'AUTH' });
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { HannesError, type Provider, type SubscriptionRuntime } from '@hannes/contracts';
+import { FutrynError, type Provider, type SubscriptionRuntime } from '@futryn/contracts';
 
 export interface SubscriptionRecipe {
   runtime: SubscriptionRuntime;
@@ -75,10 +75,10 @@ enabled = false
 ${grokIsolation}`;
 /** Native-tool mode (ADR 0027): after workspace consent Grok uses its own tools in the project.
  * Grok auto-approves ordinary reads; edits, commands and the sensitive reads below arrive as ACP
- * permission requests that Hannes answers by the session permission mode. */
+ * permission requests that Futryn answers by the session permission mode. */
 const grokWorkspaceConfig = `[permission]
 ask = ["Read(**/.env)", "Read(**/.env.*)", "Read(**/*.pem)", "Read(**/*.key)", "Read(**/id_rsa*)", "Read(**/id_ed25519*)", "Read(~/.ssh/**)", "Read(~/.aws/**)", "Read(~/.config/gcloud/**)", "Read(~/.netrc)", "Read(~/.npmrc)"]
-deny = ["Read(~/.hannes/**)", "Edit(~/.hannes/**)", "Edit(**/.git/**)"]
+deny = ["Read(~/.futryn/**)", "Edit(~/.futryn/**)", "Read(~/.hannes/**)", "Edit(~/.hannes/**)", "Edit(**/.git/**)"]
 [features]
 web_fetch = true
 telemetry = "off"
@@ -87,7 +87,7 @@ campaigns = false
 profile = "off"
 ${grokIsolation}`;
 /** Native-tool Codex (ADR 0027): shell/edits/web in the consented project; `untrusted` sends every
- * non-trivial command and file change to Hannes for a decision by the permission mode. */
+ * non-trivial command and file change to Futryn for a decision by the permission mode. */
 const codexFullConfig = `cli_auth_credentials_store = "file"
 sandbox_mode = "danger-full-access"
 web_search = "live"
@@ -140,7 +140,7 @@ export function subscriptionEnvironment(recipe: SubscriptionRecipe, profile: str
  * commands see their real HOME/toolchains; only the runtime profile and its update/telemetry
  * switches are pinned, and API keys that would bypass the subscription are dropped. */
 export function subscriptionWorkspaceEnvironment(recipe: SubscriptionRecipe, profile: string, environment = process.env): Record<string, string> {
-  if (!recipe.workspace) throw new HannesError('POLICY');
+  if (!recipe.workspace) throw new FutrynError('POLICY');
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(environment)) if (value !== undefined) env[key] = value;
   for (const key of ['XAI_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'GH_TOKEN', 'COPILOT_GITHUB_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'NODE_OPTIONS']) delete env[key];
@@ -159,7 +159,7 @@ export function authorizeSubscription(provider: Provider): SubscriptionRecipe {
     'gemini-cli': ['google-subscription', 'https://cloudcode-pa.googleapis.com'], 'qwen-code': ['qwen-subscription', 'https://api.qwen.ai'],
     'grok-build': ['grok-subscription', 'https://api.x.ai'],
   };
-  if (!runtime || provider.id !== expected[runtime][0] || provider.baseURL !== expected[runtime][1] || provider.auth !== 'api-key') throw new HannesError('POLICY');
+  if (!runtime || provider.id !== expected[runtime][0] || provider.baseURL !== expected[runtime][1] || provider.auth !== 'api-key') throw new FutrynError('POLICY');
   return SUBSCRIPTION_RECIPES[runtime];
 }
 
@@ -167,10 +167,10 @@ export function denyRuntimeRequest(method: string): unknown {
   if (method === 'session/request_permission') return { outcome: { outcome: 'cancelled' } };
   if (method === 'permission.request') return { kind: 'denied-by-rules' };
   if (method === 'item/commandExecution/requestApproval' || method === 'item/fileChange/requestApproval') return { decision: 'decline' };
-  throw new HannesError('POLICY');
+  throw new FutrynError('POLICY');
 }
 
-/** A runtime permission request as Hannes shows it (ADR 0027). */
+/** A runtime permission request as Futryn shows it (ADR 0027). */
 export interface RuntimeApproval {
   kind: 'secret' | 'edit' | 'execute' | 'network' | 'other'; label: string;
   /** SHA-256 of the complete, unclipped request; a session grant binds to exactly this request. */

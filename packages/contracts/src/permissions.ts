@@ -28,7 +28,7 @@ export type PermissionPromptResolution = z.infer<typeof permissionPromptResoluti
 
 /**
  * Session permission mode (ADR 0027), modelled on Claude Code's modes. It only changes how an
- * `ask` decision is answered; deny rules (outside workspace, `.git`, Hannes state) never change.
+ * `ask` decision is answered; deny rules (outside workspace, `.git`, Futryn state) never change.
  * - default: prompt for edits, commands, secret reads and anything else sensitive.
  * - acceptEdits: file edits are approved; commands and secrets still prompt.
  * - auto: edits and commands are approved; secret reads, network and other tools still prompt.
@@ -56,13 +56,13 @@ export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
   acceptEdits: 'File edits are approved; commands and secret files ask.',
   auto: 'Edits and commands are approved; secret files, network and other tools ask.',
   plan: 'Read-only: edits and commands are refused.',
-  bypassPermissions: 'Every request is approved without asking. Hard blocks (outside workspace, .git, Hannes state) still apply.',
+  bypassPermissions: 'Every request is approved without asking. Hard blocks (outside workspace, .git, Futryn state) still apply.',
 };
 
 /**
  * Project permission rules (ADR 0028), written like Claude Code's: `Bash`, `Bash(npm test:*)`,
  * `Read(src/**)`, `Edit(**\/*.ts)`, `WebFetch(domain:example.com)`, `Tool(name)`. They answer only
- * requests that would otherwise ask; hard denies (outside workspace, `.git`, Hannes state) stay.
+ * requests that would otherwise ask; hard denies (outside workspace, `.git`, Futryn state) stay.
  */
 export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool'] as const;
 export type PermissionRuleTool = typeof PERMISSION_RULE_TOOLS[number];

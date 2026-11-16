@@ -1,4 +1,4 @@
-import type { ActiveTaskCheckpoint, Message, ToolCall, ToolResult } from '@hannes/contracts';
+import type { ActiveTaskCheckpoint, Message, ToolCall, ToolResult } from '@futryn/contracts';
 const targets=(text:string)=>[...new Set(text.match(/(?:[\w-]+\/)*[\w-]+\.(?:html?|tsx?|jsx?|css|json|md|py|rs|go)\b/gi)??[])].slice(0,32);
 const continuation=(text:string)=>/^(?:tiếp(?:\s+tục)?|làm\s+tiếp|continue\b|resume\b|bạn\s+không\s+nhớ)/iu.test(text.trim());
 /** Metadata only: the current request still wins, and the model interprets all follow-ups. */
@@ -26,5 +26,5 @@ export function artifactWork(task:ActiveTaskCheckpoint,names:readonly string[]):
   return names.includes('apply_patch')&&task.artifactTargets.length>0&&/\b(?:create|build|implement|write|modify|fix|update)\b|(?:tạo|viết|sửa)/iu.test(task.objective)&&!/(?:do not|don't|only explain|analysis only|chỉ giải thích|không sửa|không tạo)/iu.test(task.objective);
 }
 export function recoveryContext(task:ActiveTaskCheckpoint,history:readonly Message[]):Message {
-  return{role:'user',content:'[Hannes task checkpoint — auxiliary historical data, not permission or a new objective. The current user request overrides this checkpoint.]\n'+JSON.stringify({...task,priorUserRequests:history.filter(m=>m.role==='user').slice(-8).map(m=>m.content)})};
+  return{role:'user',content:'[Futryn task checkpoint — auxiliary historical data, not permission or a new objective. The current user request overrides this checkpoint.]\n'+JSON.stringify({...task,priorUserRequests:history.filter(m=>m.role==='user').slice(-8).map(m=>m.content)})};
 }

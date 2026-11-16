@@ -2,9 +2,9 @@ import {afterEach,expect,test} from 'bun:test';
 import {mkdtempSync,rmSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {openPrivateDatabase,SqliteConversations} from '@hannes/persistence';
-import {Conversation,compactHistory,useContextSnapshot,normalizeHistory} from '@hannes/core';
-import {HannesError,type ModelPort,type Message,type TurnReceipt} from '@hannes/contracts';
+import {openPrivateDatabase,SqliteConversations} from '@futryn/persistence';
+import {Conversation,compactHistory,useContextSnapshot,normalizeHistory} from '@futryn/core';
+import {FutrynError,type ModelPort,type Message,type TurnReceipt} from '@futryn/contracts';
 const cleanup:(()=>void)[]=[];afterEach(()=>{for(const f of cleanup.splice(0).reverse())f();});
 function setup(){const home=mkdtempSync(join(tmpdir(),'hannes-journal-'));const db=openPrivateDatabase(home);cleanup.push(()=>{db.close();rmSync(home,{recursive:true,force:true});});return{home,db,store:new SqliteConversations(db)};}
 const selection={accountId:crypto.randomUUID(),modelId:'fixture'};
@@ -14,8 +14,8 @@ const usage={inputTokens:10,outputTokens:5,costUSD:null};
 test('accepted turns, ordered events and tool intents persist before completion; live owners cannot be stolen',()=>{
  const {store,db}=setup();const id=store.create(selection),r=receipt();const revision=store.beginExecution(id,{role:'user',content:'Create helo.html'},r);
  expect(store.recover(id).turns[0]!.state).toBe('pending');
- expect(()=>store.beginExecution(id,{role:'user',content:'racing'},receipt())).toThrow(HannesError);
- expect(()=>store.delete(id)).toThrow(HannesError);
+ expect(()=>store.beginExecution(id,{role:'user',content:'racing'},receipt())).toThrow(FutrynError);
+ expect(()=>store.delete(id)).toThrow(FutrynError);
  store.recordExecution(id,r.requestId,{type:'model.requested',stepId:crypto.randomUUID()});
  store.recordExecution(id,r.requestId,{type:'tool.call',call:{id:'write',name:'apply_patch',input:{patch:'proposal'}}});
  store.recordExecution(id,r.requestId,{type:'tool.intent',callId:'write',executionId:crypto.randomUUID(),capability:'fs.write'});
@@ -40,7 +40,7 @@ test('process exit preserves intermediate read evidence; restart marks abandoned
 test('corrupt event sequences fail explicitly and cannot become model-visible success',()=>{
  const {store,db}=setup(),id=store.create(selection),r=receipt();store.beginExecution(id,{role:'user',content:'Create helo.html'},r);
  db.query('UPDATE conversation_events SET seq=8 WHERE conversation=?').run(id);
- expect(()=>store.recover(id)).toThrow(HannesError);
+ expect(()=>store.recover(id)).toThrow(FutrynError);
 });
 
 test('compaction preserves all user constraints, exact change evidence and two recent turns without mutating source history',async()=>{
@@ -55,7 +55,7 @@ test('compaction preserves all user constraints, exact change evidence and two r
 });
 
 test('closing a streaming iterator finalizes its turn and preserves text instead of leaving a live owner',async()=>{
- const {store}=setup();const model:ModelPort={generate:async()=>{throw new HannesError('UNSUPPORTED');},async *stream(){yield{type:'textDelta',text:'Planning the requested helo.html'};yield{type:'completed',finishReason:'stop',usage};}};
+ const {store}=setup();const model:ModelPort={generate:async()=>{throw new FutrynError('UNSUPPORTED');},async *stream(){yield{type:'textDelta',text:'Planning the requested helo.html'};yield{type:'completed',finishReason:'stop',usage};}};
  const c=new Conversation(selection,model,store);for await(const _ of c.send('Create helo.html'))break;
  const recovered=store.recover(c.id);expect(recovered.turns[0]!.state).toBe('cancelled');expect(recovered.messages.some(m=>m.content.includes('Planning'))).toBe(true);
  const next=receipt();expect(()=>store.beginExecution(c.id,{role:'user',content:'tiếp'},next)).not.toThrow();
@@ -96,5 +96,5 @@ test('semantically corrupt lifecycle endings are rejected instead of reconstruct
  const {store,db}=setup(),id=store.create(selection),r=receipt();const revision=store.beginExecution(id,{role:'user',content:'Create helo.html'},r);
  store.interrupt(id,revision,{...r,outcome:'cancelled',finishedAt:new Date().toISOString()});
  db.query("UPDATE execution_turns SET state='completed' WHERE conversation=?").run(id);
- expect(()=>store.recover(id)).toThrow(HannesError);
+ expect(()=>store.recover(id)).toThrow(FutrynError);
 });

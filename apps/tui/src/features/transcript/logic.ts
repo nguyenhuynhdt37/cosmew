@@ -1,4 +1,4 @@
-import type { Message, ThemeTokens, ToolCall, ToolResult } from '@hannes/contracts';
+import type { Message, ThemeTokens, ToolCall, ToolResult } from '@futryn/contracts';
 import type { ExplorationRow, ToolExecutionSummary, TranscriptItem, TranscriptPart } from './types';
 import type { StyledSpan } from '../../ui';
 
@@ -195,7 +195,7 @@ export function appendToolPart(item: TranscriptItem, callId: string): void {
 }
 
 /** A runtime activity update: same id updates in place, a new id gets its own timeline slot. */
-export function applyActivity(item: TranscriptItem, activity: import('@hannes/contracts').RuntimeActivity): void {
+export function applyActivity(item: TranscriptItem, activity: import('@futryn/contracts').RuntimeActivity): void {
   const list = item.activities ??= [];
   const index = list.findIndex(entry => entry.id === activity.id);
   if (index >= 0) { list[index] = activity; return; }

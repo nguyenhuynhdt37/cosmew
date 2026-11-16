@@ -10,9 +10,9 @@ import {
   type Settings,
   type SettingsStore,
   type ThemeManifest,
-} from '@hannes/contracts';
-import { FileCustomThemeStore } from '@hannes/persistence';
-import { FutrynClient } from '@hannes/sdk';
+} from '@futryn/contracts';
+import { FileCustomThemeStore } from '@futryn/persistence';
+import { FutrynClient } from '@futryn/sdk';
 import {
   ALL_BUILTIN_THEMES,
   BUILTIN_COLOR_THEMES,
@@ -23,7 +23,7 @@ import {
   detectTerminalColorCapability,
   fgHex,
   getThemeMiniSwatches,
-} from '@hannes/tui';
+} from '@futryn/tui';
 
 class MemorySettingsStore implements SettingsStore {
   private state: Settings = emptySettings();

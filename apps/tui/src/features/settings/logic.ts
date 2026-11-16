@@ -1,4 +1,4 @@
-import type { AppearanceConfig } from '@hannes/contracts';
+import type { AppearanceConfig } from '@futryn/contracts';
 
 export interface SettingRow { label: string; value: string }
 

@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /** User budgets used by the budget tests (ADR 0030); there is no default ceiling. */
 const MAX_TOOL_ROUNDS = 16, MAX_TOOL_CALLS = 32;
-import type { ModelEvent } from '@hannes/contracts';
+import type { ModelEvent } from '@futryn/contracts';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault, scriptedView, type ScriptedReply, type ScriptedView } from '../fixtures';
 
 /**
  * Task 02 (ADR 0020). The "model" here is a deterministic policy: each reply is computed only from
- * the request that reached the fixture server, i.e. from the tool results Hannes really sent back.
+ * the request that reached the fixture server, i.e. from the tool results Futryn really sent back.
  * It contains no file path of the fixture repository except the discovery pattern, so a correct
  * sequence proves the results arrived, were paired with their calls, and could drive the next step.
  */

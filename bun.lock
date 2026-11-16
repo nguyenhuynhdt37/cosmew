@@ -3,112 +3,113 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "hannes",
+      "name": "futryn",
       "devDependencies": {
-        "@hannes/contracts": "workspace:*",
-        "@hannes/core": "workspace:*",
-        "@hannes/models": "workspace:*",
-        "@hannes/persistence": "workspace:*",
-        "@hannes/sdk": "workspace:*",
-        "@hannes/security": "workspace:*",
-        "@hannes/tools": "workspace:*",
-        "@hannes/tui": "workspace:*",
-        "@hannes/workspace": "workspace:*",
+        "@futryn/contracts": "workspace:*",
+        "@futryn/core": "workspace:*",
+        "@futryn/models": "workspace:*",
+        "@futryn/persistence": "workspace:*",
+        "@futryn/sdk": "workspace:*",
+        "@futryn/security": "workspace:*",
+        "@futryn/tools": "workspace:*",
+        "@futryn/tui": "workspace:*",
+        "@futryn/workspace": "workspace:*",
         "@types/bun": "1.4.4",
         "typescript": "7.0.2",
       },
     },
     "apps/cli": {
-      "name": "@hannes/cli",
+      "name": "@futryn/cli",
       "version": "0.1.0",
       "bin": {
-        "hannes": "./src/index.ts",
+        "fyn": "./src/index.ts",
         "futryn": "./src/index.ts",
+        "hannes": "./src/index.ts",
       },
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
-        "@hannes/core": "workspace:*",
-        "@hannes/models": "workspace:*",
-        "@hannes/persistence": "workspace:*",
-        "@hannes/sdk": "workspace:*",
-        "@hannes/security": "workspace:*",
-        "@hannes/tools": "workspace:*",
-        "@hannes/tui": "workspace:*",
-        "@hannes/workspace": "workspace:*",
+        "@futryn/contracts": "workspace:*",
+        "@futryn/core": "workspace:*",
+        "@futryn/models": "workspace:*",
+        "@futryn/persistence": "workspace:*",
+        "@futryn/sdk": "workspace:*",
+        "@futryn/security": "workspace:*",
+        "@futryn/tools": "workspace:*",
+        "@futryn/tui": "workspace:*",
+        "@futryn/workspace": "workspace:*",
       },
     },
     "apps/tui": {
-      "name": "@hannes/tui",
+      "name": "@futryn/tui",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
-        "@hannes/sdk": "workspace:*",
+        "@futryn/contracts": "workspace:*",
+        "@futryn/sdk": "workspace:*",
       },
     },
     "packages/contracts": {
-      "name": "@hannes/contracts",
+      "name": "@futryn/contracts",
       "version": "0.1.0",
       "dependencies": {
         "zod": "4.6.7",
       },
     },
     "packages/core": {
-      "name": "@hannes/core",
+      "name": "@futryn/core",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
       },
     },
     "packages/models": {
-      "name": "@hannes/models",
+      "name": "@futryn/models",
       "version": "0.1.0",
       "dependencies": {
         "@ai-sdk/anthropic": "4.0.105",
         "@ai-sdk/google": "4.0.121",
         "@ai-sdk/openai": "4.0.118",
         "@ai-sdk/openai-compatible": "3.0.92",
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
         "ai": "7.0.173",
         "ajv": "8.20.0",
       },
     },
     "packages/persistence": {
-      "name": "@hannes/persistence",
+      "name": "@futryn/persistence",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
       },
     },
     "packages/sdk": {
-      "name": "@hannes/sdk",
+      "name": "@futryn/sdk",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
       },
     },
     "packages/security": {
-      "name": "@hannes/security",
+      "name": "@futryn/security",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
         "@napi-rs/keyring": "2.1.2",
       },
     },
     "packages/tools": {
-      "name": "@hannes/tools",
+      "name": "@futryn/tools",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
-        "@hannes/security": "workspace:*",
-        "@hannes/workspace": "workspace:*",
+        "@futryn/contracts": "workspace:*",
+        "@futryn/security": "workspace:*",
+        "@futryn/workspace": "workspace:*",
         "zod": "4.6.7",
       },
     },
     "packages/workspace": {
-      "name": "@hannes/workspace",
+      "name": "@futryn/workspace",
       "version": "0.1.0",
       "dependencies": {
-        "@hannes/contracts": "workspace:*",
+        "@futryn/contracts": "workspace:*",
       },
     },
   },
@@ -127,25 +128,25 @@
 
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.81", "", { "dependencies": { "@ai-sdk/provider": "4.0.38", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-pfvvdQ3d1WxdBuug/mnGEP6E48cPokwD8dMBnsFeeAUp0/rb/H2aj0f3mwOiY62gu/Cu5GO44e+SE5nDHyBWMA=="],
 
-    "@hannes/cli": ["@hannes/cli@workspace:apps/cli"],
+    "@futryn/cli": ["@futryn/cli@workspace:apps/cli"],
 
-    "@hannes/contracts": ["@hannes/contracts@workspace:packages/contracts"],
+    "@futryn/contracts": ["@futryn/contracts@workspace:packages/contracts"],
 
-    "@hannes/core": ["@hannes/core@workspace:packages/core"],
+    "@futryn/core": ["@futryn/core@workspace:packages/core"],
 
-    "@hannes/models": ["@hannes/models@workspace:packages/models"],
+    "@futryn/models": ["@futryn/models@workspace:packages/models"],
 
-    "@hannes/persistence": ["@hannes/persistence@workspace:packages/persistence"],
+    "@futryn/persistence": ["@futryn/persistence@workspace:packages/persistence"],
 
-    "@hannes/sdk": ["@hannes/sdk@workspace:packages/sdk"],
+    "@futryn/sdk": ["@futryn/sdk@workspace:packages/sdk"],
 
-    "@hannes/security": ["@hannes/security@workspace:packages/security"],
+    "@futryn/security": ["@futryn/security@workspace:packages/security"],
 
-    "@hannes/tools": ["@hannes/tools@workspace:packages/tools"],
+    "@futryn/tools": ["@futryn/tools@workspace:packages/tools"],
 
-    "@hannes/tui": ["@hannes/tui@workspace:apps/tui"],
+    "@futryn/tui": ["@futryn/tui@workspace:apps/tui"],
 
-    "@hannes/workspace": ["@hannes/workspace@workspace:packages/workspace"],
+    "@futryn/workspace": ["@futryn/workspace@workspace:packages/workspace"],
 
     "@napi-rs/keyring": ["@napi-rs/keyring@2.1.2", "", { "optionalDependencies": { "@napi-rs/keyring-darwin-arm64": "2.1.2", "@napi-rs/keyring-darwin-x64": "2.1.2", "@napi-rs/keyring-freebsd-x64": "2.1.2", "@napi-rs/keyring-linux-arm-gnueabihf": "2.1.2", "@napi-rs/keyring-linux-arm64-gnu": "2.1.2", "@napi-rs/keyring-linux-arm64-musl": "2.1.2", "@napi-rs/keyring-linux-riscv64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-gnu": "2.1.2", "@napi-rs/keyring-linux-x64-musl": "2.1.2", "@napi-rs/keyring-win32-arm64-msvc": "2.1.2", "@napi-rs/keyring-win32-ia32-msvc": "2.1.2", "@napi-rs/keyring-win32-x64-msvc": "2.1.2" } }, "sha512-9i1SR6tYeQ3o1beLeVMxhN6Fq513m9TZlTs+46+4JgvSNkaFoW9S4WrpV5MjzE+0CzVoC+dZ4RfZDIgW6+afnQ=="],
 

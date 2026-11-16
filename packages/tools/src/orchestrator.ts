@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
-import {HannesError, toolResultSchema, type PermissionDecision, type ToolCall, type ToolResult} from '@hannes/contracts';
-import {evaluateRead, evaluateExec, evaluateWrite} from '@hannes/security';
-import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@hannes/workspace';
+import {FutrynError, toolResultSchema, type PermissionDecision, type ToolCall, type ToolResult} from '@futryn/contracts';
+import {evaluateRead, evaluateExec, evaluateWrite} from '@futryn/security';
+import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {commandGrantTarget, type ApprovalRequest, type Audit, type ToolDispatcherOptions, type ToolOutput} from './context';
 import type {PreparedTool} from './handlers/types';
 import {join} from 'node:path';
@@ -57,9 +57,9 @@ export class ToolOrchestrator {
       }
       return finish(await prepared.execute(signal));
     } catch (error) {
-      if (signal?.aborted || error instanceof HannesError && error.code==='CANCELLED') {
+      if (signal?.aborted || error instanceof FutrynError && error.code==='CANCELLED') {
         audit({target:null,phase:'completed',outcome:'error',code:'CANCELLED'});
-        throw new HannesError('CANCELLED');
+        throw new FutrynError('CANCELLED');
       }
       if(error instanceof WriteBoundaryError)return finish({status:'error',code:error.code,content:'Patch targets changed or became unsafe. No changes were made.'});
       if (error instanceof WorkspaceDenied) {
@@ -71,7 +71,7 @@ export class ToolOrchestrator {
         if (error.reason==='not-found') return finish({status:'error',code:'NOT_FOUND',content:'No such file or directory in the workspace.'});
         return finish({status:'error',code:'INVALID_INPUT',content:'Invalid path.'});
       }
-      if (error instanceof HannesError && error.code==='TIMEOUT') return finish({status:'error',code:'TIMEOUT',content:'The search took longer than 30 seconds and was stopped. Narrow the path, glob or pattern.'});
+      if (error instanceof FutrynError && error.code==='TIMEOUT') return finish({status:'error',code:'TIMEOUT',content:'The search took longer than 30 seconds and was stopped. Narrow the path, glob or pattern.'});
       return finish({status:'error',code:'EXECUTION_FAILED',content:'The tool failed.'});
     } finally { this.active.delete(call.id); }
   }

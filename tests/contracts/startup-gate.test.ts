@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { FutrynTuiApp } from '@hannes/tui';
+import { FutrynTuiApp } from '@futryn/tui';
 import { fixtureServer, memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const f of cleanup.splice(0).reverse()) await f(); });

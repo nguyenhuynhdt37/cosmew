@@ -1,4 +1,4 @@
-import type {ToolCall, ToolPort} from '@hannes/contracts';
+import type {ToolCall, ToolPort} from '@futryn/contracts';
 import type {ToolDispatcherOptions} from './context';
 import {createHandlers} from './handlers';
 import {InstructionReader} from './handlers/instructions';

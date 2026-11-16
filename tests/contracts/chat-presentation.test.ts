@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { deriveTokensFromTriplet, renderFyn, type FynState, createInitialComposerState, renderPromptComposerLines, renderMarkdownBody, renderTranscriptMessages } from '@hannes/tui';
+import { deriveTokensFromTriplet, renderFyn, type FynState, createInitialComposerState, renderPromptComposerLines, renderMarkdownBody, renderTranscriptMessages } from '@futryn/tui';
 const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
 
 test('miniature Fyn retains both ears, eyes, feet and a complete tail throughout its animation', () => {

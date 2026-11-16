@@ -1,5 +1,5 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import type { ThemeEngine } from '../theme/theme';
 import type { ActiveOverlay } from '../types';
 import type { RenderedBoxLine } from '../ui/types';

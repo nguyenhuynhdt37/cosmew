@@ -1,9 +1,9 @@
 import { afterEach, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { HannesError, type Account, type ModelRequest } from '@hannes/contracts';
-import { ConfiguredNetworkPolicy } from '@hannes/security';
-import { SqliteSettings } from '@hannes/persistence';
-import { AccountManager, ModelCatalog, ModelRouter, ProviderAdapter, ProviderRegistry, ProviderTransport, normalizeModel, retryAfter, retryDelay } from '@hannes/models';
+import { FutrynError, type Account, type ModelRequest } from '@futryn/contracts';
+import { ConfiguredNetworkPolicy } from '@futryn/security';
+import { SqliteSettings } from '@futryn/persistence';
+import { AccountManager, ModelCatalog, ModelRouter, ProviderAdapter, ProviderRegistry, ProviderTransport, normalizeModel, retryAfter, retryDelay } from '@futryn/models';
 import { fixtureServer, memoryVault } from '../fixtures';
 
 const servers: ReturnType<typeof fixtureServer>[] = [];
@@ -62,7 +62,7 @@ test('total timeout and caller cancellation propagate', async () => {
 });
 test('malformed responses reject and unavailable usage stays null', async () => {
   const x = setup(); const adapter = new ProviderAdapter(x.transport, 'fixture-model');
-  x.f.set({ malformed: true }); await expect(adapter.generate(x.request)).rejects.toBeInstanceOf(HannesError);
+  x.f.set({ malformed: true }); await expect(adapter.generate(x.request)).rejects.toBeInstanceOf(FutrynError);
   x.f.set({ malformed: false, includeUsage: false }); expect((await adapter.generate(x.request)).usage).toEqual({ inputTokens: null, outputTokens: null, costUSD: null }); x.db.close();
 });
 test('catalog pagination, manual entries, unknown metadata and account-isolated cache', async () => {

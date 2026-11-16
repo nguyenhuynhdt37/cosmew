@@ -2,16 +2,16 @@ import { afterEach, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { SAFETY_LIMITS } from '@hannes/core';
+import { SAFETY_LIMITS } from '@futryn/core';
 /** A user tool-call budget used by the Codex bridge budget tests (ADR 0030); not a default. */
 const MAX_TOOL_CALLS = 32, MAX_INLINE_TOOL_ATTEMPTS = MAX_TOOL_CALLS + SAFETY_LIMITS.bridgeRefusalGrace;
-import { HannesError, executionBackendFor, type SubscriptionRuntime, type ModelEvent } from '@hannes/contracts';
-import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows } from '@hannes/tui';
-import { RuntimeProfile } from '@hannes/persistence';
-import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@hannes/security';
+import { FutrynError, executionBackendFor, type SubscriptionRuntime, type ModelEvent } from '@futryn/contracts';
+import { FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows } from '@futryn/tui';
+import { RuntimeProfile } from '@futryn/persistence';
+import { SUBSCRIPTION_RECIPES, subscriptionEnvironment } from '@futryn/security';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { SubscriptionRpc } from '../../apps/cli/src/subscriptions/rpc';
-import { providerPresets } from '@hannes/models';
+import { providerPresets } from '@futryn/models';
 import { memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn(); });
@@ -62,7 +62,7 @@ for (const runtime of Object.keys(ids) as SubscriptionRuntime[]) {
   });
   test(`${runtime}: rejected authentication leaves no account, vault entry or temporary credentials`, async () => {
     const c = await context('reject');
-    await expect(connect(c, runtime)).rejects.toBeInstanceOf(HannesError);
+    await expect(connect(c, runtime)).rejects.toBeInstanceOf(FutrynError);
     expect(c.app.accounts.list()).toHaveLength(0); expect(c.vault.values.size).toBe(0);
     expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
   });
@@ -113,7 +113,7 @@ for (const runtime of Object.keys(ids) as SubscriptionRuntime[]) {
     const iterator = c.client.sendMessage('Slow request')[Symbol.asyncIterator]();
     expect((await iterator.next()).value?.type).toBe('started');
     await c.client.logoutAccount(account.id);
-    await expect(iterator.next()).rejects.toBeInstanceOf(HannesError);
+    await expect(iterator.next()).rejects.toBeInstanceOf(FutrynError);
     expect(c.vault.values.size).toBe(0);
     expect(readdirSync(join(c.dir, 'runtime-tmp'))).toEqual([]);
   });
@@ -313,7 +313,7 @@ async function readContext(scenario: string, enabled = true) {
 }
 async function waitForRead(check: () => boolean) { const end = Date.now() + 4000; while (!check() && Date.now() < end) await Bun.sleep(10); expect(check()).toBe(true); }
 
-test('Codex subscription reads the actual workspace through Hannes and persists the result', async () => {
+test('Codex subscription reads the actual workspace through Futryn and persists the result', async () => {
   const c = await readContext('read-file');
   await c.tui.submitPrompt('Read README.md and describe this project');
   const answer = c.tui.getTranscript().at(-1)!;
@@ -358,7 +358,7 @@ for (const scenario of ['read-unknown', 'read-wrong-turn', 'read-wrong-thread', 
   const c = await readContext(scenario);
   c.client.setTurnBudget({ maxToolCalls: MAX_TOOL_CALLS });
   const events: ModelEvent[] = [];
-  await expect((async () => { for await (const event of c.client.sendMessage('Inspect project')) events.push(event); })()).rejects.toBeInstanceOf(HannesError);
+  await expect((async () => { for await (const event of c.client.sendMessage('Inspect project')) events.push(event); })()).rejects.toBeInstanceOf(FutrynError);
   expect(events.some(e => e.type === 'completed')).toBe(false);
   const results = events.flatMap(e => e.type === 'toolResult' ? [e.result] : []);
   expect(results.length).toBeLessThanOrEqual(MAX_INLINE_TOOL_ATTEMPTS);
@@ -413,7 +413,7 @@ const exploreRepository = {
   'src/billing.ts': "export const invoice = 'UNRELATED_MARKER';\n",
 };
 
-test('Codex progressive exploration: each dynamic call is derived from the previous Hannes result', async () => {
+test('Codex progressive exploration: each dynamic call is derived from the previous Futryn result', async () => {
   const c = await exploreContext(exploreRepository);
   await c.tui.submitPrompt('How does the login route check tokens?');
   const answer = c.tui.getTranscript().at(-1)!;
@@ -614,7 +614,7 @@ for (const scenario of ['usage-cancel','usage-fail']) test(`Codex usage: ${scena
       if (scenario === 'usage-cancel' && event.type === 'usage' && event.usage.inputTokens === 100) controller.abort();
     }
   } catch (error) {caught=error;}
-  expect(caught).toBeInstanceOf(HannesError);
+  expect(caught).toBeInstanceOf(FutrynError);
   expect(events.some(e => e.type === 'completed')).toBe(false);
   expect(c.client.usage().last).toMatchObject({outcome:scenario === 'usage-cancel' ? 'cancelled' : 'failed',usage:{inputTokens:100,outputTokens:20}});
 });
@@ -645,15 +645,15 @@ for(const decision of ['once','deny'] as const)test(`Codex apply_patch JSON func
  const saved=c.app.conversations.get(c.client.activeSession()!.id)!.messages;
  expect(saved.some(m=>m.role==='tool'&&m.toolName==='apply_patch'&&m.toolCallId===answer.toolCalls![0]!.id)).toBe(true);
 });
-test('Codex native file-change requests stay denied while the Hannes patch tool is exposed',async()=>{
+test('Codex native file-change requests stay denied while the Futryn patch tool is exposed',async()=>{
  const c=await readContext('native-write-attempt');
  await expect((async()=>{for await(const _event of c.client.sendMessage('Try native write')){}})()).rejects.toMatchObject({code:'POLICY'});
  expect(c.client.listPendingPermissions()).toEqual([]);expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
 });
 
 /** ADR 0027: native runtime tools run in the consented workspace and every request they make
- * goes through the Hannes prompt, answered by the session permission mode. Fixture evidence only. */
-for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native tools ask Hannes and follow the permission mode`, async () => {
+ * goes through the Futryn prompt, answered by the session permission mode. Fixture evidence only. */
+for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native tools ask Futryn and follow the permission mode`, async () => {
   const c = await context('native-tool', true);
   await connect(c, runtime);
   const ws = mkdtempSync(join(tmpdir(), 'futryn-native-ws-'));
@@ -664,7 +664,7 @@ for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native
   const run = async () => { let text = ''; for await (const e of client.sendMessage('Create native-proof.txt')) if (e.type === 'textDelta') text += e.text; return text; };
   const proof = join(ws, 'native-proof.txt');
 
-  // default: the request becomes a Hannes prompt; dismissing it denies and nothing runs.
+  // default: the request becomes a Futryn prompt; dismissing it denies and nothing runs.
   const first = run();
   const end = Date.now() + 4000;
   while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
@@ -692,7 +692,7 @@ for (const runtime of ['grok-build', 'codex'] as const) test(`${runtime}: native
 });
 
 test('permission modes only answer ask decisions and Shift+Tab cycles them like Claude Code', async () => {
-  const { permissionModeDecision } = await import('@hannes/contracts');
+  const { permissionModeDecision } = await import('@futryn/contracts');
   expect(permissionModeDecision('default', 'edit')).toBe('ask');
   expect(permissionModeDecision('acceptEdits', 'edit')).toBe('allow');
   expect(permissionModeDecision('acceptEdits', 'execute')).toBe('ask');
@@ -713,7 +713,7 @@ test('permission modes only answer ask decisions and Shift+Tab cycles them like 
 });
 
 test('runtime session grants bind to the complete request, not a clipped or generic label', async () => {
-  const { classifyRuntimeApproval } = await import('@hannes/security');
+  const { classifyRuntimeApproval } = await import('@futryn/security');
   const prefix = 'echo ' + 'x'.repeat(400);
   const a = classifyRuntimeApproval('item/commandExecution/requestApproval', { itemId: 'i1', command: prefix + ' safe' })!;
   const b = classifyRuntimeApproval('item/commandExecution/requestApproval', { itemId: 'i1', command: prefix + '; rm -rf ~' })!;
@@ -726,7 +726,7 @@ test('runtime session grants bind to the complete request, not a clipped or gene
 });
 
 test('project permission rules match Claude-style patterns with deny > ask > allow', async () => {
-  const { permissionRuleMatches: m, permissionRuleDecision: d } = await import('@hannes/contracts');
+  const { permissionRuleMatches: m, permissionRuleDecision: d } = await import('@futryn/contracts');
   expect(m('Bash(npm test:*)', { tool: 'Bash', target: 'npm test -- --watch' })).toBe(true);
   expect(m('Bash(npm test:*)', { tool: 'Bash', target: 'npm testing' })).toBe(false);
   expect(m('Bash(git status)', { tool: 'Bash', target: 'git status --short' })).toBe(false);
@@ -823,7 +823,7 @@ test('/permissions edits rules with the keyboard and the prompt can save "don\'t
 });
 
 test('Bash allow rules never cover chained, substituted or redirected commands', async () => {
-  const { permissionRuleDecision: d } = await import('@hannes/contracts');
+  const { permissionRuleDecision: d } = await import('@futryn/contracts');
   const { suggestedRule } = await import('../../apps/tui/src/features/permissions/types');
   const rules = { allow: ['Bash(npm test:*)', 'Bash(git status)'], ask: [], deny: ['Bash(rm:*)'] };
   expect(d(rules, { tool: 'Bash', target: 'npm test -- --watch' })).toBe('allow');
@@ -840,8 +840,8 @@ test('Bash allow rules never cover chained, substituted or redirected commands',
 });
 
 test('rules judge the exact structured target: no clipping, traversal, fake hosts or display labels', async () => {
-  const { permissionRuleDecision: d, normalizeRulePath } = await import('@hannes/contracts');
-  const { classifyRuntimeApproval } = await import('@hannes/security');
+  const { permissionRuleDecision: d, normalizeRulePath } = await import('@futryn/contracts');
+  const { classifyRuntimeApproval } = await import('@futryn/security');
   const rules = { allow: ['Bash(npm test:*)', 'Read(src/**)', 'Edit(src/**)', 'WebFetch(domain:x.ai)', 'Tool(safe)'], ask: [], deny: [] };
   // 1. Runtime label is clipped/cleaned for display; the rule target keeps newlines and the full length.
   const hidden = 'npm test ' + 'a'.repeat(400) + '; rm -rf ~';
@@ -896,7 +896,7 @@ test('requests without a structured target fail closed against deny/ask rules, e
 });
 
 /** ADR 0029: folder consent never turns a subscription runtime into the coding engine by itself. */
-test('folder consent alone keeps runtimes on Hannes-owned or chat-only backends; delegation is explicit', async () => {
+test('folder consent alone keeps runtimes on Futryn-owned or chat-only backends; delegation is explicit', async () => {
   const c = await context();
   await connect(c, 'grok-build');
   c.client.setToolsEnabled(true);
@@ -906,14 +906,14 @@ test('folder consent alone keeps runtimes on Hannes-owned or chat-only backends;
   expect(events.at(-1)?.type).toBe('completed');
   expect(c.client.setDelegatedAgent(true)).toMatchObject({ kind: 'delegated', loopOwner: 'runtime', toolOwner: 'runtime' });
   expect(c.client.setDelegatedAgent(false)).toMatchObject({ kind: 'chat-only' });
-  // Codex with consent is the bridge: Codex loop, every project tool a Hannes tool.
+  // Codex with consent is the bridge: Codex loop, every project tool a Futryn tool.
   await connect(c, 'codex');
   expect(c.client.status().executionBackend).toMatchObject({ kind: 'codex-bridge', loopOwner: 'runtime', toolOwner: 'hannes' });
   // Delegation needs consent and a runtime provider.
   c.client.setToolsEnabled(false);
   expect(() => c.client.setDelegatedAgent(true)).toThrow(expect.objectContaining({ code: 'POLICY' }));
   c.client.setToolsEnabled(true);
-  // Direct API models are always Hannes-owned, even if delegation were requested.
+  // Direct API models are always Futryn-owned, even if delegation were requested.
   expect(executionBackendFor({}, { toolsEnabled: true, delegated: true })).toMatchObject({ kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes' });
 });
 

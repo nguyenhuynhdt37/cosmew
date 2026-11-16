@@ -3,13 +3,13 @@ import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { HannesError, type ModelPort } from '@hannes/contracts';
-import { providerPresets } from '@hannes/models';
-import { Conversation } from '@hannes/core';
-import { openPrivateDatabase, SqliteConversations } from '@hannes/persistence';
-import { acceptSlashSelection, parseSlashCommand, SLASH_COMMANDS } from '@hannes/sdk';
-import { Redactor, redactModel } from '@hannes/security';
-import { deriveTokensFromTriplet, FutrynTuiApp, createInitialComposerState, getMatchingSlashCommands, renderPromptComposerLines, reportRows, renderReportOverlay, renderHelpOverlay, filterPaletteCommands } from '@hannes/tui';
+import { FutrynError, type ModelPort } from '@futryn/contracts';
+import { providerPresets } from '@futryn/models';
+import { Conversation } from '@futryn/core';
+import { openPrivateDatabase, SqliteConversations } from '@futryn/persistence';
+import { acceptSlashSelection, parseSlashCommand, SLASH_COMMANDS } from '@futryn/sdk';
+import { Redactor, redactModel } from '@futryn/security';
+import { deriveTokensFromTriplet, FutrynTuiApp, createInitialComposerState, getMatchingSlashCommands, renderPromptComposerLines, reportRows, renderReportOverlay, renderHelpOverlay, filterPaletteCommands } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -161,7 +161,7 @@ test('/switch confirms context transfer, creates a separate bound session, prese
   expect(c.client.usage().reportedTurns).toBe(1);
   expect(c.app.accounts.get(c.account.id).status).not.toBe('logged-out');
   c.server.set({ status: 401 });
-  await expect(c.client.switchAccount('first', true)).rejects.toBeInstanceOf(HannesError);
+  await expect(c.client.switchAccount('first', true)).rejects.toBeInstanceOf(FutrynError);
   expect(c.client.activeSession()!.id).toBe(fork.id);
 });
 
@@ -184,7 +184,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
     const model: ModelPort = { generate: async () => { throw new Error(); }, async *stream() {
       yield { type: 'started', requestId: crypto.randomUUID() };
       yield { type: 'usage', usage: { inputTokens: 9, outputTokens: null, costUSD: null } };
-      throw new HannesError(code);
+      throw new FutrynError(code);
     } };
     const conv = new Conversation(selection, model, store);
     await expect((async () => { for await (const event of conv.send('Private prompt')) { if (event.type === 'usage') { expect(store.get(conv.id)?.turns?.[0]?.usage?.inputTokens).toBe(9); expect(store.get(conv.id)?.turns?.[0]?.outcome).toBe('pending'); } } })()).rejects.toMatchObject({code});
@@ -583,9 +583,9 @@ test('ChatGPT profiles reject the same account identity even with refreshed toke
     records.set(credential.key, JSON.stringify({version: 1, files: {'auth.json': JSON.stringify({tokens: {account_id: id, access_token: token}})}}));
   }
   const account = await c.app.accounts.add('chatgpt', 'chat-one', first);
-  await expect(c.app.accounts.add('chatgpt', 'chat-duplicate', duplicate)).rejects.toThrow(HannesError);
+  await expect(c.app.accounts.add('chatgpt', 'chat-duplicate', duplicate)).rejects.toThrow(FutrynError);
   const distinct = await c.app.accounts.add('chatgpt', 'chat-two', other);
-  await expect(c.app.accounts.reauthenticate(distinct.id, duplicate)).rejects.toThrow(HannesError);
+  await expect(c.app.accounts.reauthenticate(distinct.id, duplicate)).rejects.toThrow(FutrynError);
   expect(c.app.accounts.get(distinct.id).status).toBe('unvalidated');
   await c.app.accounts.reauthenticate(account.id, duplicate);
   expect(c.app.accounts.get(account.id).credential).toEqual(duplicate);

@@ -5,9 +5,9 @@ import { createGoogle } from '@ai-sdk/google';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import Ajv, { type ValidateFunction } from 'ajv';
 import { parseRateLimitHeaders } from './limits';
-import { HannesError, requestSchema, type Message, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@hannes/contracts';
+import { FutrynError, requestSchema, type Message, type ModelEvent, type ModelInfo, type ModelPort, type ModelRequest, type ToolCall, type Usage, usageSchema } from '@futryn/contracts';
 
-/** Hannes messages → AI SDK messages, including assistant tool calls and tool results. */
+/** Futryn messages → AI SDK messages, including assistant tool calls and tool results. */
 export function toModelMessages(messages: Message[]): ModelMessage[] {
   return messages.map((m): ModelMessage => {
     if (m.role === 'tool') return { role: 'tool', content: [{ type: 'tool-result', toolCallId: m.toolCallId!, toolName: m.toolName!, output: { type: 'text', value: m.content } }] };
@@ -34,19 +34,19 @@ export class ProviderAdapter implements ModelPort {
   constructor(private readonly transport: ProviderTransport, private readonly modelId: string, private readonly info?: ModelInfo) {}
   private async options(input: ModelRequest, signal?: AbortSignal) {
     let request: ModelRequest;
-    try { request = requestSchema.parse(input); } catch { throw new HannesError('INVALID_INPUT'); }
-    if (request.modelId !== this.modelId || JSON.stringify(request).length > 1048576) throw new HannesError('INVALID_INPUT');
+    try { request = requestSchema.parse(input); } catch { throw new FutrynError('INVALID_INPUT'); }
+    if (request.modelId !== this.modelId || JSON.stringify(request).length > 1048576) throw new FutrynError('INVALID_INPUT');
     // Unknown capability is tried (ADR 0017); only a model known to reject tools is refused up front.
-    if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new HannesError('UNSUPPORTED');
+    if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new FutrynError('UNSUPPORTED');
     if (request.maxEstimatedCostUSD !== undefined) {
-      const prices = this.info?.pricing; if (!prices) throw new HannesError('BUDGET');
+      const prices = this.info?.pricing; if (!prices) throw new FutrynError('BUDGET');
       // Deliberately an estimate guard, not an exact tokenizer or provider billing ceiling.
       const inputEstimate = Buffer.byteLength(JSON.stringify(request.messages)) + Buffer.byteLength(JSON.stringify(request.tools)) + Buffer.byteLength(request.instructions ?? '') + request.messages.length * 16 + 1024;
       const outputEstimate = Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens);
-      if ((inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 > request.maxEstimatedCostUSD) throw new HannesError('BUDGET');
+      if ((inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 > request.maxEstimatedCostUSD) throw new FutrynError('BUDGET');
     }
-    if (request.reasoningEffort && (!this.info?.reasoningEfforts?.includes(request.reasoningEffort) || this.transport.provider.protocol !== 'responses')) throw new HannesError('UNSUPPORTED');
-    if (this.info?.contextLimit && Math.min(request.maxOutputTokens, this.info.outputLimit ?? request.maxOutputTokens) >= this.info.contextLimit) throw new HannesError('CONTEXT_LIMIT');
+    if (request.reasoningEffort && (!this.info?.reasoningEfforts?.includes(request.reasoningEffort) || this.transport.provider.protocol !== 'responses')) throw new FutrynError('UNSUPPORTED');
+    if (this.info?.contextLimit && Math.min(request.maxOutputTokens, this.info.outputLimit ?? request.maxOutputTokens) >= this.info.contextLimit) throw new FutrynError('CONTEXT_LIMIT');
     const key = await this.transport.credential(); const p = this.transport.provider;
     // Rate-limit headers of the latest response; read once the turn finishes.
     const responseHeaders: { value?: Headers } = {};
@@ -63,14 +63,14 @@ export class ProviderAdapter implements ModelPort {
     else if (p.protocol === 'responses') model = createOpenAI(settings).responses(this.modelId);
     else model = createOpenAICompatible({ ...settings, name: p.id, includeUsage: p.streamUsage ?? false }).chatModel(this.modelId);
     // Adapters convert, never decide (ADR 0029): a call with wrong arguments or an unknown name is
-    // passed to the Hannes ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
+    // passed to the Futryn ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
     // Codex responds-to-model. Only genuine wire faults (duplicate ids, >32 calls, oversize) fail here.
     const tools: ToolSet = {}; const names = new Set<string>();
     const ajv = new Ajv({ strict: true, coerceTypes: false, removeAdditional: false, useDefaults: false, validateFormats: true, logger: false });
     for (const descriptor of request.tools) {
       let validate: ValidateFunction;
       try { validate = ajv.compile(descriptor.inputSchema); if (('$async' in validate && validate.$async) || names.has(descriptor.name)) throw new Error(); }
-      catch { throw new HannesError('INVALID_INPUT'); }
+      catch { throw new FutrynError('INVALID_INPUT'); }
       names.add(descriptor.name);
       tools[descriptor.name] = { description: descriptor.description, inputSchema: jsonSchema(descriptor.inputSchema, {
         validate: value => ({ success: true, value }),
@@ -91,27 +91,27 @@ export class ProviderAdapter implements ModelPort {
       for await (const part of result.fullStream) {
         options.abortSignal.throwIfAborted();
         if (part.type === 'error') throw part.error;
-        if (part.type === 'tool-error') throw new HannesError('PROTOCOL');
-        if (part.type === 'tool-input-start') { if (pending.size >= 32) throw new HannesError('PROTOCOL'); pending.add(part.id); }
-        if (part.type === 'abort') throw new HannesError('CANCELLED');
+        if (part.type === 'tool-error') throw new FutrynError('PROTOCOL');
+        if (part.type === 'tool-input-start') { if (pending.size >= 32) throw new FutrynError('PROTOCOL'); pending.add(part.id); }
+        if (part.type === 'abort') throw new FutrynError('CANCELLED');
         if (part.type === 'reasoning-delta') {
-          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new HannesError('PROTOCOL');
+          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new FutrynError('PROTOCOL');
           yield { type: 'reasoningDelta', text: part.text };
         } else if (part.type === 'text-delta') {
-          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new HannesError('PROTOCOL');
+          bytes += Buffer.byteLength(part.text); if (bytes > 262144) throw new FutrynError('PROTOCOL');
           yield { type: 'textDelta', text: part.text };
         } else if (part.type === 'tool-call') {
-          if (calls.has(part.toolCallId) || calls.size >= 32 || (JSON.stringify(part.input) ?? '').length > 65536) throw new HannesError('PROTOCOL');
+          if (calls.has(part.toolCallId) || calls.size >= 32 || (JSON.stringify(part.input) ?? '').length > 65536) throw new FutrynError('PROTOCOL');
           calls.add(part.toolCallId); pending.delete(part.toolCallId); yield { type: 'toolCallComplete', call: { id: part.toolCallId, name: part.toolName, input: objectInput(part.input) } };
         } else if (part.type === 'finish') {
           const quota = options.responseHeaders.value ? parseRateLimitHeaders(options.responseHeaders.value) : [];
           const reported = usageSchema.parse({ ...usage(part.totalUsage, this.info), ...(quota.length ? { quota } : {}) });
           yield { type: 'usage', usage: reported };
-          if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new HannesError('PROTOCOL');
+          if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new FutrynError('PROTOCOL');
           complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported };
         }
       }
-      if (!complete) throw new HannesError('PROTOCOL');
+      if (!complete) throw new FutrynError('PROTOCOL');
     } catch (e) { throw normalizeError(e, options.abortSignal); }
     finally { options.controller.abort(); }
   }
@@ -119,7 +119,7 @@ export class ProviderAdapter implements ModelPort {
     const options = await this.options(request, signal);
     try {
       const result = await generateText(options);
-      if (Buffer.byteLength(result.text) > 262144 || result.finishReason === 'error' || ['other', 'interrupted'].includes(result.finishReason) || result.toolCalls.length > 32 || new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length || result.toolCalls.some(c => JSON.stringify(c.input).length > 65536)) throw new HannesError('PROTOCOL');
+      if (Buffer.byteLength(result.text) > 262144 || result.finishReason === 'error' || ['other', 'interrupted'].includes(result.finishReason) || result.toolCalls.length > 32 || new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length || result.toolCalls.some(c => JSON.stringify(c.input).length > 65536)) throw new FutrynError('PROTOCOL');
       return { text: result.text, calls: result.toolCalls.map(call => ({ id: call.toolCallId, name: call.toolName, input: objectInput(call.input) })), usage: usageSchema.parse(usage(result.totalUsage, this.info)), finishReason: result.finishReason.replaceAll('-', '_') };
     } catch (e) { throw normalizeError(e, options.abortSignal); }
     finally { options.controller.abort(); }

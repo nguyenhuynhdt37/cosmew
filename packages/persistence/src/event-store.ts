@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
-import { HannesError, activeTaskCheckpointSchema, contextSnapshotSchema, executionEventDataSchema, turnStateSchema,
+import { FutrynError, activeTaskCheckpointSchema, contextSnapshotSchema, executionEventDataSchema, turnStateSchema,
   type ActiveTaskCheckpoint, type ContextSnapshot, type ConversationEvent, type DurableTurn, type ExecutionEventData,
-  type Message, type RecoveredConversation, type StoredMessage, type TurnState } from '@hannes/contracts';
+  type Message, type RecoveredConversation, type StoredMessage, type TurnState } from '@futryn/contracts';
 const owner = crypto.randomUUID();
 interface Row {id:string;user_revision:number;end_revision:number|null;state:string;owner_pid:number;owner:string}
 const alive = (pid:number) => {try {process.kill(pid,0);return true;}catch(error){return (error as {code?:string}).code!=='ESRCH';}};
@@ -24,23 +24,23 @@ export class ExecutionJournal {
   /** A live owner cannot be stolen, even by another client in the same process. */
   claim(id:string,turnId:string,revision:number,user:Message):void {
     this.abandonDead(id);
-    if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new HannesError('POLICY');
+    if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new FutrynError('POLICY');
     this.db.query("INSERT INTO execution_turns VALUES(?,?,?,NULL,'pending',?,?)").run(id,turnId,revision,process.pid,owner);
     this.append(id,turnId,{type:'user.accepted',message:user});
   }
   record(id:string,turnId:string,event:ExecutionEventData):number {
     try{return this.db.transaction(()=>{
-      if(event.type==='user.accepted'||event.type==='turn.finished')throw new HannesError('STORAGE');
+      if(event.type==='user.accepted'||event.type==='turn.finished')throw new FutrynError('STORAGE');
       const row=this.db.query('SELECT * FROM execution_turns WHERE conversation=? AND id=?').get(id,turnId) as Row|null;
-      if(!row||row.owner!==owner||!['pending','running'].includes(row.state))throw new HannesError('STORAGE');
+      if(!row||row.owner!==owner||!['pending','running'].includes(row.state))throw new FutrynError('STORAGE');
       if(event.type==='model.requested')this.db.query("UPDATE execution_turns SET state='running' WHERE conversation=? AND id=?").run(id,turnId);
       return this.append(id,turnId,event);
-    }).immediate();}catch(e){if(e instanceof HannesError)throw e;throw new HannesError('STORAGE');}
+    }).immediate();}catch(e){if(e instanceof FutrynError)throw e;throw new FutrynError('STORAGE');}
   }
   finish(id:string,revision:number,state:TurnState,errorCode?:string):void {
     const row=this.db.query('SELECT * FROM execution_turns WHERE conversation=? AND user_revision=?').get(id,revision) as Row|null;
     if(!row)return; // v1-v3 and custom legacy stores remain readable.
-    if(!['pending','running'].includes(row.state)||!['completed','failed','cancelled','interrupted'].includes(state))throw new HannesError('STORAGE');
+    if(!['pending','running'].includes(row.state)||!['completed','failed','cancelled','interrupted'].includes(state))throw new FutrynError('STORAGE');
     const current=(this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}).revision;
     this.db.query('UPDATE execution_turns SET state=?,end_revision=? WHERE conversation=? AND id=?').run(state,current,id,row.id);
     this.append(id,row.id,{type:'turn.finished',state,...(errorCode?{errorCode}:{})});
@@ -70,23 +70,23 @@ export class ExecutionJournal {
       const turns:DurableTurn[]=rows.map(row=>({id:row.id,userRevision:row.user_revision,state:turnStateSchema.parse(row.state),events:[]}));
       const byId=new Map(turns.map(t=>[t.id,t]));
       for(const [index,row]of records.entries()){
-        const turn=byId.get(row.turn_id);if(row.seq!==index+1||!turn)throw new HannesError('STORAGE');
+        const turn=byId.get(row.turn_id);if(row.seq!==index+1||!turn)throw new FutrynError('STORAGE');
         const event:ConversationEvent={seq:row.seq,turnId:row.turn_id,at:row.at,data:executionEventDataSchema.parse(JSON.parse(row.data))};turn.events.push(event);
       }
       const messages:Message[]=[];let cursor=0;
       for(const [index,row]of rows.entries()){
         while(cursor<legacy.length&&legacy[cursor]!.revision<row.user_revision){const {revision:_r,state:_s,...message}=legacy[cursor++]!;messages.push(message);}
-        const turn=turns[index]!;if(turn.events[0]?.data.type!=='user.accepted'||row.user_revision<1||(row.end_revision!==null&&row.end_revision<row.user_revision))throw new HannesError('STORAGE');
+        const turn=turns[index]!;if(turn.events[0]?.data.type!=='user.accepted'||row.user_revision<1||(row.end_revision!==null&&row.end_revision<row.user_revision))throw new FutrynError('STORAGE');
         const calls=new Map<string,string>(),intents=new Set<string>(),results=new Set<string>();let finished=false;
         for(const [position,event]of turn.events.entries()){
-          const e=event.data;if(finished||!Number.isFinite(Date.parse(event.at)))throw new HannesError('STORAGE');
-          if(e.type==='user.accepted'&&(position!==0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId))throw new HannesError('STORAGE');
-          if(e.type==='tool.call'){if(calls.has(e.call.id))throw new HannesError('STORAGE');calls.set(e.call.id,e.call.name);}
-          if(e.type==='tool.intent'){if(!calls.has(e.callId)||intents.has(e.callId)||results.has(e.callId))throw new HannesError('STORAGE');intents.add(e.callId);}
-          if(e.type==='tool.result'){if(calls.get(e.result.callId)!==e.result.name||results.has(e.result.callId))throw new HannesError('STORAGE');results.add(e.result.callId);}
-          if(e.type==='turn.finished'){if(e.state!==turn.state||['pending','running'].includes(e.state))throw new HannesError('STORAGE');finished=true;}
+          const e=event.data;if(finished||!Number.isFinite(Date.parse(event.at)))throw new FutrynError('STORAGE');
+          if(e.type==='user.accepted'&&(position!==0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId))throw new FutrynError('STORAGE');
+          if(e.type==='tool.call'){if(calls.has(e.call.id))throw new FutrynError('STORAGE');calls.set(e.call.id,e.call.name);}
+          if(e.type==='tool.intent'){if(!calls.has(e.callId)||intents.has(e.callId)||results.has(e.callId))throw new FutrynError('STORAGE');intents.add(e.callId);}
+          if(e.type==='tool.result'){if(calls.get(e.result.callId)!==e.result.name||results.has(e.result.callId))throw new FutrynError('STORAGE');results.add(e.result.callId);}
+          if(e.type==='turn.finished'){if(e.state!==turn.state||['pending','running'].includes(e.state))throw new FutrynError('STORAGE');finished=true;}
         }
-        if(finished===['pending','running'].includes(turn.state))throw new HannesError('STORAGE');
+        if(finished===['pending','running'].includes(turn.state))throw new FutrynError('STORAGE');
         let text='';const flush=()=>{if(text){messages.push({role:'assistant',content:text});text='';}};
         for(const event of turn.events){const e=event.data;
           if(e.type==='assistant.text')text+=e.text;
@@ -100,7 +100,7 @@ export class ExecutionJournal {
           const results=new Set(turn.events.flatMap(e=>e.data.type==='tool.result'?[e.data.result.callId]:[]));
           for(const event of turn.events)if(event.data.type==='tool.call'&&!results.has(event.data.call.id)){
             const call=event.data.call;
-            messages.push({role:'tool',toolCallId:call.id,toolName:call.name,content:attempted.has(call.id)?'[unknown: interrupted execution] Intent was recorded but no result was confirmed. Inspect current filesystem state; do not replay or reuse an old approval.':'[not executed] The turn ended before Hannes dispatched this call. A new call requires current policy and fresh revalidation.'});
+            messages.push({role:'tool',toolCallId:call.id,toolName:call.name,content:attempted.has(call.id)?'[unknown: interrupted execution] Intent was recorded but no result was confirmed. Inspect current filesystem state; do not replay or reuse an old approval.':'[not executed] The turn ended before Futryn dispatched this call. A new call requires current policy and fresh revalidation.'});
           }
         }
         const end=row.end_revision??((rows[index+1]?.user_revision??Infinity)-1);
@@ -109,6 +109,6 @@ export class ExecutionJournal {
       while(cursor<legacy.length){const {revision:_r,state:_s,...message}=legacy[cursor++]!;messages.push(message);}
       const saved=this.db.query('SELECT task,context FROM conversation_checkpoints WHERE conversation=?').get(id) as {task:string|null;context:string|null}|null;
       return{messages,turns,...(saved?.task?{task:activeTaskCheckpointSchema.parse(JSON.parse(saved.task))}:{}),...(saved?.context?{compaction:contextSnapshotSchema.parse(JSON.parse(saved.context))}:{})};
-    }).immediate();}catch{throw new HannesError('STORAGE');}
+    }).immediate();}catch{throw new FutrynError('STORAGE');}
   }
 }

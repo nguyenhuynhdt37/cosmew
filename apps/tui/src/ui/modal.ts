@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
 import { getBorderGlyphs } from '../theme/theme';
 import type { RenderedBoxLine, StyledSpan } from './types';
 

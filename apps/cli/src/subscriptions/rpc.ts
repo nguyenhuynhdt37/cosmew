@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { HannesError } from '@hannes/contracts';
-import { denyRuntimeRequest } from '@hannes/security';
+import { FutrynError } from '@futryn/contracts';
+import { denyRuntimeRequest } from '@futryn/security';
 
 export interface RpcMessage { id?: number | string; method?: string; params?: any; result?: any; error?: any }
 /** Bounded wire transport. No runtime stderr or error body reaches the UI. */
@@ -12,16 +12,16 @@ export class SubscriptionRpc {
   private readonly pending = new Map<number, { resolve(value: any): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout> }>();
   private dynamicToolHandler?: (params: any) => Promise<unknown>;
   private permissionHandler?: (method: string, params: any) => Promise<unknown | undefined>;
-  /** Full-access sessions answer runtime permission requests through Hannes (ADR 0027); undefined denies. */
+  /** Full-access sessions answer runtime permission requests through Futryn (ADR 0027); undefined denies. */
   onPermissionRequest(handler: (method: string, params: any) => Promise<unknown | undefined>): () => void { this.permissionHandler = handler; return () => { this.permissionHandler = undefined; }; }
   onDynamicTool(handler: (params: any) => Promise<unknown>): () => void { this.dynamicToolHandler = handler; return () => { this.dynamicToolHandler = undefined; }; }
   private readonly listeners = new Set<(message: RpcMessage) => void>();
   constructor(command: string, args: string[], env: Record<string, string>, cwd: string, private readonly framing: 'lines' | 'content-length', private readonly stderr: (line: string) => void = () => {}) {
     this.child = spawn(command, args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], shell: false });
-    this.child.on('error', () => this.fail(new HannesError('NOT_FOUND')));
-    this.child.on('exit', () => this.fail(new HannesError('TRANSPORT')));
-    this.child.stdin.on('error', () => this.fail(new HannesError('TRANSPORT')));
-    this.child.stdout.on('data', (data: Buffer) => { try { this.parse(data); } catch { this.fail(new HannesError('PROTOCOL')); this.child.kill(); } });
+    this.child.on('error', () => this.fail(new FutrynError('NOT_FOUND')));
+    this.child.on('exit', () => this.fail(new FutrynError('TRANSPORT')));
+    this.child.stdin.on('error', () => this.fail(new FutrynError('TRANSPORT')));
+    this.child.stdout.on('data', (data: Buffer) => { try { this.parse(data); } catch { this.fail(new FutrynError('PROTOCOL')); this.child.kill(); } });
     let diagnostic = '';
     this.child.stderr.on('data', (chunk: Buffer) => {
       diagnostic = (diagnostic + chunk.toString('utf8')).slice(-16384);
@@ -32,7 +32,7 @@ export class SubscriptionRpc {
   onMessage(listener: (message: RpcMessage) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private parse(data: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, data]);
-    if (this.buffer.length > 4 * 1024 * 1024) throw new HannesError('PROTOCOL');
+    if (this.buffer.length > 4 * 1024 * 1024) throw new FutrynError('PROTOCOL');
     while (this.buffer.length) {
       let bytes: Buffer;
       if (this.framing === 'lines') {
@@ -42,13 +42,13 @@ export class SubscriptionRpc {
       } else {
         const boundary = this.buffer.indexOf('\r\n\r\n'); if (boundary < 0) return;
         const match = /^Content-Length: (\d+)$/im.exec(this.buffer.subarray(0, boundary).toString());
-        if (!match) throw new HannesError('PROTOCOL');
-        const length = Number(match[1]); if (length > 4 * 1024 * 1024 || length < 2) throw new HannesError('PROTOCOL');
+        if (!match) throw new FutrynError('PROTOCOL');
+        const length = Number(match[1]); if (length > 4 * 1024 * 1024 || length < 2) throw new FutrynError('PROTOCOL');
         if (this.buffer.length < boundary + 4 + length) return;
         bytes = this.buffer.subarray(boundary + 4, boundary + 4 + length); this.buffer = this.buffer.subarray(boundary + 4 + length);
       }
       const message = JSON.parse(bytes.toString('utf8')) as RpcMessage;
-      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new HannesError('PROTOCOL');
+      if (!message || typeof message !== 'object' || Array.isArray(message)) throw new FutrynError('PROTOCOL');
       if (message.method && message.id !== undefined) {
         if (message.method === 'item/tool/call' && this.dynamicToolHandler) {
           const id = message.id;
@@ -71,13 +71,13 @@ export class SubscriptionRpc {
       }
       if (typeof message.id === 'number' && this.pending.has(message.id)) {
         const operation = this.pending.get(message.id)!; this.pending.delete(message.id); clearTimeout(operation.timer);
-        if (message.error) operation.reject(new HannesError(message.error.code === -32000 || message.error.code === -32001 ? 'AUTH' : 'PROTOCOL'));
+        if (message.error) operation.reject(new FutrynError(message.error.code === -32000 || message.error.code === -32001 ? 'AUTH' : 'PROTOCOL'));
         else operation.resolve(message.result);
       } else for (const listener of this.listeners) listener(message);
     }
   }
   private write(message: RpcMessage): void {
-    if (this.closed) throw new HannesError('TRANSPORT');
+    if (this.closed) throw new FutrynError('TRANSPORT');
     const body = JSON.stringify({ jsonrpc: '2.0', ...message });
     this.child.stdin.write(this.framing === 'lines' ? body + '\n' : `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
   }
@@ -85,7 +85,7 @@ export class SubscriptionRpc {
   request(method: string, params: unknown = {}, timeoutMs = 60000): Promise<any> {
     return new Promise((resolve, reject) => {
       const id = ++this.seq;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new HannesError('TIMEOUT')); }, timeoutMs);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new FutrynError('TIMEOUT')); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try { this.write({ id, method, params }); } catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
@@ -98,7 +98,7 @@ export class SubscriptionRpc {
     for (const listener of this.listeners) listener({ method: '__closed' });
   }
   async close(): Promise<void> {
-    this.fail(new HannesError('CANCELLED'));
+    this.fail(new FutrynError('CANCELLED'));
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     await new Promise<void>(resolve => {
       const timer = setTimeout(() => this.child.kill('SIGKILL'), 500);

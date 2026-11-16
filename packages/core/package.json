@@ -1,5 +1,5 @@
 {
-  "name": "@hannes/core",
+  "name": "@futryn/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,6 +7,6 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@hannes/contracts": "workspace:*"
+    "@futryn/contracts": "workspace:*"
   }
 }

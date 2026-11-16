@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { looksBinary, type ResolvedPath, type WorkspaceRoot } from '@hannes/workspace';
+import { looksBinary, type ResolvedPath, type WorkspaceRoot } from '@futryn/workspace';
 import { LIMITS, clipBytes } from '../limits';
 
 export const readInput = z.strictObject({

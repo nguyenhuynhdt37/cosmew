@@ -1,4 +1,4 @@
-import type { BorderStyle, SessionSummary, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, SessionSummary, ThemeTokens } from '@futryn/contracts';
 import { Modal, clampIndex, windowCentered, type RenderedBoxLine } from '../../ui';
 import { filterSessions } from './logic';
 import type { SessionPickerState } from './types';

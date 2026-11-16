@@ -1,4 +1,4 @@
-import { providerSchema, type CredentialVault } from '@hannes/contracts';
+import { providerSchema, type CredentialVault } from '@futryn/contracts';
 
 export const memoryVault = (): CredentialVault & { values: Map<string, string> } => ({
   values: new Map(),

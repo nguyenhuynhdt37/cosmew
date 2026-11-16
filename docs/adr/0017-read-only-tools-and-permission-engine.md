@@ -79,7 +79,7 @@ Write, edit, patch, shell, network, MCP, plugins, subagents, external directorie
 
 ## Implementation notes
 
-- **Packages.** `@hannes/workspace` (`WorkspaceRoot`, `listWorkspaceFiles`), `@hannes/tools` (`ToolDispatcher` and the `read`/`glob`/`grep` builtins), `@hannes/security` (`evaluateRead`, `SessionGrants`), `@hannes/persistence` (`ToolAuditStore`, schema **v3**: `messages.parts` JSON and the `tool_audit` table). Builds older than v3 refuse a v3 database (fail closed).
+- **Packages.** `@futryn/workspace` (`WorkspaceRoot`, `listWorkspaceFiles`), `@futryn/tools` (`ToolDispatcher` and the `read`/`glob`/`grep` builtins), `@futryn/security` (`evaluateRead`, `SessionGrants`), `@futryn/persistence` (`ToolAuditStore`, schema **v3**: `messages.parts` JSON and the `tool_audit` table). Builds older than v3 refuse a v3 database (fail closed).
 - **Contracts (additive).** `Message` gains role `tool` with `toolCallId`/`toolName`, and assistant `toolCalls`. Plain text messages are unchanged. `ModelEvent` gains `toolResult`. `ConversationStore.complete` takes the turn's tool rounds, so they commit atomically with the final answer. `ToolPort` and `ToolResult` are in `contracts/tools.ts`.
 - **Who gets tools.** Only clients that called `setToolsEnabled(true)`. The TUI does that when the user approves the folder; non-TTY runs, `hannes run` and the line chat have no consent step and offer no tools. Subscription runtimes never get tools.
 - **Approvals.** `FutrynClient.requestPermission` resolves to `deny` on dismiss, on expiry (5 min) and on abort. Clearing session authorization (account switch, new session) also clears tool grants and wakes any waiting call with `deny`. `/permissions` lists session grants; `Ctrl+X` revokes them all.

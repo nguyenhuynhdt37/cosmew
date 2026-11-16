@@ -2,26 +2,26 @@
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {
-  HannesError,
+  FutrynError,
   providerSchema,
   type Account,
   type AnimationConfig,
   type ModelInfo,
   type ThemeMode,
-} from '@hannes/contracts';
-import { parseSlashCommand } from '@hannes/sdk';
-import { providerPresets } from '@hannes/models';
-import { fetchModelsDev, terminalText, validateEndpoint } from '@hannes/security';
-import { reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab } from '@hannes/tui';
+} from '@futryn/contracts';
+import { parseSlashCommand } from '@futryn/sdk';
+import { providerPresets } from '@futryn/models';
+import { fetchModelsDev, terminalText, validateEndpoint } from '@futryn/security';
+import { reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab } from '@futryn/tui';
 import { loginSubscription } from './subscriptions/login';
 import { loginWizard } from './auth-wizard';
 import { startup, type Application } from './bootstrap/startup';
 import { ChatInput, ask, readSecretStdin, secretInput } from './input';
 
-// Suppress third-party raw warning output; diagnostics are normalized by Hannes.
+// Suppress third-party raw warning output; diagnostics are normalized by Futryn.
 (globalThis as typeof globalThis & { AI_SDK_LOG_WARNINGS: boolean }).AI_SDK_LOG_WARNINGS = false;
 
-const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
+const HELP = `Futryn (fyn) provider, authentication & TUI CLI
 
   providers list | add [id] | show <id> | test | remove <id>
     add --url <base-url> --protocol chat|responses|anthropic|gemini
@@ -42,18 +42,19 @@ const HELP = `Hannes / FUTRYN provider, authentication & TUI CLI
     [--cell-size <1..4>] [--veil <0..0.95>] [--enabled true|false] [--reduced-motion true|false]
   themes export [<theme-id>]
   themes remove <custom-theme-id> | reset [--project]
-  hannes tui
-  hannes [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
-  hannes run [--json] < message.txt
+  fyn tui
+  fyn [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
+  fyn run [--json] < message.txt
 
 Options: --json, --help, --project, --timeout-ms <100..300000> (provider add).
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
-variable NAME. Never pass a key as an argument. Default storage: ~/.hannes (0700).
+variable NAME. Never pass a key as an argument. Default storage: ~/.futryn (0700); existing ~/.hannes is reused.
+FUTRYN_HOME overrides storage; HANNES_HOME remains compatible.
 Canonical TUI commands: /login (/connect), /logout, /model, /status,
   /config, /permissions, /mcp, /plugin, /theme, /resume,
   /usage (/cost), /context, /effort <level|auto|status>,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
-Start FUTRYN: bun run futryn. Existing administration commands remain supported.
+Start Futryn in any project: fyn (or futryn). From source: bun run fyn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
 are automatic. Official subscription runtimes: Codex, Copilot CLI, Gemini CLI and
 Qwen Code (installed-version and account access required). Claude subscription
@@ -93,7 +94,7 @@ type Options = Record<string, string | boolean | undefined>;
 const str = (options: Options, key: string) =>
   typeof options[key] === 'string' ? (options[key] as string) : undefined;
 const fail = (): never => {
-  throw new HannesError('INVALID_INPUT');
+  throw new FutrynError('INVALID_INPUT');
 };
 
 function numberOption(options: Options, key: string, fallback: number): number {
@@ -124,25 +125,25 @@ async function check(app: Application, account: Account, signal: AbortSignal, ge
 
 async function login(app: Application, options: Options, signal: AbortSignal) {
   if (str(options, 'method') && !['env', 'api-key', 'none', 'subscription-browser', 'subscription-device'].includes(str(options, 'method')!)) {
-    throw new HannesError('UNSUPPORTED');
+    throw new FutrynError('UNSUPPORTED');
   }
   const existing = str(options, 'account') ? app.accounts.get(str(options, 'account')!) : undefined;
   let providerId =
     str(options, 'provider') ??
     existing?.providerId ??
     (await ask('Provider ID (openai, anthropic, gemini, xai, openrouter, ollama or configured gateway)'));
-  if (existing && existing.providerId !== providerId) throw new HannesError('POLICY');
+  if (existing && existing.providerId !== providerId) throw new FutrynError('POLICY');
   let provider = app.registry.list().find(p => p.id === providerId);
   if (!provider) {
     const preset = providerPresets.find(p => p.id === providerId);
-    if (!preset) throw new HannesError('NOT_FOUND');
+    if (!preset) throw new FutrynError('NOT_FOUND');
     provider = app.registry.add(preset);
   }
   const requestedMethod = str(options, 'method');
   const group = app.integrations.list().find(i => (i.providerIds ?? [i.provider.id]).includes(provider!.id));
   const target = group?.methods.find(method => method.id === requestedMethod)?.providerId;
   if (target && target !== provider.id) {
-    if (existing) throw new HannesError('POLICY');
+    if (existing) throw new FutrynError('POLICY');
     providerId = target;
     provider = app.registry.list().find(p => p.id === target) ?? app.registry.add(app.integrations.get(target).provider);
   }
@@ -156,7 +157,7 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
   }
   const method =
     str(options, 'method') ?? (str(options, 'env') ? 'env' : provider.auth === 'none' ? 'none' : 'api-key');
-  if (!['env', 'api-key', 'none'].includes(method)) throw new HannesError('UNSUPPORTED');
+  if (!['env', 'api-key', 'none'].includes(method)) throw new FutrynError('UNSUPPORTED');
   if ((options['key-stdin'] && str(options, 'env')) || (method === 'none' && (options['key-stdin'] || str(options, 'env')))) {
     fail();
   }
@@ -241,7 +242,7 @@ async function handleThemesCli(app: Application, action: string | undefined, arg
   if (sub === 'get' || sub === 'show') {
     const targetId = argument ?? engine.getActiveAppearance().theme;
     const manifest = engine.getTheme(targetId);
-    if (!manifest) throw new HannesError('NOT_FOUND');
+    if (!manifest) throw new FutrynError('NOT_FOUND');
     output(
       app,
       {
@@ -316,7 +317,7 @@ async function handleThemesCli(app: Application, action: string | undefined, arg
 
   if (sub === 'import') {
     output(app, 'Custom themes are unavailable. Choose auto, dark, or light.');
-    throw new HannesError('UNSUPPORTED');
+    throw new FutrynError('UNSUPPORTED');
   }
 
   if (sub === 'export') {
@@ -365,7 +366,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       conversation = app.conversation(project);
       conversationAccountId = selection.accountId;
     } catch (e) {
-      if (single || !(e instanceof HannesError) || !['AUTH', 'POLICY', 'NOT_FOUND'].includes(e.code)) throw e;
+      if (single || !(e instanceof FutrynError) || !['AUTH', 'POLICY', 'NOT_FOUND'].includes(e.code)) throw e;
     }
   };
   resetConversation();
@@ -401,13 +402,13 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     await send(message.trim());
     return;
   }
-  output(app, 'Hannes · /login /logout /model /theme /status /clear /exit. Ctrl-C cancels and exits.');
+  output(app, 'Futryn · /login /logout /model /theme /status /clear /exit. Ctrl-C cancels and exits.');
   if (!conversation) output(app, 'Chưa đăng nhập hoặc chưa chọn model. Gõ /login để bắt đầu.');
   const input = new ChatInput(signal);
   try {
     while (true) {
-      const line = await input.line('hannes> ');
-      if (signal.aborted) throw new HannesError('CANCELLED');
+      const line = await input.line('fyn> ');
+      if (signal.aborted) throw new FutrynError('CANCELLED');
       if (line === undefined) break;
       const parsedCommand = line.trim().startsWith('/') ? parseSlashCommand(line) : null;
       // Legacy scripted /connect provider alias ENV model remains supported.
@@ -466,7 +467,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           try {
             selection = app.router.resolve(project);
           } catch (e) {
-            if (!(e instanceof HannesError) || !['AUTH', 'POLICY'].includes(e.code)) throw e;
+            if (!(e instanceof FutrynError) || !['AUTH', 'POLICY'].includes(e.code)) throw e;
           }
           output(app, { accounts: accountView(app), selection, conversationId: conversation?.id ?? null, details: reportRows(telemetryClient(), 'status', '', true) });
         } else if (line.trim() === '/models') {
@@ -492,7 +493,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
         } else if (text.startsWith('/model ')) {
           const account = app.resolveAccount();
           const model = app.catalog(account).cached().find(m => m.id === text.slice(7));
-          if (!model) throw new HannesError('NOT_FOUND');
+          if (!model) throw new FutrynError('NOT_FOUND');
           app.router.select(account, model, project);
           resetConversation();
           output(app, 'Model switched; started a fresh conversation.');
@@ -532,8 +533,8 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
         }
       } catch (e) {
         if (signal.aborted) throw e;
-        const safe = e instanceof HannesError ? e : new HannesError('INVALID_INPUT');
-        if (safe.code === 'CANCELLED') output(app, 'Đã hủy. Bạn vẫn ở trong Hannes; gõ /login để thử lại.');
+        const safe = e instanceof FutrynError ? e : new FutrynError('INVALID_INPUT');
+        if (safe.code === 'CANCELLED') output(app, 'Đã hủy. Bạn vẫn ở trong Futryn; gõ /login để thử lại.');
         else process.stderr.write(JSON.stringify(safe) + '\n');
       }
     }
@@ -555,7 +556,7 @@ async function main() {
       ]),
     });
   } catch {
-    throw new HannesError('INVALID_INPUT');
+    throw new FutrynError('INVALID_INPUT');
   }
   const options = parsed.values as Options;
   const [group, action, argument] = parsed.positionals;
@@ -584,7 +585,7 @@ async function main() {
     } else if (group === 'doctor') {
       output(app, await app.createFutrynClient(resolve('.')).diagnose(controller.signal), !!options.json);
     } else if (['mcp', 'plugin', 'plugins', 'compact'].includes(group ?? '')) {
-      throw new HannesError('UNSUPPORTED');
+      throw new FutrynError('UNSUPPORTED');
     } else if (group === 'logout') {
       await app.accounts.logout(account().id, true);
       output(app, 'Logged out locally; remote keys require provider-console revocation.');
@@ -702,7 +703,7 @@ async function main() {
         else if (action === 'info' || action === 'select') {
           const id = argument ?? str(options, 'model') ?? (process.stdin.isTTY ? await ask('Model ID') : fail());
           const model = models.find(m => m.id === id);
-          if (!model) throw new HannesError('NOT_FOUND');
+          if (!model) throw new FutrynError('NOT_FOUND');
           output(app, action === 'select' ? app.router.select(a, model, options.project ? resolve('.') : undefined) : model, !!options.json);
         } else {
           fail();
@@ -746,7 +747,7 @@ async function main() {
 }
 
 main().catch(e => {
-  const safe = e instanceof HannesError ? e : new HannesError('INVALID_INPUT');
+  const safe = e instanceof FutrynError ? e : new FutrynError('INVALID_INPUT');
   process.stderr.write(JSON.stringify(safe) + '\n');
   process.exitCode = safe.code === 'CANCELLED' ? 130 : 1;
 });

@@ -1,21 +1,22 @@
 {
-  "name": "@hannes/cli",
+  "name": "@futryn/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "hannes": "./src/index.ts",
-    "futryn": "./src/index.ts"
+    "fyn": "./src/index.ts",
+    "futryn": "./src/index.ts",
+    "hannes": "./src/index.ts"
   },
   "dependencies": {
-    "@hannes/contracts": "workspace:*",
-    "@hannes/core": "workspace:*",
-    "@hannes/models": "workspace:*",
-    "@hannes/security": "workspace:*",
-    "@hannes/persistence": "workspace:*",
-    "@hannes/sdk": "workspace:*",
-    "@hannes/tui": "workspace:*",
-    "@hannes/tools": "workspace:*",
-    "@hannes/workspace": "workspace:*"
+    "@futryn/contracts": "workspace:*",
+    "@futryn/core": "workspace:*",
+    "@futryn/models": "workspace:*",
+    "@futryn/security": "workspace:*",
+    "@futryn/persistence": "workspace:*",
+    "@futryn/sdk": "workspace:*",
+    "@futryn/tui": "workspace:*",
+    "@futryn/tools": "workspace:*",
+    "@futryn/workspace": "workspace:*"
   }
 }

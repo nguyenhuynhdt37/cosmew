@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { FutrynTuiApp, SLASH_COMMANDS, getMatchingSlashCommands, parseRawTerminalKey } from '@hannes/tui';
+import { FutrynTuiApp, SLASH_COMMANDS, getMatchingSlashCommands, parseRawTerminalKey } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
-import { filterIntegrations } from '@hannes/tui';
+import { filterIntegrations } from '@futryn/tui';
 import { fixtureServer } from '../fixtures';
 
 const cleanups: (() => void)[] = [];

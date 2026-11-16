@@ -1,4 +1,4 @@
-import type { BorderStyle, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
 import type { RenderedBoxLine } from '../../ui';
 import { toolTarget } from './logic';
 import type { ToolExecutionSummary } from './types';

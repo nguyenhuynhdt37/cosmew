@@ -1,4 +1,4 @@
-import { THEME_TOKEN_KEYS } from '@hannes/contracts';
+import { THEME_TOKEN_KEYS } from '@futryn/contracts';
 import { wideLayout } from '../../core/layout';
 import type { OverlayFeature, ThemeFrame, TuiHost } from '../../core/feature';
 import { editField, stepIndex } from '../../ui';

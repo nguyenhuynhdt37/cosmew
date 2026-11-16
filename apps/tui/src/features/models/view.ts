@@ -1,4 +1,4 @@
-import type { BorderStyle, ModelInfo, ThemeTokens } from '@hannes/contracts';
+import type { BorderStyle, ModelInfo, ThemeTokens } from '@futryn/contracts';
 import { Modal, clampIndex, windowCentered, type RenderedBoxLine } from '../../ui';
 import { capabilityTag, filterModels } from './logic';
 import type { ModelPickerState } from './types';

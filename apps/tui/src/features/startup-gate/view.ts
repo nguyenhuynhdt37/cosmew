@@ -1,4 +1,4 @@
-import type { ThemeTokens } from '@hannes/contracts';
+import type { ThemeTokens } from '@futryn/contracts';
 import type { RenderedBoxLine } from '../../ui';
 import { gateHeight, gateRows, type GateContent } from './logic';
 

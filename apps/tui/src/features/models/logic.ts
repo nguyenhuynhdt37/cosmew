@@ -1,4 +1,4 @@
-import type { ModelInfo } from '@hannes/contracts';
+import type { ModelInfo } from '@futryn/contracts';
 
 export function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
   const q = query.trim().toLowerCase();

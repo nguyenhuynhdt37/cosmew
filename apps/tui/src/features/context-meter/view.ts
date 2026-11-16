@@ -1,5 +1,5 @@
-import type { ThemeTokens } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import type { ThemeTokens } from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import { compactTokens } from '../reports';
 import type { RenderedBoxLine } from '../../ui';
 

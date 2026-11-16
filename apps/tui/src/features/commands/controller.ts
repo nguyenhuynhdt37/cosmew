@@ -1,6 +1,6 @@
-import { parseSlashCommand } from '@hannes/sdk';
+import { parseSlashCommand } from '@futryn/sdk';
 import type { TuiHost } from '../../core/feature';
-import { PERMISSION_MODES, PERMISSION_MODE_HINTS, type PermissionMode } from '@hannes/contracts';
+import { PERMISSION_MODES, PERMISSION_MODE_HINTS, type PermissionMode } from '@futryn/contracts';
 import { OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage } from './logic';
 
 /** Parses and dispatches slash commands. Holds no state of its own. */
@@ -88,7 +88,7 @@ export class CommandRouter {
     try {
       if (args === 'delegated' || args === 'delegate' || args === 'on') {
         const backend = client.setDelegatedAgent(true);
-        host.setBanner(`${backend?.label ?? 'Delegated'}. The runtime now runs its own loop and tools here, unconfined by any Hannes sandbox; Hannes only answers the permission requests it chooses to send and keeps no receipts for its work. /backend hannes returns.`);
+        host.setBanner(`${backend?.label ?? 'Delegated'}. The runtime now runs its own loop and tools here, unconfined by any Futryn sandbox; Futryn only answers the permission requests it chooses to send and keeps no receipts for its work. /backend hannes returns.`);
       } else if (args === 'hannes' || args === 'off') {
         const backend = client.setDelegatedAgent(false);
         host.setBanner(`Backend: ${backend?.label ?? 'no model selected'}.`);
@@ -97,7 +97,7 @@ export class CommandRouter {
         host.setBanner(backend ? `Backend: ${backend.label}. Loop: ${backend.loopOwner}; project tools: ${backend.toolOwner}.${backend.runtime && backend.kind !== 'delegated' ? ' /backend delegated lets the runtime use its own tools (opt-in).' : ''}` : 'No model selected.');
       } else host.setBanner('Usage: /backend, /backend hannes or /backend delegated.');
     } catch (error) {
-      host.setBanner(error instanceof Error && 'code' in error && error.code === 'POLICY' ? 'Delegation needs folder consent first.' : error instanceof Error && 'code' in error && error.code === 'UNSUPPORTED' ? 'Only subscription runtimes can be delegated; direct API models always run through Hannes.' : host.describeError(error));
+      host.setBanner(error instanceof Error && 'code' in error && error.code === 'POLICY' ? 'Delegation needs folder consent first.' : error instanceof Error && 'code' in error && error.code === 'UNSUPPORTED' ? 'Only subscription runtimes can be delegated; direct API models always run through Futryn.' : host.describeError(error));
     }
   }
 

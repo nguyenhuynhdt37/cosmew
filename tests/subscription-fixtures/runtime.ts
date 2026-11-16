@@ -144,7 +144,7 @@ if (copilot && process.argv.includes('login')) {
       }
       case 'thread/start':
         if (nativeMode) {
-          // Native Codex asks Hannes for every untrusted action and never receives Hannes dynamic tools.
+          // Native Codex asks Futryn for every untrusted action and never receives Futryn dynamic tools.
           if (p.approvalPolicy !== 'untrusted' || p.sandbox !== 'danger-full-access' || realpathSync(String(p.cwd)) !== process.cwd() || p.dynamicTools) process.exit(71);
           result = { thread: { id: session } }; break;
         }

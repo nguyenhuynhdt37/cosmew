@@ -19,7 +19,7 @@ Preserved: permission engine and approvals, Project Context Loader, `ToolResult`
 
 ## Contract 1.8
 
-Additive optional field `ModelRequest.instructions`. Adapters that ignore it keep working. Durable data, settings and SDK API are unchanged; no migration. `@hannes/core` additionally exports the budget constants and the guidance builder.
+Additive optional field `ModelRequest.instructions`. Adapters that ignore it keep working. Durable data, settings and SDK API are unchanged; no migration. `@futryn/core` additionally exports the budget constants and the guidance builder.
 
 ## Acceptance (deterministic)
 

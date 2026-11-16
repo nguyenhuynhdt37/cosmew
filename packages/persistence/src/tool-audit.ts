@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { HannesError } from '@hannes/contracts';
+import { FutrynError } from '@futryn/contracts';
 
 /** One audit line from the tool dispatcher. Targets are workspace-relative; no file contents. */
 export interface ToolAuditEntry {
@@ -23,7 +23,7 @@ export class ToolAuditStore {
     try {
       this.db.query('INSERT INTO tool_audit (at, call_id, tool, target, phase, decision, reason, outcome, code, scope_hash) VALUES (?,?,?,?,?,?,?,?,?,?)')
         .run(entry.at, entry.callId, entry.tool.slice(0, 100), entry.target?.slice(0, 1024) ?? null, entry.phase, entry.decision ?? null, entry.reason?.slice(0, 100) ?? null, entry.outcome ?? null, entry.code?.slice(0, 64) ?? null,entry.scopeHash??null);
-    } catch { throw new HannesError('STORAGE'); }
+    } catch { throw new FutrynError('STORAGE'); }
   }
 
   recent(limit = 100): ToolAuditEntry[] {

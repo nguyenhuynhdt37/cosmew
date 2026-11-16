@@ -1,5 +1,5 @@
-import type { BorderStyle, PermissionMode, ThemeTokens } from '@hannes/contracts';
-import type { AgentMode } from '@hannes/sdk';
+import type { BorderStyle, PermissionMode, ThemeTokens } from '@futryn/contracts';
+import type { AgentMode } from '@futryn/sdk';
 import { getBorderGlyphs } from '../../theme/theme';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
 import { getMatchingSlashCommands } from './logic';

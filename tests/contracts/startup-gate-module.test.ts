@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import type { Account } from '@hannes/contracts';
-import { StartupGate, clampOption, gateRows, suggestedAlternative, type TuiHost } from '@hannes/tui';
+import type { Account } from '@futryn/contracts';
+import { StartupGate, clampOption, gateRows, suggestedAlternative, type TuiHost } from '@futryn/tui';
 
 /**
  * The gate depends only on the TuiHost seam, so its state machine can be driven with a

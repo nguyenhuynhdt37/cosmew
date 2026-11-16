@@ -4,7 +4,7 @@ import {
   type ThemeCategory,
   type ThemeManifest,
   type ThemeTokens,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 
 export function parseHexRgb(hex: string): [number, number, number] {
   const clean = hex.replace(/^#/, '');

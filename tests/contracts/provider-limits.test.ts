@@ -2,9 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HannesError } from '@hannes/contracts';
-import { parseOpenRouterKeyLimits } from '@hannes/models';
-import { FutrynTuiApp, limitItemText, limitRows } from '@hannes/tui';
+import { FutrynError } from '@futryn/contracts';
+import { parseOpenRouterKeyLimits } from '@futryn/models';
+import { FutrynTuiApp, limitItemText, limitRows } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 
@@ -24,7 +24,7 @@ test('OpenRouter key credit: capped, uncapped and free-tier keys', () => {
 
 test('malformed key responses are protocol errors, never zero balances', () => {
   for (const body of [null, {}, { data: null }, { data: { usage: 'lots' } }, { data: { usage: 1, limit: 'ten' } }]) {
-    expect(() => parseOpenRouterKeyLimits(body)).toThrow(HannesError);
+    expect(() => parseOpenRouterKeyLimits(body)).toThrow(FutrynError);
   }
 });
 
@@ -68,7 +68,7 @@ test('/usage lists every connected account, even before the first message', asyn
 });
 
 test('OpenAI and Anthropic rate-limit headers become quota entries; bad values are skipped', async () => {
-  const { parseRateLimitHeaders, parseDurationMs } = await import('@hannes/models');
+  const { parseRateLimitHeaders, parseDurationMs } = await import('@futryn/models');
   expect(parseDurationMs('6m0s')).toBe(360000); expect(parseDurationMs('1h2m3.5s')).toBe(3723500);
   expect(parseDurationMs('20ms')).toBe(20); expect(parseDurationMs('soon')).toBeNull();
   const now = new Date('2026-11-15T10:00:00Z');

@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {deriveTokensFromTriplet,renderDiffViewerOverlay,renderTranscriptMessages,type TranscriptItem} from '@hannes/tui';
+import {deriveTokensFromTriplet,renderDiffViewerOverlay,renderTranscriptMessages,type TranscriptItem} from '@futryn/tui';
 import {parseUnifiedDiff,renderDiffCodeLine} from '../../apps/tui/src/features/diff/code-lines';
 const tokens=deriveTokensFromTriplet('#fafafa','#252525','#245db8');
 const diff='--- a/src/a.ts\n+++ b/src/a.ts\n@@ -10,2 +10,2 @@\n const a = 1;\n-old();\n+new();\n';

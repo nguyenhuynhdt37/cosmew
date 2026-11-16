@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { FynCompanion, renderFyn, type FynState, deriveTokensFromTriplet } from '@hannes/tui';
+import { FynCompanion, renderFyn, type FynState, deriveTokensFromTriplet } from '@futryn/tui';
 
 test('Fyn never sleeps during a request, holds errors and approvals, settles terminal outcomes', () => {
   const pet = new FynCompanion();

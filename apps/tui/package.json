@@ -1,5 +1,5 @@
 {
-  "name": "@hannes/tui",
+  "name": "@futryn/tui",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "./theme": "./src/theme/theme.ts"
   },
   "dependencies": {
-    "@hannes/contracts": "workspace:*",
-    "@hannes/sdk": "workspace:*"
+    "@futryn/contracts": "workspace:*",
+    "@futryn/sdk": "workspace:*"
   }
 }

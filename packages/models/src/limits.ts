@@ -1,4 +1,4 @@
-import { HannesError, type Usage } from '@hannes/contracts';
+import { FutrynError, type Usage } from '@futryn/contracts';
 
 /** One spending or quota limit as reported by a provider API (never estimated locally). */
 export interface ProviderLimitItem {
@@ -21,12 +21,12 @@ const num = (value: unknown): number | null => (typeof value === 'number' && Num
  */
 export function parseOpenRouterKeyLimits(body: unknown): { items: ProviderLimitItem[]; freeTier: boolean } {
   const data = body && typeof body === 'object' && 'data' in body ? (body as { data: unknown }).data : null;
-  if (!data || typeof data !== 'object') throw new HannesError('PROTOCOL');
+  if (!data || typeof data !== 'object') throw new FutrynError('PROTOCOL');
   const raw = data as Record<string, unknown>;
   const used = num(raw.usage);
   const limit = num(raw.limit);
-  if (raw.usage !== undefined && used === null) throw new HannesError('PROTOCOL');
-  if (raw.limit !== null && raw.limit !== undefined && limit === null) throw new HannesError('PROTOCOL');
+  if (raw.usage !== undefined && used === null) throw new FutrynError('PROTOCOL');
+  if (raw.limit !== null && raw.limit !== undefined && limit === null) throw new FutrynError('PROTOCOL');
   const remaining = num(raw.limit_remaining) ?? (limit !== null && used !== null ? Math.max(0, limit - used) : null);
   return {
     items: [{ label: 'Key credit', used, limit, remaining: limit === null ? null : remaining, unit: 'USD', unlimited: limit === null }],

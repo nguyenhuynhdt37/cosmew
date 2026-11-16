@@ -1,4 +1,4 @@
-import type { AccountLimits, FutrynClient, LimitItem } from '@hannes/sdk';
+import type { AccountLimits, FutrynClient, LimitItem } from '@futryn/sdk';
 import type { ReportKind } from './types';
 
 export const count = (value: number | null | undefined) => value == null ? 'Unknown / not reported' : value.toLocaleString('en-US');
@@ -91,9 +91,9 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Account', status.activeAccount?.alias ?? 'Not connected'),
       field('Provider', status.activeProvider?.name ?? '—'),
       field('Model', status.selection?.modelId ?? 'Not selected'),
-      // ADR 0029: say who runs the loop and the tools, and whether a Hannes terminal exists at all.
+      // ADR 0029: say who runs the loop and the tools, and whether a Futryn terminal exists at all.
       field('Backend', status.executionBackend?.label ?? (status.workspaceReadStatus === 'disabled' ? 'Tools off · folder consent required' : '—')),
-      field('Terminal', status.executionBackend?.kind === 'delegated' ? 'Runtime\'s own shell (not Hannes-contained)' : client.availableTools().includes('exec_command') ? 'Hannes exec_command · sandboxed, approval per command' : 'Unavailable · OS containment not proven (ADR 0022)'),
+      field('Terminal', status.executionBackend?.kind === 'delegated' ? 'Runtime\'s own shell (not Futryn-contained)' : client.availableTools().includes('exec_command') ? 'Futryn exec_command · sandboxed, approval per command' : 'Unavailable · OS containment not proven (ADR 0022)'),
       '', field('Request', phase), field('Reasoning', status.reasoningEffort ?? 'Provider default'),
       field('Context', `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} ${display.measured ? 'measured' : 'local'}`),
       field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),
@@ -127,7 +127,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
   const contextRows = [
     'CONTEXT WINDOW',
     `Model: ${status.selection?.modelId ?? 'None'}`,
-    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Hannes permissions' : status.workspaceReadStatus}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Futryn permissions' : status.workspaceReadStatus}`,
     `Window: ${count(context.limitTokens)} · Output reserve: ${count(context.outputReserve)}`,
     `Model output ceiling: ${count(context.outputLimit)}`,
     `Current local history + draft: ~${count(context.estimateTokens)} tokens (${context.messages} messages)`,
@@ -153,7 +153,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Provider: ${status.activeProvider?.name ?? 'None'} · Account: ${status.activeAccount?.alias ?? 'None'}`,
     `Authentication: ${status.activeProvider?.runtime ?? status.activeAccount?.credential.kind ?? 'None'}`,
     `Model: ${status.selection?.modelId ?? 'None'}`,
-    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Hannes permissions' : status.workspaceReadStatus}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Futryn permissions' : status.workspaceReadStatus}`,
     `Session: ${status.activeSessionId ?? 'None'} · Messages: ${status.messageCount}`,
     `Account state: ${status.activeAccount?.status ?? 'None'}`,
     `Connectivity: historical validation at ${status.activeAccount?.validatedAt ?? 'never'}`,

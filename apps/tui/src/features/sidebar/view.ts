@@ -1,5 +1,5 @@
-import type { BorderStyle, SessionSummary, ThemeManifest, ThemeTokens } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import type { BorderStyle, SessionSummary, ThemeManifest, ThemeTokens } from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import { getBorderGlyphs } from '../../theme/theme';
 import type { RenderedBoxLine } from '../../ui';
 

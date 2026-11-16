@@ -2,7 +2,7 @@ import { summarizeUsage } from './telemetry';
 import { quotaItems, type AccountLimits, type FetchAccountLimits } from './limits';
 import { createHash } from 'node:crypto';
 import {
-  HannesError,
+  FutrynError,
   appearanceSchema,
   defaultAppearance,
   partialAppearanceSchema,
@@ -43,7 +43,7 @@ import {
   type ThemeManifest,
   type Usage,
   type WorkspaceDiffReport,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 
 export type AgentMode = 'chat' | 'plan' | 'review';
 
@@ -83,7 +83,7 @@ export interface ConnectAccountInput {
 
 export interface FutrynBackendPorts {
   workspace: string;
-  /** Names of the Hannes tools actually offered now (folder consent + runtime availability). */
+  /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
   getProjectContext?(): ProjectContextReport | null;
   settings: SettingsStore;
@@ -216,7 +216,7 @@ export class FutrynClient {
   turnBudget(): TurnBudget | undefined { return this.turnBudgetValue ? { ...this.turnBudgetValue } : undefined; }
   setTurnBudget(budget: TurnBudget | null): TurnBudget | undefined {
     if (budget === null) this.turnBudgetValue = undefined;
-    else { const parsed = turnBudgetSchema.safeParse(budget); if (!parsed.success) throw new HannesError('INVALID_INPUT'); this.turnBudgetValue = Object.keys(parsed.data).length ? parsed.data : undefined; }
+    else { const parsed = turnBudgetSchema.safeParse(budget); if (!parsed.success) throw new FutrynError('INVALID_INPUT'); this.turnBudgetValue = Object.keys(parsed.data).length ? parsed.data : undefined; }
     this.notifyStateChange(); return this.turnBudget();
   }
   /** True only after an explicit opt-in for this session and while folder consent holds. */
@@ -227,14 +227,14 @@ export class FutrynClient {
    */
   setDelegatedAgent(enabled: boolean): ExecutionBackend | null {
     if (enabled) {
-      if (!this.toolsAllowed) throw new HannesError('POLICY');
-      if (!this.status().activeProvider?.runtime) throw new HannesError('UNSUPPORTED');
+      if (!this.toolsAllowed) throw new FutrynError('POLICY');
+      if (!this.status().activeProvider?.runtime) throw new FutrynError('UNSUPPORTED');
     }
     this.delegatedAgentValue = enabled; this.notifyStateChange();
     return this.status().executionBackend;
   }
   setPermissionMode(mode: PermissionMode): PermissionMode {
-    if (!PERMISSION_MODES.includes(mode)) throw new HannesError('INVALID_INPUT');
+    if (!PERMISSION_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
     this.permissionModeValue = mode; this.notifyStateChange(); return mode;
   }
   /** Rules saved for this workspace (ADR 0028). */
@@ -244,13 +244,13 @@ export class FutrynClient {
   }
   addPermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
     const parsed = permissionRuleSchema.safeParse(rule.trim());
-    if (!parsed.success) throw new HannesError('INVALID_INPUT');
+    if (!parsed.success) throw new FutrynError('INVALID_INPUT');
     this.ports.settings.update(settings => {
       const all = settings.projectPermissionRules ??= {};
       const set = all[this.ports.workspace] ??= { allow: [], ask: [], deny: [] };
       // One rule lives in one list; adding it elsewhere moves it.
       for (const key of ['allow', 'ask', 'deny'] as const) set[key] = set[key].filter(entry => entry !== parsed.data);
-      if (set[effect].length >= 200) throw new HannesError('POLICY');
+      if (set[effect].length >= 200) throw new FutrynError('POLICY');
       set[effect].push(parsed.data);
     });
     this.notifyStateChange();
@@ -283,7 +283,7 @@ export class FutrynClient {
     return this.setMode(order[(idx + 1) % order.length]!);
   }
 
-  /** Hannes tools offered right now; exec_command appears only when its OS containment is proven. */
+  /** Futryn tools offered right now; exec_command appears only when its OS containment is proven. */
   availableTools(): string[] { try { return this.ports.availableTools?.() ?? []; } catch { return []; } }
 
   capabilities(): BackendCapabilitiesReport {
@@ -401,13 +401,13 @@ export class FutrynClient {
 
   // Providers, Accounts & Models
   async beginProviderAuth(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge> {
-    if (!this.ports.beginProviderAuth) throw new HannesError('UNSUPPORTED');
+    if (!this.ports.beginProviderAuth) throw new FutrynError('UNSUPPORTED');
     return this.ports.beginProviderAuth(providerId, methodId, signal);
   }
 
   async cancelProviderAuth(challengeId: string): Promise<void> { await this.ports.cancelProviderAuth?.(challengeId); }
   providerAuthProgress(challengeId: string): ProviderAuthProgress {
-    if (!this.ports.providerAuthProgress) throw new HannesError('UNSUPPORTED');
+    if (!this.ports.providerAuthProgress) throw new FutrynError('UNSUPPORTED');
     return this.ports.providerAuthProgress(challengeId);
   }
 
@@ -436,34 +436,34 @@ export class FutrynClient {
   }
 
   async connectAccount(input: ConnectAccountInput, signal?: AbortSignal): Promise<Account> {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     const existingProvider = this.ports.listProviders().find(p => p.id === input.providerId);
     if (!existingProvider) {
       const preset = this.ports.listProviderPresets().find(p => p.id === input.providerId);
-      if (!preset) throw new HannesError('NOT_FOUND');
+      if (!preset) throw new FutrynError('NOT_FOUND');
       this.ports.addProvider(preset);
     }
-    if (signal?.aborted) throw new HannesError('CANCELLED');
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
     let account: Account | undefined;
     let runtimeCredential: CredentialRef | undefined;
     try {
       let credential = input.credential;
       let secret = input.secret;
       if (input.authChallengeId && this.ports.listProviders().find(p => p.id === input.providerId)?.runtime) {
-        if (!this.ports.completeSubscriptionAuth) throw new HannesError('UNSUPPORTED');
+        if (!this.ports.completeSubscriptionAuth) throw new FutrynError('UNSUPPORTED');
         credential = runtimeCredential = await this.ports.completeSubscriptionAuth(input.providerId, input.authChallengeId, signal);
       } else if (input.authChallengeId) {
-        if (!this.ports.completeProviderAuth || !input.authorizationCode || input.credential.kind !== 'keyring') throw new HannesError('UNSUPPORTED');
+        if (!this.ports.completeProviderAuth || !input.authorizationCode || input.credential.kind !== 'keyring') throw new FutrynError('UNSUPPORTED');
         secret = await this.ports.completeProviderAuth(input.providerId, input.authChallengeId, input.authorizationCode, signal);
       }
-      if (input.reauthenticateAccountId && this.ports.getAccount(input.reauthenticateAccountId).providerId !== input.providerId) throw new HannesError('POLICY');
+      if (input.reauthenticateAccountId && this.ports.getAccount(input.reauthenticateAccountId).providerId !== input.providerId) throw new FutrynError('POLICY');
       account = input.reauthenticateAccountId
         ? await this.ports.reauthenticateAccount(input.reauthenticateAccountId, credential, secret)
         : await this.ports.addAccount(input.providerId, input.alias, credential, secret);
-      if (signal?.aborted) throw new HannesError('CANCELLED');
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
       if (input.manualModelId) this.ports.addManualModel(account, input.manualModelId);
       if (input.validate !== false) await this.ports.validateAccount(this.ports.getAccount(account.id), signal);
-      if (signal?.aborted) throw new HannesError('CANCELLED');
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
       const refreshed = this.ports.getAccount(account.id);
       // Reconnecting a switch target must retain the source chat until explicit continuation.
       if (input.reauthenticateAccountId && this.currentSession && this.currentSession.selection.accountId !== refreshed.id) { this.notifyStateChange(); return refreshed; }
@@ -499,9 +499,9 @@ export class FutrynClient {
 
   useAccount(idOrAlias: string): Account {
     const target = this.ports.getAccount(idOrAlias);
-    if (target.status === 'logged-out') throw new HannesError('AUTH');
+    if (target.status === 'logged-out') throw new FutrynError('AUTH');
     if (this.status().activeAccount?.id === target.id) return target;
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     const account = this.ports.useAccount(idOrAlias);
     this.clearSessionAuthorization();
     this.currentSession = null; this.lastUsage = null;
@@ -525,7 +525,7 @@ export class FutrynClient {
   async discoverModels(options?: { accountId?: string; offline?: boolean; query?: string; capability?: keyof ModelInfo['capabilities']; signal?: AbortSignal }) {
     const state = this.ports.settings.read();
     const accountId = options?.accountId ?? state.activeAccountId;
-    if (!accountId) throw new HannesError('AUTH');
+    if (!accountId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(accountId);
     const base = options?.offline
       ? { models: this.ports.cachedModels(account), stale: true, warning: 'Offline cache; availability unverified.' }
@@ -558,7 +558,7 @@ export class FutrynClient {
   addManualModel(modelId: string, accountId?: string): ModelInfo {
     const state = this.ports.settings.read();
     const targetId = accountId ?? state.activeAccountId;
-    if (!targetId) throw new HannesError('AUTH');
+    if (!targetId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(targetId);
     const model = this.ports.addManualModel(account, modelId); this.notifyStateChange(); return model;
   }
@@ -566,13 +566,13 @@ export class FutrynClient {
   selectModel(modelId: string, options?: { accountId?: string; projectScoped?: boolean }): Selection {
     const state = this.ports.settings.read();
     const targetId = options?.accountId ?? state.activeAccountId;
-    if (!targetId) throw new HannesError('AUTH');
+    if (!targetId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(targetId);
     const models = this.ports.cachedModels(account);
     const model = models.find(m => m.id === modelId);
-    if (!model) throw new HannesError('NOT_FOUND');
+    if (!model) throw new FutrynError('NOT_FOUND');
     const previousSelection = this.currentSession?.selection;
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     const selection = this.ports.selectModel(account, model, options?.projectScoped ? this.ports.workspace : undefined);
     // Conversation adapters and durable selections are pinned. Starting fresh
     // avoids advertising one model while the backend still invokes another.
@@ -594,7 +594,7 @@ export class FutrynClient {
   }
 
   createSession(projectScoped = false): { id: string; selection: Selection; messages: Message[] } {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = this.ports.startSession(projectScoped ? this.ports.workspace : undefined);
     this.lastUsage = null;
@@ -607,7 +607,7 @@ export class FutrynClient {
   }
 
   resumeSession(id: string): { id: string; selection: Selection; messages: Message[] } {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = this.ports.resumeSession(id);
     this.lastUsage = this.ports.getSession(id)?.turns?.at(-1)?.usage ?? null;
@@ -620,7 +620,7 @@ export class FutrynClient {
   }
 
   deleteSession(id: string): boolean {
-    if (this.currentSession?.id === id && this.sending) throw new HannesError('POLICY');
+    if (this.currentSession?.id === id && this.sending) throw new FutrynError('POLICY');
     if (this.currentSession?.id === id) {
       this.currentSession = null; this.lastUsage = null;
     }
@@ -628,7 +628,7 @@ export class FutrynClient {
   }
 
   clearSessionView(): void {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     this.clearSessionAuthorization();
     this.currentSession = null;
     this.lastUsage = null;
@@ -649,8 +649,8 @@ export class FutrynClient {
     options?: { signal?: AbortSignal; maxOutputTokens?: number; maxEstimatedCostUSD?: number; projectScoped?: boolean },
   ): AsyncIterable<ModelEvent> {
     const trimmed = content.trim();
-    if (!trimmed) throw new HannesError('INVALID_INPUT');
-    if (this.sending) throw new HannesError('POLICY');
+    if (!trimmed) throw new FutrynError('INVALID_INPUT');
+    if (this.sending) throw new FutrynError('POLICY');
     if (!this.currentSession) {
       this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
     }
@@ -703,7 +703,7 @@ export class FutrynClient {
       }
     } catch (err) {
       const stored=this.ports.getSession(session.id);if(stored?.recovery)session.messages=stored.recovery.messages;
-      this.emitReactiveEvent('error', err instanceof HannesError ? err.code : 'ERROR');
+      this.emitReactiveEvent('error', err instanceof FutrynError ? err.code : 'ERROR');
       throw err;
     } finally { this.sending = false; this.streamingText = ''; this.streamingSteps = []; }
   }
@@ -752,7 +752,7 @@ export class FutrynClient {
           const result = await request;
           this.liveLimits.set(account.id, { ...base, source: 'live', observedAt: new Date().toISOString(), items: result.items, note: result.note });
         } catch (error) {
-          this.liveLimits.set(account.id, { ...base, source: 'live', observedAt: new Date().toISOString(), items: [], error: error instanceof HannesError ? error.code : 'PROTOCOL' });
+          this.liveLimits.set(account.id, { ...base, source: 'live', observedAt: new Date().toISOString(), items: [], error: error instanceof FutrynError ? error.code : 'PROTOCOL' });
         } finally { this.limitsPending.delete(account.id); }
       }));
       this.notifyStateChange();
@@ -791,10 +791,10 @@ export class FutrynClient {
     return stored && model.reasoningEfforts?.includes(stored) ? stored : model.defaultReasoningEffort ?? null;
   }
   setReasoningEffort(value: string): void {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     const status = this.status(); const model = status.activeModel; const account = status.activeAccount;
-    if (!model || !account || !model.reasoningEfforts?.length) throw new HannesError('UNSUPPORTED');
-    if (value !== 'default' && !model.reasoningEfforts.includes(value)) throw new HannesError('INVALID_INPUT');
+    if (!model || !account || !model.reasoningEfforts?.length) throw new FutrynError('UNSUPPORTED');
+    if (value !== 'default' && !model.reasoningEfforts.includes(value)) throw new FutrynError('INVALID_INPUT');
     this.ports.settings.update(settings => {
       settings.reasoningPreferences ??= {};
       const key = account.id + ':' + model.id;
@@ -804,26 +804,26 @@ export class FutrynClient {
   }
 
   async switchAccount(reference: string, continueHistory = false, modelId?: string, signal?: AbortSignal): Promise<Account> {
-    if (this.sending) throw new HannesError('POLICY');
+    if (this.sending) throw new FutrynError('POLICY');
     const accounts = this.listAccounts();
     const target = /^\d+$/.test(reference) ? accounts[Number(reference) - 1] : accounts.find(a => a.id === reference || a.alias === reference);
-    if (!target) throw new HannesError('NOT_FOUND');
-    if (target.status === 'logged-out') throw new HannesError('AUTH');
+    if (!target) throw new FutrynError('NOT_FOUND');
+    if (target.status === 'logged-out') throw new FutrynError('AUTH');
     const source = this.currentSession;
     const current = source?.selection ?? this.status().selection;
     if ((current?.accountId ?? this.status().activeAccount?.id) === target.id && (!modelId || current?.modelId === modelId)) return target;
-    if (signal?.aborted) throw new HannesError('CANCELLED');
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
     const initialActiveId = this.status().activeAccount?.id;
     const initialSelection = JSON.stringify(this.status().selection);
     const catalog = await this.ports.discoverModels(target, signal);
-    if (this.sending || this.currentSession !== source || this.status().activeAccount?.id !== initialActiveId || JSON.stringify(this.status().selection) !== initialSelection) throw new HannesError('POLICY');
-    if (signal?.aborted) throw new HannesError('CANCELLED');
-    if (catalog.stale) throw new HannesError('TRANSPORT');
+    if (this.sending || this.currentSession !== source || this.status().activeAccount?.id !== initialActiveId || JSON.stringify(this.status().selection) !== initialSelection) throw new FutrynError('POLICY');
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
+    if (catalog.stale) throw new FutrynError('TRANSPORT');
     const previousId = source?.selection.modelId ?? this.status().selection?.modelId;
     const model = modelId ? catalog.models.find(m => m.id === modelId) : catalog.models.find(m => m.id === previousId) ?? catalog.models.find(m => m.id === target.defaultModel) ?? (!source ? catalog.models[0] : undefined);
-    if (!model) throw new HannesError('NOT_FOUND');
+    if (!model) throw new FutrynError('NOT_FOUND');
     const selection = { accountId: target.id, modelId: model.id };
-    if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new HannesError('UNSUPPORTED');
+    if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
     const fork = continueHistory && source?.messages.length ? this.ports.forkSession!(source.id, selection) : null;
     try { this.ports.selectModel(target, model); }
     catch (error) { if (fork) this.ports.deleteSession(fork.id); throw error; }
@@ -967,12 +967,12 @@ export class FutrynClient {
 
   resolvePermission(approvalId: string, scopeHash: string, decision: PermissionResolutionScope): PermissionPromptResolution {
     const req = this.permissions.get(approvalId);
-    if (!req) throw new HannesError('NOT_FOUND');
-    if (req.scopeHash !== scopeHash) throw new HannesError('POLICY');
-    if (req.status !== 'pending') throw new HannesError('POLICY');
+    if (!req) throw new FutrynError('NOT_FOUND');
+    if (req.scopeHash !== scopeHash) throw new FutrynError('POLICY');
+    if (req.status !== 'pending') throw new FutrynError('POLICY');
     if (Date.parse(req.expiresAt) <= Date.now()) {
       req.status = 'expired';
-      throw new HannesError('POLICY');
+      throw new FutrynError('POLICY');
     }
     req.status = decision === 'once' ? 'approved_once' : decision === 'session' ? 'approved_session' : 'denied';
     if (decision === 'session') {
@@ -1046,7 +1046,7 @@ export class FutrynClient {
    */
   dismissPermissionDialog(approvalId: string): PermissionPromptResolution {
     const req = this.permissions.get(approvalId);
-    if (!req) throw new HannesError('NOT_FOUND');
+    if (!req) throw new FutrynError('NOT_FOUND');
     if (req.status === 'pending') {
       return this.resolvePermission(approvalId, req.scopeHash, 'deny');
     }

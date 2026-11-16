@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {HannesError, type ProjectContextOptions, type ProjectContextSnapshot, type ProjectContextDiagnostic, type ProjectInstructionSource, type ProjectInstructionReader} from '@hannes/contracts';
+import {FutrynError, type ProjectContextOptions, type ProjectContextSnapshot, type ProjectContextDiagnostic, type ProjectInstructionSource, type ProjectInstructionReader} from '@futryn/contracts';
 import {WorkspaceRoot, WorkspaceDenied} from './paths';
 
 type LoadedSource = ProjectInstructionSource & {content: string};
@@ -16,7 +16,7 @@ export class ProjectContextLoader {
   constructor(private readonly workspace: WorkspaceRoot, private readonly reader: ProjectInstructionReader, private readonly options: ProjectContextOptions = {}) {
     this.budget = options.maxBytes ?? 32768;
     this.fileBudget = options.maxFileBytes ?? 16384;
-    if (![this.budget,this.fileBudget].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new HannesError('INVALID_INPUT');
+    if (![this.budget,this.fileBudget].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new FutrynError('INVALID_INPUT');
   }
 
   async load(signal?: AbortSignal): Promise<ProjectContextSnapshot> {
@@ -49,7 +49,7 @@ export class ProjectContextLoader {
         const path = scope === '.' ? name : `${scope}/${name}`;
         let result;
         try { result = await this.reader.read(path,Math.min(this.fileBudget,this.budget),signal); }
-        catch (error) {if (signal?.aborted || error instanceof HannesError && error.code === 'CANCELLED') throw new HannesError('CANCELLED'); diagnostics.push({path,code:'READ_FAILED'}); break;}
+        catch (error) {if (signal?.aborted || error instanceof FutrynError && error.code === 'CANCELLED') throw new FutrynError('CANCELLED'); diagnostics.push({path,code:'READ_FAILED'}); break;}
         signal?.throwIfAborted();
         if (result.status === 'missing') continue;
         if (result.status !== 'ok') {diagnostics.push({path,code:result.code}); break;}

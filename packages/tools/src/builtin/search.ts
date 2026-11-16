@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { evaluateRead } from '@hannes/security';
-import { listWorkspaceFiles, type ResolvedPath, type WorkspaceRoot } from '@hannes/workspace';
+import { evaluateRead } from '@futryn/security';
+import { listWorkspaceFiles, type ResolvedPath, type WorkspaceRoot } from '@futryn/workspace';
 import { LIMITS } from '../limits';
 
 export const globInput = z.strictObject({

@@ -3,7 +3,7 @@ import type { ToolCall } from './models';
 
 /**
  * TOOLS1 (ADR 0017): read-only workspace tools. Descriptors carry no executable code; the
- * dispatcher in `@hannes/tools` is the single enforcement point and `@hannes/security` decides.
+ * dispatcher in `@futryn/tools` is the single enforcement point and `@futryn/security` decides.
  */
 export const toolCapabilitySchema = z.enum(['fs.read', 'fs.write', 'process.execute']);
 export type ToolCapability = z.infer<typeof toolCapabilitySchema>;

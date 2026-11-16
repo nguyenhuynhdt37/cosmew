@@ -1,4 +1,6 @@
-# Điều hướng đặc tả Hannes
+# Điều hướng đặc tả Futryn
+
+Project/repository rename: [ADR 0031](adr/0031-futryn-project-rename.md). Futryn is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.
 
 Current conversation recovery: [ADR 0030](adr/0030-durable-conversation-recovery.md), [acceptance matrix](delivery/conversation-recovery.md). Contract 1.12 / SQLite 4 preserve interrupted evidence without replaying tools.
 

@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import {
-  HannesError,
+  FutrynError,
   turnReceiptSchema, type TurnReceipt,
   messageSchema,
   selectionSchema,
@@ -10,7 +10,7 @@ import {
   type SessionRecord,
   type SessionSummary,
   type StoredMessage,
-} from '@hannes/contracts';
+} from '@futryn/contracts';
 
 import { ExecutionJournal } from './event-store';
 
@@ -23,9 +23,9 @@ function encodeParts(message: Message): string | null {
 }
 
 function decodeRow(row: StoredRow): StoredMessage {
-  if(!Number.isSafeInteger(row.revision)||row.revision<1||!['pending','committed','interrupted'].includes(row.state))throw new HannesError('STORAGE');
+  if(!Number.isSafeInteger(row.revision)||row.revision<1||!['pending','committed','interrupted'].includes(row.state))throw new FutrynError('STORAGE');
   const parts = row.parts ? JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName'> : {};
-  if(Object.keys(parts).some(key=>!['toolCalls','toolCallId','toolName'].includes(key)))throw new HannesError('STORAGE');
+  if(Object.keys(parts).some(key=>!['toolCalls','toolCallId','toolName'].includes(key)))throw new FutrynError('STORAGE');
   const message = messageSchema.parse({ role: row.role, content: row.content, ...parts });
   return { ...message, revision: row.revision, state: row.state };
 }
@@ -45,28 +45,28 @@ export class SqliteConversations implements ConversationStore {
     return value;
   }
   beginExecution(id:string,user:Message,receipt:TurnReceipt):number {
-    try{if(user.role!=='user'||user.toolCalls||user.toolCallId)throw new HannesError('INVALID_INPUT');return this.db.transaction(()=>{const current=this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}|null;if(!current)throw new HannesError('STORAGE');this.journal.claim(id,receipt.requestId,current.revision+1,{...user,content:this.redact(user.content)});return this.append(id,{...user,content:this.redact(user.content)},'pending',receipt);}).immediate();}
-    catch(e){if(e instanceof HannesError)throw e;throw new HannesError('STORAGE');}
+    try{if(user.role!=='user'||user.toolCalls||user.toolCallId)throw new FutrynError('INVALID_INPUT');return this.db.transaction(()=>{const current=this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}|null;if(!current)throw new FutrynError('STORAGE');this.journal.claim(id,receipt.requestId,current.revision+1,{...user,content:this.redact(user.content)});return this.append(id,{...user,content:this.redact(user.content)},'pending',receipt);}).immediate();}
+    catch(e){if(e instanceof FutrynError)throw e;throw new FutrynError('STORAGE');}
   }
-  recordExecution(id:string,turnId:string,event:import('@hannes/contracts').ExecutionEventData):number{return this.journal.record(id,turnId,event);}
-  recover(id:string):import('@hannes/contracts').RecoveredConversation {
+  recordExecution(id:string,turnId:string,event:import('@futryn/contracts').ExecutionEventData):number{return this.journal.record(id,turnId,event);}
+  recover(id:string):import('@futryn/contracts').RecoveredConversation {
     const messages=(this.db.query('SELECT revision,role,content,state,parts FROM messages WHERE conversation=? ORDER BY revision').all(id) as StoredRow[]).map(decodeRow);
     return this.journal.recover(id,messages);
   }
-  saveTask(id:string,task:import('@hannes/contracts').ActiveTaskCheckpoint):void{this.journal.task(id,task);}
-  saveContextSnapshot(id:string,snapshot:import('@hannes/contracts').ContextSnapshot):void{this.journal.snapshot(id,snapshot);}
+  saveTask(id:string,task:import('@futryn/contracts').ActiveTaskCheckpoint):void{this.journal.task(id,task);}
+  saveContextSnapshot(id:string,snapshot:import('@futryn/contracts').ContextSnapshot):void{this.journal.snapshot(id,snapshot);}
   create(selection: Selection): string {
     try {
       const id = crypto.randomUUID();
       this.db.query('INSERT INTO conversations(id,selection) VALUES(?,?)').run(id, JSON.stringify(selectionSchema.parse(selection)));
       return id;
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   fork(id: string, selection: Selection): SessionRecord {
     return this.db.transaction(() => {
-      const source = this.get(id); if (!source) throw new HannesError('NOT_FOUND');
+      const source = this.get(id); if (!source) throw new FutrynError('NOT_FOUND');
       const next = this.create(selection);
       for (const message of source.recovery?.messages ?? source.messages.map(toMessage)) this.append(next, message, 'committed');
       if(source.recovery?.task)this.saveTask(next,{...source.recovery.task,verifiedActions:source.recovery.task.verifiedActions.filter(a=>!a.status.startsWith('verified:')),state:'unfinished',pending:['Revalidate prior artifact evidence in this workspace before making changes.']});
@@ -78,22 +78,22 @@ export class SqliteConversations implements ConversationStore {
       return this.db.transaction(() => {
         message=messageSchema.parse(this.clean(message));
         const row = this.db.query('UPDATE conversations SET revision=revision+1 WHERE id=? RETURNING revision').get(id) as { revision: number } | null;
-        if (!row) throw new HannesError('STORAGE');
+        if (!row) throw new FutrynError('STORAGE');
         this.db.query('INSERT INTO messages (conversation, revision, role, content, state, parts) VALUES(?,?,?,?,?,?)').run(id, row.revision, message.role, message.content, state, encodeParts(message));
         if (receipt) this.db.query('INSERT INTO turn_receipts VALUES(?,?,?)').run(id, row.revision, JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))));
         return row.revision;
       }).immediate();
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   complete(id: string, revision: number, message: Message, receipt?: TurnReceipt, intermediate: Message[] = []): void {
     try {
       this.db.transaction(() => {
         const row = this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as { revision: number } | null;
-        if (row?.revision !== revision) throw new HannesError('STORAGE');
+        if (row?.revision !== revision) throw new FutrynError('STORAGE');
         const result = this.db.query("UPDATE messages SET state='committed' WHERE conversation=? AND revision=? AND state='pending'").run(id, revision);
-        if (result.changes !== 1) throw new HannesError('STORAGE');
+        if (result.changes !== 1) throw new FutrynError('STORAGE');
         // Tool rounds of this turn are committed together with the final answer, never on their own.
         for (const step of intermediate) this.append(id, messageSchema.parse(step), 'committed');
         this.append(id, messageSchema.parse(message), 'committed');
@@ -101,28 +101,28 @@ export class SqliteConversations implements ConversationStore {
         this.journal.finish(id,revision,'completed');
       }).immediate();
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   private writeReceipt(id: string, revision: number, receipt: TurnReceipt): void {
     const result = this.db.query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?').run(JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))), id, revision);
-    if (result.changes !== 1) throw new HannesError('STORAGE');
+    if (result.changes !== 1) throw new FutrynError('STORAGE');
   }
   observeTurn(id: string, revision: number, receipt: TurnReceipt): void {
-    try { this.writeReceipt(id, revision, receipt); } catch { throw new HannesError('STORAGE'); }
+    try { this.writeReceipt(id, revision, receipt); } catch { throw new FutrynError('STORAGE'); }
   }
   interrupt(id: string, revision: number, receipt?: TurnReceipt, appliedSteps: Message[] = []): void {
     try {
       this.db.transaction(() => {
         const state=appliedSteps.length?'committed':'interrupted';
         const updated=this.db.query("UPDATE messages SET state=? WHERE conversation=? AND revision=? AND state='pending'").run(state,id,revision);
-        if(appliedSteps.length&&updated.changes!==1)throw new HannesError('STORAGE');
+        if(appliedSteps.length&&updated.changes!==1)throw new FutrynError('STORAGE');
         // Mutating receipts survive interrupted continuations; they are evidence, never replay jobs.
         for(const step of appliedSteps)this.append(id,messageSchema.parse(step),'committed');
         if (receipt) this.writeReceipt(id, revision, receipt);
         this.journal.finish(id,revision,receipt?.outcome==='cancelled'?'cancelled':receipt?.outcome==='interrupted'?'interrupted':'failed');
       }).immediate();
-    } catch { throw new HannesError('STORAGE'); }
+    } catch { throw new FutrynError('STORAGE'); }
   }
   list(): SessionSummary[] {
     try {
@@ -156,7 +156,7 @@ export class SqliteConversations implements ConversationStore {
         };
       });
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   get(id: string): SessionRecord | undefined {
@@ -189,13 +189,13 @@ export class SqliteConversations implements ConversationStore {
         }),
       };
     } catch {
-      throw new HannesError('STORAGE');
+      throw new FutrynError('STORAGE');
     }
   }
   delete(id: string): boolean {
     try {
       return this.db.transaction(() => {
-        if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new HannesError('POLICY');
+        if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new FutrynError('POLICY');
         this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
         this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
         this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);
@@ -205,8 +205,8 @@ export class SqliteConversations implements ConversationStore {
         return res.changes > 0;
       }).immediate();
     } catch(e) {
-      if(e instanceof HannesError)throw e;
-      throw new HannesError('STORAGE');
+      if(e instanceof FutrynError)throw e;
+      throw new FutrynError('STORAGE');
     }
   }
 }

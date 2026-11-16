@@ -1,4 +1,4 @@
-import type { Usage } from '@hannes/contracts';
+import type { Usage } from '@futryn/contracts';
 
 const count = (value: unknown): number | null => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
 const fields = ['inputTokens', 'outputTokens', 'cachedInputTokens', 'cacheWriteInputTokens', 'reasoningOutputTokens'] as const;

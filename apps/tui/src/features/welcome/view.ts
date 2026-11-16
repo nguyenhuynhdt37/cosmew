@@ -1,5 +1,5 @@
-import type { BorderStyle, ThemeManifest, ThemeTokens } from '@hannes/contracts';
-import type { FutrynClient } from '@hannes/sdk';
+import type { BorderStyle, ThemeManifest, ThemeTokens } from '@futryn/contracts';
+import type { FutrynClient } from '@futryn/sdk';
 import type { RenderedBoxLine, StyledSpan } from '../../ui';
 
 export function renderWelcomeScreen(options: {

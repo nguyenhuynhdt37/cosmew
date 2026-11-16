@@ -1,5 +1,5 @@
 {
-  "name": "hannes",
+  "name": "futryn",
   "private": true,
   "type": "module",
   "packageManager": "bun@1.4.4",
@@ -17,25 +17,31 @@
   ],
   "scripts": {
     "hannes": "bun apps/cli/src/index.ts",
-    "futryn": "bun apps/cli/src/index.ts tui",
+    "futryn": "bun apps/cli/src/index.ts",
     "tui": "bun apps/cli/src/index.ts tui",
     "test": "bun test tests",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && git diff --check",
     "test:integration": "bun test tests/contracts/provider-adapters.test.ts tests/security",
-    "test:e2e": "bun test tests/end-to-end"
+    "test:e2e": "bun test tests/end-to-end",
+    "fyn": "bun apps/cli/src/index.ts",
+    "link:cli": "bun link --cwd apps/cli"
   },
   "devDependencies": {
     "typescript": "7.0.2",
     "@types/bun": "1.4.4",
-    "@hannes/contracts": "workspace:*",
-    "@hannes/security": "workspace:*",
-    "@hannes/persistence": "workspace:*",
-    "@hannes/models": "workspace:*",
-    "@hannes/core": "workspace:*",
-    "@hannes/sdk": "workspace:*",
-    "@hannes/tui": "workspace:*",
-    "@hannes/tools": "workspace:*",
-    "@hannes/workspace": "workspace:*"
+    "@futryn/contracts": "workspace:*",
+    "@futryn/security": "workspace:*",
+    "@futryn/persistence": "workspace:*",
+    "@futryn/models": "workspace:*",
+    "@futryn/core": "workspace:*",
+    "@futryn/sdk": "workspace:*",
+    "@futryn/tui": "workspace:*",
+    "@futryn/tools": "workspace:*",
+    "@futryn/workspace": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nguyenhuynhdt37/futryn.git"
   }
 }

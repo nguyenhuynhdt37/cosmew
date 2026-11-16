@@ -1,8 +1,8 @@
 import { readdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { defaultStateDirectory } from './paths';
 import { join, relative, resolve } from 'node:path';
 import {
-  HannesError,
+  FutrynError,
   type Account,
   type ProjectContextPort,
   type ProjectContextOptions,
@@ -15,10 +15,10 @@ import {
   type WorkspaceDiffFile,
   type WorkspaceDiffReport,
   type TurnBudget,
-} from '@hannes/contracts';
-import { Conversation } from '@hannes/core';
-import { ToolDispatcher, platformCommandRuntime, type CommandRuntime } from '@hannes/tools';
-import { WorkspaceRoot, ProjectContextLoader } from '@hannes/workspace';
+} from '@futryn/contracts';
+import { Conversation } from '@futryn/core';
+import { ToolDispatcher, platformCommandRuntime, type CommandRuntime } from '@futryn/tools';
+import { WorkspaceRoot, ProjectContextLoader } from '@futryn/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -30,7 +30,7 @@ import {
   ProviderTransport,
   providerPresets,
   parseOpenRouterKeyLimits,
-} from '@hannes/models';
+} from '@futryn/models';
 import {
   FileCustomThemeStore,
   RuntimeLeases,
@@ -38,12 +38,12 @@ import {
   SqliteSettings,
   ToolAuditStore,
   openPrivateDatabase,
-} from '@hannes/persistence';
+} from '@futryn/persistence';
 import { SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions } from '../subscriptions/host';
-import { FutrynClient } from '@hannes/sdk';
-import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, SessionGrants, redactModel, terminalText, validateEndpoint } from '@hannes/security';
+import { FutrynClient } from '@futryn/sdk';
+import { ConfiguredNetworkPolicy, OpenRouterPKCE, Redactor, SecureVault, SessionGrants, redactModel, terminalText, validateEndpoint } from '@futryn/security';
 
-const IGNORED_DIRS = new Set(['.git', 'node_modules', '.hannes', 'dist', '.DS_Store', '.codegraph']);
+const IGNORED_DIRS = new Set(['.git', 'node_modules', '.hannes', '.futryn', 'dist', '.DS_Store', '.codegraph']);
 
 export function scanWorkspaceFiles(workspaceRoot: string, query?: string, limit = 250): string[] {
   const root = resolve(workspaceRoot);
@@ -207,7 +207,7 @@ export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffRep
 }
 
 /** Committed history as conversation messages, keeping tool calls and tool results. */
-function committedMessages(record: import('@hannes/contracts').SessionRecord): Message[] {
+function committedMessages(record: import('@futryn/contracts').SessionRecord): Message[] {
   if(record.recovery)return record.recovery.messages;
   return record.messages.filter(m => m.state === 'committed').map(({ revision: _revision, state: _state, ...message }) => message);
 }
@@ -223,7 +223,7 @@ const APPROVAL_REASONS: Record<string, string> = {
   'process-execute': 'Runs a shell command in a read-only sandbox: no writes, no network, project files only.',
 };
 
-export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '.hannes'), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions; commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime } = {}) {
+export function startup(directory = defaultStateDirectory(), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions; commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime } = {}) {
   const commandRuntimes = new Set<CommandRuntime>();
   let commandsClosed = false;
   let commandShutdown: Promise<void> | undefined;
@@ -234,7 +234,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     return commandShutdown = (async () => {
       try {
         const results = await Promise.allSettled(owned.map(runtime => Promise.resolve().then(() => runtime.shutdown?.())));
-        if (results.some(result => result.status === 'rejected')) throw new HannesError('TRANSPORT');
+        if (results.some(result => result.status === 'rejected')) throw new FutrynError('TRANSPORT');
       } finally { for (const runtime of owned) commandRuntimes.delete(runtime); }
     })();
   };
@@ -264,7 +264,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           JSON.stringify(fresh.credential) !== JSON.stringify(a.credential) ||
           JSON.stringify(registry.get(provider.id)) !== JSON.stringify(provider)
         ) {
-          throw new HannesError('POLICY');
+          throw new FutrynError('POLICY');
         }
         policy.authorize(provider, fresh);
       },
@@ -274,21 +274,21 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
 
   const resolveAccount = (id?: string) => {
     const selected = id ?? settings.read().activeAccountId;
-    if (!selected) throw new HannesError('AUTH');
+    if (!selected) throw new FutrynError('AUTH');
     return accounts.get(selected);
   };
 
   const createConversationForSelection = (selection: { accountId: string; modelId: string }, existingSession?: { id: string; messages: Message[] }, tools?: ToolPort, workspaceRoot?: string, projectContext?: ProjectContextPort, approve?: RuntimeApprover, delegated: () => boolean = () => false, budget: () => TurnBudget | undefined = () => undefined, analysisOnly:()=>boolean=()=>false) => {
     const account = accounts.get(selection.accountId);
-    if (account.status === 'logged-out') throw new HannesError('AUTH');
+    if (account.status === 'logged-out') throw new FutrynError('AUTH');
     const info = catalog(account).cached().find(m => m.id === selection.modelId);
-    if (!info) throw new HannesError('NOT_FOUND');
+    if (!info) throw new FutrynError('NOT_FOUND');
     // Only direct APIs and the explicitly authorized Codex dynamic read bridge receive tools (ADR 0018).
     const runtime = !!registry.get(account.providerId).runtime;
     const codexReads = registry.get(account.providerId).runtime === 'codex';
     // Re-read the catalog each turn so a model marked 'unsupported' stops receiving tools at once.
     const modelTools: ToolPort | undefined = tools && (!runtime || codexReads) ? {
-      // A delegated runtime uses its own tools; Hannes tools are not offered alongside them (ADR 0029).
+      // A delegated runtime uses its own tools; Futryn tools are not offered alongside them (ADR 0029).
       descriptors: () => runtime && delegated() ? [] : catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
       invoke: (call, signal) => tools.invoke(call, signal),
     } : undefined;
@@ -315,7 +315,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
   };
 
   const resumeConversation = (id: string) => {
-    const record = conversations.get(id); if (!record) throw new HannesError('NOT_FOUND');
+    const record = conversations.get(id); if (!record) throw new FutrynError('NOT_FOUND');
     return createConversationForSelection(record.selection, { id, messages: committedMessages(record) });
   };
 
@@ -332,7 +332,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
     });
     settings.update(state => {
       const fresh = state.accounts.find(a => a.id === account.id);
-      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) throw new HannesError('POLICY');
+      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) throw new FutrynError('POLICY');
       state.catalogs = state.catalogs.filter(c => c.accountId !== account.id);
       state.catalogs.push({ accountId: account.id, providerFingerprint: JSON.stringify(provider), fetchedAt: new Date().toISOString(), models });
     });
@@ -346,40 +346,40 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       const currentKey = p.id === 'openrouter' && p.baseURL === 'https://openrouter.ai/api/v1';
       if (currentKey) {
         const info = await transport(account).json('key', signal);
-        if (!info || typeof info !== 'object' || !('data' in info) || !info.data || typeof info.data !== 'object') throw new HannesError('PROTOCOL');
+        if (!info || typeof info !== 'object' || !('data' in info) || !info.data || typeof info.data !== 'object') throw new FutrynError('PROTOCOL');
       }
       // An explicit generation probe validates the pinned model without replacing
       // richer cached metadata with a less complete model-list response.
       const cached = generate ? catalog(account).cached() : [];
       const res = cached.length ? { models: cached, stale: false } : await discoverModels(account, signal);
-      if (res.stale) throw new HannesError('TRANSPORT');
+      if (res.stale) throw new FutrynError('TRANSPORT');
       const modelId = account.defaultModel ?? res.models[0]?.id;
-      if ((generate || (p.catalog === 'manual' && !p.runtime)) && !modelId) throw new HannesError('NOT_FOUND');
+      if ((generate || (p.catalog === 'manual' && !p.runtime)) && !modelId) throw new FutrynError('NOT_FOUND');
       if ((generate || (p.catalog === 'manual' && !p.runtime)) && modelId) {
         await (p.runtime ? new SubscriptionAdapter(modelId, (request, turnSignal) => subscriptions.stream(p, account, request, turnSignal)) : new ProviderAdapter(transport(account), modelId)).generate({ requestId: crypto.randomUUID(), modelId,
           messages: [{ role: 'user', content: 'Reply with OK.' }], maxOutputTokens: 16, tools: [] }, signal);
       }
-      if (signal?.aborted) throw new HannesError('CANCELLED');
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
       accounts.validation(account.id, true, account);
       return { accountId: account.id, providerId: p.id, connection: 'validated', models: res.models.length,
         validation: generate || (p.catalog === 'manual' && !p.runtime) ? 'generation' : currentKey ? 'authenticated-key-and-model-discovery' : p.runtime ? 'subscription-runtime-model-discovery' : 'model-discovery',
         checkedAt: new Date().toISOString() };
     } catch (error) {
-      if (error instanceof HannesError && ['AUTH', 'FORBIDDEN'].includes(error.code)) accounts.validation(account.id, false, account);
+      if (error instanceof FutrynError && ['AUTH', 'FORBIDDEN'].includes(error.code)) accounts.validation(account.id, false, account);
       throw error;
     }
   };
 
   const createFutrynClient = (workspaceRoot = resolve('.'), contextOptions: ProjectContextOptions = {}): FutrynClient => {
-    const envBudget = process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
-    if (contextOptions.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) throw new HannesError('INVALID_INPUT');
+    const envBudget = process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ?? process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
+    if (contextOptions.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) throw new FutrynError('INVALID_INPUT');
     const options = {...contextOptions,maxBytes:contextOptions.maxBytes ?? (envBudget === undefined ? 32768 : Number(envBudget))};
-    if (![options.maxBytes,options.maxFileBytes ?? 16384].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new HannesError('INVALID_INPUT');
+    if (![options.maxBytes,options.maxFileBytes ?? 16384].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536)) throw new FutrynError('INVALID_INPUT');
     let projectReport: ProjectContextReport | null = null;
     let contextLoader: ProjectContextLoader | undefined;
     let commandRuntime: CommandRuntime | undefined;
     const commands = () => {
-      if (commandsClosed) throw new HannesError('CANCELLED');
+      if (commandsClosed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
         commandRuntime = (services.commands ?? ((root, state) => platformCommandRuntime({workspaceRoot:root,stateDirectory:state,extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
         commandRuntimes.add(commandRuntime);
@@ -411,7 +411,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
           : { capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
         : Promise.resolve('deny'),
     });
-    /** Native runtime tools ask through the same prompt and permission mode as Hannes tools (ADR 0027). */
+    /** Native runtime tools ask through the same prompt and permission mode as Futryn tools (ADR 0027). */
     const RUNTIME_CAPABILITY = { secret: 'fs.read', edit: 'fs.write', execute: 'process.execute', network: 'network.connect', other: 'extension.service' } as const;
     const runtimeApprover: RuntimeApprover = async (request, signal) => {
       if (!client?.toolsEnabled()) return false;
@@ -452,12 +452,12 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       beginProviderAuth: async (providerId, methodId, signal) => {
         const integration = integrations.get(providerId);
         if (integration?.provider.runtime) return subscriptions.begin(integration.provider, methodId === 'subscription-device', signal);
-        if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new HannesError('UNSUPPORTED');
+        if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.begin();
       },
       completeProviderAuth: async (providerId, challengeId, code, signal) => {
         const integration = integrations.get(providerId);
-        if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new HannesError('UNSUPPORTED');
+        if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.complete(challengeId, code, signal);
       },
       providerAuthProgress: id => subscriptions.progress(id),
@@ -528,7 +528,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
       },
       resumeSession: id => {
         const record = conversations.get(id);
-        if (!record) throw new HannesError('NOT_FOUND');
+        if (!record) throw new FutrynError('NOT_FOUND');
         const committed = committedMessages(record);
         const conv = createConversationForSelection(record.selection, {
           id: record.id,
@@ -545,7 +545,7 @@ export function startup(directory = process.env.HANNES_HOME ?? join(homedir(), '
         let conv = activeConvMap.get(sessionId);
         if (!conv) {
           const record = conversations.get(sessionId);
-          if (!record) throw new HannesError('NOT_FOUND');
+          if (!record) throw new FutrynError('NOT_FOUND');
           const committed = committedMessages(record);
           conv = createConversationForSelection(record.selection, {
             id: record.id,

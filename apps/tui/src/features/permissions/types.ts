@@ -1,4 +1,4 @@
-import type { PermissionPromptRequest, PermissionResolutionScope, PermissionRuleEffect } from '@hannes/contracts';
+import type { PermissionPromptRequest, PermissionResolutionScope, PermissionRuleEffect } from '@futryn/contracts';
 
 /** `rule` approves once and saves the suggested Allow rule for this project (ADR 0028). */
 export type PermissionDialogAction = PermissionResolutionScope | 'rule';

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage } from '@hannes/tui';
+import { OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage } from '@futryn/tui';
 
 test('every overlay command alias resolves to the overlay its command opens', () => {
   expect(OVERLAY_COMMANDS['/config']).toBe('settings');

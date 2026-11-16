@@ -1,4 +1,4 @@
-import type { Usage } from '@hannes/contracts';
+import type { Usage } from '@futryn/contracts';
 
 /** One limit shown to the user. Percent-based (subscription plans) or amount-based (API credit). */
 export interface LimitItem {
@@ -16,7 +16,7 @@ export interface LimitItem {
  * Limits for one connected account.
  *  - live:        fetched from the provider's API just now
  *  - last-turn:   the plan snapshot the subscription runtime reported with its latest reply
- *  - unavailable: this provider exposes no balance or quota API to Hannes
+ *  - unavailable: this provider exposes no balance or quota API to Futryn
  */
 export interface AccountLimits {
   accountId: string;
@@ -37,7 +37,7 @@ export interface AccountLimits {
  * Live limits a composition root can fetch. Returns null synchronously when the provider has no
  * such API, so the UI can say so at once instead of showing a pending check.
  */
-export type FetchAccountLimits = (account: import('@hannes/contracts').Account, signal?: AbortSignal) =>
+export type FetchAccountLimits = (account: import('@futryn/contracts').Account, signal?: AbortSignal) =>
   Promise<{ items: LimitItem[]; note?: string }> | null;
 
 /** Convert a runtime quota snapshot (subscription plans) into display items. */

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { WALLPAPER_PRESET_IDS, defaultAnimationConfig } from '@hannes/contracts';
-import { WALLPAPER_SCENES, WallpaperEngine } from '@hannes/tui';
+import { WALLPAPER_PRESET_IDS, defaultAnimationConfig } from '@futryn/contracts';
+import { WALLPAPER_SCENES, WallpaperEngine } from '@futryn/tui';
 
 describe('FUTRYN Live ASCII Wallpaper Engine', () => {
   test('implements all 12 declarative ASCII wallpaper presets and resolves clawd alias to futryn-spark', () => {

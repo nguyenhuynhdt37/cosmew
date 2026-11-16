@@ -1,4 +1,4 @@
-import { HannesError, credentialRefSchema, type CredentialRef, type CredentialVault } from '@hannes/contracts';
+import { FutrynError, credentialRefSchema, type CredentialRef, type CredentialVault } from '@futryn/contracts';
 
 export class Redactor {
   private readonly secrets = new Set<string>();
@@ -32,6 +32,7 @@ export class SecureVault implements CredentialVault {
   constructor(private readonly redactor = new Redactor(), private readonly environment: Record<string, string | undefined> = process.env) {}
   private async entry(key: string) {
     const { AsyncEntry } = await import('@napi-rs/keyring');
+    // Keep the legacy keyring service identity so existing credentials remain accessible.
     // Require persistent Secret Service on Linux, never silently switch backend.
     return new AsyncEntry('hannes.provider-auth.v1', key, { linux: { store: 'secret-service' } });
   }
@@ -39,26 +40,26 @@ export class SecureVault implements CredentialVault {
     try {
       const ref = credentialRefSchema.parse(reference);
       const secret = ref.kind === 'runtime' ? undefined : ref.kind === 'none' ? undefined : ref.kind === 'env' ? this.environment[ref.name] : (await (await this.entry(ref.key)).getPassword()) ?? undefined;
-      if (secret && (secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret))) throw new HannesError('AUTH');
+      if (secret && (secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret))) throw new FutrynError('AUTH');
       if (secret) this.redactor.register(secret);
       return secret;
-    } catch (e) { if (e instanceof HannesError) throw e; throw new HannesError('STORAGE'); }
+    } catch (e) { if (e instanceof FutrynError) throw e; throw new FutrynError('STORAGE'); }
   }
   async set(key: string, secret: string): Promise<void> {
-    if (!secret || secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret)) throw new HannesError('INVALID_INPUT');
+    if (!secret || secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret)) throw new FutrynError('INVALID_INPUT');
     this.redactor.register(secret);
     try { credentialRefSchema.parse({ kind: 'keyring', key }); await (await this.entry(key)).setPassword(secret); }
-    catch { throw new HannesError('STORAGE'); }
+    catch { throw new FutrynError('STORAGE'); }
   }
   async setRuntime(key: string, payload: string): Promise<void> {
-    if (Buffer.byteLength(payload) > 65536) throw new HannesError('INVALID_INPUT');
+    if (Buffer.byteLength(payload) > 65536) throw new FutrynError('INVALID_INPUT');
     try {
       credentialRefSchema.parse({ kind: 'keyring', key });
       const data = JSON.parse(payload);
-      if (data.version !== 1 || typeof data.files !== 'object') throw new HannesError('INVALID_INPUT');
+      if (data.version !== 1 || typeof data.files !== 'object') throw new FutrynError('INVALID_INPUT');
       this.registerRuntimeSecrets(data);
       await (await this.entry(key)).setPassword(payload);
-    } catch (error) { if (error instanceof HannesError) throw error; throw new HannesError('STORAGE'); }
+    } catch (error) { if (error instanceof FutrynError) throw error; throw new FutrynError('STORAGE'); }
   }
   private registerRuntimeSecrets(value: unknown): void {
     if (typeof value === 'string') {
@@ -73,13 +74,13 @@ export class SecureVault implements CredentialVault {
     try {
       credentialRefSchema.parse(ref);
       const payload = (await (await this.entry(ref.key)).getPassword()) ?? undefined;
-      if (payload) { if (Buffer.byteLength(payload) > 65536) throw new HannesError('STORAGE'); this.registerRuntimeSecrets(JSON.parse(payload)); }
+      if (payload) { if (Buffer.byteLength(payload) > 65536) throw new FutrynError('STORAGE'); this.registerRuntimeSecrets(JSON.parse(payload)); }
       return payload;
-    } catch { throw new HannesError('STORAGE'); }
+    } catch { throw new FutrynError('STORAGE'); }
   }
   async delete(ref: CredentialRef): Promise<void> {
     try { if (ref.kind === 'keyring' || ref.kind === 'runtime') await (await this.entry(ref.key)).deleteCredential(); }
-    catch { throw new HannesError('STORAGE'); }
+    catch { throw new FutrynError('STORAGE'); }
   }
 }
 
@@ -88,7 +89,7 @@ export function terminalText(value: string): string {
 }
 
 /** Redact normalized model text before it reaches durable transcripts or UI sinks. */
-export function redactModel(model: import('@hannes/contracts').ModelPort, redactor: Redactor): import('@hannes/contracts').ModelPort {
+export function redactModel(model: import('@futryn/contracts').ModelPort, redactor: Redactor): import('@futryn/contracts').ModelPort {
   return {
     inlineTools: model.inlineTools,
     async *stream(request, signal, executeTool) {

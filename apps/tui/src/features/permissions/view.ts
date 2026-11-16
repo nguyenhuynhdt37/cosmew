@@ -1,5 +1,5 @@
-import type { FutrynClient } from '@hannes/sdk';
-import { PERMISSION_MODE_HINTS, PERMISSION_MODES, type BorderStyle, type PermissionMode, type PermissionPromptRequest, type PermissionRuleSet, type ThemeTokens } from '@hannes/contracts';
+import type { FutrynClient } from '@futryn/sdk';
+import { PERMISSION_MODE_HINTS, PERMISSION_MODES, type BorderStyle, type PermissionMode, type PermissionPromptRequest, type PermissionRuleSet, type ThemeTokens } from '@futryn/contracts';
 import { Modal, clampIndex, type RenderedBoxLine } from '../../ui';
 import { PERMISSION_RULE_TABS, suggestedRule, type PermissionDialogState, type PermissionRulesState } from './types';
 import { parseUnifiedDiff, renderDiffCodeLine } from '../diff/code-lines';
@@ -80,9 +80,9 @@ export function renderPermissionDialogOverlay(options: {
 
 const TAB_LABELS = { allow: 'Allow', ask: 'Ask', deny: 'Deny', mode: 'Mode' } as const;
 const TAB_HELP = {
-  allow: 'Hannes will not ask before using these.',
-  ask: 'Hannes always asks first, even in auto or bypass mode.',
-  deny: 'Hannes refuses these without asking.',
+  allow: 'Futryn will not ask before using these.',
+  ask: 'Futryn always asks first, even in auto or bypass mode.',
+  deny: 'Futryn refuses these without asking.',
   mode: 'How requests without a rule are answered. Shift+Tab cycles.',
 } as const;
 

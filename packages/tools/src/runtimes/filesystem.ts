@@ -1,5 +1,5 @@
-import {HannesError} from '@hannes/contracts';
-import type {ResolvedPath} from '@hannes/workspace';
+import {FutrynError} from '@futryn/contracts';
+import type {ResolvedPath} from '@futryn/workspace';
 import type {z} from 'zod';
 import {runRead, readInput} from '../builtin/read';
 import {candidateFiles, runGlob, globInput, grepInput} from '../builtin/search';
@@ -18,8 +18,8 @@ export class FileSystemRuntime {
     return new Promise((resolve, reject) => {
       const worker = new Worker(new URL('../builtin/grep-worker.ts', import.meta.url).href);
       const stop = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); worker.terminate(); };
-      const onAbort = () => { stop(); reject(new HannesError('CANCELLED')); };
-      const timer = setTimeout(() => { stop(); reject(new HannesError('TIMEOUT')); }, Math.max(1, deadline - Date.now()));
+      const onAbort = () => { stop(); reject(new FutrynError('CANCELLED')); };
+      const timer = setTimeout(() => { stop(); reject(new FutrynError('TIMEOUT')); }, Math.max(1, deadline - Date.now()));
       signal?.addEventListener('abort', onAbort, { once: true });
       worker.onmessage = (event: MessageEvent<{ matches: string[]; total: number; skippedSecret: number }>) => {
         stop();
@@ -32,7 +32,7 @@ export class FileSystemRuntime {
         const body = matches.length ? matches.join('\n') : 'No matches.';
         resolve({ status: 'ok', content: body + (notes.length ? `\n\n[${notes.join('; ')}]` : ''), target: base.relative, truncated: total > matches.length || incomplete || undefined });
       };
-      worker.onerror = () => { stop(); reject(new HannesError('PROTOCOL')); };
+      worker.onerror = () => { stop(); reject(new FutrynError('PROTOCOL')); };
       if (signal?.aborted) { onAbort(); return; }
       try { worker.postMessage({ root: this.options.workspace.root, files, pattern: input.pattern, ignoreCase: input.ignoreCase, stateDirectory: this.options.stateDirectory }); }
       catch (error) { stop(); reject(error); }

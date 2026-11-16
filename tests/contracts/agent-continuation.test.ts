@@ -1,13 +1,13 @@
 /**
- * ADR 0030: Codex-style continuation semantics of the Hannes Conversation loop, driven by a
+ * ADR 0030: Codex-style continuation semantics of the Futryn Conversation loop, driven by a
  * deterministic in-process model so each stop condition can be forced exactly. Fixture evidence only.
  */
 import { afterEach, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { HannesError, type ModelEvent, type ModelPort, type ModelRequest, type ToolCall, type ToolPort, type TurnBudget, type Usage } from '@hannes/contracts';
-import { Conversation, SAFETY_LIMITS } from '@hannes/core';
+import { FutrynError, type ModelEvent, type ModelPort, type ModelRequest, type ToolCall, type ToolPort, type TurnBudget, type Usage } from '@futryn/contracts';
+import { Conversation, SAFETY_LIMITS } from '@futryn/core';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { memoryVault } from '../fixtures';
 
@@ -31,7 +31,7 @@ function harness(step: Step, options: { budget?: TurnBudget; contextLimit?: numb
       if (out instanceof Error) throw out;
       for (const event of out) { if (event instanceof Error) throw event; yield event; }
     },
-    generate: async () => { throw new HannesError('UNSUPPORTED'); },
+    generate: async () => { throw new FutrynError('UNSUPPORTED'); },
   };
   const tools: ToolPort = {
     descriptors: () => [{ name: 'read', description: 'read a file', inputSchema: { type: 'object', properties: { path: { type: 'string' } } }, capability: 'fs.read' }],
@@ -54,28 +54,28 @@ test('no default ceiling: 50 rounds and 50 calls run until the model ends with t
 });
 
 test('a round that fails before producing anything is retried (bounded); output means no retry', async () => {
-  const transient = harness((_, attempt) => attempt < 2 ? new HannesError('TRANSPORT', true) : answer('recovered'));
+  const transient = harness((_, attempt) => attempt < 2 ? new FutrynError('TRANSPORT', true) : answer('recovered'));
   expect((await transient.send()).at(-1)?.type).toBe('completed');
   expect(transient.requests).toHaveLength(3);
   expect(transient.sleeps).toEqual([250, 500]);
   // Exhausted: 1 attempt + SAFETY_LIMITS.roundRetries retries, then a failed turn with its stop reason.
-  const down = harness(() => new HannesError('TRANSPORT', true));
+  const down = harness(() => new FutrynError('TRANSPORT', true));
   await expect(down.send()).rejects.toMatchObject({ code: 'TRANSPORT' });
   expect(down.requests).toHaveLength(1 + SAFETY_LIMITS.roundRetries);
   expect(down.receipt()).toMatchObject({ outcome: 'failed', stopReason: 'failed' });
   // Terminal (non-retryable) errors are never retried.
-  const auth = harness(() => new HannesError('AUTH'));
+  const auth = harness(() => new FutrynError('AUTH'));
   await expect(auth.send()).rejects.toMatchObject({ code: 'AUTH' });
   expect(auth.requests).toHaveLength(1);
   // Once text came back, a later failure is not hidden by a silent re-sample.
-  const partial = harness(() => [{ type: 'textDelta', text: 'half' }, new HannesError('TRANSPORT', true) as unknown as ModelEvent]);
+  const partial = harness(() => [{ type: 'textDelta', text: 'half' }, new FutrynError('TRANSPORT', true) as unknown as ModelEvent]);
   await expect(partial.send()).rejects.toMatchObject({ code: 'TRANSPORT' });
   expect(partial.requests).toHaveLength(1);
 });
 
 test('cancellation while waiting to retry ends the turn as cancelled', async () => {
   const controller = new AbortController();
-  const h = harness(() => { controller.abort(); return new HannesError('TRANSPORT', true); });
+  const h = harness(() => { controller.abort(); return new FutrynError('TRANSPORT', true); });
   await expect(h.send('go', controller.signal)).rejects.toMatchObject({ code: 'CANCELLED' });
   expect(h.receipt()).toMatchObject({ outcome: 'cancelled', stopReason: 'cancelled' });
 });

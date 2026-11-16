@@ -1,4 +1,4 @@
-import { HannesError, modelIdSchema, providerSchema, type Provider } from '@hannes/contracts';
+import { FutrynError, modelIdSchema, providerSchema, type Provider } from '@futryn/contracts';
 import type { AccountWorkflow, OverlayFeature, OverlayLayout, ThemeFrame, TuiHost } from '../../core/feature';
 import { wideLayout } from '../../core/layout';
 import { stepIndex } from '../../ui';
@@ -135,10 +135,10 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
       return true;
     } catch (error) {
       if (abort.signal.aborted) { host.openOverlay('none'); host.setBanner('Account switch cancelled; current account and history preserved.'); }
-      else if (error instanceof HannesError && error.code === 'NOT_FOUND' && host.client.cachedModels(id).length) {
+      else if (error instanceof FutrynError && error.code === 'NOT_FOUND' && host.client.cachedModels(id).length) {
         host.openOverlay('models');
         host.features.models.awaitModelForAccount(id, 'Choose a model for the new account. Current account stays active until you confirm.');
-      } else if (error instanceof HannesError && error.code === 'AUTH') {
+      } else if (error instanceof FutrynError && error.code === 'AUTH') {
         const account = host.client.listAccounts().find(a => a.id === id);
         this.state = { ...createInitialConnectProviderState(), step: 'method', pendingAction: 'switch', accountId: id, providerId: account?.providerId, providerLabel: alias, statusMessage: 'This account needs sign-in. Sign in again to reconnect this profile, then choose it to continue your chat.' };
       } else {

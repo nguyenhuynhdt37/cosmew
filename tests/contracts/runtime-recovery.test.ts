@@ -2,8 +2,8 @@ import {afterEach,expect,test} from 'bun:test';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {Conversation} from '@hannes/core';
-import {HannesError,type ModelPort,type ModelRequest,type ToolPort,type Message} from '@hannes/contracts';
+import {Conversation} from '@futryn/core';
+import {FutrynError,type ModelPort,type ModelRequest,type ToolPort,type Message} from '@futryn/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault} from '../fixtures';
 const cleanup:(()=>void)[]=[];afterEach(()=>{for(const f of cleanup.splice(0).reverse())f();});
@@ -12,13 +12,13 @@ const usage={inputTokens:10,outputTokens:5,costUSD:null};
 const selection={accountId:crypto.randomUUID(),modelId:'fixture'};
 const tools:ToolPort={descriptors:()=>[{name:'read',description:'Read',inputSchema:{type:'object'},capability:'fs.read'}],invoke:async call=>({callId:call.id,name:call.name,status:'ok',content:'Existing project uses a standalone HTML file; helo.html does not exist.'})};
 async function send(c:Conversation,text:string){for await(const _ of c.send(text)){} }
-function model(step:(request:ModelRequest)=>AsyncIterable<import('@hannes/contracts').ModelEvent>):ModelPort{return{stream:step,generate:async()=>{throw new HannesError('UNSUPPORTED');}};}
+function model(step:(request:ModelRequest)=>AsyncIterable<import('@futryn/contracts').ModelEvent>):ModelPort{return{stream:step,generate:async()=>{throw new FutrynError('UNSUPPORTED');}};}
 
 test('read → provider timeout preserves the original HTML objective and exact tool evidence on continuation',async()=>{
  const app=setup();let requests=0;let recovered:ModelRequest|undefined;
  const port=model(async function*(request){requests++;
   if(requests===1){yield{type:'textDelta',text:'I will inspect the project, then create helo.html.'};yield{type:'toolCallComplete',call:{id:'read-1',name:'read',input:{path:'README.md'}}};yield{type:'completed',finishReason:'tool_calls',usage};return;}
-  if(requests===2)throw new HannesError('TIMEOUT');
+  if(requests===2)throw new FutrynError('TIMEOUT');
   recovered=request;yield{type:'textDelta',text:'Resuming the unfinished HTML artifact.'};yield{type:'completed',finishReason:'stop',usage};
  });
  const c=new Conversation(selection,port,app.conversations,undefined,tools);
@@ -31,7 +31,7 @@ test('read → provider timeout preserves the original HTML objective and exact 
 
 test('restart reconstructs interrupted read evidence instead of loading only completed turns',async()=>{
  const app=setup();let count=0;
- const c=new Conversation(selection,model(async function*(){if(count++===0){yield{type:'toolCallComplete',call:{id:'read-restart',name:'read',input:{path:'README.md'}}};yield{type:'completed',finishReason:'tool_calls',usage};}else throw new HannesError('TRANSPORT');}),app.conversations,undefined,tools);
+ const c=new Conversation(selection,model(async function*(){if(count++===0){yield{type:'toolCallComplete',call:{id:'read-restart',name:'read',input:{path:'README.md'}}};yield{type:'completed',finishReason:'tool_calls',usage};}else throw new FutrynError('TRANSPORT');}),app.conversations,undefined,tools);
  await expect(send(c,'Create helo.html with a pricing section.')).rejects.toMatchObject({code:'TRANSPORT'});
  const restored=new Conversation(selection,model(async function*(){}),app.conversations,{id:c.id,messages:app.conversations.get(c.id)!.messages.filter(m=>m.state==='committed')},tools);
  expect(restored.history().some(m=>m.content.includes('pricing section'))).toBe(true);

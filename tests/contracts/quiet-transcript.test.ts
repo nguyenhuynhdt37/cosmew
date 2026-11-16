@@ -1,5 +1,5 @@
 import {expect,test} from 'bun:test';
-import {deriveTokensFromTriplet,renderMarkdownBody,renderTranscriptMessages,type TranscriptItem} from '@hannes/tui';
+import {deriveTokensFromTriplet,renderMarkdownBody,renderTranscriptMessages,type TranscriptItem} from '@futryn/tui';
 const tokens=deriveTokensFromTriplet('#faf9f5','#262624','#a85236');
 const text=(lines:ReturnType<typeof renderMarkdownBody>)=>lines.map(l=>l.spans.map(s=>s.text).join('')).join('\n');
 test('answer Markdown renders emphasis and file references without raw markup or duplicate absolute paths',()=>{

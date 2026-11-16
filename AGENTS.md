@@ -2,6 +2,8 @@
 
 ## Phạm vi đã cho phép
 
+- **Futryn rename (2026-11-16):** user cho phép đổi tên dự án/repo thành Futryn (`nguyenhuynhdt37/futryn`), lệnh CLI `fyn` và alias `futryn`, cập nhật package/import/docs và Git remote theo [ADR 0031](docs/adr/0031-futryn-project-rename.md). Giữ dữ liệu/credentials và các định danh protocol cũ cần tương thích; không thay đổi quyền hoặc mở execution backends.
+
 - **Conversation recovery (2026-11-16):** cho phép journal turn/event, SQLite schema 4, contract 1.12, reconstruction, task/context checkpoints, compaction và bounded progress theo [ADR 0030](docs/adr/0030-durable-conversation-recovery.md). Không replay mutations hoặc phục hồi quyền từ lịch sử.
 
 - **Hannes-owned agent (2026-11-16):** model chỉ quyết định, Hannes sở hữu Agent Loop và chạy mọi tool dự án qua dispatcher/orchestrator của mình cho mọi model backend. Runtime subscription chỉ là `codex-bridge` (Codex loop + tool Hannes) hoặc `chat-only`; `delegated` (runtime tự chạy loop và tool, không có sandbox của Hannes) chỉ khi user opt-in tường minh từng phiên. Không bao giờ âm thầm dùng CLI ngoài làm engine chính. [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
@@ -28,7 +30,7 @@ Migration không mở PTY, write_stdin, write/edit tools khác apply_patch, netw
 
 - Trước implementation đọc phần liên quan của [docs](docs/README.md), [events contract](docs/contracts/agent-events.md), [dependency rules](docs/architecture/dependency-rules.md), [module ownership](docs/architecture/repository-map.md), [roadmap](docs/delivery/implementation-roadmap.md). Chỉ mở rộng slice được giao; nguồn rỗng không chứng minh tính năng hoạt động.
 - Public contract changes cần ADR, migration/versioning và cập nhật consumers. Không deep-import private files giữa packages, đổi framework/ngôn ngữ hay mở rộng package tree ngoài scope.
-- Dependency mới phải được đánh giá tên/version/license/provenance/Bun/OS compatibility/threat surface và cập nhật catalog trước install. Có thể install dependencies đã duyệt, typecheck/test/run CLI/TUI (`hannes tui`, `hannes themes`).
+- Dependency mới phải được đánh giá tên/version/license/provenance/Bun/OS compatibility/threat surface và cập nhật catalog trước install. Có thể install dependencies đã duyệt, typecheck/test/run CLI/TUI (`fyn tui`, `fyn themes`).
 - Viết tests có ý nghĩa cho invariants, permissions, conformance, cancellation và failure modes; cập nhật docs ngắn gọn cùng thay đổi. Không dùng mock success chứng minh OS/live compatibility.
 - Upstream evidence ghi URL/path, ngày, revision và giới hạn; chưa xác minh thì ghi Needs verification. Không tuyên bố Product MVP complete trước interactive acceptance thật; GUI compatibility cần host và acceptance riêng.
 - Phase 0 còn lại chỉ filesystem/content/link inspection; executable fixtures chỉ chứng minh scoped behavior. Native vault, authenticated providers và live verification được ghi riêng.
