@@ -261,7 +261,7 @@ export class ChatController {
           discardResponse(assistantItem, responseMark);
           this.banner =
             event.reason === 'retry'
-              ? `Stream interrupted; retrying (${event.attempt ?? 1}). Partial output discarded.`
+              ? `Reconnecting... ${event.attempt ?? 1}/${event.maxRetries ?? '?'}` // Codex notify_stream_error
               : 'Response preempted by your new instruction.';
         } else if (event.type === 'inputDeferred') {
           this.banner = `${event.steerIds.length} accepted instruction(s) were not processed (${event.reason.replace('_', ' ')}); they open your next turn.`;

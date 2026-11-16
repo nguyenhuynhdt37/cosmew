@@ -13,7 +13,6 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {
   FutrynError,
-  GENERATION_LIMITS,
   type CommandOutputChunk,
   type ModelEvent,
   type ModelPort,
@@ -1356,18 +1355,18 @@ test('V: command output beyond the progress bound is dropped from live deltas on
   expect(streamed).toBeLessThanOrEqual(64000);
   expect(streamed).toBeGreaterThan(0);
   expect(paired(h).find(m => m.toolCallId === 'x')!.content).toBe('Exit code: 0');
-  // Visible text past the per-response bound is a protocol failure, not a silently cut answer.
+  // Like Codex there is no per-response text ceiling: a 5 MiB answer streams through complete.
   const flood = harness(
     [
       async function* () {
         const chunk = 'y'.repeat(65536);
-        for (let i = 0; i <= GENERATION_LIMITS.textBytes / chunk.length; i++) yield text(chunk);
+        for (let i = 0; i < 80; i++) yield text(chunk);
         yield done();
       },
     ],
     [],
   );
-  await expect(flood.send()).rejects.toMatchObject({code: 'PROTOCOL'});
+  expect((await flood.send()).at(-1)?.type).toBe('completed');
 });
 
 test('closing the turn stream surfaces a failure to close the model stream and records the turn as failed', async () => {

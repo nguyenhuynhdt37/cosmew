@@ -1,6 +1,6 @@
 import {afterEach, test, expect} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {FutrynError, type Account, type ModelRequest} from '@futryn/contracts';
+import {FutrynError, GENERATION_LIMITS, type Account, type ModelRequest} from '@futryn/contracts';
 import {ConfiguredNetworkPolicy} from '@futryn/security';
 import {SqliteSettings} from '@futryn/persistence';
 import {
@@ -124,7 +124,7 @@ test('missing keys do not invoke HTTP; a model known to reject tools fails befor
   expect(x.f.requests).toHaveLength(0);
   x.db.close(); // ADR 0017: only 'unsupported' is refused up front; 'unknown' is tried
 });
-test('auth, invalid model, rate limit errors are safe; generation never retries uncertain acceptance', async () => {
+test('auth, invalid model, rate limit errors are safe; only 5xx/transport is resent (Codex request_max_retries, not 429)', async () => {
   const x = setup();
   const adapter = new ProviderAdapter(x.transport, 'fixture-model');
   for (const [status, code] of [
@@ -137,7 +137,7 @@ test('auth, invalid model, rate limit errors are safe; generation never retries 
     x.f.set({status});
     const before = x.f.requests.length;
     await expect(adapter.generate(x.request)).rejects.toMatchObject({code});
-    expect(x.f.requests.length - before).toBe(1);
+    expect(x.f.requests.length - before).toBe(status === 503 ? 1 + GENERATION_LIMITS.requestMaxRetries : 1);
     try {
       await adapter.generate(x.request);
     } catch (e) {
@@ -145,7 +145,7 @@ test('auth, invalid model, rate limit errors are safe; generation never retries 
     }
   }
   x.db.close();
-});
+}, 30_000);
 test('stream idle timeout and caller cancellation propagate', async () => {
   const x = setup();
   x.f.set({delay: 500});

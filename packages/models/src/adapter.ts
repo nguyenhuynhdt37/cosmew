@@ -17,6 +17,7 @@ import {
   type Usage,
   usageSchema,
   GENERATION_LIMITS,
+  codexBackoffMs,
 } from '@futryn/contracts';
 
 /** Futryn messages → AI SDK messages, including assistant tool calls and tool results. */
@@ -45,7 +46,7 @@ export function toModelMessages(messages: Message[]): ModelMessage[] {
     return {role: m.role, content: m.content} as ModelMessage;
   });
 }
-import {normalizeError, ProviderTransport} from './http';
+import {normalizeError, ProviderTransport, wait} from './http';
 
 const usage = (
   u: {
@@ -113,8 +114,8 @@ export class ProviderAdapter implements ModelPort {
     } catch {
       throw new FutrynError('INVALID_INPUT');
     }
-    if (request.modelId !== this.modelId || JSON.stringify(request).length > GENERATION_LIMITS.requestBytes)
-      throw new FutrynError('INVALID_INPUT');
+    if (request.modelId !== this.modelId) throw new FutrynError('INVALID_INPUT');
+    const maxOutputTokens = this.outputCap(request);
     // Unknown capability is tried (ADR 0017); only a model known to reject tools is refused up front.
     if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new FutrynError('UNSUPPORTED');
     if (request.maxEstimatedCostUSD !== undefined) {
@@ -127,7 +128,8 @@ export class ProviderAdapter implements ModelPort {
         Buffer.byteLength(request.instructions ?? '') +
         request.messages.length * 16 +
         1024;
-      const outputEstimate = Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens);
+      const outputEstimate =
+        maxOutputTokens ?? this.info?.outputLimit ?? GENERATION_LIMITS.anthropicFallbackOutputTokens;
       if (
         (inputEstimate * prices.inputPerMillion + outputEstimate * prices.outputPerMillion) / 1000000 >
         request.maxEstimatedCostUSD
@@ -140,10 +142,7 @@ export class ProviderAdapter implements ModelPort {
         this.transport.provider.protocol !== 'responses')
     )
       throw new FutrynError('UNSUPPORTED');
-    if (
-      this.info?.contextLimit &&
-      Math.min(request.maxOutputTokens, this.info.outputLimit ?? request.maxOutputTokens) >= this.info.contextLimit
-    )
+    if (this.info?.contextLimit && maxOutputTokens !== undefined && maxOutputTokens >= this.info.contextLimit)
       throw new FutrynError('CONTEXT_LIMIT');
     const key = await this.transport.credential();
     const p = this.transport.provider;
@@ -157,12 +156,10 @@ export class ProviderAdapter implements ModelPort {
         headers.delete('x-api-key');
         headers.delete('x-goog-api-key');
       }
-      return this.transport
-        .request(url, {...init, headers}, GENERATION_LIMITS.responseBytes, idle.touch)
-        .then(response => {
-          responseHeaders.value = response.headers;
-          return response;
-        });
+      return this.requestWithRetries(url, {...init, headers}, idle.touch).then(response => {
+        responseHeaders.value = response.headers;
+        return response;
+      });
     }) as typeof fetch;
     const settings = {baseURL: p.baseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch};
     let model: LanguageModel;
@@ -212,7 +209,7 @@ export class ProviderAdapter implements ModelPort {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
       messages: toModelMessages(request.messages),
-      maxOutputTokens: Math.min(request.maxOutputTokens, this.info?.outputLimit ?? request.maxOutputTokens),
+      ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
       ...(request.reasoningEffort
         ? {
             providerOptions: {
@@ -228,9 +225,43 @@ export class ProviderAdapter implements ModelPort {
       responseHeaders,
     };
   }
+  /**
+   * Output cap sent to the provider. Like Codex none is sent unless the caller asked for one; the
+   * Anthropic API requires `max_tokens`, so it gets the model's own output limit.
+   */
+  private outputCap(request: ModelRequest): number | undefined {
+    const limit = this.info?.outputLimit ?? undefined;
+    if (request.maxOutputTokens !== undefined) return Math.min(request.maxOutputTokens, limit ?? Infinity);
+    if (this.transport.provider.protocol === 'anthropic')
+      return limit ?? GENERATION_LIMITS.anthropicFallbackOutputTokens;
+    return undefined;
+  }
+
+  /**
+   * Codex request retries (`request_max_retries`, retry_5xx + retry_transport, not 429): a request
+   * that fails before its response streams is resent with backoff; a failed stream is the agent
+   * loop's to re-sample.
+   */
+  private async requestWithRetries(url: string | URL | Request, init: RequestInit, activity: () => void) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.transport.request(url, init, Infinity, activity);
+      } catch (error) {
+        const retry =
+          error instanceof FutrynError &&
+          error.code === 'TRANSPORT' &&
+          error.retryable &&
+          attempt < GENERATION_LIMITS.requestMaxRetries &&
+          !init.signal?.aborted;
+        if (!retry) throw error;
+        activity();
+        await wait(error.retryAfterMs ?? codexBackoffMs(attempt + 1), init.signal ?? undefined);
+      }
+    }
+  }
+
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
     const options = await this.options(request, signal);
-    let bytes = 0;
     let complete = false;
     const calls = new Set<string>();
     const pending = new Set<string>();
@@ -246,25 +277,16 @@ export class ProviderAdapter implements ModelPort {
         if (part.type === 'error') throw part.error;
         if (part.type === 'tool-error') throw new FutrynError('PROTOCOL');
         if (part.type === 'tool-input-start') {
-          if (pending.size >= GENERATION_LIMITS.toolCallsPerResponse) throw new FutrynError('PROTOCOL');
           pending.add(part.id);
         }
         if (part.type === 'abort') throw new FutrynError('CANCELLED');
         if (part.type === 'reasoning-delta') {
-          bytes += Buffer.byteLength(part.text);
-          if (bytes > GENERATION_LIMITS.textBytes) throw new FutrynError('PROTOCOL');
           yield {type: 'reasoningDelta', text: part.text};
         } else if (part.type === 'text-delta') {
-          bytes += Buffer.byteLength(part.text);
-          if (bytes > GENERATION_LIMITS.textBytes) throw new FutrynError('PROTOCOL');
           yield {type: 'textDelta', text: part.text};
         } else if (part.type === 'tool-call') {
-          if (
-            calls.has(part.toolCallId) ||
-            calls.size >= GENERATION_LIMITS.toolCallsPerResponse ||
-            (JSON.stringify(part.input) ?? '').length > GENERATION_LIMITS.toolArgumentBytes
-          )
-            throw new FutrynError('PROTOCOL');
+          // No size or count ceiling (Codex); a repeated call id is still a broken stream.
+          if (calls.has(part.toolCallId)) throw new FutrynError('PROTOCOL');
           calls.add(part.toolCallId);
           pending.delete(part.toolCallId);
           const call = {id: part.toolCallId, name: part.toolName, input: objectInput(part.input)};
@@ -304,12 +326,9 @@ export class ProviderAdapter implements ModelPort {
     try {
       const result = await generateText(options);
       if (
-        Buffer.byteLength(result.text) > GENERATION_LIMITS.textBytes ||
         result.finishReason === 'error' ||
         ['other', 'interrupted'].includes(result.finishReason) ||
-        result.toolCalls.length > GENERATION_LIMITS.toolCallsPerResponse ||
-        new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length ||
-        result.toolCalls.some(c => JSON.stringify(c.input).length > GENERATION_LIMITS.toolArgumentBytes)
+        new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length
       )
         throw new FutrynError('PROTOCOL');
       return {

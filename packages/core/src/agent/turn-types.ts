@@ -20,10 +20,6 @@ import type {ContextCompactor} from '../context/compaction';
  * a user-configured budget runs out, or the context window is full.
  */
 export const SAFETY_LIMITS = {
-  /** Tool calls the model may request in one response (provider wire bound). */
-  callsPerResponse: GENERATION_LIMITS.toolCallsPerResponse,
-  /** Visible text bytes per model response. */
-  textBytesPerResponse: GENERATION_LIMITS.textBytes,
   /** Tool calls a bridge runtime that owns its own loop (Codex app-server) may make in one turn. */
   bridgeCallsPerTurn: 256,
   /** Refused attempts allowed past a user tool-call budget before a bridge turn fails closed. */
@@ -103,7 +99,7 @@ export interface TurnHost {
 /** Per-request settings of one `send` call. */
 export interface TurnRequest {
   signal?: AbortSignal;
-  /** Absent: the model's output limit, else GENERATION_LIMITS.defaultOutputTokens. */
+  /** Absent: no output cap is sent (Codex); the model's own limit applies. */
   maxOutputTokens?: number;
   maxEstimatedCostUSD?: number;
   reasoningEffort?: string;

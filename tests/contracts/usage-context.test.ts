@@ -560,7 +560,7 @@ test('documented provider catalog metadata preserves limits and converts OpenRou
   expect(result.models[0]!.reasoningEfforts).toBeUndefined();
 });
 
-test('known output reserve over context capacity fails before a provider request; lower explicit reserve works', async () => {
+test('an explicit output cap over context capacity fails before a provider request; no cap is sent by default (Codex)', async () => {
   const c = await setup();
   c.app.settings.update(settings => {
     const model = settings.catalogs[0]!.models[0]!;
@@ -568,8 +568,21 @@ test('known output reserve over context capacity fails before a provider request
     model.outputLimit = 100;
   });
   const before = c.server.requests.filter(request => request.body).length;
-  await expect(send(c.client, 'Over limit')).rejects.toMatchObject({code: 'CONTEXT_LIMIT'});
+  const over = async () => {
+    for await (const _event of c.client.sendMessage('Over limit', {maxOutputTokens: 100})) {
+      /* refused before sending */
+    }
+  };
+  await expect(over()).rejects.toMatchObject({code: 'CONTEXT_LIMIT'});
   expect(c.server.requests.filter(request => request.body)).toHaveLength(before);
+  // A window that holds the input: nothing is reserved and no cap is sent.
+  c.app.settings.update(settings => {
+    settings.catalogs[0]!.models[0]!.contextLimit = 100_000;
+  });
+  for await (const _event of c.client.sendMessage('No cap')) {
+    /* real request without max tokens */
+  }
+  expect(c.server.requests.filter(request => request.body).at(-1)!.body).not.toHaveProperty('max_tokens');
   for await (const _event of c.client.sendMessage('Explicit reserve', {maxOutputTokens: 30})) {
     /* real request */
   }

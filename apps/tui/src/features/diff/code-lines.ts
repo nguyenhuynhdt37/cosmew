@@ -1,4 +1,3 @@
-import {GENERATION_LIMITS} from '@futryn/contracts';
 import type {DiffLine, ThemeTokens} from '@futryn/contracts';
 import type {RenderedBoxLine} from '../../ui';
 import {mixHex} from '../../theme/presets';
@@ -11,7 +10,7 @@ export function parseUnifiedDiff(diff: string): DiffLine[] {
     inHunk = false,
     oldRemaining = 0,
     newRemaining = 0;
-  for (const content of diff.slice(0, GENERATION_LIMITS.patchBytes).split('\n')) {
+  for (const content of diff.split('\n')) {
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(content);
     if (hunk) {
       oldLine = Number(hunk[1]);

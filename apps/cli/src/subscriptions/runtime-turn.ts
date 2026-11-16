@@ -58,11 +58,8 @@ export interface RuntimeTurnOptions {
   acpModels(session: unknown): ModelInfo[];
 }
 
-/** Visible text bytes accepted from one runtime turn. */
-const MAX_TEXT_BYTES = GENERATION_LIMITS.textBytes;
 const MAX_ACTIVITIES = 512;
 const MAX_PENDING_CODEX_USAGE = 256;
-const MAX_TOOL_ARGUMENT_BYTES = GENERATION_LIMITS.toolArgumentBytes;
 
 const measured = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 
@@ -219,10 +216,6 @@ export class RuntimeTurn {
   private pushText(value: unknown, type: 'textDelta' | 'reasoningDelta' = 'textDelta'): void {
     if (typeof value !== 'string') return;
     this.bytes += Buffer.byteLength(value);
-    if (this.bytes > MAX_TEXT_BYTES) {
-      this.fail(new FutrynError('PROTOCOL'));
-      return;
-    }
     if (type === 'textDelta' && value.trim()) this.answered = true;
     this.push({type, text: value});
   }
@@ -496,8 +489,6 @@ export class RuntimeTurn {
         params?.turnId === this.turnId &&
         params.namespace == null;
       if (!ownTurn) throw new FutrynError('POLICY');
-      if (Buffer.byteLength(JSON.stringify(params.arguments) ?? '') > MAX_TOOL_ARGUMENT_BYTES)
-        throw new FutrynError('PROTOCOL');
       const call = toolCallSchema.parse({id: params.callId, name: params.tool, input: params.arguments});
       // Defence in depth behind the engine's named bridge limit (ADR 0030), which fires first.
       const overLimit = this.callIds.size > SAFETY_LIMITS.bridgeCallsPerTurn + SAFETY_LIMITS.bridgeRefusalGrace;

@@ -1,6 +1,5 @@
 import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
-import {GENERATION_LIMITS} from './limits';
 
 export const CONTRACT_VERSION = '1.17' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
@@ -134,8 +133,9 @@ export const toolCallSchema = z.strictObject({id: z.string().min(1).max(200), na
 export const messageSchema = z
   .strictObject({
     role: z.enum(['user', 'assistant', 'tool']),
-    content: z.string().max(GENERATION_LIMITS.textBytes),
-    toolCalls: z.array(toolCallSchema).min(1).max(GENERATION_LIMITS.toolCallsPerResponse).optional(),
+    // No size ceilings (Codex): the context window bounds history.
+    content: z.string(),
+    toolCalls: z.array(toolCallSchema).min(1).optional(),
     toolCallId: z.string().min(1).max(200).optional(),
     toolName: idSchema.optional(),
   })
@@ -155,12 +155,8 @@ export const requestSchema = z.strictObject({
   modelId: modelIdSchema,
   // No message-count ceiling (ADR 0030): the context window, checked by the agent loop, bounds history.
   messages: z.array(messageSchema).min(1).max(100000),
-  maxOutputTokens: z
-    .number()
-    .int()
-    .min(1)
-    .max(GENERATION_LIMITS.maxOutputTokens)
-    .default(GENERATION_LIMITS.defaultOutputTokens),
+  /** Absent: no cap is sent (Codex); the provider uses the model's own output limit. */
+  maxOutputTokens: z.number().int().min(1).optional(),
   reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),
   tools: z
@@ -201,7 +197,7 @@ export type ModelEvent =
    */
   | {type: 'completed'; finishReason: string; usage: Usage; endTurn?: boolean}
   /** Streamed text/reasoning of the current response is void: it is being retried or was preempted by steering. */
-  | {type: 'responseDiscarded'; reason: 'retry' | 'preempted'; attempt?: number}
+  | {type: 'responseDiscarded'; reason: 'retry' | 'preempted'; attempt?: number; maxRetries?: number}
   /** Accepted steering the turn could not deliver (budget, context or interruption); it opens the next turn. */
   | {type: 'inputDeferred'; steerIds: string[]; reason: string};
 export interface RuntimeActivity {

@@ -15,7 +15,6 @@ import {join} from 'node:path';
 import {ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {SessionGrants} from '@futryn/security';
-import {GENERATION_LIMITS} from '@futryn/contracts';
 import {parsePatch, updateFile} from '../../packages/tools/src/patch/parser';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -317,10 +316,9 @@ test('partial receipts do not label completed no-op operations as remaining', as
   expect(JSON.parse(runtime.apply(plan).content).remaining).toEqual(['c']);
 });
 
-test('a patch that writes a whole large file is accepted up to the shared limit (was 64 KiB)', () => {
+test('a patch that writes a whole large file is accepted with no size ceiling, as on Codex (was 64 KiB)', () => {
   const body = Array.from({length: 6000}, (_, i) => `+<div class="row-${i}">line ${i} of a generated page</div>`);
   const large = patch('*** Add File: page.html', ...body);
   expect(Buffer.byteLength(large)).toBeGreaterThan(256 * 1024);
   expect(parsePatch(large)).toHaveLength(1);
-  expect(() => parsePatch('x'.repeat(GENERATION_LIMITS.patchBytes + 1))).toThrow();
 });

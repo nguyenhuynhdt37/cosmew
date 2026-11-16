@@ -15,7 +15,6 @@ import {
   type ToolPort,
   type TurnBudget,
   type Usage,
-  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {Conversation, SAFETY_LIMITS} from '@futryn/core';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -137,7 +136,10 @@ test('a failed stream is retried (bounded); partial output is discarded visibly,
   const transient = harness((_, attempt) => (attempt < 2 ? new FutrynError('TRANSPORT', true) : answer('recovered')));
   expect((await transient.send()).at(-1)?.type).toBe('completed');
   expect(transient.requests).toHaveLength(3);
-  expect(transient.sleeps).toEqual([200, 400]); // Codex backoff()
+  // Codex backoff(): 200 ms, then 400 ms, each with ±10% jitter.
+  expect(transient.sleeps[0]).toBeWithin(180, 221);
+  expect(transient.sleeps[1]).toBeWithin(360, 441);
+  expect(transient.sleeps).toHaveLength(2);
   // Exhausted: 1 attempt + SAFETY_LIMITS.roundRetries retries, then a failed turn with its stop reason.
   const down = harness(() => new FutrynError('TRANSPORT', true));
   await expect(down.send()).rejects.toMatchObject({code: 'TRANSPORT'});
@@ -229,16 +231,14 @@ test('measured provider usage counts toward the window even when the local estim
   expect(h.receipt().stopReason).toBe('context_window');
 });
 
-test('without an explicit cap a turn may use the model output limit (Codex sends none), never more than half of a small window', async () => {
-  const sent = async (options: {contextLimit?: number; outputLimit?: number}) => {
+test('like Codex no output cap is sent unless asked for, and an asked cap is clamped to the model limit', async () => {
+  const sent = async (options: {contextLimit?: number; outputLimit?: number}, cap?: number) => {
     const h = harness(() => answer('ok'), options);
-    for await (const _ of h.conversation.send('go')) void _;
+    for await (const _ of h.conversation.send('go', undefined, cap)) void _;
     return h.requests[0]!.maxOutputTokens;
   };
-  // Known output limit on a large window: all of it.
-  expect(await sent({contextLimit: 400_000, outputLimit: 128_000})).toBe(128_000);
-  // Unknown output limit: the generous default instead of the old 4096.
-  expect(await sent({contextLimit: 400_000})).toBe(GENERATION_LIMITS.defaultOutputTokens);
-  // Small window: the default reserves at most half of it, so input keeps room.
-  expect(await sent({contextLimit: 8_192, outputLimit: 8_192})).toBe(4_096);
+  expect(await sent({contextLimit: 400_000, outputLimit: 128_000})).toBeUndefined();
+  expect(await sent({contextLimit: 400_000})).toBeUndefined();
+  expect(await sent({contextLimit: 400_000, outputLimit: 8_000}, 50_000)).toBe(8_000);
+  expect(await sent({contextLimit: 400_000}, 2_000)).toBe(2_000);
 });

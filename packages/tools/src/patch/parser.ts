@@ -1,4 +1,3 @@
-import {GENERATION_LIMITS} from '@futryn/contracts';
 /** Codex patch grammar. Parsing never reads or writes the workspace. */
 export interface Chunk {
   context?: string;
@@ -21,7 +20,7 @@ export class PatchError extends Error {
 }
 const invalid = () => new PatchError('INVALID_PATCH', 'Malformed or unsupported patch syntax.');
 export function parsePatch(text: string): PatchOperation[] {
-  if (Buffer.byteLength(text) > GENERATION_LIMITS.patchBytes || text.includes('\0')) throw invalid();
+  if (text.includes('\0')) throw invalid();
   let lines = text.trim().split(/\r?\n/);
   if (/^<<['"]?EOF['"]?$/.test(lines[0] ?? '') && lines.at(-1) === 'EOF') lines = lines.slice(1, -1);
   if (lines[0]?.trim() !== '*** Begin Patch' || lines.at(-1)?.trim() !== '*** End Patch') throw invalid();

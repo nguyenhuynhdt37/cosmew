@@ -14,8 +14,8 @@ import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 import {setDefaultTimeout} from 'bun:test';
 
-// Failed provider streams are retried 5 times with Codex's backoff (≈6 s in total, ADR 0036).
-setDefaultTimeout(30_000);
+// Codex retries: 4 request resends inside each of 5 stream re-samples, with backoff (≈25 s, ADR 0036).
+setDefaultTimeout(60_000);
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -169,7 +169,8 @@ for (const protocol of ['chat', 'anthropic'] as const) {
     c.server.set({status: 500});
     await expect(turn(c, 'patch')).rejects.toMatchObject({code: 'TRANSPORT'});
     expect(c.server.requests.filter(request => request.body).length).toBeLessThanOrEqual(
-      1 + GENERATION_LIMITS.streamMaxRetries,
+      // Codex: up to request_max_retries resends inside each of the stream_max_retries re-samples.
+      (1 + GENERATION_LIMITS.requestMaxRetries) * (1 + GENERATION_LIMITS.streamMaxRetries),
     );
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('old\n');
   });

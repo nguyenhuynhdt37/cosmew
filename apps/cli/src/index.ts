@@ -8,7 +8,6 @@ import {
   type AnimationConfig,
   type ModelInfo,
   type ThemeMode,
-  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {parseSlashCommand} from '@futryn/sdk';
 import {providerPresets} from '@futryn/models';
@@ -377,7 +376,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
   // Absent: the model's own output limit (Codex sends no cap).
   const maxOutput =
     str(options, 'max-output-tokens') === undefined ? undefined : numberOption(options, 'max-output-tokens', 0);
-  if (maxOutput !== undefined && (maxOutput < 1 || maxOutput > GENERATION_LIMITS.maxOutputTokens)) fail();
+  if (maxOutput !== undefined && maxOutput < 1) fail();
   const budgetInput = str(options, 'max-estimated-cost-usd');
   const estimatedBudget = budgetInput === undefined ? undefined : Number(budgetInput);
   if (
@@ -434,7 +433,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
         if (!options.json)
           process.stdout.write(
             terminalText(streamRedactor.finish()) +
-              `\n[${event.reason === 'retry' ? 'stream interrupted; partial output above discarded, retrying' : 'preempted; partial output above discarded'}]\n`,
+              `\n[${event.reason === 'retry' ? `Reconnecting... ${event.attempt ?? 1}/${event.maxRetries ?? '?'}; partial output above discarded` : 'preempted; partial output above discarded'}]\n`,
           );
       }
       if (event.type === 'inputDeferred' && process.stderr.isTTY)

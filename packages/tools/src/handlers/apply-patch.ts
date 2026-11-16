@@ -1,4 +1,3 @@
-import {GENERATION_LIMITS} from '@futryn/contracts';
 import {z} from 'zod';
 import {WriteBoundaryError} from '@futryn/workspace';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
@@ -17,7 +16,7 @@ export const applyPatchDescriptor = {
     additionalProperties: false,
   },
 };
-const input = z.strictObject({patch: z.string().min(1).max(GENERATION_LIMITS.patchBytes)});
+const input = z.strictObject({patch: z.string().min(1)});
 export class ApplyPatchHandler implements ToolHandler {
   readonly descriptor = applyPatchDescriptor;
   readonly unavailable: ToolOutput = {

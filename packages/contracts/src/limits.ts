@@ -1,27 +1,24 @@
 /**
- * Generation limits, at or above Codex (openai/codex `75fc67e8`, ADR 0036). Codex bounds a response
- * only by the model's output tokens and a stream idle timeout; these byte ceilings exist so a broken
- * provider cannot exhaust memory, and are sized so a real response never reaches them.
+ * Model-stream defaults ported from Codex (openai/codex `75fc67e8`, `model-provider-info/src/lib.rs`,
+ * `codex-client/src/retry.rs`, `async-utils/src/backoff.rs`; ADR 0036). Like Codex, Futryn puts no
+ * byte ceiling on a response, its text or its tool-call arguments, and sends no output-token cap
+ * unless the user asks for one (Anthropic, whose API requires `max_tokens`, gets the model's limit).
  */
 export const GENERATION_LIMITS = {
-  /** Codex DEFAULT_STREAM_IDLE_TIMEOUT_MS: silence allowed while waiting for or reading a response. */
+  /** DEFAULT_STREAM_IDLE_TIMEOUT_MS: silence allowed while waiting for or reading a response. */
   streamIdleTimeoutMs: 300_000,
-  /** Codex DEFAULT_STREAM_MAX_RETRIES: a dropped stream is retried this many times. */
+  /** DEFAULT_STREAM_MAX_RETRIES: a dropped or failed stream is re-sampled this many times. */
   streamMaxRetries: 5,
-  /** Output tokens requested when the model's own limit is unknown (Codex sends none at all). */
-  defaultOutputTokens: 32_768,
-  /** Highest output-token request accepted (above every current model's output limit). */
-  maxOutputTokens: 262_144,
-  /** Text (answer + reasoning) of one response and of one stored message. */
-  textBytes: 4 * 1024 * 1024,
-  /** Arguments of one tool call, e.g. a patch that writes a whole file. */
-  toolArgumentBytes: 4 * 1024 * 1024,
-  /** Tool calls in one response. */
-  toolCallsPerResponse: 128,
-  /** One serialized model request (history is bounded first by the context window). */
-  requestBytes: 64 * 1024 * 1024,
-  /** Raw bytes of one streamed HTTP response or runtime frame. */
-  responseBytes: 64 * 1024 * 1024,
-  /** A patch and the complete diff shown for its approval. */
-  patchBytes: 4 * 1024 * 1024,
+  /** DEFAULT_REQUEST_MAX_RETRIES: an HTTP request failing with 5xx or a transport error, before streaming. */
+  requestMaxRetries: 4,
+  /** backoff(): 200 ms doubling per retry, with ±10% jitter. */
+  retryBaseDelayMs: 200,
+  /** `max_tokens` for Anthropic when the model's output limit is unknown (the API requires a value). */
+  anthropicFallbackOutputTokens: 32_000,
 } as const;
+
+/** Codex backoff(attempt): attempts 0 and 1 wait the base delay, then it doubles; jitter 0.9–1.1. */
+export function codexBackoffMs(attempt: number, random: () => number = Math.random): number {
+  const base = GENERATION_LIMITS.retryBaseDelayMs * 2 ** Math.max(0, attempt - 1);
+  return Math.floor(base * (0.9 + random() * 0.2));
+}

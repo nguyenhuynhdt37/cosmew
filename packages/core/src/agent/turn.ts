@@ -12,7 +12,7 @@ import {
   type TurnReceipt,
   type TurnStopReason,
   type Usage,
-  GENERATION_LIMITS,
+  codexBackoffMs,
 } from '@futryn/contracts';
 import {normalizeHistory, truncateToolResults} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
@@ -106,7 +106,8 @@ export class TurnRun {
   private readonly startedAt = Date.now();
   private readonly progress = new ProgressQueue();
   private readonly tools: TurnTools;
-  private maxOutputTokens: number;
+  /** Absent: no cap is sent (Codex). */
+  private maxOutputTokens: number | undefined;
 
   /** Accepted-but-undelivered input of earlier turns that opens this one. */
   private carried: Message[] = [];
@@ -140,7 +141,7 @@ export class TurnRun {
   ) {
     this.signal = request.signal ? AbortSignal.any([request.signal, this.turnAbort.signal]) : this.turnAbort.signal;
     this.budget = host.options.budget?.() ?? {};
-    this.maxOutputTokens = request.maxOutputTokens ?? GENERATION_LIMITS.defaultOutputTokens;
+    this.maxOutputTokens = request.maxOutputTokens;
     this.receipt = {
       requestId: crypto.randomUUID(),
       accountId: host.selection.accountId,
@@ -265,20 +266,13 @@ export class TurnRun {
     if (invalidBudget) throw new FutrynError('BUDGET');
     this.projectMessages = context?.content ? [messageSchema.parse({role: 'user', content: context.content})] : [];
 
-    // Like Codex, a turn may use the model's whole output limit unless the caller asked for less.
-    // The default never reserves more than half of the window, so small-context models keep room for input.
+    // Codex sends no output cap and reserves nothing from the window. Only a cap the caller asked
+    // for (`--max-output-tokens`) is sent, clamped to the model's limit, and reserved.
     const outputLimit = host.options.outputLimit?.() ?? undefined;
     const contextLimit = host.options.contextLimit?.() ?? SAFETY_LIMITS.unknownContextTokens;
-    const byDefault = Math.min(
-      outputLimit ?? GENERATION_LIMITS.defaultOutputTokens,
-      Math.max(1024, Math.floor(contextLimit / 2)),
-    );
-    this.maxOutputTokens = Math.min(
-      this.request.maxOutputTokens ?? byDefault,
-      outputLimit ?? GENERATION_LIMITS.maxOutputTokens,
-      GENERATION_LIMITS.maxOutputTokens,
-    );
-    this.window = Math.max(1, contextLimit - this.maxOutputTokens);
+    if (this.maxOutputTokens !== undefined && outputLimit)
+      this.maxOutputTokens = Math.min(this.maxOutputTokens, outputLimit);
+    this.window = Math.max(1, contextLimit - (this.maxOutputTokens ?? 0));
   }
 
   private async *deliverSteering(): AsyncGenerator<ModelEvent> {
@@ -600,15 +594,10 @@ export class TurnRun {
       result.text += event.text;
       result.textBytes += Buffer.byteLength(event.text);
       this.record({type: 'assistant.text', text: event.text});
-      if (result.textBytes > SAFETY_LIMITS.textBytesPerResponse) throw new FutrynError('PROTOCOL');
     }
     if (event.type === 'reasoningDelta') {
       result.reasoned = true;
       result.reasoningBytes += Buffer.byteLength(event.text);
-      if (result.reasoningBytes > SAFETY_LIMITS.textBytesPerResponse) {
-        this.stop = 'safety_limit';
-        throw new FutrynError('PROTOCOL');
-      }
     }
     if (event.type === 'usage' || event.type === 'completed') {
       receipt.usage = combine(usageBefore, event.usage);
@@ -622,10 +611,9 @@ export class TurnRun {
       // A complete call (adapters emit it only once its arguments parsed) is dispatched now, while
       // the rest of the response streams. Incomplete argument deltas never reach here.
       if (!prepared.offerTools) throw new FutrynError('UNSUPPORTED');
-      const tooMany = result.calls.length >= SAFETY_LIMITS.callsPerResponse;
       const repeated =
         result.calls.some(c => c.id === event.call.id) || (!inline && tools.journalCalls.has(event.call.id));
-      if (tooMany || repeated) throw new FutrynError('PROTOCOL');
+      if (repeated) throw new FutrynError('PROTOCOL');
       tools.recordCall(event.call);
       if (!inline) {
         result.calls.push(event.call);
@@ -665,10 +653,11 @@ export class TurnRun {
     const retryable =
       error instanceof FutrynError && error.retryable && !sample.acted && attempt < SAFETY_LIMITS.roundRetries;
     if (!retryable || !(error instanceof FutrynError)) throw error;
-    if (sample.text || sample.reasoned) yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1};
+    // Codex notify_stream_error("Reconnecting... n/max"): every retry is visible, with or without partial output.
+    yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1, maxRetries: SAFETY_LIMITS.roundRetries};
     const sleep = this.host.options.sleep ?? defaultSleep;
-    // Codex backoff(): 200 ms × 2^(n-1) for retry n.
-    await sleep(Math.min(10000, Math.max(error.retryAfterMs ?? 0, 200 * 2 ** attempt)), this.signal);
+    // Codex: a server Retry-After wins; otherwise backoff(n) = 200 ms × 2^(n-1) with ±10% jitter.
+    await sleep(error.retryAfterMs ?? codexBackoffMs(attempt + 1), this.signal);
   }
 
   /** Decide whether the turn needs another model request (Codex `needs_follow_up`) or is complete. */

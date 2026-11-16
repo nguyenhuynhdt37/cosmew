@@ -68,7 +68,7 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 - SDK: `submitWhileBusy` (steer or queue for the next turn), `takeQueuedMessage`, `queuedMessages`, `queuedInput`; port `queuedInput`.
 
 ## Generation limits (contract 1.17)
-See [ADR 0036](../adr/0036-codex-generation-limits.md): `GENERATION_LIMITS`, optional `Provider.streamIdleTimeoutMs`, widened `ModelRequest.maxOutputTokens` / message / tool-call / diff limits, optional `maxOutputTokens` on `Conversation.send`. Widening only; 1.16 data still parses.
+See [ADR 0036](../adr/0036-codex-generation-limits.md): Codex values only (`GENERATION_LIMITS`, `codexBackoffMs`), optional `Provider.streamIdleTimeoutMs`, optional `ModelRequest.maxOutputTokens` (none sent by default), no size ceilings on messages/tool calls/diffs, `responseDiscarded.maxRetries` on every retry. Widening only; 1.16 data still parses.
 
 ## Unified exec terminal (contract 1.16)
 
