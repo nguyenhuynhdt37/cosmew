@@ -12,6 +12,7 @@ import {
   type RuntimeActivity,
   type SubscriptionRuntime,
   type Usage,
+  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {SAFETY_LIMITS} from '@futryn/core';
 import type {RuntimeProfile} from '@futryn/persistence';
@@ -58,10 +59,10 @@ export interface RuntimeTurnOptions {
 }
 
 /** Visible text bytes accepted from one runtime turn. */
-const MAX_TEXT_BYTES = 262144;
+const MAX_TEXT_BYTES = GENERATION_LIMITS.textBytes;
 const MAX_ACTIVITIES = 512;
 const MAX_PENDING_CODEX_USAGE = 256;
-const MAX_TOOL_ARGUMENT_BYTES = 65536;
+const MAX_TOOL_ARGUMENT_BYTES = GENERATION_LIMITS.toolArgumentBytes;
 
 const measured = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null);
 
@@ -154,7 +155,7 @@ export class RuntimeTurn {
     this.deadline = setTimeout(() => {
       this.fail(new FutrynError('TIMEOUT'));
       void this.options.connection.rpc.close();
-    }, this.options.provider.timeoutMs);
+    }, this.options.provider.streamIdleTimeoutMs ?? GENERATION_LIMITS.streamIdleTimeoutMs);
   }
 
   /** Runs `work` with the idle deadline paused. */

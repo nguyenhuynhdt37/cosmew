@@ -12,6 +12,7 @@ import {
   type TurnReceipt,
   type TurnStopReason,
   type Usage,
+  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {normalizeHistory, truncateToolResults} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
@@ -139,7 +140,7 @@ export class TurnRun {
   ) {
     this.signal = request.signal ? AbortSignal.any([request.signal, this.turnAbort.signal]) : this.turnAbort.signal;
     this.budget = host.options.budget?.() ?? {};
-    this.maxOutputTokens = request.maxOutputTokens;
+    this.maxOutputTokens = request.maxOutputTokens ?? GENERATION_LIMITS.defaultOutputTokens;
     this.receipt = {
       requestId: crypto.randomUUID(),
       accountId: host.selection.accountId,
@@ -264,11 +265,20 @@ export class TurnRun {
     if (invalidBudget) throw new FutrynError('BUDGET');
     this.projectMessages = context?.content ? [messageSchema.parse({role: 'user', content: context.content})] : [];
 
-    this.maxOutputTokens = Math.min(this.maxOutputTokens, host.options.outputLimit?.() ?? this.maxOutputTokens);
-    this.window = Math.max(
-      1,
-      (host.options.contextLimit?.() ?? SAFETY_LIMITS.unknownContextTokens) - this.maxOutputTokens,
+    // Like Codex, a turn may use the model's whole output limit unless the caller asked for less.
+    // The default never reserves more than half of the window, so small-context models keep room for input.
+    const outputLimit = host.options.outputLimit?.() ?? undefined;
+    const contextLimit = host.options.contextLimit?.() ?? SAFETY_LIMITS.unknownContextTokens;
+    const byDefault = Math.min(
+      outputLimit ?? GENERATION_LIMITS.defaultOutputTokens,
+      Math.max(1024, Math.floor(contextLimit / 2)),
     );
+    this.maxOutputTokens = Math.min(
+      this.request.maxOutputTokens ?? byDefault,
+      outputLimit ?? GENERATION_LIMITS.maxOutputTokens,
+      GENERATION_LIMITS.maxOutputTokens,
+    );
+    this.window = Math.max(1, contextLimit - this.maxOutputTokens);
   }
 
   private async *deliverSteering(): AsyncGenerator<ModelEvent> {
@@ -657,7 +667,8 @@ export class TurnRun {
     if (!retryable || !(error instanceof FutrynError)) throw error;
     if (sample.text || sample.reasoned) yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1};
     const sleep = this.host.options.sleep ?? defaultSleep;
-    await sleep(Math.min(10000, Math.max(error.retryAfterMs ?? 0, 250 * 2 ** attempt)), this.signal);
+    // Codex backoff(): 200 ms × 2^(n-1) for retry n.
+    await sleep(Math.min(10000, Math.max(error.retryAfterMs ?? 0, 200 * 2 ** attempt)), this.signal);
   }
 
   /** Decide whether the turn needs another model request (Codex `needs_follow_up`) or is complete. */

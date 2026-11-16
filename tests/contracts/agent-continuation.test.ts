@@ -15,6 +15,7 @@ import {
   type ToolPort,
   type TurnBudget,
   type Usage,
+  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {Conversation, SAFETY_LIMITS} from '@futryn/core';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -42,7 +43,7 @@ const callRead = (id: string, path = 'a.txt', u = usage(10, 5)): ModelEvent[] =>
   {type: 'completed', finishReason: 'tool_calls', usage: u},
 ];
 
-function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: number} = {}) {
+function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: number; outputLimit?: number} = {}) {
   const home = mkdtempSync(join(tmpdir(), 'hannes-continuation-'));
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(() => {
@@ -97,6 +98,7 @@ function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: numbe
     {
       budget: () => options.budget,
       contextLimit: () => options.contextLimit ?? null,
+      outputLimit: () => options.outputLimit ?? null,
       sleep: async ms => {
         sleeps.push(ms);
       },
@@ -104,7 +106,7 @@ function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: numbe
   );
   const send = async (text = 'go', signal?: AbortSignal) => {
     const events: ModelEvent[] = [];
-    for await (const e of conversation.send(text, signal)) events.push(e);
+    for await (const e of conversation.send(text, signal, 4096)) events.push(e); // window = limit − 4096
     return events;
   };
   const receipt = () =>
@@ -135,7 +137,7 @@ test('a failed stream is retried (bounded); partial output is discarded visibly,
   const transient = harness((_, attempt) => (attempt < 2 ? new FutrynError('TRANSPORT', true) : answer('recovered')));
   expect((await transient.send()).at(-1)?.type).toBe('completed');
   expect(transient.requests).toHaveLength(3);
-  expect(transient.sleeps).toEqual([250, 500]);
+  expect(transient.sleeps).toEqual([200, 400]); // Codex backoff()
   // Exhausted: 1 attempt + SAFETY_LIMITS.roundRetries retries, then a failed turn with its stop reason.
   const down = harness(() => new FutrynError('TRANSPORT', true));
   await expect(down.send()).rejects.toMatchObject({code: 'TRANSPORT'});
@@ -225,4 +227,18 @@ test('measured provider usage counts toward the window even when the local estim
   await h.send();
   expect(h.invoked).toHaveLength(1);
   expect(h.receipt().stopReason).toBe('context_window');
+});
+
+test('without an explicit cap a turn may use the model output limit (Codex sends none), never more than half of a small window', async () => {
+  const sent = async (options: {contextLimit?: number; outputLimit?: number}) => {
+    const h = harness(() => answer('ok'), options);
+    for await (const _ of h.conversation.send('go')) void _;
+    return h.requests[0]!.maxOutputTokens;
+  };
+  // Known output limit on a large window: all of it.
+  expect(await sent({contextLimit: 400_000, outputLimit: 128_000})).toBe(128_000);
+  // Unknown output limit: the generous default instead of the old 4096.
+  expect(await sent({contextLimit: 400_000})).toBe(GENERATION_LIMITS.defaultOutputTokens);
+  // Small window: the default reserves at most half of it, so input keeps room.
+  expect(await sent({contextLimit: 8_192, outputLimit: 8_192})).toBe(4_096);
 });

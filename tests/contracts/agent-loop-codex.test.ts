@@ -13,6 +13,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {
   FutrynError,
+  GENERATION_LIMITS,
   type CommandOutputChunk,
   type ModelEvent,
   type ModelPort,
@@ -153,7 +154,8 @@ function harness(
   );
   const events: ModelEvent[] = [];
   const send = async (content = 'go', signal?: AbortSignal, onEvent?: (event: ModelEvent) => void) => {
-    for await (const event of conversation.send(content, signal)) {
+    for await (const event of conversation.send(content, signal, 4096)) {
+      // window arithmetic below assumes 4096
       events.push(event);
       onEvent?.(event);
     }
@@ -1358,7 +1360,8 @@ test('V: command output beyond the progress bound is dropped from live deltas on
   const flood = harness(
     [
       async function* () {
-        for (let i = 0; i < 70; i++) yield text('y'.repeat(4096));
+        const chunk = 'y'.repeat(65536);
+        for (let i = 0; i <= GENERATION_LIMITS.textBytes / chunk.length; i++) yield text(chunk);
         yield done();
       },
     ],

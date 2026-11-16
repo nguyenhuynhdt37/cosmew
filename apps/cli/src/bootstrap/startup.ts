@@ -578,14 +578,7 @@ export function startup(
         const {conv, record, messages} = openStoredConversation(id);
         return {id: conv.id, selection: record.selection, messages};
       },
-      sendTurn: async function* (
-        sessionId,
-        content,
-        signal,
-        maxOutputTokens = 4096,
-        maxEstimatedCostUSD,
-        reasoningEffort,
-      ) {
+      sendTurn: async function* (sessionId, content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort) {
         const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
       },

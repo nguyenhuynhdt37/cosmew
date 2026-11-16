@@ -1,3 +1,4 @@
+import {GENERATION_LIMITS} from '@futryn/contracts';
 import {join} from 'node:path';
 import {SecureFiles, WriteBoundaryError, contentHash, writePath, type FileSnapshot} from '@futryn/workspace';
 import {evaluateWrite} from '@futryn/security';
@@ -97,8 +98,8 @@ export class ApplyPatchRuntime {
     )
       throw new PatchError('PATCH_TOO_LARGE', 'Patch files exceed the aggregate size limit.');
     const diff = changes.map(c => c.diff).join('');
-    if (Buffer.byteLength(diff) > 50000)
-      throw new PatchError('DIFF_TOO_LARGE', 'The complete approval diff exceeds 50 KiB; split the patch.');
+    if (Buffer.byteLength(diff) > GENERATION_LIMITS.patchBytes)
+      throw new PatchError('DIFF_TOO_LARGE', 'The complete approval diff exceeds 4 MiB; split the patch.');
     const scopeKey =
       'patch:' +
       contentHash(

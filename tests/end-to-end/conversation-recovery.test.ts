@@ -4,6 +4,10 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
+import {setDefaultTimeout} from 'bun:test';
+
+// Failed provider streams are retried 5 times with Codex's backoff (≈6 s in total, ADR 0036).
+setDefaultTimeout(30_000);
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();

@@ -8,6 +8,7 @@ import {
   type AnimationConfig,
   type ModelInfo,
   type ThemeMode,
+  GENERATION_LIMITS,
 } from '@futryn/contracts';
 import {parseSlashCommand} from '@futryn/sdk';
 import {providerPresets} from '@futryn/models';
@@ -373,8 +374,10 @@ async function handleThemesCli(
 }
 
 async function chat(app: Application, options: Options, signal: AbortSignal, single = false) {
-  const maxOutput = numberOption(options, 'max-output-tokens', 4096);
-  if (maxOutput < 1 || maxOutput > 32768) fail();
+  // Absent: the model's own output limit (Codex sends no cap).
+  const maxOutput =
+    str(options, 'max-output-tokens') === undefined ? undefined : numberOption(options, 'max-output-tokens', 0);
+  if (maxOutput !== undefined && (maxOutput < 1 || maxOutput > GENERATION_LIMITS.maxOutputTokens)) fail();
   const budgetInput = str(options, 'max-estimated-cost-usd');
   const estimatedBudget = budgetInput === undefined ? undefined : Number(budgetInput);
   if (

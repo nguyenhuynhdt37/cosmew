@@ -9,6 +9,7 @@ import type {
   ToolPort,
   TurnBudget,
 } from '@futryn/contracts';
+import {GENERATION_LIMITS} from '@futryn/contracts';
 import {estimateContextTokens} from '../context/builder';
 import type {ContextCompactor} from '../context/compaction';
 
@@ -20,15 +21,15 @@ import type {ContextCompactor} from '../context/compaction';
  */
 export const SAFETY_LIMITS = {
   /** Tool calls the model may request in one response (provider wire bound). */
-  callsPerResponse: 32,
+  callsPerResponse: GENERATION_LIMITS.toolCallsPerResponse,
   /** Visible text bytes per model response. */
-  textBytesPerResponse: 262144,
+  textBytesPerResponse: GENERATION_LIMITS.textBytes,
   /** Tool calls a bridge runtime that owns its own loop (Codex app-server) may make in one turn. */
   bridgeCallsPerTurn: 256,
   /** Refused attempts allowed past a user tool-call budget before a bridge turn fails closed. */
   bridgeRefusalGrace: 4,
-  /** Retries of a model request whose stream failed (Codex: bounded stream retries). */
-  roundRetries: 2,
+  /** Retries of a model request whose stream failed (Codex DEFAULT_STREAM_MAX_RETRIES). */
+  roundRetries: GENERATION_LIMITS.streamMaxRetries,
   /** Context window assumed when the model does not report one (conservative). */
   unknownContextTokens: 128000,
   /** Fraction of the usable window after which tools are withdrawn for a final answer. */
@@ -102,7 +103,8 @@ export interface TurnHost {
 /** Per-request settings of one `send` call. */
 export interface TurnRequest {
   signal?: AbortSignal;
-  maxOutputTokens: number;
+  /** Absent: the model's output limit, else GENERATION_LIMITS.defaultOutputTokens. */
+  maxOutputTokens?: number;
   maxEstimatedCostUSD?: number;
   reasoningEffort?: string;
 }

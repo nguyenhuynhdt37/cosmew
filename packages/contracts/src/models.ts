@@ -1,7 +1,8 @@
 import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
+import {GENERATION_LIMITS} from './limits';
 
-export const CONTRACT_VERSION = '1.16' as const;
+export const CONTRACT_VERSION = '1.17' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -28,7 +29,10 @@ export const providerSchema = z.strictObject({
   auth: z.enum(['api-key', 'none']),
   catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
   metadataVersion: z.literal(1),
+  /** Metadata requests and runtime handshakes. Model streams use `streamIdleTimeoutMs`. */
   timeoutMs: z.number().int().min(100).max(300000).default(60000),
+  /** Silence allowed in a model stream (Codex stream_idle_timeout_ms); default GENERATION_LIMITS. Contract 1.17. */
+  streamIdleTimeoutMs: z.number().int().min(100).max(3_600_000).optional(),
   streamUsage: z.boolean().optional(),
   runtime: subscriptionRuntimeSchema.optional(),
   family: idSchema.optional(),
@@ -130,8 +134,8 @@ export const toolCallSchema = z.strictObject({id: z.string().min(1).max(200), na
 export const messageSchema = z
   .strictObject({
     role: z.enum(['user', 'assistant', 'tool']),
-    content: z.string().max(262144),
-    toolCalls: z.array(toolCallSchema).min(1).max(32).optional(),
+    content: z.string().max(GENERATION_LIMITS.textBytes),
+    toolCalls: z.array(toolCallSchema).min(1).max(GENERATION_LIMITS.toolCallsPerResponse).optional(),
     toolCallId: z.string().min(1).max(200).optional(),
     toolName: idSchema.optional(),
   })
@@ -151,7 +155,12 @@ export const requestSchema = z.strictObject({
   modelId: modelIdSchema,
   // No message-count ceiling (ADR 0030): the context window, checked by the agent loop, bounds history.
   messages: z.array(messageSchema).min(1).max(100000),
-  maxOutputTokens: z.number().int().min(1).max(32768).default(4096),
+  maxOutputTokens: z
+    .number()
+    .int()
+    .min(1)
+    .max(GENERATION_LIMITS.maxOutputTokens)
+    .default(GENERATION_LIMITS.defaultOutputTokens),
   reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),
   tools: z

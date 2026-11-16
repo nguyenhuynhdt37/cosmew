@@ -5,6 +5,10 @@ import {join, resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {FutrynTuiApp} from '@futryn/tui';
 import {fixtureServer} from '../fixtures';
+import {setDefaultTimeout} from 'bun:test';
+
+// Failed provider streams are retried 5 times with Codex's backoff (≈6 s in total, ADR 0036).
+setDefaultTimeout(30_000);
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {

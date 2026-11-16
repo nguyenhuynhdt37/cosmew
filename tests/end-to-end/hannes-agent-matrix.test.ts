@@ -8,9 +8,14 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
+import {GENERATION_LIMITS} from '@futryn/contracts';
 import {messagesToTranscript} from '@futryn/tui';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
+import {setDefaultTimeout} from 'bun:test';
+
+// Failed provider streams are retried 5 times with Codex's backoff (≈6 s in total, ADR 0036).
+setDefaultTimeout(30_000);
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -163,7 +168,9 @@ for (const protocol of ['chat', 'anthropic'] as const) {
     const c = await make(protocol, () => ({calls: [{name: 'apply_patch', input: {patch: PATCH}}]}));
     c.server.set({status: 500});
     await expect(turn(c, 'patch')).rejects.toMatchObject({code: 'TRANSPORT'});
-    expect(c.server.requests.filter(request => request.body).length).toBeLessThanOrEqual(3);
+    expect(c.server.requests.filter(request => request.body).length).toBeLessThanOrEqual(
+      1 + GENERATION_LIMITS.streamMaxRetries,
+    );
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('old\n');
   });
 

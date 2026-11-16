@@ -73,7 +73,8 @@ Ownership: `send` is the task and owns one `ActiveTurn`; each iteration is one m
 Found in a real run (xAI `grok-4.7`, preset `timeoutMs: 60000`): the model was streaming a large `apply_patch` (a full HTML file) and the request was aborted exactly 60.02 s after `model.requested`, so the turn failed with `TIMEOUT` mid-file. `timeoutMs` was a whole-request deadline; Codex uses `stream_idle_timeout_ms` (silence between events). Now:
 - Direct APIs (`packages/models/src/adapter.ts`): `timeoutMs` bounds waiting for headers and the gap between body chunks; each chunk restarts it. A model response may stream up to 64 MiB (the transport's 4 MiB default would cut large files).
 - Subscription runtimes (`apps/cli/src/subscriptions/runtime-turn.ts`): the turn deadline restarts on every runtime message and is paused while Futryn handles an approval or runs a bridge tool; the ACP `session/prompt` request no longer has its own whole-prompt timer.
-- Evidence: `tests/security/provider-failures.test.ts` "provider timeout bounds silence…" (fails before the change). Remaining limit: one tool call's arguments are still capped at 64 KiB.
+- Evidence: `tests/security/provider-failures.test.ts` "provider timeout bounds silence…" (fails before the change).
+- Superseded in detail by [ADR 0036](0036-codex-generation-limits.md): the idle timeout is now `Provider.streamIdleTimeoutMs` (default 300 s, Codex's value) and the other generation limits were raised to Codex level.
 
 ## Code layout (refactor 2026-11-16, no behavior change)
 The former 760-line `Conversation.send` is split along Codex's structure (`packages/core/src/agent/`):

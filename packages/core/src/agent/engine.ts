@@ -93,7 +93,7 @@ export class Conversation {
   async *send(
     content: string,
     signal?: AbortSignal,
-    maxOutputTokens = 4096,
+    maxOutputTokens?: number,
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
   ): AsyncIterable<ModelEvent> {

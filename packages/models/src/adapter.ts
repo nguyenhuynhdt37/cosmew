@@ -16,6 +16,7 @@ import {
   type ToolCall,
   type Usage,
   usageSchema,
+  GENERATION_LIMITS,
 } from '@futryn/contracts';
 
 /** Futryn messages → AI SDK messages, including assistant tool calls and tool results. */
@@ -85,9 +86,6 @@ const objectInput = (input: unknown): Record<string, unknown> =>
     ? (input as Record<string, unknown>)
     : {invalidArguments: String(JSON.stringify(input) ?? input).slice(0, 1000)};
 
-/** A streamed model response may be long; the transport's 4 MiB default would cut large files. */
-const MODEL_RESPONSE_LIMIT = 64 * 1024 * 1024;
-
 /** Aborts with a TimeoutError after `ms` without `touch()`; `stop()` disarms it. */
 function idleDeadline(ms: number): {signal: AbortSignal; touch: () => void; stop: () => void} {
   const controller = new AbortController();
@@ -115,7 +113,7 @@ export class ProviderAdapter implements ModelPort {
     } catch {
       throw new FutrynError('INVALID_INPUT');
     }
-    if (request.modelId !== this.modelId || JSON.stringify(request).length > 1048576)
+    if (request.modelId !== this.modelId || JSON.stringify(request).length > GENERATION_LIMITS.requestBytes)
       throw new FutrynError('INVALID_INPUT');
     // Unknown capability is tried (ADR 0017); only a model known to reject tools is refused up front.
     if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new FutrynError('UNSUPPORTED');
@@ -159,10 +157,12 @@ export class ProviderAdapter implements ModelPort {
         headers.delete('x-api-key');
         headers.delete('x-goog-api-key');
       }
-      return this.transport.request(url, {...init, headers}, MODEL_RESPONSE_LIMIT, idle.touch).then(response => {
-        responseHeaders.value = response.headers;
-        return response;
-      });
+      return this.transport
+        .request(url, {...init, headers}, GENERATION_LIMITS.responseBytes, idle.touch)
+        .then(response => {
+          responseHeaders.value = response.headers;
+          return response;
+        });
     }) as typeof fetch;
     const settings = {baseURL: p.baseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch};
     let model: LanguageModel;
@@ -204,7 +204,7 @@ export class ProviderAdapter implements ModelPort {
     }
     // Codex stream_idle_timeout_ms: the provider timeout bounds silence (waiting for headers or
     // between chunks), not the whole response, so a long streamed answer or file is never cut.
-    const idle = idleDeadline(p.timeoutMs);
+    const idle = idleDeadline(p.streamIdleTimeoutMs ?? GENERATION_LIMITS.streamIdleTimeoutMs);
     const controller = new AbortController();
     const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), idle.signal]);
     controller.signal.addEventListener('abort', idle.stop, {once: true});
@@ -246,20 +246,24 @@ export class ProviderAdapter implements ModelPort {
         if (part.type === 'error') throw part.error;
         if (part.type === 'tool-error') throw new FutrynError('PROTOCOL');
         if (part.type === 'tool-input-start') {
-          if (pending.size >= 32) throw new FutrynError('PROTOCOL');
+          if (pending.size >= GENERATION_LIMITS.toolCallsPerResponse) throw new FutrynError('PROTOCOL');
           pending.add(part.id);
         }
         if (part.type === 'abort') throw new FutrynError('CANCELLED');
         if (part.type === 'reasoning-delta') {
           bytes += Buffer.byteLength(part.text);
-          if (bytes > 262144) throw new FutrynError('PROTOCOL');
+          if (bytes > GENERATION_LIMITS.textBytes) throw new FutrynError('PROTOCOL');
           yield {type: 'reasoningDelta', text: part.text};
         } else if (part.type === 'text-delta') {
           bytes += Buffer.byteLength(part.text);
-          if (bytes > 262144) throw new FutrynError('PROTOCOL');
+          if (bytes > GENERATION_LIMITS.textBytes) throw new FutrynError('PROTOCOL');
           yield {type: 'textDelta', text: part.text};
         } else if (part.type === 'tool-call') {
-          if (calls.has(part.toolCallId) || calls.size >= 32 || (JSON.stringify(part.input) ?? '').length > 65536)
+          if (
+            calls.has(part.toolCallId) ||
+            calls.size >= GENERATION_LIMITS.toolCallsPerResponse ||
+            (JSON.stringify(part.input) ?? '').length > GENERATION_LIMITS.toolArgumentBytes
+          )
             throw new FutrynError('PROTOCOL');
           calls.add(part.toolCallId);
           pending.delete(part.toolCallId);
@@ -300,12 +304,12 @@ export class ProviderAdapter implements ModelPort {
     try {
       const result = await generateText(options);
       if (
-        Buffer.byteLength(result.text) > 262144 ||
+        Buffer.byteLength(result.text) > GENERATION_LIMITS.textBytes ||
         result.finishReason === 'error' ||
         ['other', 'interrupted'].includes(result.finishReason) ||
-        result.toolCalls.length > 32 ||
+        result.toolCalls.length > GENERATION_LIMITS.toolCallsPerResponse ||
         new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length ||
-        result.toolCalls.some(c => JSON.stringify(c.input).length > 65536)
+        result.toolCalls.some(c => JSON.stringify(c.input).length > GENERATION_LIMITS.toolArgumentBytes)
       )
         throw new FutrynError('PROTOCOL');
       return {

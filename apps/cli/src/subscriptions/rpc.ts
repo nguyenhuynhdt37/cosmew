@@ -1,5 +1,5 @@
 import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError, GENERATION_LIMITS} from '@futryn/contracts';
 import {denyRuntimeRequest} from '@futryn/security';
 
 export interface RpcMessage {
@@ -69,7 +69,7 @@ export class SubscriptionRpc {
   }
   private parse(data: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, data]);
-    if (this.buffer.length > 4 * 1024 * 1024) throw new FutrynError('PROTOCOL');
+    if (this.buffer.length > GENERATION_LIMITS.responseBytes) throw new FutrynError('PROTOCOL');
     while (this.buffer.length) {
       let bytes: Buffer;
       if (this.framing === 'lines') {
@@ -84,7 +84,7 @@ export class SubscriptionRpc {
         const match = /^Content-Length: (\d+)$/im.exec(this.buffer.subarray(0, boundary).toString());
         if (!match) throw new FutrynError('PROTOCOL');
         const length = Number(match[1]);
-        if (length > 4 * 1024 * 1024 || length < 2) throw new FutrynError('PROTOCOL');
+        if (length > GENERATION_LIMITS.responseBytes || length < 2) throw new FutrynError('PROTOCOL');
         if (this.buffer.length < boundary + 4 + length) return;
         bytes = this.buffer.subarray(boundary + 4, boundary + 4 + length);
         this.buffer = this.buffer.subarray(boundary + 4 + length);

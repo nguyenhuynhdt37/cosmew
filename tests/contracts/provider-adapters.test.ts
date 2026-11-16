@@ -146,10 +146,10 @@ test('auth, invalid model, rate limit errors are safe; generation never retries 
   }
   x.db.close();
 });
-test('total timeout and caller cancellation propagate', async () => {
+test('stream idle timeout and caller cancellation propagate', async () => {
   const x = setup();
   x.f.set({delay: 500});
-  x.provider.timeoutMs = 100;
+  x.provider.streamIdleTimeoutMs = 100;
   const adapter = new ProviderAdapter(x.transport, 'fixture-model');
   await expect(adapter.generate(x.request)).rejects.toMatchObject({code: 'TIMEOUT'});
   const controller = new AbortController();

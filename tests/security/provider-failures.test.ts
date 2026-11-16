@@ -295,7 +295,7 @@ test('provider timeout bounds silence, not the length of a streamed response (Co
   const x = setup();
   // Every chunk arrives well inside the timeout, but the whole response takes several timeouts.
   x.f.set({streamDelay: 60});
-  const provider = x.f.provider('chat', {timeoutMs: 150});
+  const provider = x.f.provider('chat', {streamIdleTimeoutMs: 150});
   const transport = new ProviderTransport(provider, x.account, x.vault, new ConfiguredNetworkPolicy());
   const started = performance.now();
   const events = await Array.fromAsync(new ProviderAdapter(transport, 'fixture-model').stream(request));
@@ -307,5 +307,23 @@ test('provider timeout bounds silence, not the length of a streamed response (Co
   await expect(Array.fromAsync(new ProviderAdapter(transport, 'fixture-model').stream(request))).rejects.toMatchObject({
     code: 'TIMEOUT',
   });
+  x.db.close();
+});
+
+test('one tool call may carry hundreds of KiB of arguments (a whole file), as on Codex', async () => {
+  const x = setup();
+  const patchText =
+    '*** Begin Patch\n*** Add File: page.html\n' + '+<p>generated</p>\n'.repeat(20000) + '*** End Patch';
+  x.f.set({toolCall: {name: 'apply_patch', args: JSON.stringify({patch: patchText})}});
+  const transport = new ProviderTransport(x.f.provider('chat'), x.account, x.vault, new ConfiguredNetworkPolicy());
+  const events = await Array.fromAsync(
+    new ProviderAdapter(transport, 'fixture-model').stream({
+      ...request,
+      tools: [{name: 'apply_patch', description: 'patch', inputSchema: {type: 'object'}}],
+    }),
+  );
+  const call = events.find(e => e.type === 'toolCallComplete');
+  expect(call).toMatchObject({call: {name: 'apply_patch', input: {patch: patchText}}});
+  expect(Buffer.byteLength(patchText)).toBeGreaterThan(256 * 1024);
   x.db.close();
 });

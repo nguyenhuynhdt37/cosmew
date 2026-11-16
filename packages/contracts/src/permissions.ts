@@ -1,3 +1,4 @@
+import {GENERATION_LIMITS} from './limits';
 import {z} from 'zod';
 
 export const permissionScopeSchema = z.enum(['once', 'session', 'deny']);
@@ -13,7 +14,7 @@ export const permissionPromptRequestSchema = z.strictObject({
   scopeHash: z.string().min(8).max(128),
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
-  diffPreview: z.string().max(65536).optional(),
+  diffPreview: z.string().max(GENERATION_LIMITS.patchBytes).optional(),
   status: z.enum(['pending', 'approved_once', 'approved_session', 'denied', 'expired']).default('pending'),
 });
 export type PermissionPromptRequest = z.infer<typeof permissionPromptRequestSchema>;

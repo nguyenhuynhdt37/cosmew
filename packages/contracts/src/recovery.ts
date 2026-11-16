@@ -1,3 +1,4 @@
+import {GENERATION_LIMITS} from './limits';
 import {z} from 'zod';
 import {messageSchema, toolCallSchema} from './models';
 import {toolResultSchema} from './tools';
@@ -17,7 +18,7 @@ export const executionEventDataSchema = z.discriminatedUnion('type', [
   z.object({type: z.literal('model.requested'), stepId: z.string().uuid(), protocol: z.literal(2).optional()}),
   /** The provider completed this request's response (Codex ResponseEvent::Completed); its text is committed. */
   z.object({type: z.literal('model.completed'), stepId: z.string().uuid()}),
-  z.object({type: z.literal('assistant.text'), text: z.string().max(262144)}),
+  z.object({type: z.literal('assistant.text'), text: z.string().max(GENERATION_LIMITS.textBytes)}),
   z.object({type: z.literal('tool.call'), call: toolCallSchema}),
   z.object({
     type: z.literal('tool.intent'),
