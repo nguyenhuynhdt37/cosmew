@@ -125,3 +125,11 @@ nativeTest('default (Codex parity): project .env stays readable so bun/node tool
  const r=await h.exec({cmd:'bun test 2>&1; cat .fyn-state/credentials.json 2>/dev/null || echo STATE_DENIED'});
  expect(r.content).toContain('1 pass');expect(r.content).toContain('STATE_DENIED');expect(r.content).not.toContain('STATE_SECRET');
 },60000);
+
+nativeTest('git keeps working while URL credentials from .git/config never reach the model or the TUI stream',async()=>{
+ const h=harness();expect(h.runtime.availability().ok).toBe(true);
+ writeFileSync(join(h.root,'f.txt'),'one\n');git(h.root,'init','-q');git(h.root,'add','f.txt');expect(git(h.root,'commit','-qm','init').status).toBe(0);
+ expect(git(h.root,'remote','add','origin','https://user:ghp_URLTOKEN123@example.invalid/r.git').status).toBe(0);writeFileSync(join(h.root,'f.txt'),'two\n');
+ const r=await h.exec({cmd:'git status --short; git remote -v; cat .git/config'});
+ expect(r.exitCode).toBe(0);expect(r.content).toContain('M f.txt');expect(r.content).toContain('https://***@example.invalid/r.git');expect(r.content).not.toContain('URLTOKEN');
+},60000);

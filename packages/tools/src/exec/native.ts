@@ -79,7 +79,7 @@ export class NativeCommandRuntime implements CommandRuntime {
    const outside=join(dirname(probe),'fyn-probe-outside-'+randomUUID());
    const probePlatform=this.platform.name==='macos-seatbelt'?new Seatbelt(probe,undefined,this.scratch,realpathSync(this.options.home??homedir()),[],secretRegexes()):this.platform;
    // The probe always checks the secret rule so a hide-secrets configuration is proven too.
-   const argv=probePlatform.wrap(['/bin/bash','--noprofile','--norc','-c',`echo ok > made && ! cat .env 2>/dev/null | grep -q PROBE && ! touch .git/x 2>/dev/null && ! touch ${JSON.stringify(outside)} 2>/dev/null && ! ls ${JSON.stringify(this.options.home??homedir())} >/dev/null 2>&1`],{mode:'workspace-write',network:false},probe);
+   const argv=probePlatform.wrap(['/bin/bash','--noprofile','--norc','-c',`echo ok > made && ! cat .env 2>/dev/null | grep -q PROBE && ! touch .git/x 2>/dev/null && ! touch ${JSON.stringify(outside)} 2>/dev/null && ! ls ${JSON.stringify(this.options.home??homedir())} >/dev/null 2>&1 && ! kill -0 ${process.pid} 2>/dev/null && ! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null`],{mode:'workspace-write',network:false},probe);
    const r=spawnSync(argv[0]!,argv.slice(1),{cwd:probe,env:this.env(false),timeout:10000,encoding:'utf8'});
    if(r.status!==0||readFileSync(join(probe,'made'),'utf8')!=='ok\n'||existsSync(outside)||existsSync(join(probe,'.git','x')))return{ok:false,reason:'The native sandbox self-test failed: '+(r.stderr||'').slice(0,200)};
    return this.proven={ok:true};
@@ -182,6 +182,9 @@ interface NativeSession {id:string;request:CommandRequest;sandbox:CommandSandbox
  outputClosed:boolean;leaderStarted:boolean;exitObserved?:boolean;spawnFailed?:boolean;unconfirmed?:boolean;stop?:'cancelled'|'timeout';lease?:ReturnType<typeof setTimeout>;release?:()=>void;
  pid?:number;node?:ChildProcess;bun?:ReturnType<typeof Bun.spawn>}
 
+/** Codex base-policy sysctl allow-list (seatbelt_base_policy.sbpl, pinned 75fc67e8). */
+const SYSCTLS='(sysctl-name "hw.activecpu") (sysctl-name "hw.busfrequency_compat") (sysctl-name "hw.byteorder") (sysctl-name "hw.cacheconfig") (sysctl-name "hw.cachelinesize_compat") (sysctl-name "hw.cpufamily") (sysctl-name "hw.cpufrequency_compat") (sysctl-name "hw.cputype") (sysctl-name "hw.l1dcachesize_compat") (sysctl-name "hw.l1icachesize_compat") (sysctl-name "hw.l2cachesize_compat") (sysctl-name "hw.l3cachesize_compat") (sysctl-name "hw.logicalcpu_max") (sysctl-name "hw.machine") (sysctl-name "hw.model") (sysctl-name "hw.memsize") (sysctl-name "hw.ncpu") (sysctl-name "hw.nperflevels") (sysctl-name "hw.packages") (sysctl-name "hw.pagesize_compat") (sysctl-name "hw.pagesize") (sysctl-name "hw.physicalcpu") (sysctl-name "hw.physicalcpu_max") (sysctl-name "hw.logicalcpu") (sysctl-name "hw.cpufrequency") (sysctl-name "hw.tbfrequency_compat") (sysctl-name "hw.vectorunit") (sysctl-name "machdep.cpu.brand_string") (sysctl-name "kern.argmax") (sysctl-name "kern.hostname") (sysctl-name "kern.maxfilesperproc") (sysctl-name "kern.maxproc") (sysctl-name "kern.osproductversion") (sysctl-name "kern.osrelease") (sysctl-name "kern.ostype") (sysctl-name "kern.osvariant_status") (sysctl-name "kern.osversion") (sysctl-name "kern.secure_kernel") (sysctl-name "kern.sysv.semmns") (sysctl-name "kern.usrstack64") (sysctl-name "kern.version") (sysctl-name "sysctl.proc_cputype") (sysctl-name "vm.loadavg") (sysctl-name-prefix "hw.optional.arm.") (sysctl-name-prefix "hw.optional.armv8_") (sysctl-name-prefix "hw.perflevel") (sysctl-name-prefix "kern.proc.pgrp.") (sysctl-name-prefix "kern.proc.pid.") (sysctl-name-prefix "net.routetable.")';
+
 function findExecutable(name:string,path:string){for(const dir of path.split(':')){const c=join(dir,name);try{if(statSync(c).isFile())return c;}catch{/* next */}}return undefined;}
 
 /**
@@ -197,19 +200,31 @@ class Seatbelt implements Platform {
   const ws=this.workspace,wsRe=escapeRegex(ws);
   return [
    '(version 1)','(deny default)',
-   '(allow process-exec process-fork process-info* signal)',
-   '(allow sysctl-read mach-lookup ipc-posix-shm* ipc-posix-sem* iokit-open file-ioctl pseudo-tty user-preference-read system-socket)',
+   // Codex seatbelt_base_policy.sbpl + preferences policy (pinned 75fc67e8): no blanket mach-lookup,
+   // so LaunchServices/AppleEvents/pasteboard (e.g. `open -a`) cannot start anything outside the sandbox.
+   '(allow process-exec process-fork)','(allow signal (target same-sandbox))','(allow process-info* (target same-sandbox))',
+   `(allow sysctl-read ${SYSCTLS})`,'(allow sysctl-write (sysctl-name "kern.grade_cputype"))',
+   '(allow iokit-open (iokit-registry-entry-class "RootDomainUserClient"))',
+   '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo") (global-name "com.apple.bsd.dirhelper") (global-name "com.apple.PowerManagement.control") (global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.cfprefsd.agent") (local-name "com.apple.cfprefsd.agent"))',
+   '(allow ipc-posix-sem)','(allow ipc-posix-shm-read-data ipc-posix-shm-write-create ipc-posix-shm-write-unlink (ipc-posix-name-regex #"^/__KMP_REGISTERED_LIB_[0-9]+$"))',
+   '(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))','(allow user-preference-read)',
+   // Terminals: only this session's own PTY (sandbox extension) and /dev/tty; ioctl on inherited fds.
+   '(allow pseudo-tty)','(allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))',
+   '(allow file-read* file-write* (require-all (regex #"^/dev/ttys[0-9]+") (extension "com.apple.sandbox.pty")))','(allow file-ioctl (regex #"^/dev/ttys[0-9]+"))',
    '(allow file-read*)',
    `(deny file-read* (subpath "/Users") (subpath ${sbplString(this.home)}) (subpath "/Volumes"))`,
    `(allow file-read-metadata (literal "/Users") (path-ancestors ${sbplString(ws)}))`,
    `(allow file-read* (subpath ${sbplString(ws)}) ${this.toolchains.map(t=>`(subpath ${sbplString(t)})`).join(' ')} (subpath ${sbplString(this.scratch)}))`,
-   `(allow file-write* (subpath ${sbplString(join(this.scratch,'tmp'))}) (subpath ${sbplString(join(this.scratch,'home'))}) (literal "/dev/null") (literal "/dev/tty") (regex #"^/dev/ttys[0-9]+$") (literal "/dev/dtracehelper"))`,
+   `(allow file-write* (subpath ${sbplString(join(this.scratch,'tmp'))}) (subpath ${sbplString(join(this.scratch,'home'))}) (literal "/dev/null") (literal "/dev/tty") (literal "/dev/dtracehelper"))`,
    ...(sandbox.mode==='workspace-write'?[`(allow file-write* (subpath ${sbplString(ws)}) (subpath "/private/tmp"))`,`(deny file-write* (regex #"^${wsRe}/(.*/)?\\.[gG][iI][tT](/|$)"))`]:[]),
+   // .git/config stays readable (git fails without it, as in Codex); URL credentials are redacted from output instead.
    `(deny file-read* file-write* (regex #"^${wsRe}/(.*/)?\\.(futryn|hannes)(/|$)") (regex #"^${wsRe}/(.*/)?\\.(futryn|hannes)-patch-"))`,
    ...(this.state?[`(deny file-read* file-write* (subpath ${sbplString(this.state)}))`]:[]),
    // Optional: secret names hidden inside the project only; system files such as /etc/ssl/cert.pem stay readable.
    ...(this.secrets?[`(deny file-read* file-write* (require-all (regex #"^${wsRe}/") (require-any ${this.secrets.deny.map(r=>`(regex #"${r}")`).join(' ')}) ${this.secrets.except.map(r=>`(require-not (regex #"${r}"))`).join(' ')}))`]:[]),
-   sandbox.network?'(allow network*)':'(deny network*)',
+   ...(sandbox.network?['(allow network*)','(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))',
+    // Codex seatbelt_network_policy.sbpl, only for an approved network escalation.
+    '(allow mach-lookup (global-name "com.apple.bsd.dirhelper") (global-name "com.apple.system.opendirectoryd.membership") (global-name "com.apple.SecurityServer") (global-name "com.apple.networkd") (global-name "com.apple.ocspd") (global-name "com.apple.trustd.agent") (global-name "com.apple.SystemConfiguration.DNSConfiguration") (global-name "com.apple.SystemConfiguration.configd") (global-name "com.apple.dnssd.service"))']:['(deny network*)']),
   ].join('\n');
  }
  wrap(argv:string[],sandbox:CommandSandbox):string[]{return['/usr/bin/sandbox-exec','-p',this.profile(sandbox),...argv];}
@@ -232,6 +247,8 @@ class Bubblewrap implements Platform {
    '--bind',join(this.scratch,'home'),join(this.scratch,'home'),'--bind',join(this.scratch,'tmp'),join(this.scratch,'tmp'),
    sandbox.mode==='workspace-write'?'--bind':'--ro-bind',ws.root,ws.root,
    ...masks.readOnly.flatMap(p=>['--ro-bind',join(ws.root,p),join(ws.root,p)]),
+   // Same as the Docker mask: git works with an empty repository config, credentials stay hidden.
+   ...masks.readOnly.flatMap(p=>['config','config.worktree'].filter(f=>existsSync(join(ws.root,p,f))).flatMap(f=>['--ro-bind','/dev/null',join(ws.root,p,f)])),
    ...masks.hiddenFiles.flatMap(p=>['--ro-bind','/dev/null',join(ws.root,p)]),
    ...masks.hiddenDirectories.flatMap(p=>['--tmpfs',join(ws.root,p),'--remount-ro',join(ws.root,p)]),
    ...(this.state&&!this.state.startsWith(ws.root+'/')?['--tmpfs',this.state]:[]),

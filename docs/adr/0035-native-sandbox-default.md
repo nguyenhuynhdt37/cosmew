@@ -15,5 +15,11 @@ Accepted 2026-11-16 on the user's explicit decision ("làm native support all h�
 - Reads outside `/Users` are broad (system, `/private/var/folders`, other tool caches), as in Codex.
 - Secrets readable by default (see above); network still off unless approved, and the model only sees what commands print.
 
+## Security review follow-up (2026-11-16)
+- Seatbelt profile now follows Codex `seatbelt_base_policy.sbpl` + preferences policy: Mach lookups limited to an allow-list (`opendirectoryd.libinfo`, `bsd.dirhelper`, `PowerManagement.control`, `cfprefsd`), network-related services only with an approved network escalation, `signal`/`process-info*` limited to `(target same-sandbox)`, sysctl/IOKit allow-lists, and other terminals reachable only through the session's own PTY. The self-test now also requires that `open -a …` (LaunchServices) and signalling a process outside the sandbox fail. Before this change a command could start an unsandboxed app through LaunchServices.
+- `.git/config` stays readable on macOS because git fails without it (measured); URL userinfo (`https://user:token@`) is redacted from all command output for every backend. bubblewrap masks `.git/config` like Docker.
+- Known Linux limitation (untested code): bubblewrap masks are computed before launch; a concurrently running write session could move a masked directory in between (the Docker backend verifies mountpoints in-container; bubblewrap does not yet).
+- Secrets readable by default and `/private/tmp` writable are deliberate (Codex parity, toolchain compatibility); `FUTRYN_SANDBOX_HIDE_SECRETS=1` restores hiding.
+
 ## Evidence (Darwin 24.6.0 arm64)
-`tests/security/native-exec.test.ts` (8 tests, real Seatbelt) and `tests/end-to-end/native-agent.test.ts` (fixture model → Bash write → failing test → Bash fix → passing rerun). Measured: self-test 73 ms, write command ~105 ms, repeated commands ~25 ms (Docker: 0.45–1.5 s). See [acceptance](../delivery/unified-exec-acceptance.md).
+`tests/security/native-exec.test.ts` (8 tests, real Seatbelt) and `tests/end-to-end/native-agent.test.ts` (fixture model → Bash write → failing test → Bash fix → passing rerun). Measured after hardening: self-test ~200 ms, commands ~25–45 ms, `git status` ~190 ms (Docker: 0.45–1.5 s). See [acceptance](../delivery/unified-exec-acceptance.md).

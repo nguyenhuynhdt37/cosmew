@@ -133,3 +133,7 @@ osTest('mandatory gate negative evidence: setsid child escapes candidate cleanup
   try{expect(()=>process.kill(pid,0)).not.toThrow();const native=platformCommandRuntime({workspaceRoot:f.root});if(native.availability().ok){const r=await native.run({command:'true',cwd:f.root,timeoutMs:2000,maxOutputBytes:100,yieldTimeMs:2000});expect(r.lifecycle?.descendants).toBe('unconfirmed');await native.shutdown?.();}}
   finally{try{process.kill(pid,'SIGKILL');}catch{/* fixture already exited */}}
 });
+
+test('URL userinfo is redacted from terminal text, including token-only and ssh URLs',()=>{
+  expect(plainTerminalText('origin\thttps://user:secret@github.com/a/b.git (fetch)\nhttps://ghp_abcdef@github.com/x ssh://git:pw@host/repo plain@email.com')).toBe('origin\thttps://***@github.com/a/b.git (fetch)\nhttps://***@github.com/x ssh://***@host/repo plain@email.com');
+});

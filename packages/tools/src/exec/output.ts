@@ -56,8 +56,13 @@ export class HeadTailBuffer {
  * every remaining control byte except newline and tab dropped, so neither the model nor the TUI
  * receives sequences that could drive a terminal.
  */
+/** Userinfo in URLs (`https://user:token@host`) is credentials; it never reaches the model or the TUI. */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@'"<>]+@/gi, '$1***@');
+}
+
 export function plainTerminalText(text: string): string {
-  return text
+  return redactUrlCredentials(text)
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b[PX^_][^\x1b]*(?:\x1b\\)?/g, '')
