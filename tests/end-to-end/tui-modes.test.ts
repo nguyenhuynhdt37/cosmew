@@ -93,6 +93,32 @@ test('review command inspects real Git changes, reads source and emits findings 
   expect(readFileSync(join(c.dir, 'value.ts'), 'utf8')).toBe('export const value = 0;\n');
 });
 
+test('review withholds diff content of files the read policy would ask about', async () => {
+  const c = await context();
+  const git = (...args: string[]) => {
+    const result = Bun.spawnSync(['git', ...args], {cwd: c.dir, stdout: 'pipe', stderr: 'pipe'});
+    expect(result.exitCode).toBe(0);
+  };
+  git('init', '-q');
+  git('config', 'user.email', 'fixture@example.invalid');
+  git('config', 'user.name', 'Fixture');
+  writeFileSync(join(c.dir, '.gitignore'), 'state/\n');
+  writeFileSync(join(c.dir, '.env'), 'API_TOKEN=old-value\n');
+  writeFileSync(join(c.dir, 'value.ts'), 'export const value = 1;\n');
+  git('add', '.');
+  git('commit', '-qm', 'base');
+  writeFileSync(join(c.dir, '.env'), 'API_TOKEN=fixture-secret-never-sent\n');
+  writeFileSync(join(c.dir, 'value.ts'), 'export const value = 2;\n');
+  c.server.set({script: () => ({text: 'No findings.'})});
+  await c.tui.submitPrompt('/review');
+  const request = c.client.activeSession()!.messages.find(message => message.role === 'user')!.content;
+  expect(request).toContain('export const value = 2;');
+  expect(request).toContain('"path":".env"');
+  expect(request).toContain('contentWithheld');
+  expect(request).not.toContain('fixture-secret-never-sent');
+  expect(request).not.toContain('old-value');
+});
+
 test('review never inspects an unapproved workspace and session aliases use canonical handlers', async () => {
   const c = await context();
   c.server.set({script: () => ({text: 'A saved answer'})});

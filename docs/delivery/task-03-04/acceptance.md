@@ -46,6 +46,7 @@ Flaky: `process-supervision.test.ts` "ordinary child and nested shell/pipeline" 
 - `--ignore-submodules=all` giấu staged gitlink → bỏ, có test Git thật.
 - Đổi delegation/mode/session/resume/fork/clear khi turn hoặc shell đang chạy → `POLICY`.
 - Queue next-turn dùng chung toàn client → lưu durable theo session id, claim theo session.
+- (Security review sau commit) `/review` gửi diff của file secret (ví dụ `.env`) cho model mà không qua `evaluateRead` → chỉ gửi nội dung khi policy là `allow`, còn lại gửi path/status kèm `contentWithheld`; test `tui-modes` "review withholds diff content…" fail trên code cũ, pass sau khi sửa.
 
 ## Khác biệt còn lại so với Codex
 

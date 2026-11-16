@@ -1,6 +1,6 @@
 import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
-import {resolve} from 'node:path';
+import {join, resolve} from 'node:path';
 import {
   FutrynError,
   type Account,
@@ -49,6 +49,7 @@ import {
   Redactor,
   SecureVault,
   SessionGrants,
+  evaluateRead,
   redactModel,
   terminalText,
   validateEndpoint,
@@ -548,6 +549,8 @@ export function startup(
       },
       settings,
       listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
+      readAllowedWithoutApproval: path =>
+        evaluateRead(path, join(workspaceRoot, path), {stateDirectory}).effect === 'allow',
       getWorkspaceDiff: () => diffReport,
       refreshWorkspaceDiff: () => {
         if (!toolsEnabled())

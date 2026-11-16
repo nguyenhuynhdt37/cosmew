@@ -45,6 +45,7 @@ import {
   type SteerOutcome,
   type ThemeManifest,
   type Usage,
+  type WorkspaceDiffFile,
   type WorkspaceDiffReport,
 } from '@futryn/contracts';
 
@@ -171,6 +172,8 @@ export interface FutrynBackendPorts {
   listWorkspaceFiles(query?: string): string[];
   getWorkspaceDiff(): WorkspaceDiffReport;
   refreshWorkspaceDiff?(): Promise<WorkspaceDiffReport>;
+  /** True only when the read policy lets this workspace path's content reach the model without approval. */
+  readAllowedWithoutApproval?(relativePath: string): boolean;
   sanitizeText(text: string): string;
 }
 
@@ -1483,6 +1486,21 @@ export class FutrynClient {
   async refreshWorkspaceDiff(): Promise<WorkspaceDiffReport> {
     if (!this.toolsAllowed) return this.getWorkspaceDiff();
     return this.ports.refreshWorkspaceDiff ? this.ports.refreshWorkspaceDiff() : this.ports.getWorkspaceDiff();
+  }
+
+  /**
+   * Diff files as `/review` may send them to the model. Content of a file the read policy would deny
+   * or ask about (secrets, Git internals, Futryn state) is withheld so review never bypasses the
+   * permission engine; the model can still request it through the read tool's approval flow.
+   * Without a policy port every file's content is withheld.
+   */
+  reviewEvidence(files: readonly WorkspaceDiffFile[]): (WorkspaceDiffFile & {contentWithheld?: true})[] {
+    const allowed = (path: string) => this.ports.readAllowedWithoutApproval?.(path) ?? false;
+    return files.map(file =>
+      allowed(file.path) && (!file.oldPath || allowed(file.oldPath))
+        ? file
+        : {...file, lines: [], contentWithheld: true as const},
+    );
   }
 
   // Permission Dialog & Policy Gate

@@ -169,12 +169,14 @@ export class CommandRouter {
         return;
       }
       const evidence = JSON.stringify(
-        report.files.slice(0, 100).map(file => ({
+        client.reviewEvidence(report.files.slice(0, 100)).map(file => ({
           path: file.path,
           status: file.status,
           additions: file.additions,
           deletions: file.deletions,
-          lines: file.lines.slice(0, 150),
+          ...(file.contentWithheld
+            ? {contentWithheld: 'read policy requires approval; use the read tool if needed'}
+            : {lines: file.lines.slice(0, 150)}),
         })),
       );
       await host.submitPrompt(
