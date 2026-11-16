@@ -137,3 +137,7 @@ osTest('mandatory gate negative evidence: setsid child escapes candidate cleanup
 test('URL userinfo is redacted from terminal text, including token-only and ssh URLs',()=>{
   expect(plainTerminalText('origin\thttps://user:secret@github.com/a/b.git (fetch)\nhttps://ghp_abcdef@github.com/x ssh://git:pw@host/repo plain@email.com')).toBe('origin\thttps://***@github.com/a/b.git (fetch)\nhttps://***@github.com/x ssh://***@host/repo plain@email.com');
 });
+
+test('a credential split by escape or control sequences is still redacted after stripping',()=>{
+  expect(plainTerminalText('https://u\x1b[0m:tok\x07en@host/r https://a\x1b]0;t\x07b:c@h')).toBe('https://***@host/r https://***@h');
+});

@@ -62,11 +62,12 @@ export function redactUrlCredentials(text: string): string {
 }
 
 export function plainTerminalText(text: string): string {
-  return redactUrlCredentials(text)
+  // Redact last: escape/control stripping could otherwise join a credential split by an escape sequence.
+  return redactUrlCredentials(text
     .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b[PX^_][^\x1b]*(?:\x1b\\)?/g, '')
     .replace(/\x1b[@-Z\\-_]/g, '')
     .replace(/\r\n?/g, '\n')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''));
 }
