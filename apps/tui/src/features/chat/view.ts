@@ -1,4 +1,4 @@
-import type {ThemeManifest, ThemeTokens, AppearanceConfig} from '@futryn/contracts';
+import {isFileChangeTool, type ThemeManifest, type ThemeTokens, type AppearanceConfig} from '@futryn/contracts';
 import type {FutrynClient, ReactiveAgentEvent} from '@futryn/sdk';
 import type {Canvas} from '../../ui';
 import type {TranscriptViewport} from '../../types';
@@ -201,7 +201,7 @@ export function turnStatusSpans(
       ? (() => {
           const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
           if (running.some(call => call.name === 'exec_command')) return 'Command pending';
-          if (running.some(call => call.name === 'apply_patch')) return 'Patch pending';
+          if (running.some(call => isFileChangeTool(call.name))) return 'Patch pending';
           return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
         })()
       : turn?.awaitingModel

@@ -58,7 +58,15 @@ test('registry rejects duplicate identities, owns descriptor snapshots and route
   const handlers = createHandlers(f.options);
   for (const handler of handlers) registry.register(handler);
   expect(() => registry.register(handlers[0]!)).toThrow();
-  expect(registry.descriptors().map(d => d.name)).toEqual(['read', 'glob', 'grep', 'exec_command', 'apply_patch']);
+  expect(registry.descriptors().map(d => d.name)).toEqual([
+    'read',
+    'glob',
+    'grep',
+    'exec_command',
+    'apply_patch',
+    'edit',
+    'write',
+  ]);
   const descriptor = registry.descriptors()[0]!;
   descriptor.name = 'shell';
   descriptor.inputSchema.type = 'anything';

@@ -2,6 +2,7 @@ import type {ToolDescriptor} from '@futryn/contracts';
 import type {ToolHandler} from './handlers/types';
 export {globDescriptor, grepDescriptor} from './builtin/search';
 export {readDescriptor} from './builtin/read';
+export {editDescriptor, writeDescriptor} from './handlers/file-edit';
 
 /** Composition-owned registrations. Exposure is discovery metadata, never permission. */
 export class ToolRegistry {

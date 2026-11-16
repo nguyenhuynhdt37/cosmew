@@ -6,7 +6,7 @@ export {
   type ToolAuditRecord,
   type ToolDispatcherOptions,
 } from './dispatcher';
-export {globDescriptor, grepDescriptor, readDescriptor} from './registry';
+export {editDescriptor, globDescriptor, grepDescriptor, readDescriptor, writeDescriptor} from './registry';
 export {LIMITS} from './limits';
 export {execDescriptor, EXEC_LIMITS} from './exec/command';
 export {HeadTailBuffer, plainTerminalText} from './exec/output';

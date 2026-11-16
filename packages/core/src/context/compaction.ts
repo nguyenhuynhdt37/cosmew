@@ -1,4 +1,10 @@
-import {FutrynError, type ActiveTaskCheckpoint, type ContextSnapshot, type Message} from '@futryn/contracts';
+import {
+  FutrynError,
+  isFileChangeTool,
+  type ActiveTaskCheckpoint,
+  type ContextSnapshot,
+  type Message,
+} from '@futryn/contracts';
 import {contextHash, estimateContextTokens} from './builder';
 
 export interface CompactionInput {
@@ -46,7 +52,7 @@ export async function compactHistory(
     .filter(m => m.role === 'tool')
     .map(m => {
       let outcome = m.content;
-      if (m.toolName === 'apply_patch')
+      if (isFileChangeTool(m.toolName ?? ''))
         try {
           const parsed = JSON.parse(outcome);
           if (Array.isArray(parsed.changes))

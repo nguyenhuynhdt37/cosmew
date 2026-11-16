@@ -27,7 +27,7 @@ export const readDescriptor = {
 };
 
 export type ReadOutcome =
-  | {ok: true; content: string; truncated: boolean}
+  | {ok: true; content: string; truncated: boolean; bytes: Uint8Array}
   | {ok: false; code: 'IS_DIRECTORY' | 'BINARY_FILE' | 'FILE_TOO_LARGE'};
 
 export function runRead(workspace: WorkspaceRoot, file: ResolvedPath, input: z.infer<typeof readInput>): ReadOutcome {
@@ -53,6 +53,7 @@ export function runRead(workspace: WorkspaceRoot, file: ResolvedPath, input: z.i
       ok: true,
       content: `[file has ${lines.length} lines; offset ${start + 1} is past the end]`,
       truncated: false,
+      bytes,
     };
-  return {ok: true, content: clipped.text + footer, truncated: more};
+  return {ok: true, content: clipped.text + footer, truncated: more, bytes};
 }

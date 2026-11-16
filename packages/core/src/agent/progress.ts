@@ -1,4 +1,10 @@
-import type {ActiveTaskCheckpoint, Message, ToolCall, ToolResult} from '@futryn/contracts';
+import {
+  isFileChangeTool,
+  type ActiveTaskCheckpoint,
+  type Message,
+  type ToolCall,
+  type ToolResult,
+} from '@futryn/contracts';
 const targets = (text: string) =>
   [...new Set(text.match(/(?:[\w-]+\/)*[\w-]+\.(?:html?|tsx?|jsx?|css|json|md|py|rs|go)\b/gi) ?? [])].slice(0, 32);
 const continuation = (text: string) =>
@@ -67,7 +73,7 @@ export function observeResult(task: ActiveTaskCheckpoint, call: ToolCall, result
       task.verifiedActions.push({callId: call.id, tool: 'read', status: 'verified:' + path});
     }
   }
-  if (call.name === 'apply_patch' && result.status === 'ok')
+  if (isFileChangeTool(call.name) && result.status === 'ok')
     try {
       const receipt = JSON.parse(result.content);
       for (const change of receipt.changes ?? [])
@@ -81,7 +87,7 @@ export function observeResult(task: ActiveTaskCheckpoint, call: ToolCall, result
 }
 export function artifactWork(task: ActiveTaskCheckpoint, names: readonly string[]): boolean {
   return (
-    names.includes('apply_patch') &&
+    names.some(isFileChangeTool) &&
     task.artifactTargets.length > 0 &&
     /\b(?:create|build|implement|write|modify|fix|update)\b|(?:tạo|viết|sửa)/iu.test(task.objective) &&
     !/(?:do not|don't|only explain|analysis only|chỉ giải thích|không sửa|không tạo)/iu.test(task.objective)

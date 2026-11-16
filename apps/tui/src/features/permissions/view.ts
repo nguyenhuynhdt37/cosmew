@@ -74,7 +74,7 @@ export function renderPermissionDialogOverlay(options: {
     );
     wrap('Project files: allowed after folder consent.');
     wrap('Secret files: ask. Outside workspace: denied.');
-    wrap('Tools: read, glob, grep; apply_patch asks before writes.');
+    wrap('Tools: read, glob, grep; edit, write and apply_patch ask before writes.');
     wrap('Commands unavailable: process cleanup safety check failed.');
     if (grants.length) {
       wrap(`Allowed this session (${grants.length}, Ctrl+X revokes):`);

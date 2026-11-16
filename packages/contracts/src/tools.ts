@@ -23,6 +23,14 @@ export interface ToolDescriptor {
   parallel?: boolean;
 }
 
+/**
+ * Tools whose successful result is a file-change receipt (`{status, changes[{path, action, diff}]}`,
+ * ADR 0038). They share apply_patch's approval, revalidation and receipt, so consumers that keep,
+ * render or track write evidence treat them alike.
+ */
+export const FILE_CHANGE_TOOLS = ['apply_patch', 'edit', 'write'] as const;
+export const isFileChangeTool = (name: string): boolean => (FILE_CHANGE_TOOLS as readonly string[]).includes(name);
+
 /** Outcome of evaluating one target against policy. Deny wins over ask, ask over allow. */
 export interface PermissionDecision {
   effect: 'allow' | 'ask' | 'deny';

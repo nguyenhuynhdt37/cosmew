@@ -1,4 +1,11 @@
-import type {BorderStyle, RuntimeActivity, ThemeTokens, ToolCall, ToolResult} from '@futryn/contracts';
+import {
+  isFileChangeTool,
+  type BorderStyle,
+  type RuntimeActivity,
+  type ThemeTokens,
+  type ToolCall,
+  type ToolResult,
+} from '@futryn/contracts';
 import type {RenderedBoxLine, StyledSpan} from '../../ui';
 import {
   commandSummary,
@@ -365,6 +372,8 @@ const TOOL_NAMES: Record<string, string> = {
   grep: 'Search',
   exec_command: 'Bash',
   apply_patch: 'Update',
+  edit: 'Update',
+  write: 'Write',
 };
 
 /** One Futryn tool call with its paired result. */
@@ -386,7 +395,7 @@ function renderToolCall(options: {
   const args =
     call.name === 'exec_command'
       ? commandSummary(call, result, {live}).command
-      : call.name === 'apply_patch'
+      : isFileChangeTool(call.name)
         ? toolTarget(call)
         : expanded && ['read', 'glob', 'grep'].includes(call.name)
           ? JSON.stringify(input ?? {})
@@ -405,7 +414,7 @@ function renderToolCall(options: {
         ? 'ok'
         : 'error';
   const lines = callHeader(name, args, state, width, tokens, bg, {itemId: item.id, key}, expanded);
-  if (call.name === 'apply_patch') {
+  if (isFileChangeTool(call.name)) {
     // The patch title (Patched / partially applied / failed / denied / pending / stopped) leads the `⎿`.
     const patch = renderPatchCell({call, result, width, tokens, bg, live, showDiff: true});
     const title = patch[0]!.spans.slice(1).map(span => ({...span, text: span.text.trimStart()}));

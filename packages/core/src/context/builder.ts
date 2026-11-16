@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {FutrynError, type Message} from '@futryn/contracts';
+import {FutrynError, isFileChangeTool, type Message} from '@futryn/contracts';
 export const contextHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** Conservative UTF-8 estimate; provider metadata supplies the actual window and measured usage. */
 export const estimateContextTokens = (value: unknown) => Math.ceil(Buffer.byteLength(JSON.stringify(value) ?? '') / 3);
@@ -47,7 +47,11 @@ export function normalizeHistory(messages: readonly Message[]): Message[] {
 export function truncateToolResults(messages: readonly Message[], maxBytes: number): Message[] {
   const limit = Math.max(256, maxBytes);
   return messages.map(message => {
-    if (message.role !== 'tool' || message.toolName === 'apply_patch' || Buffer.byteLength(message.content) <= limit)
+    if (
+      message.role !== 'tool' ||
+      isFileChangeTool(message.toolName ?? '') ||
+      Buffer.byteLength(message.content) <= limit
+    )
       return {...message};
     const content = message.content;
     return {

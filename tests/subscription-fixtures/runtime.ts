@@ -456,7 +456,11 @@ if (copilot && process.argv.includes('login')) {
         if (!readFileSync(join(profile, 'config.toml'), 'utf8').includes('shell_tool = false')) process.exit(26);
         dynamicTools = p.dynamicTools ?? [];
         projectInstructions = p.developerInstructions ?? '';
-        if (dynamicTools.some((t: any) => !['read', 'glob', 'grep', 'exec_command', 'apply_patch'].includes(t.name)))
+        if (
+          dynamicTools.some(
+            (t: any) => !['read', 'glob', 'grep', 'exec_command', 'apply_patch', 'edit', 'write'].includes(t.name),
+          )
+        )
           process.exit(47);
         result = {thread: {id: session}};
         break;

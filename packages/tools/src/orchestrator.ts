@@ -82,7 +82,7 @@ export class ToolOrchestrator {
       }
       const authorization =
         prepared.kind === 'patch'
-          ? await this.authorizePatch(prepared, audit, signal)
+          ? await this.authorizePatch(call.name, prepared, audit, signal)
           : prepared.kind === 'command'
             ? await this.authorizeCommand(prepared, audit, signal)
             : prepared.kind === 'read'
@@ -271,6 +271,7 @@ export class ToolOrchestrator {
   }
 
   private async authorizePatch(
+    tool: string,
     prepared: Extract<PreparedTool, {kind: 'patch'}>,
     audit: Audit,
     signal?: AbortSignal,
@@ -291,7 +292,7 @@ export class ToolOrchestrator {
     return this.permission(
       decision,
       {
-        tool: 'apply_patch',
+        tool,
         capability: 'fs.write',
         target,
         reason: decision.reason,

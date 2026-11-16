@@ -82,7 +82,7 @@ test('platforms without a native sandbox are closed, without an unsafe fallback'
       },
       redact: t => t,
     });
-    expect(tools.descriptors().map(t => t.name)).toEqual(['read', 'glob', 'grep', 'apply_patch']);
+    expect(tools.descriptors().map(t => t.name)).toEqual(['read', 'glob', 'grep', 'apply_patch', 'edit', 'write']);
     expect(await invoke(tools, {cmd: 'touch forbidden'})).toMatchObject({status: 'error', code: 'SANDBOX_UNAVAILABLE'});
   }
   expect(prompts).toBe(0);

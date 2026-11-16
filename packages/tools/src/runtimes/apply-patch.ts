@@ -23,37 +23,8 @@ export class ApplyPatchRuntime {
   }
   verify(operations: PatchOperation[]): PatchPlan {
     const files = new SecureFiles(this.options.workspace),
-      changes: PatchChange[] = [],
-      touched = new Set<string>();
-    const names = operations
-      .flatMap(op => (op.kind === 'update' && op.move ? [op.path, op.move] : [op.path]))
-      .map(writePath);
-    if (Buffer.byteLength(JSON.stringify(names)) > 8192)
-      throw new PatchError('PATCH_TOO_LARGE', 'Patch paths exceed the aggregate size limit.');
-    const directories = new Set(
-      names.flatMap(path =>
-        path
-          .split('/')
-          .slice(0, -1)
-          .map((_, i) =>
-            path
-              .split('/')
-              .slice(0, i + 1)
-              .join('/'),
-          ),
-      ),
-    );
-    if (Buffer.byteLength(JSON.stringify([...directories])) > 8192)
-      throw new PatchError('PATCH_TOO_LARGE', 'Patch directory paths exceed the aggregate size limit.');
-    for (const path of names) {
-      if (touched.has(path.toLowerCase())) throw new PatchError('INVALID_PATCH', 'Patch paths overlap or collide.');
-      touched.add(path.toLowerCase());
-      if (
-        evaluateWrite(path, join(this.options.workspace.root, path), {stateDirectory: this.options.stateDirectory})
-          .effect === 'deny'
-      )
-        throw new WriteBoundaryError('PROTECTED_PATH');
-    }
+      changes: PatchChange[] = [];
+    this.checkPaths(operations.flatMap(op => (op.kind === 'update' && op.move ? [op.path, op.move] : [op.path])));
     const change = (path: string, after: string | null, expected: 'existing' | 'new') => {
       const snapshot = files.snapshot(path);
       if ((expected === 'new') !== (snapshot.content === null))
@@ -91,6 +62,62 @@ export class ApplyPatchRuntime {
           changes.push({snapshot: before, after, diff: unifiedDiff(op.path, before.content, after), action: 'update'});
       }
     }
+    return this.plan(files, changes);
+  }
+
+  /**
+   * Plan replacing one file's whole content (the edit and write tools, ADR 0038). `next` receives
+   * the current content (null when the file does not exist) and returns the new content or throws
+   * a PatchError. Same path policy, snapshot, approval diff and revalidation as apply_patch.
+   */
+  verifyFile(path: string, next: (before: string | null) => string): PatchPlan {
+    this.checkPaths([path]);
+    const files = new SecureFiles(this.options.workspace);
+    const snapshot = files.snapshot(path);
+    const after = next(snapshot.content);
+    return this.plan(files, [
+      {
+        snapshot,
+        after,
+        diff: unifiedDiff(path, snapshot.content, after),
+        action: snapshot.content === null ? 'add' : 'update',
+      },
+    ]);
+  }
+
+  /** Syntax, size, collision and protected-path checks shared by every write plan. */
+  private checkPaths(paths: string[]): void {
+    const touched = new Set<string>();
+    const names = paths.map(writePath);
+    if (Buffer.byteLength(JSON.stringify(names)) > 8192)
+      throw new PatchError('PATCH_TOO_LARGE', 'Patch paths exceed the aggregate size limit.');
+    const directories = new Set(
+      names.flatMap(path =>
+        path
+          .split('/')
+          .slice(0, -1)
+          .map((_, i) =>
+            path
+              .split('/')
+              .slice(0, i + 1)
+              .join('/'),
+          ),
+      ),
+    );
+    if (Buffer.byteLength(JSON.stringify([...directories])) > 8192)
+      throw new PatchError('PATCH_TOO_LARGE', 'Patch directory paths exceed the aggregate size limit.');
+    for (const path of names) {
+      if (touched.has(path.toLowerCase())) throw new PatchError('INVALID_PATCH', 'Patch paths overlap or collide.');
+      touched.add(path.toLowerCase());
+      if (
+        evaluateWrite(path, join(this.options.workspace.root, path), {stateDirectory: this.options.stateDirectory})
+          .effect === 'deny'
+      )
+        throw new WriteBoundaryError('PROTECTED_PATH');
+    }
+  }
+
+  private plan(files: SecureFiles, changes: PatchChange[]): PatchPlan {
     // No patch or diff size ceiling (Codex apply_patch); the approval shows the complete diff.
     const diff = changes.map(c => c.diff).join('');
     const scopeKey =

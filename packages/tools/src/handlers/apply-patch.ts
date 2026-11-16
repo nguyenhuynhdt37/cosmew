@@ -2,7 +2,8 @@ import {z} from 'zod';
 import {WriteBoundaryError} from '@futryn/workspace';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import {PatchError, parsePatch} from '../patch/parser';
-import {ApplyPatchRuntime} from '../runtimes/apply-patch';
+import {ApplyPatchRuntime, type PatchPlan} from '../runtimes/apply-patch';
+import type {ReadLedger} from '../runtimes/read-ledger';
 import type {ToolHandler, PreparedTool} from './types';
 export const applyPatchDescriptor = {
   name: 'apply_patch',
@@ -25,8 +26,20 @@ export class ApplyPatchHandler implements ToolHandler {
     content: 'Safe directory-relative writes are unavailable on this host.',
   };
   private readonly runtime: ApplyPatchRuntime;
-  constructor(options: ToolDispatcherOptions) {
+  constructor(
+    options: ToolDispatcherOptions,
+    private readonly ledger?: ReadLedger,
+  ) {
     this.runtime = new ApplyPatchRuntime(options);
+  }
+  /** Content the model just wrote counts as seen; anything else must be read again. */
+  private remember(plan: PatchPlan, result: ToolOutput): ToolOutput {
+    for (const change of plan.changes) {
+      const path = change.snapshot.path;
+      if (result.status === 'ok' && change.after !== null) this.ledger?.record(path, change.after);
+      else this.ledger?.forget(path);
+    }
+    return result;
   }
   available(): boolean {
     return this.runtime.available();
@@ -41,7 +54,12 @@ export class ApplyPatchHandler implements ToolHandler {
       };
     try {
       const plan = this.runtime.verify(parsePatch(parsed.data.patch));
-      return {kind: 'patch', plan, runtime: this.runtime, execute: signal => this.runtime.apply(plan, signal)};
+      return {
+        kind: 'patch',
+        plan,
+        runtime: this.runtime,
+        execute: signal => this.remember(plan, this.runtime.apply(plan, signal)),
+      };
     } catch (error) {
       if (error instanceof WriteBoundaryError)
         return {
