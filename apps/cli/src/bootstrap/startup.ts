@@ -1,41 +1,34 @@
-import {readdirSync, realpathSync} from 'node:fs';
-import {defaultStateDirectory} from './paths';
-import {join, relative, resolve} from 'node:path';
+import {realpathSync} from 'node:fs';
+import {resolve} from 'node:path';
 import {
   FutrynError,
   type Account,
-  type ProjectContextPort,
-  type ProjectContextOptions,
-  type ProjectContextReport,
   type CredentialVault,
-  type DiffLine,
   type Message,
+  type ModelInfo,
+  type ProjectContextOptions,
+  type ProjectContextPort,
+  type ProjectContextReport,
+  type Selection,
+  type SessionRecord,
   type ToolPort,
   type ToolResult,
-  type WorkspaceDiffFile,
-  type WorkspaceDiffReport,
   type TurnBudget,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
-import {
-  ToolDispatcher,
-  UnsupportedRuntime,
-  commandBackendFromEnv,
-  platformCommandRuntime,
-  type CommandRuntime,
-} from '@futryn/tools';
-import {WorkspaceRoot, ProjectContextLoader} from '@futryn/workspace';
+import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
+import {ProjectContextLoader, WorkspaceRoot} from '@futryn/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
   ModelCatalog,
   ModelRouter,
   ProviderAdapter,
-  SubscriptionAdapter,
   ProviderRegistry,
   ProviderTransport,
-  providerPresets,
+  SubscriptionAdapter,
   parseOpenRouterKeyLimits,
+  providerPresets,
 } from '@futryn/models';
 import {
   FileCustomThemeStore,
@@ -45,7 +38,6 @@ import {
   ToolAuditStore,
   openPrivateDatabase,
 } from '@futryn/persistence';
-import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} from '../subscriptions/host';
 import {FutrynClient} from '@futryn/sdk';
 import {
   ConfiguredNetworkPolicy,
@@ -57,215 +49,56 @@ import {
   terminalText,
   validateEndpoint,
 } from '@futryn/security';
+import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} from '../subscriptions/host';
+import {grantLabel, runtimeApprover, toolPermissionRequest} from './approvals';
+import {CommandRuntimes, createCommandRuntime, sandboxSettingsFromEnv} from './commands';
+import {defaultStateDirectory} from './paths';
+import {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 
-const IGNORED_DIRS = new Set(['.git', 'node_modules', '.hannes', '.futryn', 'dist', '.DS_Store', '.codegraph']);
+export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
+export {sandboxSettingsFromEnv} from './commands';
 
-export function scanWorkspaceFiles(workspaceRoot: string, query?: string, limit = 250): string[] {
-  const root = resolve(workspaceRoot);
-  const results: string[] = [];
-  const q = query?.trim().toLowerCase() ?? '';
-
-  const walk = (dir: string, depth: number) => {
-    if (depth > 5 || results.length >= limit) return;
-    let entries;
-    try {
-      entries = readdirSync(dir, {withFileTypes: true});
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (results.length >= limit) break;
-      if (IGNORED_DIRS.has(entry.name)) continue;
-      const fullPath = join(dir, entry.name);
-      const relPath = relative(root, fullPath).replace(/\\/g, '/');
-      if (entry.isDirectory()) {
-        walk(fullPath, depth + 1);
-      } else if (entry.isFile()) {
-        if (!q || relPath.toLowerCase().includes(q)) {
-          results.push(relPath);
-        }
-      }
-    }
-  };
-
-  walk(root, 0);
-  return results.sort();
-}
-
-export function computeWorkspaceGitDiff(workspaceRoot: string): WorkspaceDiffReport {
-  const root = resolve(workspaceRoot);
-  try {
-    const proc = Bun.spawnSync(['git', 'diff', '--no-color', '--unified=3'], {
-      cwd: root,
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    if (proc.exitCode !== 0) {
-      return {
-        workspace: root,
-        gitAvailable: false,
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-    }
-
-    // File names and contents are untrusted: strip terminal control bytes before they reach any UI.
-    const raw = terminalText(Buffer.from(proc.stdout).toString('utf8'));
-    if (!raw.trim()) {
-      return {
-        workspace: root,
-        gitAvailable: true,
-        files: [],
-        totalAdditions: 0,
-        totalDeletions: 0,
-      };
-    }
-
-    const files: WorkspaceDiffFile[] = [];
-    let currentFile: WorkspaceDiffFile | null = null;
-    let oldLine = 1;
-    let newLine = 1;
-    let totalAdditions = 0;
-    let totalDeletions = 0;
-
-    for (const line of raw.split('\n')) {
-      if (line.startsWith('diff --git ')) {
-        if (currentFile) files.push(currentFile);
-        const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-        const path = match?.[2] ?? line.slice('diff --git '.length);
-        currentFile = {
-          path,
-          status: 'modified',
-          additions: 0,
-          deletions: 0,
-          lines: [],
-        };
-        continue;
-      }
-      if (!currentFile) continue;
-      if (line.startsWith('new file mode')) {
-        currentFile.status = 'added';
-        continue;
-      }
-      if (line.startsWith('deleted file mode')) {
-        currentFile.status = 'deleted';
-        continue;
-      }
-      if (line.startsWith('rename from ') || line.startsWith('rename to ')) {
-        currentFile.status = 'renamed';
-        continue;
-      }
-      if (line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ')) {
-        continue;
-      }
-      if (line.startsWith('@@')) {
-        const hunkMatch = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
-        oldLine = hunkMatch ? Number(hunkMatch[1]) : 1;
-        newLine = hunkMatch ? Number(hunkMatch[2]) : 1;
-        currentFile.lines.push({
-          type: 'hunk',
-          oldLine: null,
-          newLine: null,
-          content: line,
-        });
-        continue;
-      }
-      if (currentFile.lines.length >= 2000) continue;
-
-      if (line.startsWith('+')) {
-        currentFile.additions++;
-        totalAdditions++;
-        currentFile.lines.push({
-          type: 'add',
-          oldLine: null,
-          newLine: newLine++,
-          content: line.slice(1),
-        });
-      } else if (line.startsWith('-')) {
-        currentFile.deletions++;
-        totalDeletions++;
-        currentFile.lines.push({
-          type: 'del',
-          oldLine: oldLine++,
-          newLine: null,
-          content: line.slice(1),
-        });
-      } else if (line.startsWith(' ')) {
-        const dl: DiffLine = {
-          type: 'context',
-          oldLine: oldLine++,
-          newLine: newLine++,
-          content: line.slice(1),
-        };
-        currentFile.lines.push(dl);
-      }
-    }
-
-    if (currentFile) files.push(currentFile);
-    return {
-      workspace: root,
-      gitAvailable: true,
-      files,
-      totalAdditions,
-      totalDeletions,
-    };
-  } catch {
-    return {
-      workspace: root,
-      gitAvailable: false,
-      files: [],
-      totalAdditions: 0,
-      totalDeletions: 0,
-    };
-  }
-}
+const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 
 /** Committed history as conversation messages, keeping tool calls and tool results. */
-function committedMessages(record: import('@futryn/contracts').SessionRecord): Message[] {
+function committedMessages(record: SessionRecord): Message[] {
   if (record.recovery) return record.recovery.messages;
   return record.messages
     .filter(m => m.state === 'committed')
     .map(({revision: _revision, state: _state, ...message}) => message);
 }
 
-/** Why a read needs approval, in words the permission dialog can show. */
-/** `$ cmd` (plus `in dir` when not the root) for a session command grant. */
-function commandGrantLabel(target: string, workspace: WorkspaceRoot): string {
-  try {
-    const {exec, cwd} = JSON.parse(target) as {exec: string; cwd: string};
-    const dir = workspace.relativeOf(cwd);
-    return `$ ${exec}${dir === '.' ? '' : ` (in ${dir})`}`;
-  } catch {
-    return '$ (command)';
+/** Project context budget: explicit options, else FUTRYN_PROJECT_CONTEXT_MAX_BYTES, else 32 KiB. */
+function projectContextOptions(options: ProjectContextOptions): ProjectContextOptions & {maxBytes: number} {
+  const envBudget = process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ?? process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
+  if (options.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) {
+    throw new FutrynError('INVALID_INPUT');
   }
+  const resolved = {...options, maxBytes: options.maxBytes ?? (envBudget === undefined ? 32768 : Number(envBudget))};
+  const valid = [resolved.maxBytes, resolved.maxFileBytes ?? 16384].every(
+    n => Number.isSafeInteger(n) && n >= 0 && n <= 65536,
+  );
+  if (!valid) throw new FutrynError('INVALID_INPUT');
+  return resolved;
 }
 
-const APPROVAL_REASONS: Record<string, string> = {
-  'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
-  'process-execute':
-    'Runs a shell command in the Futryn sandbox: project files only, .git read-only, secrets hidden, no network.',
-  'network-escalation':
-    'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
-  'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',
-  'stdin-retained-escalation': 'Sends input to a running command that still has network access.',
-  'stdin-input':
-    'Sends input to a running command; for a shell or REPL this runs new commands. "Allow for session" covers this session only.',
-};
-
-/** Configured command sandbox (ADR 0034): FUTRYN_SANDBOX_MODE and FUTRYN_SANDBOX_ESCALATION. Invalid values fail closed. */
-export function sandboxSettingsFromEnv(env: Record<string, string | undefined> = process.env): {
-  mode: 'read-only' | 'workspace-write';
-  escalation: 'on-request' | 'never';
-} {
-  const mode = env.FUTRYN_SANDBOX_MODE ?? 'workspace-write',
-    escalation = env.FUTRYN_SANDBOX_ESCALATION ?? 'on-request';
-  return {
-    mode: mode === 'workspace-write' ? 'workspace-write' : 'read-only',
-    escalation: escalation === 'on-request' ? 'on-request' : 'never',
-  };
+/** What a conversation is wired to inside a client session. All optional for bare CLI conversations. */
+interface ConversationWiring {
+  tools?: ToolPort;
+  workspaceRoot?: string;
+  projectContext?: ProjectContextPort;
+  approve?: RuntimeApprover;
+  /** The user opted this session into the runtime's own loop and tools (ADR 0029). */
+  delegated?: () => boolean;
+  budget?: () => TurnBudget | undefined;
+  /** Plan/review modes cannot be turned into mutating artifact recovery. */
+  analysisOnly?: () => boolean;
 }
 
+/**
+ * The composition root (CLAUDE.md, dependency rules): the only place that wires models, security,
+ * persistence, core, tools, workspace and the SDK client together.
+ */
 export function startup(
   directory = defaultStateDirectory(),
   services: {
@@ -275,24 +108,7 @@ export function startup(
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
   } = {},
 ) {
-  const commandRuntimes = new Set<CommandRuntime>();
-  let commandsClosed = false;
-  let commandShutdown: Promise<void> | undefined;
-  const shutdownCommands = () => {
-    if (commandShutdown) return commandShutdown;
-    commandsClosed = true;
-    const owned = [...commandRuntimes];
-    return (commandShutdown = (async () => {
-      try {
-        const results = await Promise.allSettled(
-          owned.map(runtime => Promise.resolve().then(() => runtime.shutdown?.())),
-        );
-        if (results.some(result => result.status === 'rejected')) throw new FutrynError('TRANSPORT');
-      } finally {
-        for (const runtime of owned) commandRuntimes.delete(runtime);
-      }
-    })());
-  };
+  const commandRuntimes = new CommandRuntimes();
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
@@ -318,13 +134,11 @@ export function startup(
         authorize(provider, a) {
           // Re-read durable grants before every network operation, so logout in another process fences new requests.
           const fresh = accounts.get(a.id);
-          if (
+          const changed =
             (fresh.authGeneration ?? 1) !== (a.authGeneration ?? 1) ||
             JSON.stringify(fresh.credential) !== JSON.stringify(a.credential) ||
-            JSON.stringify(registry.get(provider.id)) !== JSON.stringify(provider)
-          ) {
-            throw new FutrynError('POLICY');
-          }
+            JSON.stringify(registry.get(provider.id)) !== JSON.stringify(provider);
+          if (changed) throw new FutrynError('POLICY');
           policy.authorize(provider, fresh);
         },
       },
@@ -332,6 +146,11 @@ export function startup(
     );
 
   const catalog = (account: Account) => new ModelCatalog(settings, transport(account));
+  /** Re-read on every use, so a model marked 'unsupported' or with new limits takes effect at once. */
+  const cachedModel = (account: Account, modelId: string): ModelInfo | undefined =>
+    catalog(account)
+      .cached()
+      .find(m => m.id === modelId);
 
   const resolveAccount = (id?: string) => {
     const selected = id ?? settings.read().activeAccountId;
@@ -339,90 +158,77 @@ export function startup(
     return accounts.get(selected);
   };
 
+  /**
+   * Tools the model may see. Only direct APIs and the authorized Codex dynamic read bridge receive
+   * Futryn tools (ADR 0018); a delegated runtime uses its own tools instead (ADR 0029).
+   */
+  const modelTools = (account: Account, modelId: string, wiring: ConversationWiring): ToolPort | undefined => {
+    const {tools, delegated = () => false} = wiring;
+    const runtime = registry.get(account.providerId).runtime;
+    if (!tools || (runtime && runtime !== 'codex')) return undefined;
+    return {
+      descriptors: () => {
+        if (runtime && delegated()) return [];
+        if (cachedModel(account, modelId)?.capabilities.tools === 'unsupported') return [];
+        return tools.descriptors();
+      },
+      invoke: (call, signal, onOutput) => tools.invoke(call, signal, onOutput),
+    };
+  };
+
+  /** The model port: a direct provider adapter, or a subscription runtime (Codex, Copilot, …). */
+  const modelPort = (account: Account, selection: Selection, info: ModelInfo, wiring: ConversationWiring) => {
+    const provider = registry.get(account.providerId);
+    if (!provider.runtime) return new ProviderAdapter(transport(account), selection.modelId, info);
+    const {tools, workspaceRoot, approve, delegated = () => false} = wiring;
+    return new SubscriptionAdapter(
+      selection.modelId,
+      (request, signal, executeTool) =>
+        subscriptions.stream(
+          registry.get(account.providerId),
+          account,
+          request,
+          signal,
+          executeTool,
+          workspaceRoot,
+          // Native runtime tools only after folder consent AND an explicit delegation opt-in (ADR 0029).
+          workspaceRoot && delegated() && tools?.descriptors().length ? workspaceRoot : undefined,
+          approve,
+        ),
+      provider.runtime === 'codex',
+    );
+  };
+
   const createConversationForSelection = (
-    selection: {accountId: string; modelId: string},
+    selection: Selection,
     existingSession?: {id: string; messages: Message[]},
-    tools?: ToolPort,
-    workspaceRoot?: string,
-    projectContext?: ProjectContextPort,
-    approve?: RuntimeApprover,
-    delegated: () => boolean = () => false,
-    budget: () => TurnBudget | undefined = () => undefined,
-    analysisOnly: () => boolean = () => false,
+    wiring: ConversationWiring = {},
   ) => {
     const account = accounts.get(selection.accountId);
     if (account.status === 'logged-out') throw new FutrynError('AUTH');
-    const info = catalog(account)
-      .cached()
-      .find(m => m.id === selection.modelId);
+    const info = cachedModel(account, selection.modelId);
     if (!info) throw new FutrynError('NOT_FOUND');
-    // Only direct APIs and the explicitly authorized Codex dynamic read bridge receive tools (ADR 0018).
-    const runtime = !!registry.get(account.providerId).runtime;
-    const codexReads = registry.get(account.providerId).runtime === 'codex';
-    // Re-read the catalog each turn so a model marked 'unsupported' stops receiving tools at once.
-    const modelTools: ToolPort | undefined =
-      tools && (!runtime || codexReads)
-        ? {
-            // A delegated runtime uses its own tools; Futryn tools are not offered alongside them (ADR 0029).
-            descriptors: () =>
-              runtime && delegated()
-                ? []
-                : catalog(account)
-                      .cached()
-                      .find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported'
-                  ? []
-                  : tools.descriptors(),
-            invoke: (call, signal, onOutput) => tools.invoke(call, signal, onOutput),
-          }
-        : undefined;
+    const isRuntime = !!registry.get(account.providerId).runtime;
+
     return new Conversation(
       selection,
-      redactModel(
-        registry.get(account.providerId).runtime
-          ? new SubscriptionAdapter(
-              selection.modelId,
-              (request, signal, executeTool) =>
-                subscriptions.stream(
-                  registry.get(account.providerId),
-                  account,
-                  request,
-                  signal,
-                  executeTool,
-                  workspaceRoot,
-                  // Native runtime tools only after folder consent AND an explicit delegation opt-in (ADR 0029).
-                  workspaceRoot && delegated() && tools?.descriptors().length ? workspaceRoot : undefined,
-                  approve,
-                ),
-              codexReads,
-            )
-          : new ProviderAdapter(transport(account), selection.modelId, info),
-        redactor,
-      ),
+      redactModel(modelPort(account, selection, info, wiring), redactor),
       conversations,
       existingSession,
-      modelTools,
-      runtime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
-      projectContext,
+      modelTools(account, selection.modelId, wiring),
+      isRuntime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
+      wiring.projectContext,
       // ADR 0030: the user's optional work budget and the model's reported context window.
       {
-        budget,
-        analysisOnly,
-        contextLimit: () =>
-          catalog(account)
-            .cached()
-            .find(m => m.id === selection.modelId)?.contextLimit ?? null,
-        outputLimit: () =>
-          catalog(account)
-            .cached()
-            .find(m => m.id === selection.modelId)?.outputLimit ?? null,
+        budget: wiring.budget ?? (() => undefined),
+        analysisOnly: wiring.analysisOnly ?? (() => false),
+        contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
+        outputLimit: () => cachedModel(account, selection.modelId)?.outputLimit ?? null,
       },
     );
   };
 
-  const conversation = (project?: string) => {
-    const selection = router.resolve(project);
-    return createConversationForSelection(selection);
-  };
+  const conversation = (project?: string) => createConversationForSelection(router.resolve(project));
 
   const resumeConversation = (id: string) => {
     const record = conversations.get(id);
@@ -433,6 +239,8 @@ export function startup(
   const discoverModels = async (account: Account, signal?: AbortSignal) => {
     const provider = registry.get(account.providerId);
     if (!provider.runtime) return catalog(account).discover(signal);
+
+    // Runtimes may not report a context window; keep one observed earlier for the same model.
     const observed = new Map(
       catalog(account)
         .cached()
@@ -440,24 +248,21 @@ export function startup(
     );
     const models = (await subscriptions.models(provider, account, signal)).map(model => {
       const previous = observed.get(model.id);
-      if (
-        model.contextLimit == null &&
-        previous?.metadataSource?.endsWith(':observed-context') &&
-        previous.contextLimit
-      ) {
-        return {
-          ...model,
-          contextLimit: previous.contextLimit,
-          metadataSource: previous.metadataSource,
-          metadataFetchedAt: previous.metadataFetchedAt,
-        };
-      }
-      return model;
+      const keepObserved =
+        model.contextLimit == null && previous?.metadataSource?.endsWith(':observed-context') && previous.contextLimit;
+      if (!keepObserved || !previous) return model;
+      return {
+        ...model,
+        contextLimit: previous.contextLimit,
+        metadataSource: previous.metadataSource,
+        metadataFetchedAt: previous.metadataFetchedAt,
+      };
     });
     settings.update(state => {
       const fresh = state.accounts.find(a => a.id === account.id);
-      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration)
+      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) {
         throw new FutrynError('POLICY');
+      }
       state.catalogs = state.catalogs.filter(c => c.accountId !== account.id);
       state.catalogs.push({
         accountId: account.id,
@@ -470,222 +275,179 @@ export function startup(
   };
 
   const validateAccount = async (account: Account, signal?: AbortSignal, generate = false) => {
-    const p = registry.get(account.providerId);
+    const provider = registry.get(account.providerId);
+    // OpenRouter's /models is public and cannot prove that an API key is valid; its /key endpoint can.
+    const checksKey = provider.id === 'openrouter' && provider.baseURL === OPENROUTER_API;
+    // Manual catalogs (no model list) can only be validated by generating.
+    const generates = generate || (provider.catalog === 'manual' && !provider.runtime);
     try {
-      // OpenRouter's /models is public and cannot prove that an API key is valid.
-      const currentKey = p.id === 'openrouter' && p.baseURL === 'https://openrouter.ai/api/v1';
-      if (currentKey) {
+      if (checksKey) {
         const info = await transport(account).json('key', signal);
-        if (!info || typeof info !== 'object' || !('data' in info) || !info.data || typeof info.data !== 'object')
-          throw new FutrynError('PROTOCOL');
+        const valid = info && typeof info === 'object' && 'data' in info && info.data && typeof info.data === 'object';
+        if (!valid) throw new FutrynError('PROTOCOL');
       }
-      // An explicit generation probe validates the pinned model without replacing
-      // richer cached metadata with a less complete model-list response.
+      // An explicit generation probe validates the pinned model without replacing richer cached
+      // metadata with a less complete model-list response.
       const cached = generate ? catalog(account).cached() : [];
-      const res = cached.length ? {models: cached, stale: false} : await discoverModels(account, signal);
-      if (res.stale) throw new FutrynError('TRANSPORT');
-      const modelId = account.defaultModel ?? res.models[0]?.id;
-      if ((generate || (p.catalog === 'manual' && !p.runtime)) && !modelId) throw new FutrynError('NOT_FOUND');
-      if ((generate || (p.catalog === 'manual' && !p.runtime)) && modelId) {
-        await (
-          p.runtime
-            ? new SubscriptionAdapter(modelId, (request, turnSignal) =>
-                subscriptions.stream(p, account, request, turnSignal),
-              )
-            : new ProviderAdapter(transport(account), modelId)
-        ).generate(
-          {
-            requestId: crypto.randomUUID(),
-            modelId,
-            messages: [{role: 'user', content: 'Reply with OK.'}],
-            maxOutputTokens: 16,
-            tools: [],
-          },
-          signal,
-        );
-      }
+      const discovered = cached.length ? {models: cached, stale: false} : await discoverModels(account, signal);
+      if (discovered.stale) throw new FutrynError('TRANSPORT');
+
+      const modelId = account.defaultModel ?? discovered.models[0]?.id;
+      if (generates && !modelId) throw new FutrynError('NOT_FOUND');
+      if (generates && modelId) await generateProbe(account, provider, modelId, signal);
       if (signal?.aborted) throw new FutrynError('CANCELLED');
+
       accounts.validation(account.id, true, account);
+      let validation = 'model-discovery';
+      if (generates) validation = 'generation';
+      else if (checksKey) validation = 'authenticated-key-and-model-discovery';
+      else if (provider.runtime) validation = 'subscription-runtime-model-discovery';
       return {
         accountId: account.id,
-        providerId: p.id,
+        providerId: provider.id,
         connection: 'validated',
-        models: res.models.length,
-        validation:
-          generate || (p.catalog === 'manual' && !p.runtime)
-            ? 'generation'
-            : currentKey
-              ? 'authenticated-key-and-model-discovery'
-              : p.runtime
-                ? 'subscription-runtime-model-discovery'
-                : 'model-discovery',
+        models: discovered.models.length,
+        validation,
         checkedAt: new Date().toISOString(),
       };
     } catch (error) {
-      if (error instanceof FutrynError && ['AUTH', 'FORBIDDEN'].includes(error.code))
+      if (error instanceof FutrynError && ['AUTH', 'FORBIDDEN'].includes(error.code)) {
         accounts.validation(account.id, false, account);
+      }
       throw error;
     }
   };
 
+  /** A minimal, possibly billable generation that proves the account can use the model. */
+  const generateProbe = async (
+    account: Account,
+    provider: ReturnType<typeof registry.get>,
+    modelId: string,
+    signal?: AbortSignal,
+  ) => {
+    const adapter = provider.runtime
+      ? new SubscriptionAdapter(modelId, (request, turnSignal) =>
+          subscriptions.stream(provider, account, request, turnSignal),
+        )
+      : new ProviderAdapter(transport(account), modelId);
+    await adapter.generate(
+      {
+        requestId: crypto.randomUUID(),
+        modelId,
+        messages: [{role: 'user', content: 'Reply with OK.'}],
+        maxOutputTokens: 16,
+        tools: [],
+      },
+      signal,
+    );
+  };
+
+  /** One SDK client per workspace: tools, approvals, project context and sessions for the TUI/CLI. */
   const createFutrynClient = (
     workspaceRoot = resolve('.'),
     contextOptions: ProjectContextOptions = {},
   ): FutrynClient => {
-    const envBudget = process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ?? process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
-    if (contextOptions.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget))
-      throw new FutrynError('INVALID_INPUT');
-    const options = {
-      ...contextOptions,
-      maxBytes: contextOptions.maxBytes ?? (envBudget === undefined ? 32768 : Number(envBudget)),
-    };
-    if (![options.maxBytes, options.maxFileBytes ?? 16384].every(n => Number.isSafeInteger(n) && n >= 0 && n <= 65536))
-      throw new FutrynError('INVALID_INPUT');
+    const contextBudget = projectContextOptions(contextOptions);
+    const stateDirectory = realpathSync.native(resolve(directory));
+    const sandboxSettings = sandboxSettingsFromEnv();
+    const grants = new SessionGrants();
+    const activeConversations = new Map<string, Conversation>();
+    let client: FutrynClient | undefined;
     let projectReport: ProjectContextReport | null = null;
     let contextLoader: ProjectContextLoader | undefined;
     let commandRuntime: CommandRuntime | undefined;
+    let dispatcher: ToolDispatcher | undefined;
+    let workspace: WorkspaceRoot | undefined;
+    const toolsEnabled = () => client?.toolsEnabled() === true;
+
+    // Everything below is created lazily, on first use after folder consent.
+    const workspaceTree = () => (workspace ??= new WorkspaceRoot(workspaceRoot));
+
     const commands = () => {
-      if (commandsClosed) throw new FutrynError('CANCELLED');
+      if (commandRuntimes.closed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
-        // ADR 0035: the native OS sandbox is the default (Codex model); Docker only when selected.
-        // Selecting a backend grants nothing; availability still requires the real self-test.
-        const backend = commandBackendFromEnv(process.env.FUTRYN_COMMAND_BACKEND);
-        commandRuntime = (
-          services.commands ??
-          ((root, state) =>
-            backend === 'none'
-              ? new UnsupportedRuntime('Commands are disabled (FUTRYN_COMMAND_BACKEND).')
-              : platformCommandRuntime({
-                  workspaceRoot: root,
-                  stateDirectory: state,
-                  backend,
-                  hideSecrets: process.env.FUTRYN_SANDBOX_HIDE_SECRETS === '1',
-                }))
-        )(workspaceTree().root, realpathSync.native(resolve(directory)));
+        commandRuntime = (services.commands ?? createCommandRuntime)(workspaceTree().root, stateDirectory);
         commandRuntimes.add(commandRuntime);
       }
       return commandRuntime;
     };
-    const sandboxSettings = sandboxSettingsFromEnv();
-    const activeConvMap = new Map<string, Conversation>();
-    // Read-only workspace tools (ADR 0017). Offered only while the client allows them, i.e. after
-    // the TUI obtained folder consent; approvals go through the client's permission dialog.
-    let client: FutrynClient | undefined;
-    let dispatcher: ToolDispatcher | undefined;
-    let workspace: WorkspaceRoot | undefined;
-    const grants = new SessionGrants();
-    const workspaceTree = () => (workspace ??= new WorkspaceRoot(workspaceRoot));
+
+    // Workspace tools (ADR 0017+): offered only while the client allows them, i.e. after the TUI
+    // obtained folder consent; approvals go through the client's permission dialog.
     const tools = () =>
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
         grants,
-        stateDirectory: realpathSync.native(resolve(directory)),
-        // Sandboxed exec_command (ADR 0022): Seatbelt on macOS; other platforms fail closed.
+        stateDirectory,
         commands: commands(),
         sandbox: () => sandboxSettings,
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),
         approve: (request, signal) =>
-          client
-            ? client.requestPermission(
-                request.capability === 'fs.write'
-                  ? {
-                      capability: 'fs.write',
-                      action: 'Apply verified workspace patch',
-                      target: request.target,
-                      reason: 'Review the exact file changes before applying.',
-                      riskLevel: 'high',
-                      scopeKey: request.scopeKey,
-                      diffPreview: request.diffPreview,
-                    }
-                  : request.capability === 'process.execute'
-                    ? // The action names directory and sandbox, so a "session" answer is bound to all three.
-                      // Network escalation is its own capability, so Bash allow rules and auto mode never approve it.
-                      {
-                        capability: request.network ? 'network.connect' : request.capability,
-                        ...(request.network ? {kind: 'network' as const, ruleTarget: null} : {}),
-                        action: `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
-                        target: request.target,
-                        reason:
-                          (APPROVAL_REASONS[request.reason] ?? request.reason) +
-                          (request.justification ? ` Model's reason: ${request.justification}` : ''),
-                        riskLevel: 'high',
-                        scopeKey: request.scopeKey,
-                      }
-                    : {
-                        capability: request.capability,
-                        action: `${request.tool} ${request.target}`,
-                        target: request.target,
-                        reason: APPROVAL_REASONS[request.reason] ?? request.reason,
-                        riskLevel: 'medium',
-                      },
-                signal,
-              )
-            : Promise.resolve('deny'),
+          client ? client.requestPermission(toolPermissionRequest(request), signal) : Promise.resolve('deny'),
       }));
-    /** Native runtime tools ask through the same prompt and permission mode as Futryn tools (ADR 0027). */
-    const RUNTIME_CAPABILITY = {
-      secret: 'fs.read',
-      edit: 'fs.write',
-      execute: 'process.execute',
-      network: 'network.connect',
-      other: 'extension.service',
-    } as const;
-    const runtimeApprover: RuntimeApprover = async (request, signal) => {
-      if (!client?.toolsEnabled()) return false;
-      const decision = await client.requestPermission(
-        {
-          capability: RUNTIME_CAPABILITY[request.kind],
-          kind: request.kind,
-          action: `${request.runtime}: ${request.label}`.slice(0, 200),
-          target: request.label.slice(0, 1024) || request.kind,
-          reason: `The ${request.runtime} runtime wants to ${request.kind === 'secret' ? 'read a sensitive file' : request.kind === 'edit' ? 'change files' : request.kind === 'execute' ? 'run a command' : request.kind === 'network' ? 'use the network' : 'use a tool'} in this project.`,
-          riskLevel: request.kind === 'execute' || request.kind === 'edit' ? 'high' : 'medium',
-          scopeKey: `runtime:${request.runtime}:${request.kind}:${request.fingerprint}`,
-          ruleTarget: request.ruleTarget,
-        },
-        signal,
-      );
-      return decision !== 'deny';
-    };
+
     const toolPort: ToolPort = {
-      descriptors: () => (client?.toolsEnabled() ? tools().descriptors() : []),
-      invoke: async (call, signal, onOutput): Promise<ToolResult> =>
-        client?.toolsEnabled()
-          ? tools().invoke(call, signal, onOutput)
-          : {
-              callId: call.id,
-              name: call.name,
-              status: 'denied',
-              code: 'TOOLS_DISABLED',
-              content: 'Workspace tools are not enabled for this session.',
-            },
+      descriptors: () => (toolsEnabled() ? tools().descriptors() : []),
+      invoke: async (call, signal, onOutput): Promise<ToolResult> => {
+        if (toolsEnabled()) return tools().invoke(call, signal, onOutput);
+        return {
+          callId: call.id,
+          name: call.name,
+          status: 'denied',
+          code: 'TOOLS_DISABLED',
+          content: 'Workspace tools are not enabled for this session.',
+        };
+      },
     };
 
     const projectContext: ProjectContextPort = {
       load: async signal => {
-        if (!client?.toolsEnabled()) return null;
+        if (!toolsEnabled()) return null;
         contextLoader ??= new ProjectContextLoader(
           workspaceTree(),
           {
             read: (path, budget, readSignal) => {
-              if (!client?.toolsEnabled()) return Promise.resolve({status: 'denied', code: 'WORKSPACE_NOT_APPROVED'});
+              if (!toolsEnabled()) return Promise.resolve({status: 'denied', code: 'WORKSPACE_NOT_APPROVED'});
               return tools().readInstruction(path, budget, readSignal);
             },
           },
-          options,
+          contextBudget,
         );
         const snapshot = await contextLoader.load(signal);
-        if (!client.toolsEnabled()) return null;
+        if (!toolsEnabled()) return null;
         const {content: _content, ...report} = snapshot;
         projectReport = report;
         return snapshot;
       },
     };
 
+    /** Every session of this client is wired the same way. */
+    const wiring: ConversationWiring = {
+      tools: toolPort,
+      workspaceRoot: resolve(workspaceRoot),
+      projectContext,
+      approve: runtimeApprover(() => client),
+      delegated: () => client?.delegatedAgent() ?? false,
+      budget: () => client?.turnBudget(),
+      analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
+    };
+    const openConversation = (selection: Selection, existing?: {id: string; messages: Message[]}) => {
+      const conv = createConversationForSelection(selection, existing, wiring);
+      activeConversations.set(conv.id, conv);
+      return conv;
+    };
+    const openStoredConversation = (id: string) => {
+      const record = conversations.get(id);
+      if (!record) throw new FutrynError('NOT_FOUND');
+      const messages = committedMessages(record);
+      return {conv: openConversation(record.selection, {id: record.id, messages}), record, messages};
+    };
+
     client = new FutrynClient({
+      // Workspace and tools
       availableTools: () =>
-        client?.toolsEnabled()
+        toolsEnabled()
           ? tools()
               .descriptors()
               .map(d => d.name)
@@ -696,42 +458,39 @@ export function startup(
           signal,
           onOutput,
         ),
-      getProjectContext: () => (client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
+      getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
       toolGrants: {
-        list: () =>
-          grants
-            .list()
-            .map(grant =>
-              grant.capability === 'process.execute'
-                ? commandGrantLabel(grant.target, workspaceTree())
-                : grant.capability === 'fs.write'
-                  ? 'Exact patch ' + grant.target.slice(6, 18)
-                  : workspaceTree().relativeOf(grant.target),
-            ),
+        list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
       },
       workspace: resolve(workspaceRoot),
       settings,
+      listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
+      getWorkspaceDiff: () => computeWorkspaceGitDiff(workspaceRoot),
+      sanitizeText: text => terminalText(redactor.text(text)),
+
+      // Providers and sign-in
       listIntegrations: () =>
         integrations.list().map(integration => ({
           ...integration,
           methods: integration.methods.map(method => {
             const provider = integrations.get(method.providerId ?? integration.provider.id).provider;
-            return provider.runtime
-              ? {
-                  ...method,
-                  available: subscriptions.available(provider),
-                  diagnostic: subscriptions.available(provider)
-                    ? undefined
-                    : `Install the official ${provider.runtime} runtime on PATH, then retry. No credentials were read or imported.`,
-                }
-              : method;
+            if (!provider.runtime) return method;
+            const available = subscriptions.available(provider);
+            return {
+              ...method,
+              available,
+              diagnostic: available
+                ? undefined
+                : `Install the official ${provider.runtime} runtime on PATH, then retry. No credentials were read or imported.`,
+            };
           }),
         })),
       beginProviderAuth: async (providerId, methodId, signal) => {
         const integration = integrations.get(providerId);
-        if (integration?.provider.runtime)
+        if (integration?.provider.runtime) {
           return subscriptions.begin(integration.provider, methodId === 'subscription-device', signal);
+        }
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.begin();
       },
@@ -752,6 +511,8 @@ export function startup(
       listProviderPresets: () => [...providerPresets],
       addProvider: p => registry.add({...p, baseURL: validateEndpoint(p.baseURL)}),
       removeProvider: id => registry.remove(id),
+
+      // Accounts and models
       listAccounts: () => settings.read().accounts,
       getAccount: idOrAlias => accounts.get(idOrAlias),
       addAccount: (providerId, alias, credential, secret) => accounts.add(providerId, alias, credential, secret),
@@ -774,7 +535,7 @@ export function startup(
       fetchAccountLimits: (account, signal) => {
         const provider = registry.get(account.providerId);
         // Only OpenRouter's official endpoint has a documented key-credit API; others report nothing.
-        if (provider.id !== 'openrouter' || provider.baseURL !== 'https://openrouter.ai/api/v1') return null;
+        if (provider.id !== 'openrouter' || provider.baseURL !== OPENROUTER_API) return null;
         return transport(account)
           .json('key', signal)
           .then(body => {
@@ -793,10 +554,12 @@ export function startup(
           return null;
         }
       },
+
+      // Sessions
       listSessions: () => conversations.list(),
       getSession: id => conversations.get(id),
       deleteSession: id => {
-        activeConvMap.delete(id);
+        activeConversations.delete(id);
         return conversations.delete(id);
       },
       forkSession: (id, selection) => {
@@ -804,60 +567,16 @@ export function startup(
         createConversationForSelection(selection, {id, messages: []});
         const record = conversations.fork(id, selection);
         const messages = committedMessages(record);
-        const conv = createConversationForSelection(
-          selection,
-          {id: record.id, messages},
-          toolPort,
-          resolve(workspaceRoot),
-          projectContext,
-          runtimeApprover,
-          () => client?.delegatedAgent() ?? false,
-          () => client?.turnBudget(),
-          () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
-        );
-        activeConvMap.set(conv.id, conv);
+        const conv = openConversation(selection, {id: record.id, messages});
         return {id: conv.id, selection, messages};
       },
       startSession: project => {
-        const conv = createConversationForSelection(
-          router.resolve(project),
-          undefined,
-          toolPort,
-          resolve(workspaceRoot),
-          projectContext,
-          runtimeApprover,
-          () => client?.delegatedAgent() ?? false,
-          () => client?.turnBudget(),
-          () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
-        );
-        const selection = router.resolve(project);
-        activeConvMap.set(conv.id, conv);
-        return {id: conv.id, selection, messages: []};
+        const conv = openConversation(router.resolve(project));
+        return {id: conv.id, selection: router.resolve(project), messages: []};
       },
       resumeSession: id => {
-        const record = conversations.get(id);
-        if (!record) throw new FutrynError('NOT_FOUND');
-        const committed = committedMessages(record);
-        const conv = createConversationForSelection(
-          record.selection,
-          {
-            id: record.id,
-            messages: committed,
-          },
-          toolPort,
-          resolve(workspaceRoot),
-          projectContext,
-          runtimeApprover,
-          () => client?.delegatedAgent() ?? false,
-          () => client?.turnBudget(),
-          () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
-        );
-        activeConvMap.set(conv.id, conv);
-        return {
-          id: conv.id,
-          selection: record.selection,
-          messages: committed,
-        };
+        const {conv, record, messages} = openStoredConversation(id);
+        return {id: conv.id, selection: record.selection, messages};
       },
       sendTurn: async function* (
         sessionId,
@@ -867,44 +586,26 @@ export function startup(
         maxEstimatedCostUSD,
         reasoningEffort,
       ) {
-        let conv = activeConvMap.get(sessionId);
-        if (!conv) {
-          const record = conversations.get(sessionId);
-          if (!record) throw new FutrynError('NOT_FOUND');
-          const committed = committedMessages(record);
-          conv = createConversationForSelection(
-            record.selection,
-            {
-              id: record.id,
-              messages: committed,
-            },
-            toolPort,
-            resolve(workspaceRoot),
-            projectContext,
-            runtimeApprover,
-            () => client?.delegatedAgent() ?? false,
-            () => client?.turnBudget(),
-            () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
-          );
-          activeConvMap.set(conv.id, conv);
-        }
+        const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
       },
       // Steering reaches only the conversation that owns the running turn; there is nothing to steer otherwise.
       steerTurn: (sessionId, content, expectedTurnId) =>
-        activeConvMap.get(sessionId)?.steer(content, expectedTurnId) ?? {accepted: false, reason: 'no_active_turn'},
+        activeConversations.get(sessionId)?.steer(content, expectedTurnId) ?? {
+          accepted: false,
+          reason: 'no_active_turn',
+        },
       queuedInput: sessionId =>
-        activeConvMap.get(sessionId)?.queuedInput() ??
+        activeConversations.get(sessionId)?.queuedInput() ??
         (conversations.recover(sessionId).pendingInput ?? []).map(p => ({
           steerId: p.steerId,
           content: p.message.content,
         })),
+
+      // Appearance
       loadCustomThemes: () => customThemes.loadAll(),
       saveCustomTheme: manifest => customThemes.save(manifest),
       removeCustomTheme: id => customThemes.remove(id),
-      listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
-      getWorkspaceDiff: () => computeWorkspaceGitDiff(workspaceRoot),
-      sanitizeText: text => terminalText(redactor.text(text)),
     });
     return client;
   };
@@ -929,7 +630,7 @@ export function startup(
     validateAccount,
     discoverModels,
     subscriptions,
-    shutdownCommands,
+    shutdownCommands: () => commandRuntimes.shutdown(),
   };
 }
 
