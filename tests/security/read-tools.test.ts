@@ -11,7 +11,7 @@ afterEach(() => {
   for (const f of cleanup.splice(0)) f();
 });
 
-function setup(answer: ApprovalDecision = 'deny') {
+function setup(answer: ApprovalDecision = 'deny', options: {ripgrep?: string | null} = {}) {
   const base = mkdtempSync(join(tmpdir(), 'futryn-tools-'));
   cleanup.push(() => rmSync(base, {recursive: true, force: true}));
   const root = join(base, 'ws');
@@ -39,6 +39,7 @@ function setup(answer: ApprovalDecision = 'deny') {
     redact: text => text.replace(/sk-ant-[A-Za-z0-9_-]+/g, '[REDACTED]'),
     audit: record => audit.push(record),
     searchDeadlineMs: 1500,
+    ...options,
   });
   const call = (name: string, input: unknown) => dispatcher.invoke({id: crypto.randomUUID(), name, input});
   return {root, outside, asked, audit, grants, call};
@@ -151,7 +152,8 @@ test('read pages long files within the line and byte limits', async () => {
 });
 
 test('a catastrophic regex is stopped by the deadline instead of hanging the app', async () => {
-  const s = setup();
+  // The built-in JavaScript search backtracks; ripgrep's regex engine is linear-time.
+  const s = setup('deny', {ripgrep: null});
   // JavaScriptCore caps one backtracking match at ~0.5 s, but 20 such lines add up to ~10 s.
   writeFileSync(join(s.root, 'evil.txt'), Array.from({length: 20}, () => 'x'.repeat(30)).join('\n'));
   const started = Date.now();

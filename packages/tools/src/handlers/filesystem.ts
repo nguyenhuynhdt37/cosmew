@@ -1,6 +1,6 @@
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import {readDescriptor, readInput} from '../builtin/read';
-import {compilePattern, globDescriptor, globInput, grepDescriptor, grepInput} from '../builtin/search';
+import {globDescriptor, globInput, grepDescriptor, grepInput} from '../builtin/search';
 import {FileSystemRuntime} from '../runtimes/filesystem';
 import type {ToolHandler} from './types';
 const invalid = (name: string): ToolOutput => ({
@@ -81,12 +81,6 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
       prepare(args) {
         const parsed = grepInput.safeParse(args);
         if (!parsed.success) return invalid('grep');
-        if (!compilePattern(parsed.data.pattern, parsed.data.ignoreCase))
-          return {
-            status: 'error',
-            code: 'INVALID_PATTERN',
-            content: 'The pattern is not a valid JavaScript regular expression.',
-          };
         const file = options.workspace.resolve(parsed.data.path ?? '.');
         if (file.kind !== 'directory')
           return {

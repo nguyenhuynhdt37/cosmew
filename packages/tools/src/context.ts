@@ -46,6 +46,11 @@ export interface ToolDispatcherOptions {
   stateDirectory?: string;
   /** Search deadline; defaults to 30 s. */
   searchDeadlineMs?: number;
+  /**
+   * ripgrep executable for grep (ADR 0038). Omitted: the trusted `rg` on PATH, if any; `null`:
+   * always use the built-in search. A path inside the workspace is never used.
+   */
+  ripgrep?: string | null;
   /** Sandboxed command runtime (ADR 0022). Without one, or while it is unavailable, exec_command is not offered. */
   commands?: CommandRuntime;
   /**

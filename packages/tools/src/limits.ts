@@ -5,6 +5,9 @@ export const LIMITS = {
   lineChars: 2000,
   readFileBytes: 8 * 1024 * 1024,
   results: 100,
+  /** Largest grep page (head_limit) and context window (ADR 0038). */
+  grepEntries: 2000,
+  grepContext: 20,
   searchFileBytes: 1024 * 1024,
   patternChars: 500,
   deadlineMs: 30000,
