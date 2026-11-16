@@ -301,7 +301,7 @@ export class Conversation {
         if(needsArtifact&&!verified&&!stop){
           if(corrections++>=2){stop='stalled';throw new FutrynError('STALLED');}
           steps.push({role:'assistant',content:text});
-          progressNotice='Artifact progress correction: the requested artifact has no successful verification read yet. If the user still requests implementation, perform the approved change and verify the target. Do not merely promise it. If blocked, report the precise blocker and stop. Do not retry denied writes.';
+          progressNotice='Artifact progress correction: the requested artifact has no complete verification read yet. Partial HTML excerpts do not establish full document structure. For these targets, use read with '+JSON.stringify(this.task!.artifactTargets.map(path=>({path,offset:1,limit:2000})))+'. If output remains truncated, report the verification limit rather than claiming completion. If the user still requests implementation, perform the approved change and verify the target. Do not merely promise it. If blocked, report the precise blocker and stop. Do not retry denied writes.';
           if(this.task!.failures.some(f=>f.includes('denied'))){stop='stalled';throw new FutrynError('STALLED');}
           continue;
         }
