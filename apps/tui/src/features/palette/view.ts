@@ -1,7 +1,7 @@
-import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
-import { Modal, clampIndex, windowTrailing, type RenderedBoxLine } from '../../ui';
-import { filterPaletteCommands } from './logic';
-import type { CommandPaletteState } from './types';
+import type {BorderStyle, ThemeTokens} from '@futryn/contracts';
+import {Modal, clampIndex, windowTrailing, type RenderedBoxLine} from '../../ui';
+import {filterPaletteCommands} from './logic';
+import type {CommandPaletteState} from './types';
 
 export function renderCommandPaletteOverlay(options: {
   width: number;
@@ -10,8 +10,8 @@ export function renderCommandPaletteOverlay(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
-  const { width, height, state, tokens, borderStyle } = options;
-  const modal = new Modal({ width, height, tokens, borderStyle, minInner: 30 });
+  const {width, height, state, tokens, borderStyle} = options;
+  const modal = new Modal({width, height, tokens, borderStyle, minInner: 30});
   const matches = filterPaletteCommands(state.query);
   modal.top(` COMMAND PALETTE (${matches.length}) `, ' Enter Execute · Esc Close ');
   modal.input(` ❯ ${state.query}█`, true);
@@ -27,9 +27,13 @@ export function renderCommandPaletteOverlay(options: {
     const right = cmd.shortcut ? ` [${cmd.shortcut}] ` : ' ';
     const descMax = Math.max(0, modal.innerWidth - left.length - right.length);
     modal.spans([
-      { text: left, fg: selected ? tokens.accent : rowFg, bg: rowBg, bold: selected },
-      { text: cmd.description.slice(0, descMax).padEnd(descMax, ' '), fg: selected ? rowFg : tokens.foregroundMuted, bg: rowBg },
-      { text: right, fg: tokens.info, bg: rowBg },
+      {text: left, fg: selected ? tokens.accent : rowFg, bg: rowBg, bold: selected},
+      {
+        text: cmd.description.slice(0, descMax).padEnd(descMax, ' '),
+        fg: selected ? rowFg : tokens.foregroundMuted,
+        bg: rowBg,
+      },
+      {text: right, fg: tokens.info, bg: rowBg},
     ]);
   });
 

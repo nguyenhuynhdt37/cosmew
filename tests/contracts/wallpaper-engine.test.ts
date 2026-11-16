@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'bun:test';
-import { WALLPAPER_PRESET_IDS, defaultAnimationConfig } from '@futryn/contracts';
-import { WALLPAPER_SCENES, WallpaperEngine } from '@futryn/tui';
+import {describe, expect, test} from 'bun:test';
+import {WALLPAPER_PRESET_IDS, defaultAnimationConfig} from '@futryn/contracts';
+import {WALLPAPER_SCENES, WallpaperEngine} from '@futryn/tui';
 
 describe('FUTRYN Live ASCII Wallpaper Engine', () => {
   test('implements all 12 declarative ASCII wallpaper presets and resolves clawd alias to futryn-spark', () => {
@@ -31,7 +31,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
         cols,
         rows,
         timeSeconds: 1.5,
-        config: { ...config, motion: 'smooth', veil: 0.2 },
+        config: {...config, motion: 'smooth', veil: 0.2},
         backgroundHex: preset.defaultBg,
         eventKind: 'streaming',
       });
@@ -57,7 +57,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
         cols,
         rows,
         timeSeconds: 3.2,
-        config: { ...config, motion: 'grid', cellSize: 2 },
+        config: {...config, motion: 'grid', cellSize: 2},
         backgroundHex: preset.defaultBg,
       });
       expect(frameGrid.length).toBe(rows);
@@ -75,7 +75,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 5,
-      config: { ...baseCfg, veil: 0 },
+      config: {...baseCfg, veil: 0},
       backgroundHex: '#231a2e',
       centerColumnRange: [20, 70],
     });
@@ -83,7 +83,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 5,
-      config: { ...baseCfg, veil: 0.9 },
+      config: {...baseCfg, veil: 0.9},
       backgroundHex: '#231a2e',
       centerColumnRange: [20, 70],
     });
@@ -103,14 +103,14 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 1,
-      config: { ...baseCfg, reducedMotion: true },
+      config: {...baseCfg, reducedMotion: true},
       backgroundHex: '#0f1628',
     });
     const static2 = engine.renderFrame('moonlit', {
       cols,
       rows,
       timeSeconds: 42,
-      config: { ...baseCfg, reducedMotion: true },
+      config: {...baseCfg, reducedMotion: true},
       backgroundHex: '#0f1628',
     });
     expect(static1).toEqual(static2);
@@ -120,7 +120,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 2,
-      config: { ...baseCfg, pauseUnfocused: true },
+      config: {...baseCfg, pauseUnfocused: true},
       backgroundHex: '#091821',
       focused: false,
     });
@@ -128,7 +128,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 19,
-      config: { ...baseCfg, pauseUnfocused: true },
+      config: {...baseCfg, pauseUnfocused: true},
       backgroundHex: '#091821',
       focused: false,
     });
@@ -149,7 +149,7 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
       cols,
       rows,
       timeSeconds: 1,
-      config: { ...baseCfg, enabled: false },
+      config: {...baseCfg, enabled: false},
       backgroundHex: '#0c1020',
     });
     expect(disabled.flat().filter(Boolean).length).toBe(0);

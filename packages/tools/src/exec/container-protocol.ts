@@ -56,7 +56,12 @@ export class FrameReader {
 
   private handleLine(line: string): void {
     let frame: unknown;
-    try { frame = JSON.parse(line); } catch { this.handlers.onProtocolError(false); return; }
+    try {
+      frame = JSON.parse(line);
+    } catch {
+      this.handlers.onProtocolError(false);
+      return;
+    }
 
     if (isDataFrame(frame)) {
       this.handlers.onData(frame.stream, Buffer.from(frame.data, 'base64'));
@@ -76,21 +81,25 @@ export class FrameReader {
 
 function isDataFrame(frame: unknown): frame is {type: 'data'; stream: 'stdout' | 'stderr'; data: string} {
   const f = frame as Record<string, unknown>;
-  return f?.type === 'data'
-    && (f.stream === 'stdout' || f.stream === 'stderr')
-    && typeof f.data === 'string'
-    && f.data.length <= MAX_DATA_FIELD
-    && /^[A-Za-z0-9+/]*={0,2}$/.test(f.data);
+  return (
+    f?.type === 'data' &&
+    (f.stream === 'stdout' || f.stream === 'stderr') &&
+    typeof f.data === 'string' &&
+    f.data.length <= MAX_DATA_FIELD &&
+    /^[A-Za-z0-9+/]*={0,2}$/.test(f.data)
+  );
 }
 
 function isReceipt(frame: unknown): frame is Receipt & {type: 'result'} {
   const f = frame as Record<string, unknown>;
-  return f?.type === 'result'
-    && ['exited', 'timeout', 'cancelled', 'spawn-failed'].includes(f.kind as string)
-    && (f.exitCode === null || Number.isInteger(f.exitCode))
-    && (f.signal === null || (typeof f.signal === 'string' && /^SIG[A-Z0-9]{1,12}$/.test(f.signal)))
-    && typeof f.outputClosed === 'boolean'
-    && Number.isInteger(f.wrapperExitCode);
+  return (
+    f?.type === 'result' &&
+    ['exited', 'timeout', 'cancelled', 'spawn-failed'].includes(f.kind as string) &&
+    (f.exitCode === null || Number.isInteger(f.exitCode)) &&
+    (f.signal === null || (typeof f.signal === 'string' && /^SIG[A-Z0-9]{1,12}$/.test(f.signal))) &&
+    typeof f.outputClosed === 'boolean' &&
+    Number.isInteger(f.wrapperExitCode)
+  );
 }
 
 /** Capabilities the trusted supervisor may keep; the command itself drops all of them. */
@@ -119,22 +128,27 @@ interface HostConfig {
 export function hostConfigMatches(host: HostConfig | null, sandbox: CommandSandbox, expected: Mount[]): boolean {
   if (!host) return false;
 
-  const policyOk = host.PidMode === ''
-    && host.NetworkMode === (sandbox.network ? 'bridge' : 'none')
-    && !host.Privileged
-    && host.ReadonlyRootfs === true
-    && (host.SecurityOpt ?? []).includes('no-new-privileges')
-    && host.PidsLimit === 128
-    && host.Memory === 536_870_912
-    && host.NanoCpus === 1_000_000_000
-    && host.CgroupnsMode === 'private'
-    && (host.CapDrop ?? []).includes('ALL')
-    && !(host.CapAdd ?? []).some(cap => !ALLOWED_CAPABILITIES.includes(cap.replace(/^CAP_/, '')))
-    && !host.Binds?.length;
+  const policyOk =
+    host.PidMode === '' &&
+    host.NetworkMode === (sandbox.network ? 'bridge' : 'none') &&
+    !host.Privileged &&
+    host.ReadonlyRootfs === true &&
+    (host.SecurityOpt ?? []).includes('no-new-privileges') &&
+    host.PidsLimit === 128 &&
+    host.Memory === 536_870_912 &&
+    host.NanoCpus === 1_000_000_000 &&
+    host.CgroupnsMode === 'private' &&
+    (host.CapDrop ?? []).includes('ALL') &&
+    !(host.CapAdd ?? []).some(cap => !ALLOWED_CAPABILITIES.includes(cap.replace(/^CAP_/, ''))) &&
+    !host.Binds?.length;
   if (!policyOk) return false;
 
   const key = (mount: Mount) => JSON.stringify([mount.Source, mount.Target, mount.ReadOnly]);
   const wanted = new Set(expected.map(key));
-  const actual = (host.Mounts ?? []).map(m => m.Type === 'bind' ? {Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly === true} : {Source: '', Target: '', ReadOnly: false});
+  const actual = (host.Mounts ?? []).map(m =>
+    m.Type === 'bind'
+      ? {Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly === true}
+      : {Source: '', Target: '', ReadOnly: false},
+  );
   return actual.length === expected.length && actual.every(mount => wanted.has(key(mount)));
 }

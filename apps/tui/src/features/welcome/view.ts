@@ -1,6 +1,6 @@
-import type { BorderStyle, ThemeManifest, ThemeTokens } from '@futryn/contracts';
-import type { FutrynClient } from '@futryn/sdk';
-import type { RenderedBoxLine, StyledSpan } from '../../ui';
+import type {BorderStyle, ThemeManifest, ThemeTokens} from '@futryn/contracts';
+import type {FutrynClient} from '@futryn/sdk';
+import type {RenderedBoxLine, StyledSpan} from '../../ui';
 
 export function renderWelcomeScreen(options: {
   width: number;
@@ -11,7 +11,7 @@ export function renderWelcomeScreen(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
-  const { width, manifest, status, tokens } = options;
+  const {width, manifest, status, tokens} = options;
   const w = Math.min(Math.max(28, width - 4), 56);
   const bg = tokens.background;
   const lines: RenderedBoxLine[] = [];
@@ -21,9 +21,9 @@ export function renderWelcomeScreen(options: {
     const left = Math.max(0, Math.floor((w - clipped.length) / 2));
     return {
       spans: [
-        { text: ' '.repeat(left), fg, bg },
-        { text: clipped, fg, bg, bold },
-        { text: ' '.repeat(Math.max(0, w - left - clipped.length)), fg, bg },
+        {text: ' '.repeat(left), fg, bg},
+        {text: clipped, fg, bg, bold},
+        {text: ' '.repeat(Math.max(0, w - left - clipped.length)), fg, bg},
       ],
     };
   };
@@ -31,16 +31,16 @@ export function renderWelcomeScreen(options: {
   const pills = (labels: string[]): RenderedBoxLine => {
     const parts: StyledSpan[] = [];
     for (const label of labels) {
-      if (parts.length > 0) parts.push({ text: ' ', fg: tokens.foregroundSubtle, bg });
-      parts.push({ text: ` ${label} `, fg: tokens.info, bg: tokens.backgroundElevated });
+      if (parts.length > 0) parts.push({text: ' ', fg: tokens.foregroundSubtle, bg});
+      parts.push({text: ` ${label} `, fg: tokens.info, bg: tokens.backgroundElevated});
     }
     const len = parts.reduce((sum, span) => sum + span.text.length, 0);
     const left = Math.max(0, Math.floor((w - len) / 2));
     return {
       spans: [
-        { text: ' '.repeat(left), fg: tokens.foregroundSubtle, bg },
+        {text: ' '.repeat(left), fg: tokens.foregroundSubtle, bg},
         ...parts,
-        { text: ' '.repeat(Math.max(0, w - left - len)), fg: tokens.foregroundSubtle, bg },
+        {text: ' '.repeat(Math.max(0, w - left - len)), fg: tokens.foregroundSubtle, bg},
       ],
     };
   };
@@ -59,4 +59,3 @@ export function renderWelcomeScreen(options: {
 
   return lines;
 }
-

@@ -1,9 +1,16 @@
-import { FutrynError, type Account, type Provider } from '@futryn/contracts';
-import type { Application } from '../bootstrap/startup';
+import {FutrynError, type Account, type Provider} from '@futryn/contracts';
+import type {Application} from '../bootstrap/startup';
 
 /** Shared line/administration subscription UX. Prints public authorization
  * instructions only; the official runtime and OS vault own secret material. */
-export async function loginSubscription(app: Application, provider: Provider, alias: string, signal: AbortSignal, existing?: Account, device = false): Promise<Account> {
+export async function loginSubscription(
+  app: Application,
+  provider: Provider,
+  alias: string,
+  signal: AbortSignal,
+  existing?: Account,
+  device = false,
+): Promise<Account> {
   const client = app.createFutrynClient();
   const methodId = device ? 'subscription-device' : 'subscription-browser';
   const integration = client.listIntegrations().find(i => i.provider.id === provider.id);
@@ -17,14 +24,36 @@ export async function loginSubscription(app: Application, provider: Provider, al
   const display = () => {
     try {
       const progress = client.providerAuthProgress(challenge.id);
-      const value = [progress.message, progress.authorizationURL, progress.userCode ? `Device code: ${progress.userCode}` : ''].filter(Boolean).join('\n');
-      if (value && value !== previous) { process.stdout.write(app.redactor.text(value) + '\n'); previous = value; }
-    } catch { /* completion consumed the challenge */ }
+      const value = [
+        progress.message,
+        progress.authorizationURL,
+        progress.userCode ? `Device code: ${progress.userCode}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      if (value && value !== previous) {
+        process.stdout.write(app.redactor.text(value) + '\n');
+        previous = value;
+      }
+    } catch {
+      /* completion consumed the challenge */
+    }
   };
   display();
   const timer = setInterval(display, 150);
   try {
-    return await client.connectAccount({ providerId: provider.id, alias, reauthenticateAccountId: existing?.id,
-      credential: { kind: 'keyring', key: crypto.randomUUID() }, authChallengeId: challenge.id }, signal);
-  } finally { clearInterval(timer); await client.cancelProviderAuth(challenge.id); }
+    return await client.connectAccount(
+      {
+        providerId: provider.id,
+        alias,
+        reauthenticateAccountId: existing?.id,
+        credential: {kind: 'keyring', key: crypto.randomUUID()},
+        authChallengeId: challenge.id,
+      },
+      signal,
+    );
+  } finally {
+    clearInterval(timer);
+    await client.cancelProviderAuth(challenge.id);
+  }
 }

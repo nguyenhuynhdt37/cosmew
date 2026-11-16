@@ -4,5 +4,5 @@ export interface DiffViewState {
 }
 
 export function createInitialDiffViewState(): DiffViewState {
-  return { selectedFileIndex: 0, scrollOffset: 0 };
+  return {selectedFileIndex: 0, scrollOffset: 0};
 }

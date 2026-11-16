@@ -21,24 +21,27 @@
     "tui": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts tui",
     "test": "bun test tests",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && git diff --check",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && prettier --check \"**/*.{ts,tsx,js}\" && git diff --check",
     "test:integration": "bun test tests/contracts/provider-adapters.test.ts tests/security",
     "test:e2e": "bun test tests/end-to-end",
     "fyn": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
-    "link:cli": "bun link --cwd apps/cli"
+    "link:cli": "bun link --cwd apps/cli",
+    "format": "prettier --write \"**/*.{ts,tsx,js}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js}\""
   },
   "devDependencies": {
-    "typescript": "7.0.2",
-    "@types/bun": "1.4.4",
     "@futryn/contracts": "workspace:*",
-    "@futryn/security": "workspace:*",
-    "@futryn/persistence": "workspace:*",
-    "@futryn/models": "workspace:*",
     "@futryn/core": "workspace:*",
+    "@futryn/models": "workspace:*",
+    "@futryn/persistence": "workspace:*",
     "@futryn/sdk": "workspace:*",
-    "@futryn/tui": "workspace:*",
+    "@futryn/security": "workspace:*",
     "@futryn/tools": "workspace:*",
-    "@futryn/workspace": "workspace:*"
+    "@futryn/tui": "workspace:*",
+    "@futryn/workspace": "workspace:*",
+    "@types/bun": "1.4.4",
+    "prettier": "3.9.10",
+    "typescript": "7.0.2"
   },
   "repository": {
     "type": "git",

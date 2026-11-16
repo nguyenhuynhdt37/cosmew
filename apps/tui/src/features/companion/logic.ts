@@ -1,4 +1,4 @@
-import type { FynState } from './types';
+import type {FynState} from './types';
 
 export class FynCompanion {
   private state: FynState = 'idle';
@@ -31,7 +31,7 @@ export class FynCompanion {
     }
   }
 
-  view(pendingApproval: boolean, reactive: boolean, reducedMotion: boolean): { state: FynState; time: number } {
+  view(pendingApproval: boolean, reactive: boolean, reducedMotion: boolean): {state: FynState; time: number} {
     return {
       state: reactive ? (pendingApproval ? 'waiting' : this.state) : 'idle',
       time: reducedMotion ? 0 : this.motion,

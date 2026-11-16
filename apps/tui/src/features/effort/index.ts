@@ -1,1 +1,1 @@
-export { EffortFeature } from './controller';
+export {EffortFeature} from './controller';

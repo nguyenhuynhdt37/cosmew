@@ -22,14 +22,22 @@ export type MaskDecision = 'hide' | 'read-only' | 'keep';
  * is bounded; a tree that exceeds it, or a path that cannot be expressed as a mount target, fails
  * closed instead of launching with an unmasked secret.
  */
-export function scanExecutionMasks(workspace: WorkspaceRoot, classify: (relative: string, directory: boolean) => MaskDecision, limits: {maxEntries: number; maxMasks: number} = {maxEntries: 250_000, maxMasks: 512}, signal?: AbortSignal): ExecutionMasks {
+export function scanExecutionMasks(
+  workspace: WorkspaceRoot,
+  classify: (relative: string, directory: boolean) => MaskDecision,
+  limits: {maxEntries: number; maxMasks: number} = {maxEntries: 250_000, maxMasks: 512},
+  signal?: AbortSignal,
+): ExecutionMasks {
   const masks: ExecutionMasks = {hiddenFiles: [], hiddenDirectories: [], readOnly: [], entries: 0};
   const unsafe = /[,"\n\r\u0000]/;
   const visit = (relative: string) => {
     signal?.throwIfAborted();
     let entries;
-    try { entries = readdirSync(relative ? join(workspace.root, relative) : workspace.root, {withFileTypes: true}); }
-    catch { throw new FutrynError('POLICY'); }
+    try {
+      entries = readdirSync(relative ? join(workspace.root, relative) : workspace.root, {withFileTypes: true});
+    } catch {
+      throw new FutrynError('POLICY');
+    }
     for (const entry of entries) {
       if (++masks.entries > limits.maxEntries) throw new FutrynError('BUDGET');
       const path = relative ? `${relative}/${entry.name}` : entry.name;
@@ -43,7 +51,8 @@ export function scanExecutionMasks(workspace: WorkspaceRoot, classify: (relative
         else if (directory) masks.hiddenDirectories.push(path);
         else if (entry.isFile()) masks.hiddenFiles.push(path);
         else throw new FutrynError('POLICY');
-        if (masks.hiddenFiles.length + masks.hiddenDirectories.length + masks.readOnly.length > limits.maxMasks) throw new FutrynError('BUDGET');
+        if (masks.hiddenFiles.length + masks.hiddenDirectories.length + masks.readOnly.length > limits.maxMasks)
+          throw new FutrynError('BUDGET');
         continue;
       }
       if (directory) visit(path);

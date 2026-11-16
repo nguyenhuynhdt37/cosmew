@@ -1,6 +1,22 @@
-import type { AuthMethod, Provider, ProviderAuthChallenge } from '@futryn/contracts';
+import type {AuthMethod, Provider, ProviderAuthChallenge} from '@futryn/contracts';
 
-export type ConnectStep = 'provider' | 'method' | 'secret' | 'env' | 'custom-id' | 'url' | 'protocol' | 'auth' | 'catalog' | 'manual' | 'accounts' | 'actions' | 'rename' | 'confirm' | 'busy' | 'oauth';
+export type ConnectStep =
+  | 'provider'
+  | 'method'
+  | 'secret'
+  | 'env'
+  | 'custom-id'
+  | 'url'
+  | 'protocol'
+  | 'auth'
+  | 'catalog'
+  | 'manual'
+  | 'accounts'
+  | 'actions'
+  | 'rename'
+  | 'confirm'
+  | 'busy'
+  | 'oauth';
 export interface ConnectProviderState {
   selectedIndex: number;
   showAdvanced?: boolean;
@@ -23,5 +39,5 @@ export interface ConnectProviderState {
   statusMessage?: string;
 }
 export function createInitialConnectProviderState(): ConnectProviderState {
-  return { selectedIndex: 0, query: '', step: 'provider', aliasDraft: '', secretDraft: '', draft: '' };
+  return {selectedIndex: 0, query: '', step: 'provider', aliasDraft: '', secretDraft: '', draft: ''};
 }

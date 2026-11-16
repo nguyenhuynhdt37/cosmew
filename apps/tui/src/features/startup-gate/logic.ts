@@ -1,5 +1,5 @@
-import type { Account, ThemeTokens } from '@futryn/contracts';
-import type { GateRow, StartupPhase } from './types';
+import type {Account, ThemeTokens} from '@futryn/contracts';
+import type {GateRow, StartupPhase} from './types';
 
 /** A verification request that takes longer than this is reported as a timeout. */
 export const CHECK_TIMEOUT_SECONDS = 20;
@@ -7,16 +7,27 @@ export const CHECK_TIMEOUT_SECONDS = 20;
 /** Overlays the gate lets through while the user signs in. */
 export const GATE_OVERLAYS: readonly string[] = ['connect', 'models'];
 /** Global shortcuts that must not open other overlays during sign-in. */
-export const GATE_BLOCKED_KEYS: readonly string[] = ['Ctrl+P', 'Ctrl+T', 'Ctrl+L', 'Ctrl+S', 'Ctrl+D', 'Ctrl+B', 'Ctrl+N'];
+export const GATE_BLOCKED_KEYS: readonly string[] = [
+  'Ctrl+P',
+  'Ctrl+T',
+  'Ctrl+L',
+  'Ctrl+S',
+  'Ctrl+D',
+  'Ctrl+B',
+  'Ctrl+N',
+];
 
 /** Accounts the user may still pick from (signed-out ones are hidden). */
-export const selectableAccounts = (accounts: Account[]): Account[] => accounts.filter(account => account.status !== 'logged-out');
+export const selectableAccounts = (accounts: Account[]): Account[] =>
+  accounts.filter(account => account.status !== 'logged-out');
 
 /** Number of rows the keyboard cursor can land on. */
-export const optionCount = (phase: StartupPhase, accounts: Account[]): number => (phase === 'trust' ? 2 : accounts.length + 1);
+export const optionCount = (phase: StartupPhase, accounts: Account[]): number =>
+  phase === 'trust' ? 2 : accounts.length + 1;
 
 /** Keep the cursor inside the list even when accounts changed underneath it. */
-export const clampOption = (index: number, count: number): number => Math.max(0, Math.min(index, Math.max(0, count - 1)));
+export const clampOption = (index: number, count: number): number =>
+  Math.max(0, Math.min(index, Math.max(0, count - 1)));
 
 /** Which account to pre-select after a failed check: the first other usable one, else "sign in". */
 export function suggestedAlternative(accounts: Account[], failedId: string): number {
@@ -50,10 +61,11 @@ export interface GateContent {
 
 /** Rows of the dialog, exactly `height` of them; the footer always stays the last row. */
 export function gateRows(c: GateContent): GateRow[] {
-  const { tokens, width: w, height: h } = c;
+  const {tokens, width: w, height: h} = c;
   const rows: GateRow[] = [];
-  const add = (text: string, fg = tokens.foreground, bold = false) => rows.push({ text, fg, bold });
-  const option = (selected: boolean, label: string) => add(`${selected ? '›' : ' '} ${label}`, selected ? tokens.accent : tokens.foreground, selected);
+  const add = (text: string, fg = tokens.foreground, bold = false) => rows.push({text, fg, bold});
+  const option = (selected: boolean, label: string) =>
+    add(`${selected ? '›' : ' '} ${label}`, selected ? tokens.accent : tokens.foreground, selected);
 
   if (c.phase === 'trust') {
     add('Trust this folder?', tokens.accent, true);
@@ -72,15 +84,18 @@ export function gateRows(c: GateContent): GateRow[] {
   } else {
     add('Choose an account', tokens.accent, true);
     if (h >= 8) add(c.message || 'Select an account or sign in.', tokens.warning);
-    const choices = [...c.accounts.map(account => `${account.alias} · ${account.providerId}`), 'Sign in to another account'];
+    const choices = [
+      ...c.accounts.map(account => `${account.alias} · ${account.providerId}`),
+      'Sign in to another account',
+    ];
     const room = Math.max(1, h - (h >= 8 ? 4 : 3));
     const start = Math.max(0, Math.min(c.index - room + 1, choices.length - room));
     for (const [offset, text] of choices.slice(start, start + room).entries()) option(start + offset === c.index, text);
   }
 
   const body = rows.slice(0, Math.max(0, h - 1));
-  while (body.length < h - 1) body.push({ text: '', fg: tokens.foreground });
-  body.push({ text: w >= 35 ? '↑↓ Choose · Enter Continue · Esc Exit' : '↑↓  Enter  Esc', fg: tokens.foregroundSubtle });
+  while (body.length < h - 1) body.push({text: '', fg: tokens.foreground});
+  body.push({text: w >= 35 ? '↑↓ Choose · Enter Continue · Esc Exit' : '↑↓  Enter  Esc', fg: tokens.foregroundSubtle});
   return body.slice(0, h);
 }
 

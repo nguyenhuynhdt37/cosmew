@@ -1,5 +1,5 @@
 export interface ModelPickerState {
-  effortDraft?: { modelId: string; value: string };
+  effortDraft?: {modelId: string; value: string};
   query: string;
   selectedIndex: number;
   addingManual: boolean;
@@ -8,5 +8,5 @@ export interface ModelPickerState {
 }
 
 export function createInitialModelPickerState(): ModelPickerState {
-  return { query: '', selectedIndex: 0, addingManual: false, manualDraft: '' };
+  return {query: '', selectedIndex: 0, addingManual: false, manualDraft: ''};
 }

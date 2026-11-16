@@ -1,4 +1,4 @@
-import type { Database } from 'bun:sqlite';
+import type {Database} from 'bun:sqlite';
 import {
   chmodSync,
   closeSync,
@@ -15,7 +15,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import {join, resolve} from 'node:path';
 import {
   FutrynError,
   emptySettings,
@@ -26,15 +26,15 @@ import {
   type SettingsStore,
   type ThemeManifest,
 } from '@futryn/contracts';
-export { openPrivateDatabase } from './database';
-export { SqliteConversations } from './session-store';
-export { ToolAuditStore, type ToolAuditEntry } from './tool-audit';
+export {openPrivateDatabase} from './database';
+export {SqliteConversations} from './session-store';
+export {ToolAuditStore, type ToolAuditEntry} from './tool-audit';
 
 export class SqliteSettings implements SettingsStore {
   constructor(private readonly db: Database) {}
   read(): Settings {
     try {
-      const row = this.db.query('SELECT data FROM settings WHERE id=1').get() as { data: string } | null;
+      const row = this.db.query('SELECT data FROM settings WHERE id=1').get() as {data: string} | null;
       return settingsSchema.parse(row ? JSON.parse(row.data) : emptySettings());
     } catch {
       throw new FutrynError('STORAGE');
@@ -42,12 +42,16 @@ export class SqliteSettings implements SettingsStore {
   }
   update(change: (settings: Settings) => void): void {
     try {
-      this.db.transaction(() => {
-        const settings = this.read();
-        change(settings);
-        const validated = settingsSchema.parse(settings);
-        this.db.query('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').run(JSON.stringify(validated));
-      }).immediate();
+      this.db
+        .transaction(() => {
+          const settings = this.read();
+          change(settings);
+          const validated = settingsSchema.parse(settings);
+          this.db
+            .query('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')
+            .run(JSON.stringify(validated));
+        })
+        .immediate();
     } catch (e) {
       if (e instanceof FutrynError) throw e;
       throw new FutrynError('STORAGE');
@@ -57,7 +61,7 @@ export class SqliteSettings implements SettingsStore {
 
 export interface CustomThemeStoreResult {
   themes: ThemeManifest[];
-  errors: { file: string; message: string }[];
+  errors: {file: string; message: string}[];
 }
 
 export class FileCustomThemeStore {
@@ -67,38 +71,38 @@ export class FileCustomThemeStore {
     this.themesDir = join(root, 'themes');
   }
   private ensureSafeDirectory(): void {
-    mkdirSync(this.themesDir, { recursive: true, mode: 0o700 });
+    mkdirSync(this.themesDir, {recursive: true, mode: 0o700});
     const stat = lstatSync(this.themesDir);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new FutrynError('STORAGE');
-    if (process.platform !== 'win32' && (stat.mode & 0o077)) chmodSync(this.themesDir, 0o700);
+    if (process.platform !== 'win32' && stat.mode & 0o077) chmodSync(this.themesDir, 0o700);
   }
   loadAll(): CustomThemeStoreResult {
     try {
       this.ensureSafeDirectory();
       const entries = readdirSync(this.themesDir);
       const themes: ThemeManifest[] = [];
-      const errors: { file: string; message: string }[] = [];
+      const errors: {file: string; message: string}[] = [];
       for (const entry of entries.sort()) {
         if (!entry.endsWith('.json')) continue;
         const fullPath = join(this.themesDir, entry);
         try {
           const stat = lstatSync(fullPath);
           if (stat.isSymbolicLink() || !stat.isFile() || stat.size > 262144) {
-            errors.push({ file: entry, message: 'Unsafe or oversized theme file refused' });
+            errors.push({file: entry, message: 'Unsafe or oversized theme file refused'});
             continue;
           }
           const raw = JSON.parse(readFileSync(fullPath, 'utf8'));
-          const parsed = themeManifestSchema.safeParse({ ...raw, builtIn: false, category: 'custom' });
+          const parsed = themeManifestSchema.safeParse({...raw, builtIn: false, category: 'custom'});
           if (!parsed.success) {
-            errors.push({ file: entry, message: parsed.error.issues[0]?.message ?? 'Invalid theme manifest schema' });
+            errors.push({file: entry, message: parsed.error.issues[0]?.message ?? 'Invalid theme manifest schema'});
             continue;
           }
           themes.push(parsed.data);
         } catch (err) {
-          errors.push({ file: entry, message: err instanceof Error ? err.message : 'Corrupted JSON file' });
+          errors.push({file: entry, message: err instanceof Error ? err.message : 'Corrupted JSON file'});
         }
       }
-      return { themes, errors };
+      return {themes, errors};
     } catch (e) {
       if (e instanceof FutrynError) throw e;
       throw new FutrynError('STORAGE');
@@ -107,7 +111,7 @@ export class FileCustomThemeStore {
   save(manifest: ThemeManifest): ThemeManifest {
     let validated: ThemeManifest;
     try {
-      validated = themeManifestSchema.parse({ ...manifest, builtIn: false, category: 'custom' });
+      validated = themeManifestSchema.parse({...manifest, builtIn: false, category: 'custom'});
     } catch {
       throw new FutrynError('INVALID_INPUT');
     }
@@ -117,7 +121,7 @@ export class FileCustomThemeStore {
       if (existsSync(targetPath) && lstatSync(targetPath).isSymbolicLink()) throw new FutrynError('STORAGE');
       const tempPath = join(this.themesDir, `.${validated.id}.${crypto.randomUUID()}.tmp`);
       const serialized = JSON.stringify(validated, null, 2) + '\n';
-      writeFileSync(tempPath, serialized, { encoding: 'utf8', mode: 0o600 });
+      writeFileSync(tempPath, serialized, {encoding: 'utf8', mode: 0o600});
       const fd = openSync(tempPath, constants.O_RDONLY);
       try {
         fsyncSync(fd);
@@ -147,7 +151,7 @@ export class FileCustomThemeStore {
         unlinkSync(targetPath);
         return true;
       }
-      rmSync(targetPath, { force: true });
+      rmSync(targetPath, {force: true});
       return true;
     } catch {
       throw new FutrynError('STORAGE');

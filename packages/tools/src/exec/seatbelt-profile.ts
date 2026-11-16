@@ -34,7 +34,7 @@ const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 
 /** Case-insensitive regex for a literal text, e.g. `.env` → `[.][eE][nN][vV]`. */
 const caseInsensitive = (text: string) =>
-  [...text].map(ch => /[a-z]/i.test(ch) ? `[${ch.toLowerCase()}${ch.toUpperCase()}]` : escapeRegex(ch)).join('');
+  [...text].map(ch => (/[a-z]/i.test(ch) ? `[${ch.toLowerCase()}${ch.toUpperCase()}]` : escapeRegex(ch))).join('');
 
 const quote = (text: string) => JSON.stringify(text);
 const subpath = (path: string) => `(subpath ${quote(path)})`;
@@ -52,16 +52,58 @@ export function secretPatterns(): SecretPatterns {
 
 /** Codex `seatbelt_base_policy.sbpl` sysctl allow-list. */
 const SYSCTL_NAMES = [
-  'hw.activecpu', 'hw.busfrequency_compat', 'hw.byteorder', 'hw.cacheconfig', 'hw.cachelinesize_compat',
-  'hw.cpufamily', 'hw.cpufrequency_compat', 'hw.cputype', 'hw.l1dcachesize_compat', 'hw.l1icachesize_compat',
-  'hw.l2cachesize_compat', 'hw.l3cachesize_compat', 'hw.logicalcpu_max', 'hw.machine', 'hw.model', 'hw.memsize',
-  'hw.ncpu', 'hw.nperflevels', 'hw.packages', 'hw.pagesize_compat', 'hw.pagesize', 'hw.physicalcpu',
-  'hw.physicalcpu_max', 'hw.logicalcpu', 'hw.cpufrequency', 'hw.tbfrequency_compat', 'hw.vectorunit',
-  'machdep.cpu.brand_string', 'kern.argmax', 'kern.hostname', 'kern.maxfilesperproc', 'kern.maxproc',
-  'kern.osproductversion', 'kern.osrelease', 'kern.ostype', 'kern.osvariant_status', 'kern.osversion',
-  'kern.secure_kernel', 'kern.sysv.semmns', 'kern.usrstack64', 'kern.version', 'sysctl.proc_cputype', 'vm.loadavg',
+  'hw.activecpu',
+  'hw.busfrequency_compat',
+  'hw.byteorder',
+  'hw.cacheconfig',
+  'hw.cachelinesize_compat',
+  'hw.cpufamily',
+  'hw.cpufrequency_compat',
+  'hw.cputype',
+  'hw.l1dcachesize_compat',
+  'hw.l1icachesize_compat',
+  'hw.l2cachesize_compat',
+  'hw.l3cachesize_compat',
+  'hw.logicalcpu_max',
+  'hw.machine',
+  'hw.model',
+  'hw.memsize',
+  'hw.ncpu',
+  'hw.nperflevels',
+  'hw.packages',
+  'hw.pagesize_compat',
+  'hw.pagesize',
+  'hw.physicalcpu',
+  'hw.physicalcpu_max',
+  'hw.logicalcpu',
+  'hw.cpufrequency',
+  'hw.tbfrequency_compat',
+  'hw.vectorunit',
+  'machdep.cpu.brand_string',
+  'kern.argmax',
+  'kern.hostname',
+  'kern.maxfilesperproc',
+  'kern.maxproc',
+  'kern.osproductversion',
+  'kern.osrelease',
+  'kern.ostype',
+  'kern.osvariant_status',
+  'kern.osversion',
+  'kern.secure_kernel',
+  'kern.sysv.semmns',
+  'kern.usrstack64',
+  'kern.version',
+  'sysctl.proc_cputype',
+  'vm.loadavg',
 ];
-const SYSCTL_PREFIXES = ['hw.optional.arm.', 'hw.optional.armv8_', 'hw.perflevel', 'kern.proc.pgrp.', 'kern.proc.pid.', 'net.routetable.'];
+const SYSCTL_PREFIXES = [
+  'hw.optional.arm.',
+  'hw.optional.armv8_',
+  'hw.perflevel',
+  'kern.proc.pgrp.',
+  'kern.proc.pid.',
+  'net.routetable.',
+];
 
 /** Mach services every command may use (Codex base + preferences policy, plus dirhelper for temp dirs). */
 const BASE_MACH_SERVICES = [

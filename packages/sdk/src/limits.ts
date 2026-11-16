@@ -1,4 +1,4 @@
-import type { Usage } from '@futryn/contracts';
+import type {Usage} from '@futryn/contracts';
 
 /** One limit shown to the user. Percent-based (subscription plans) or amount-based (API credit). */
 export interface LimitItem {
@@ -37,10 +37,18 @@ export interface AccountLimits {
  * Live limits a composition root can fetch. Returns null synchronously when the provider has no
  * such API, so the UI can say so at once instead of showing a pending check.
  */
-export type FetchAccountLimits = (account: import('@futryn/contracts').Account, signal?: AbortSignal) =>
-  Promise<{ items: LimitItem[]; note?: string }> | null;
+export type FetchAccountLimits = (
+  account: import('@futryn/contracts').Account,
+  signal?: AbortSignal,
+) => Promise<{items: LimitItem[]; note?: string}> | null;
 
 /** Convert a runtime quota snapshot (subscription plans) into display items. */
 export function quotaItems(quota: NonNullable<Usage['quota']>): LimitItem[] {
-  return quota.map(q => ({ label: q.name, usedPercent: q.usedPercent, resetAt: q.resetAt, unlimited: q.unlimited ?? false, unit: '%' as const }));
+  return quota.map(q => ({
+    label: q.name,
+    usedPercent: q.usedPercent,
+    resetAt: q.resetAt,
+    unlimited: q.unlimited ?? false,
+    unit: '%' as const,
+  }));
 }

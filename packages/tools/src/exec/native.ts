@@ -132,7 +132,11 @@ export class NativeCommandRuntime implements CommandRuntime {
     mkdirSync(join(this.scratch, 'home'));
     mkdirSync(join(this.scratch, 'tmp'));
 
-    const pathDirectories = [...new Set((options.hostPath ?? process.env.PATH ?? '').split(delimiter).filter(dir => isAbsolute(dir) && existsSync(dir)))];
+    const pathDirectories = [
+      ...new Set(
+        (options.hostPath ?? process.env.PATH ?? '').split(delimiter).filter(dir => isAbsolute(dir) && existsSync(dir)),
+      ),
+    ];
     this.path = [...new Set([...pathDirectories, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])].join(':');
     const toolchains = toolchainDirectories(pathDirectories, home);
 
@@ -158,12 +162,24 @@ export class NativeCommandRuntime implements CommandRuntime {
       this.unavailableReason = unavailableReason(os);
     }
 
-    this.label = this.sandbox?.name === 'macos-seatbelt' ? 'macOS Seatbelt'
-      : this.sandbox?.name === 'linux-bubblewrap' ? 'Linux bubblewrap'
-      : 'no sandbox';
+    this.label =
+      this.sandbox?.name === 'macos-seatbelt'
+        ? 'macOS Seatbelt'
+        : this.sandbox?.name === 'linux-bubblewrap'
+          ? 'Linux bubblewrap'
+          : 'no sandbox';
     // Approvals are bound to this id, so any change of the effective policy invalidates them.
-    const policy = [options.workspaceRoot, options.stateDirectory, this.path, toolchains, options.hideSecrets === true, 'v1'];
-    this.id = `native-${this.sandbox?.name ?? 'none'}:` + createHash('sha256').update(JSON.stringify(policy)).digest('hex').slice(0, 24);
+    const policy = [
+      options.workspaceRoot,
+      options.stateDirectory,
+      this.path,
+      toolchains,
+      options.hideSecrets === true,
+      'v1',
+    ];
+    this.id =
+      `native-${this.sandbox?.name ?? 'none'}:` +
+      createHash('sha256').update(JSON.stringify(policy)).digest('hex').slice(0, 24);
   }
 
   capabilities(): CommandRuntimeCapabilities {
@@ -183,10 +199,13 @@ export class NativeCommandRuntime implements CommandRuntime {
     const probe = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-probe-')));
     try {
       const result = this.runSelfTest(probe);
-      if (result) return this.proven = {ok: true};
+      if (result) return (this.proven = {ok: true});
       return {ok: false, reason: 'The native sandbox self-test failed.'};
     } catch (error) {
-      return {ok: false, reason: 'The native sandbox self-test failed: ' + (error instanceof Error ? error.message : 'unknown')};
+      return {
+        ok: false,
+        reason: 'The native sandbox self-test failed: ' + (error instanceof Error ? error.message : 'unknown'),
+      };
     } finally {
       rmSync(probe, {recursive: true, force: true});
     }
@@ -199,9 +218,16 @@ export class NativeCommandRuntime implements CommandRuntime {
     const home = this.options.home ?? homedir();
 
     // The probe always enables the secret rule so a hide-secrets configuration is proven as well.
-    const sandbox = this.sandbox!.name === 'macos-seatbelt'
-      ? new SeatbeltSandbox({workspace: probe, scratch: this.scratch, home: realPath(home), toolchains: [], secrets: secretPatterns()})
-      : this.sandbox!;
+    const sandbox =
+      this.sandbox!.name === 'macos-seatbelt'
+        ? new SeatbeltSandbox({
+            workspace: probe,
+            scratch: this.scratch,
+            home: realPath(home),
+            toolchains: [],
+            secrets: secretPatterns(),
+          })
+        : this.sandbox!;
     const script = [
       'echo ok > made',
       '! cat .env 2>/dev/null | grep -q PROBE',
@@ -211,13 +237,24 @@ export class NativeCommandRuntime implements CommandRuntime {
       `! kill -0 ${process.pid} 2>/dev/null`,
       '! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null',
     ].join(' && ');
-    const argv = sandbox.wrap(['/bin/bash', '--noprofile', '--norc', '-c', script], {mode: 'workspace-write', network: false}, probe);
-    const result = spawnSync(argv[0]!, argv.slice(1), {cwd: probe, env: this.env(false), timeout: 10_000, encoding: 'utf8'});
+    const argv = sandbox.wrap(
+      ['/bin/bash', '--noprofile', '--norc', '-c', script],
+      {mode: 'workspace-write', network: false},
+      probe,
+    );
+    const result = spawnSync(argv[0]!, argv.slice(1), {
+      cwd: probe,
+      env: this.env(false),
+      timeout: 10_000,
+      encoding: 'utf8',
+    });
 
-    return result.status === 0
-      && readFileSync(join(probe, 'made'), 'utf8') === 'ok\n'
-      && !existsSync(outside)
-      && !existsSync(join(probe, '.git', 'x'));
+    return (
+      result.status === 0 &&
+      readFileSync(join(probe, 'made'), 'utf8') === 'ok\n' &&
+      !existsSync(outside) &&
+      !existsSync(join(probe, '.git', 'x'))
+    );
   }
 
   private env(tty: boolean): Record<string, string> {
@@ -255,10 +292,14 @@ export class NativeCommandRuntime implements CommandRuntime {
     }
 
     // The lease is the hard deadline for the command and everything it started.
-    session.lease = setTimeout(() => { void this.stop(session, 'timeout'); }, request.timeoutMs);
+    session.lease = setTimeout(() => {
+      void this.stop(session, 'timeout');
+    }, request.timeoutMs);
     this.sessions.set(session.id, session);
 
-    const abort = () => { void this.stop(session, 'cancelled'); };
+    const abort = () => {
+      void this.stop(session, 'cancelled');
+    };
     signal?.addEventListener('abort', abort, {once: true});
     session.releaseAbort = () => signal?.removeEventListener('abort', abort);
 
@@ -289,7 +330,12 @@ export class NativeCommandRuntime implements CommandRuntime {
 
   /** Pipe session: a detached process group so the whole group can be signalled. */
   private startPipes(session: NativeSession, argv: string[], cwd: string): void {
-    const child = spawn(argv[0]!, argv.slice(1), {cwd, env: this.env(false), stdio: ['pipe', 'pipe', 'pipe'], detached: true});
+    const child = spawn(argv[0]!, argv.slice(1), {
+      cwd,
+      env: this.env(false),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
     session.pipeChild = child;
     session.pid = child.pid;
 
@@ -328,13 +374,21 @@ export class NativeCommandRuntime implements CommandRuntime {
 
   /** Wait up to `yieldMs`, then report the session's state and the output since the previous call. */
   private async collect(session: NativeSession, yieldMs: number, signal?: AbortSignal): Promise<CommandOutcome> {
-    const abort = () => { void this.stop(session, 'cancelled'); };
+    const abort = () => {
+      void this.stop(session, 'cancelled');
+    };
     if (signal?.aborted) await this.stop(session, 'cancelled');
     else signal?.addEventListener('abort', abort, {once: true});
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!session.ended) await Promise.race([session.done, new Promise<void>(resolve => { timer = setTimeout(resolve, yieldMs); })]);
+      if (!session.ended)
+        await Promise.race([
+          session.done,
+          new Promise<void>(resolve => {
+            timer = setTimeout(resolve, yieldMs);
+          }),
+        ]);
       if (signal?.aborted) await this.stop(session, 'cancelled');
 
       const result = this.outcome(session);
@@ -353,7 +407,8 @@ export class NativeCommandRuntime implements CommandRuntime {
 
   private outcome(session: NativeSession): CommandOutcome {
     const kind = outcomeKind(session);
-    const stdout = session.buffers.stdout, stderr = session.buffers.stderr;
+    const stdout = session.buffers.stdout,
+      stderr = session.buffers.stderr;
     const output = stdout.text() + (stderr.totalBytes ? '\n[stderr]\n' + stderr.text() : '');
     const exitCode = kind === 'exited' ? session.exitCode : null;
     // Seatbelt cannot prove that a setsid descendant died; bubblewrap's PID namespace can.
@@ -381,12 +436,18 @@ export class NativeCommandRuntime implements CommandRuntime {
   session(id: string): CommandSessionInfo | undefined {
     const session = this.sessions.get(id);
     if (!session) return undefined;
-    return {cwd: session.request.cwd, command: session.request.command, tty: session.tty, sandbox: {...session.sandbox}};
+    return {
+      cwd: session.request.cwd,
+      command: session.request.command,
+      tty: session.tty,
+      sandbox: {...session.sandbox},
+    };
   }
 
   resize(id: string, cols: number, rows: number): void {
     const session = this.sessions.get(id);
-    const validSize = Number.isInteger(cols) && cols >= 10 && cols <= 1000 && Number.isInteger(rows) && rows >= 5 && rows <= 500;
+    const validSize =
+      Number.isInteger(cols) && cols >= 10 && cols <= 1000 && Number.isInteger(rows) && rows >= 5 && rows <= 500;
     if (!session || !session.tty || session.ended || !validSize) throw new FutrynError('POLICY');
     session.ptyChild?.terminal?.resize(cols, rows);
   }
@@ -396,7 +457,14 @@ export class NativeCommandRuntime implements CommandRuntime {
    * `\x03` on a pipe session) interrupts the foreground job, which may survive it; SIGTERM ends the
    * whole session. The original lease never extends.
    */
-  async writeStdin(id: string, chars: string, yieldTimeMs: number, signal?: AbortSignal, interrupt?: 'SIGINT' | 'SIGTERM', onOutput?: (chunk: CommandOutputChunk) => void): Promise<CommandOutcome> {
+  async writeStdin(
+    id: string,
+    chars: string,
+    yieldTimeMs: number,
+    signal?: AbortSignal,
+    interrupt?: 'SIGINT' | 'SIGTERM',
+    onOutput?: (chunk: CommandOutputChunk) => void,
+  ): Promise<CommandOutcome> {
     const session = this.sessions.get(id);
     const validInput = chars.length <= NATIVE_LIMITS.maxStdinChars && !chars.includes('\u0000');
     const validYield = Number.isInteger(yieldTimeMs) && yieldTimeMs >= 0 && yieldTimeMs <= 30_000;
@@ -433,7 +501,9 @@ function createSession(request: CommandRequest, sandbox: CommandSandbox): Native
   const stdoutBudget = tty ? request.maxOutputBytes : Math.max(1, Math.ceil(request.maxOutputBytes / 2));
   const stderrBudget = Math.max(1, Math.floor(request.maxOutputBytes / 2));
   let markDone!: () => void;
-  const done = new Promise<void>(resolve => { markDone = resolve; });
+  const done = new Promise<void>(resolve => {
+    markDone = resolve;
+  });
   return {
     id: randomUUID(),
     request,
@@ -462,12 +532,19 @@ function recordOutput(session: NativeSession, stream: Stream, bytes: Buffer): vo
 
   const text = new TextDecoder().decode(bytes.subarray(0, limit - session.streamed[stream]));
   session.streamed[stream] += bytes.length;
-  try { session.observer?.({stream, text}); } catch { session.observer = undefined; }
+  try {
+    session.observer?.({stream, text});
+  } catch {
+    session.observer = undefined;
+  }
 }
 
 /** Codex: each call reports only the output produced since the previous call on this session. */
 function resetOutputWindow(session: NativeSession): void {
-  session.buffers = {stdout: new HeadTailBuffer(session.budgets.stdout), stderr: new HeadTailBuffer(session.budgets.stderr)};
+  session.buffers = {
+    stdout: new HeadTailBuffer(session.budgets.stdout),
+    stderr: new HeadTailBuffer(session.budgets.stderr),
+  };
   session.streamed = {stdout: 0, stderr: 0};
 }
 
@@ -504,7 +581,9 @@ function signalGroup(session: NativeSession, signal: NodeJS.Signals): void {
     try {
       session.pipeChild?.kill(signal);
       session.ptyChild?.kill(signal);
-    } catch { /* already gone */ }
+    } catch {
+      /* already gone */
+    }
   }
 }
 
@@ -513,7 +592,11 @@ function interruptForeground(session: NativeSession): void {
     session.ptyChild?.terminal?.write('\u0003');
     return;
   }
-  try { process.kill(-session.pid!, 'SIGINT'); } catch { /* already gone */ }
+  try {
+    process.kill(-session.pid!, 'SIGINT');
+  } catch {
+    /* already gone */
+  }
 }
 
 function sendInput(session: NativeSession, chars: string): void {
@@ -526,10 +609,15 @@ function sendInput(session: NativeSession, chars: string): void {
 
 function validateRequest(request: CommandRequest): void {
   const shell = request.shell ?? 'bash';
-  const validLease = Number.isInteger(request.timeoutMs) && request.timeoutMs >= NATIVE_LIMITS.minLeaseMs && request.timeoutMs <= NATIVE_LIMITS.maxLeaseMs;
+  const validLease =
+    Number.isInteger(request.timeoutMs) &&
+    request.timeoutMs >= NATIVE_LIMITS.minLeaseMs &&
+    request.timeoutMs <= NATIVE_LIMITS.maxLeaseMs;
   const validCommand = request.command.length <= 1024 && !request.command.includes('\u0000');
-  const validOutput = Number.isInteger(request.maxOutputBytes) && request.maxOutputBytes >= 1 && request.maxOutputBytes <= 60_000;
-  if (!validLease || !validCommand || !validOutput || !['bash', 'sh'].includes(shell)) throw new FutrynError('INVALID_INPUT');
+  const validOutput =
+    Number.isInteger(request.maxOutputBytes) && request.maxOutputBytes >= 1 && request.maxOutputBytes <= 60_000;
+  if (!validLease || !validCommand || !validOutput || !['bash', 'sh'].includes(shell))
+    throw new FutrynError('INVALID_INPUT');
 }
 
 /** The shell never reads project startup files unless a login shell was requested. */
@@ -553,13 +641,21 @@ function unavailableReason(os: NodeJS.Platform): string {
 function findExecutable(name: string, path: string): string | undefined {
   for (const dir of path.split(':')) {
     const candidate = join(dir, name);
-    try { if (statSync(candidate).isFile()) return candidate; } catch { /* try the next directory */ }
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* try the next directory */
+    }
   }
   return undefined;
 }
 
 function realPath(path: string): string {
-  try { return realpathSync(path); } catch { return path; }
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

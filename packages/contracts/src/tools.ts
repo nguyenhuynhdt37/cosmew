@@ -1,6 +1,6 @@
-import { z } from 'zod';
-import type { CommandOutputChunk } from './command-runtime';
-import type { ToolCall } from './models';
+import {z} from 'zod';
+import type {CommandOutputChunk} from './command-runtime';
+import type {ToolCall} from './models';
 
 /**
  * TOOLS1 (ADR 0017): read-only workspace tools. Descriptors carry no executable code; the
@@ -32,7 +32,10 @@ export interface PermissionDecision {
 
 export const toolResultSchema = z.strictObject({
   /** Historical authorization binding, never a reusable grant. */
-  authorizationScopeHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  authorizationScopeHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   callId: z.string().min(1).max(200),
   name: z.string().min(1).max(100),
   status: z.enum(['ok', 'denied', 'error']),
@@ -46,7 +49,7 @@ export const toolResultSchema = z.strictObject({
   /** exec_command (ADR 0022): exit code of the command; null when it was killed by a signal. */
   exitCode: z.number().int().nullable().optional(),
   /** exec_command: wall-clock run time of the process. */
-  sessionId:z.string().uuid().optional(),
+  sessionId: z.string().uuid().optional(),
   durationMs: z.number().int().min(0).optional(),
 });
 export type ToolResult = z.infer<typeof toolResultSchema>;
@@ -54,5 +57,5 @@ export type ToolResult = z.infer<typeof toolResultSchema>;
 /** What `core` sees: descriptors to offer and one call to run. */
 export interface ToolPort {
   descriptors(): ToolDescriptor[];
-  invoke(call: ToolCall, signal?: AbortSignal, onOutput?:(chunk:CommandOutputChunk)=>void): Promise<ToolResult>;
+  invoke(call: ToolCall, signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): Promise<ToolResult>;
 }

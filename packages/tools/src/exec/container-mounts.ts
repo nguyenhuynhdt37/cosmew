@@ -58,11 +58,18 @@ const UNSAFE_MOUNT_PATH = /[,"\n\r]/;
  * no running write-capable session could swap it (`allowGitSource`). Every other mask is sourced from
  * Futryn's private control directory.
  */
-export function planContainerMounts(root: string, sandbox: CommandSandbox, sources: MountSources, allowGitSource = true): MountPlan {
+export function planContainerMounts(
+  root: string,
+  sandbox: CommandSandbox,
+  sources: MountSources,
+  allowGitSource = true,
+): MountPlan {
   if (UNSAFE_MOUNT_PATH.test(root) || UNSAFE_MOUNT_PATH.test(sources.control)) throw new FutrynError('POLICY');
 
   const workspace = new WorkspaceRoot(root);
-  const masks = scanExecutionMasks(workspace, (path, directory) => classify(workspace, path, directory, sources.stateDirectory, allowGitSource));
+  const masks = scanExecutionMasks(workspace, (path, directory) =>
+    classify(workspace, path, directory, sources.stateDirectory, allowGitSource),
+  );
 
   if (masks.readOnly.some(path => path !== '.git')) throw new FutrynError('POLICY');
   const gitPinned = masks.readOnly.length > 0;
@@ -78,7 +85,11 @@ export function planContainerMounts(root: string, sandbox: CommandSandbox, sourc
     {Source: workspace.root, Target: '/workspace', ReadOnly: sandbox.mode === 'read-only'},
     ...masks.readOnly.map(path => ({Source: join(workspace.root, path), Target: `/workspace/${path}`, ReadOnly: true})),
     ...masks.hiddenFiles.map(path => ({Source: sources.emptyFile, Target: `/workspace/${path}`, ReadOnly: true})),
-    ...masks.hiddenDirectories.map(path => ({Source: sources.emptyDirectory, Target: `/workspace/${path}`, ReadOnly: true})),
+    ...masks.hiddenDirectories.map(path => ({
+      Source: sources.emptyDirectory,
+      Target: `/workspace/${path}`,
+      ReadOnly: true,
+    })),
   ];
 
   const {uid, gid} = commandIdentity(workspace.root, sandbox);
@@ -87,12 +98,21 @@ export function planContainerMounts(root: string, sandbox: CommandSandbox, sourc
     hidden: [...masks.hiddenDirectories, ...masks.hiddenFiles].filter(path => !path.startsWith('.git/')),
     ...secretNamePatterns(),
   };
-  const args = expected.flatMap(mount => ['--mount', `type=bind,src=${mount.Source},dst=${mount.Target}${mount.ReadOnly ? ',readonly' : ''}`]);
+  const args = expected.flatMap(mount => [
+    '--mount',
+    `type=bind,src=${mount.Source},dst=${mount.Target}${mount.ReadOnly ? ',readonly' : ''}`,
+  ]);
 
   return {workspace, expected, args, uid, gid, gitPinned, verify};
 }
 
-function classify(workspace: WorkspaceRoot, path: string, directory: boolean, stateDirectory: string | undefined, allowGitSource: boolean): MaskDecision {
+function classify(
+  workspace: WorkspaceRoot,
+  path: string,
+  directory: boolean,
+  stateDirectory: string | undefined,
+  allowGitSource: boolean,
+): MaskDecision {
   const name = path.toLowerCase().split('/').at(-1)!;
   if (name === '.git') return path === '.git' && directory && allowGitSource ? 'read-only' : 'hide';
   if (name === '.futryn' || name === '.hannes') return 'hide';
@@ -123,7 +143,11 @@ function assertRealDirectory(path: string): void {
 /** False when the file does not exist; a symlink or special file there is refused. */
 function existsAsRegularFile(path: string): boolean {
   let entry;
-  try { entry = lstatSync(path); } catch { return false; }
+  try {
+    entry = lstatSync(path);
+  } catch {
+    return false;
+  }
   if (entry.isSymbolicLink() || !entry.isFile()) throw new FutrynError('POLICY');
   return true;
 }

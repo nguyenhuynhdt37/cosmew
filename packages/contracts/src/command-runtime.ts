@@ -1,4 +1,7 @@
-export interface CommandOutputChunk {stream:'stdout'|'stderr';text:string}
+export interface CommandOutputChunk {
+  stream: 'stdout' | 'stderr';
+  text: string;
+}
 
 /**
  * Effective sandbox for one command (ADR 0034, Codex `SandboxPolicy` subset). `read-only` and
@@ -18,7 +21,7 @@ export interface CommandRequest {
   timeoutMs: number;
   maxOutputBytes: number;
   /** Wait before returning a running session (Codex yield_time_ms). Omitted: wait for exit or lease. */
-  yieldTimeMs?:number;
+  yieldTimeMs?: number;
   /** Defaults to `{mode:'read-only',network:false}` for runtimes that predate ADR 0034. */
   sandbox?: CommandSandbox;
   /** Allocate a real pseudo-terminal inside the sandbox (Codex `tty`). */
@@ -27,7 +30,7 @@ export interface CommandRequest {
   shell?: 'bash' | 'sh';
   /** Login-shell startup from the image's trusted profile only (Codex `login`). */
   login?: boolean;
-  onOutput?:(chunk:CommandOutputChunk)=>void;
+  onOutput?: (chunk: CommandOutputChunk) => void;
 }
 
 export interface CommandLifecycle {
@@ -40,7 +43,7 @@ export interface CommandLifecycle {
 
 export interface CommandOutcome {
   kind: 'exited' | 'timeout' | 'cancelled' | 'spawn-failed' | 'running' | 'unconfirmed';
-  sessionId?:string;
+  sessionId?: string;
   exitCode: number | null;
   signal: string | null;
   output: string;
@@ -53,7 +56,7 @@ export interface CommandOutcome {
   sandboxDenied?: boolean;
 }
 
-export type RuntimeAvailability = { ok: true } | { ok: false; reason: string };
+export type RuntimeAvailability = {ok: true} | {ok: false; reason: string};
 
 /** What an available runtime can enforce. Requests outside it are refused, never downgraded. */
 export interface CommandRuntimeCapabilities {
@@ -86,10 +89,17 @@ export interface CommandRuntime {
   availability(): RuntimeAvailability;
   capabilities?(): CommandRuntimeCapabilities;
   run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome>;
-  session?(id:string):CommandSessionInfo|undefined;
-  writeStdin?(id:string,chars:string,yieldTimeMs:number,signal?:AbortSignal,interrupt?:'SIGINT'|'SIGTERM',onOutput?:(chunk:CommandOutputChunk)=>void):Promise<CommandOutcome>;
+  session?(id: string): CommandSessionInfo | undefined;
+  writeStdin?(
+    id: string,
+    chars: string,
+    yieldTimeMs: number,
+    signal?: AbortSignal,
+    interrupt?: 'SIGINT' | 'SIGTERM',
+    onOutput?: (chunk: CommandOutputChunk) => void,
+  ): Promise<CommandOutcome>;
   /** Resize an owned PTY session; refused for pipe sessions. */
-  resize?(id:string,cols:number,rows:number):void;
+  resize?(id: string, cols: number, rows: number): void;
   /** Close admission and settle owned runs; this does not certify descendant containment. */
   shutdown?(): Promise<void>;
 }

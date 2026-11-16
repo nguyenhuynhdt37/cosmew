@@ -1,6 +1,6 @@
-export { FutrynTuiApp } from './app';
-export { runInteractiveTui } from './runtime';
-export { parseRawTerminalKey, TerminalInputDecoder } from './input/terminal-keys';
+export {FutrynTuiApp} from './app';
+export {runInteractiveTui} from './runtime';
+export {parseRawTerminalKey, TerminalInputDecoder} from './input/terminal-keys';
 export * from './types';
 export * from './theme/theme';
 export * from './theme/presets';
@@ -27,6 +27,6 @@ export * from './features/connect';
 export * from './features/models';
 export * from './features/theme-editor';
 export * from './features/startup-gate';
-export type { FeatureRegistry, OverlayFeature, OverlayLayout, ThemeFrame, TuiHost } from './core/feature';
+export type {FeatureRegistry, OverlayFeature, OverlayLayout, ThemeFrame, TuiHost} from './core/feature';
 export * from './ui';
 export * from './features/commands';

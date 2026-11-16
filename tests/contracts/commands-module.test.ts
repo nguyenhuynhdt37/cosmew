@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test';
-import { OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage } from '@futryn/tui';
+import {expect, test} from 'bun:test';
+import {OVERLAY_COMMANDS, isUnsupported, planEffort, unsupportedMessage} from '@futryn/tui';
 
 test('every overlay command alias resolves to the overlay its command opens', () => {
   expect(OVERLAY_COMMANDS['/config']).toBe('settings');
@@ -19,9 +19,9 @@ test('unsupported backends explain themselves instead of failing silently', () =
 
 test('effort planning handles models without levels, unknown levels, auto and status', () => {
   expect(planEffort('', []).kind).toBe('banner');
-  expect(planEffort('', ['low', 'high'])).toEqual({ kind: 'open' });
+  expect(planEffort('', ['low', 'high'])).toEqual({kind: 'open'});
   expect(planEffort('bogus', ['low', 'high']).kind).toBe('banner');
-  expect(planEffort('auto', ['low'])).toEqual({ kind: 'apply', level: 'default', available: ['low'] });
-  expect(planEffort('status', ['low'])).toEqual({ kind: 'apply', level: null, available: ['low'] });
-  expect(planEffort('high', ['low', 'high'])).toEqual({ kind: 'apply', level: 'high', available: ['low', 'high'] });
+  expect(planEffort('auto', ['low'])).toEqual({kind: 'apply', level: 'default', available: ['low']});
+  expect(planEffort('status', ['low'])).toEqual({kind: 'apply', level: null, available: ['low']});
+  expect(planEffort('high', ['low', 'high'])).toEqual({kind: 'apply', level: 'high', available: ['low', 'high']});
 });

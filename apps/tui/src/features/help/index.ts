@@ -1,2 +1,2 @@
-export { HelpFeature } from './controller';
-export { renderHelpOverlay } from './view';
+export {HelpFeature} from './controller';
+export {renderHelpOverlay} from './view';

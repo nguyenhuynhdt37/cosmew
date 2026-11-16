@@ -17,4 +17,8 @@ export interface StartupGateState {
   startedAt?: number;
 }
 
-export interface GateRow { text: string; fg: string; bold?: boolean }
+export interface GateRow {
+  text: string;
+  fg: string;
+  bold?: boolean;
+}

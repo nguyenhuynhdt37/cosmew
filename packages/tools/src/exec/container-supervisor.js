@@ -21,18 +21,24 @@ const FINAL_FLUSH_MS = 250;
 const isInt = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
 
 let launch;
-try { launch = JSON.parse(process.argv[1]); } catch { process.exit(126); }
+try {
+  launch = JSON.parse(process.argv[1]);
+} catch {
+  process.exit(126);
+}
 
-const validLaunch = launch
-  && typeof launch.command === 'string'
-  && typeof launch.cwd === 'string' && launch.cwd.startsWith('/')
-  && isInt(launch.lease, 1000, 1800000)
-  && isInt(launch.uid, 1, 4294967294)
-  && isInt(launch.gid, 1, 4294967294)
-  && typeof launch.tty === 'boolean'
-  && ['bash', 'sh'].includes(launch.shell)
-  && typeof launch.login === 'boolean'
-  && (!launch.tty || (isInt(launch.cols, 10, 1000) && isInt(launch.rows, 5, 500)));
+const validLaunch =
+  launch &&
+  typeof launch.command === 'string' &&
+  typeof launch.cwd === 'string' &&
+  launch.cwd.startsWith('/') &&
+  isInt(launch.lease, 1000, 1800000) &&
+  isInt(launch.uid, 1, 4294967294) &&
+  isInt(launch.gid, 1, 4294967294) &&
+  typeof launch.tty === 'boolean' &&
+  ['bash', 'sh'].includes(launch.shell) &&
+  typeof launch.login === 'boolean' &&
+  (!launch.tty || (isInt(launch.cols, 10, 1000) && isInt(launch.rows, 5, 500)));
 if (!validLaunch) process.exit(126);
 
 // ---------------------------------------------------------------------------------------------
@@ -77,7 +83,10 @@ function flushQueue() {
 function emit(stream, chunk) {
   const line = dataFrame(stream, chunk);
   if (blocked) {
-    if (queuedBytes + line.length > MAX_QUEUED_PTY_BYTES) { dropped = true; return; }
+    if (queuedBytes + line.length > MAX_QUEUED_PTY_BYTES) {
+      dropped = true;
+      return;
+    }
     pending.push(line);
     queuedBytes += line.length;
     return;
@@ -92,7 +101,12 @@ function emit(stream, chunk) {
 function finish(value, status) {
   if (finishing) return;
   finishing = true;
-  const receipt = {type: 'result', ...value, outputClosed: closedStreams >= streams && !dropped, wrapperExitCode: status};
+  const receipt = {
+    type: 'result',
+    ...value,
+    outputClosed: closedStreams >= streams && !dropped,
+    wrapperExitCode: status,
+  };
   setTimeout(() => process.exit(status), FINAL_FLUSH_MS);
   while (pending.length) process.stdout.write(pending.shift());
   process.stdout.write(JSON.stringify(receipt) + '\n', () => process.exit(status));
@@ -100,7 +114,10 @@ function finish(value, status) {
 
 function onLeaderExit(code, signal) {
   observedExit = true;
-  result = {value: {kind: 'exited', exitCode: code, signal: signal ?? null}, status: code ?? (128 + (signals[signal] ?? 0))};
+  result = {
+    value: {kind: 'exited', exitCode: code, signal: signal ?? null},
+    status: code ?? 128 + (signals[signal] ?? 0),
+  };
   if (closedStreams >= streams) finish(result.value, result.status);
   else setTimeout(() => finish(result.value, result.status), PIPE_DRAIN_AFTER_EXIT_MS);
 }
@@ -123,7 +140,11 @@ function verifyMasks(verify) {
   try {
     const lines = fs.readFileSync('/proc/self/mountinfo', 'utf8').split('\n').filter(Boolean);
     // Field 5 is the mount point, with octal escapes such as \040 for spaces.
-    mountpoints = new Set(lines.map(line => line.split(' ')[4].replace(/\\([0-7]{3})/g, (_match, octal) => String.fromCharCode(parseInt(octal, 8)))));
+    mountpoints = new Set(
+      lines.map(line =>
+        line.split(' ')[4].replace(/\\([0-7]{3})/g, (_match, octal) => String.fromCharCode(parseInt(octal, 8))),
+      ),
+    );
   } catch {
     return false;
   }
@@ -133,15 +154,21 @@ function verifyMasks(verify) {
   let entries = 0;
 
   const isProtected = (entry, relative, name) =>
-    (name === '.git' && !(relative === '.git' && verify.gitPinned))
-    || name === '.futryn' || name === '.hannes'
-    || name.startsWith('.futryn-patch-') || name.startsWith('.hannes-patch-')
-    || verify.hidden.includes(relative)
-    || (!entry.isDirectory() && secret.some(r => r.test(name)) && !except.some(r => r.test(name)));
+    (name === '.git' && !(relative === '.git' && verify.gitPinned)) ||
+    name === '.futryn' ||
+    name === '.hannes' ||
+    name.startsWith('.futryn-patch-') ||
+    name.startsWith('.hannes-patch-') ||
+    verify.hidden.includes(relative) ||
+    (!entry.isDirectory() && secret.some(r => r.test(name)) && !except.some(r => r.test(name)));
 
   const walk = directory => {
     let list;
-    try { list = fs.readdirSync(directory, {withFileTypes: true}); } catch { return false; }
+    try {
+      list = fs.readdirSync(directory, {withFileTypes: true});
+    } catch {
+      return false;
+    }
     for (const entry of list) {
       if (++entries > 250000) return false;
       if (entry.isSymbolicLink()) continue;
@@ -169,7 +196,14 @@ function verifyMasks(verify) {
 const aborted = !!launch.verify && !verifyMasks(launch.verify);
 if (aborted) {
   finishing = true;
-  const receipt = {type: 'result', kind: 'spawn-failed', exitCode: null, signal: null, outputClosed: true, wrapperExitCode: 125};
+  const receipt = {
+    type: 'result',
+    kind: 'spawn-failed',
+    exitCode: null,
+    signal: null,
+    outputClosed: true,
+    wrapperExitCode: 125,
+  };
   process.stdout.write(JSON.stringify(receipt) + '\n', () => process.exit(125));
   setTimeout(() => process.exit(125), FINAL_FLUSH_MS);
 }
@@ -179,28 +213,60 @@ if (aborted) {
 
 // Codex UNIFIED_EXEC_ENV, adjusted for a terminal. Nothing is inherited from the host.
 const env = [
-  'PATH=/usr/local/bin:/usr/bin:/bin', 'HOME=/tmp', 'TMPDIR=/tmp',
-  'LANG=C.UTF-8', 'LC_CTYPE=C.UTF-8', 'LC_ALL=C.UTF-8',
-  'PAGER=cat', 'GIT_PAGER=cat', 'GH_PAGER=cat', 'GIT_OPTIONAL_LOCKS=0', 'CODEX_CI=1', 'FUTRYN_SANDBOX=1',
+  'PATH=/usr/local/bin:/usr/bin:/bin',
+  'HOME=/tmp',
+  'TMPDIR=/tmp',
+  'LANG=C.UTF-8',
+  'LC_CTYPE=C.UTF-8',
+  'LC_ALL=C.UTF-8',
+  'PAGER=cat',
+  'GIT_PAGER=cat',
+  'GH_PAGER=cat',
+  'GIT_OPTIONAL_LOCKS=0',
+  'CODEX_CI=1',
+  'FUTRYN_SANDBOX=1',
   ...(launch.tty ? ['TERM=xterm-256color'] : ['TERM=dumb', 'NO_COLOR=1', 'COLORTERM=']),
 ];
 
 // A login shell reads only the image's read-only /etc/profile (HOME is the private /tmp).
 const shell = launch.login
-  ? (launch.shell === 'sh' ? ['/bin/sh', '-l'] : ['/bin/bash', '--login'])
-  : (launch.shell === 'sh' ? ['/bin/sh'] : ['/bin/bash', '--noprofile', '--norc']);
+  ? launch.shell === 'sh'
+    ? ['/bin/sh', '-l']
+    : ['/bin/bash', '--login']
+  : launch.shell === 'sh'
+    ? ['/bin/sh']
+    : ['/bin/bash', '--noprofile', '--norc'];
 
 // setpriv drops to the command's uid/gid with no groups and an empty capability set.
 const argv = [
-  '/usr/bin/setpriv', '--reuid=' + launch.uid, '--regid=' + launch.gid, '--clear-groups',
-  '--bounding-set=-all', '--inh-caps=-all', '--ambient-caps=-all',
-  '/usr/bin/env', '-i', ...env,
-  ...shell, '-c', launch.command, 'futryn-command',
+  '/usr/bin/setpriv',
+  '--reuid=' + launch.uid,
+  '--regid=' + launch.gid,
+  '--clear-groups',
+  '--bounding-set=-all',
+  '--inh-caps=-all',
+  '--ambient-caps=-all',
+  '/usr/bin/env',
+  '-i',
+  ...env,
+  ...shell,
+  '-c',
+  launch.command,
+  'futryn-command',
 ];
 
 function startPty() {
   try {
-    child = Bun.spawn(argv, {cwd: launch.cwd, terminal: {cols: launch.cols, rows: launch.rows, data(_terminal, data) { emit('stdout', data); }}});
+    child = Bun.spawn(argv, {
+      cwd: launch.cwd,
+      terminal: {
+        cols: launch.cols,
+        rows: launch.rows,
+        data(_terminal, data) {
+          emit('stdout', data);
+        },
+      },
+    });
     terminal = child.terminal;
   } catch {
     finish({kind: 'spawn-failed', exitCode: null, signal: null}, 126);
@@ -228,7 +294,10 @@ function startPipes() {
       while ((chunk = readable.read(Math.min(16384, Math.max(1, readable.readableLength)))) !== null) {
         if (!process.stdout.write(dataFrame(stream, chunk))) {
           paused = true;
-          process.stdout.once('drain', () => { paused = false; pump(); });
+          process.stdout.once('drain', () => {
+            paused = false;
+            pump();
+          });
           return;
         }
       }
@@ -263,7 +332,13 @@ function handleControl(frame) {
     terminal.resize(frame.c, frame.r);
   } else if (frame.t === 'int') {
     if (terminal) terminal.write('\x03');
-    else { try { process.kill(-child.pid, 'SIGINT'); } catch { /* already gone */ } }
+    else {
+      try {
+        process.kill(-child.pid, 'SIGINT');
+      } catch {
+        /* already gone */
+      }
+    }
   } else if (frame.t === 'eof' && !terminal) {
     child.stdin.end();
   }
@@ -280,7 +355,11 @@ process.stdin.on('data', bytes => {
     const line = wire.slice(0, end);
     wire = wire.slice(end + 1);
     let frame;
-    try { frame = JSON.parse(line); } catch { continue; }
+    try {
+      frame = JSON.parse(line);
+    } catch {
+      continue;
+    }
     handleControl(frame);
   }
 });

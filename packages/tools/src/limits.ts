@@ -11,8 +11,8 @@ export const LIMITS = {
 } as const;
 
 /** Cut text to a UTF-8 byte budget without splitting a character. */
-export function clipBytes(text: string, maxBytes: number): { text: string; clipped: boolean } {
+export function clipBytes(text: string, maxBytes: number): {text: string; clipped: boolean} {
   const bytes = Buffer.from(text, 'utf8');
-  if (bytes.byteLength <= maxBytes) return { text, clipped: false };
-  return { text: new TextDecoder().decode(bytes.subarray(0, maxBytes)).replace(/�$/, ''), clipped: true };
+  if (bytes.byteLength <= maxBytes) return {text, clipped: false};
+  return {text: new TextDecoder().decode(bytes.subarray(0, maxBytes)).replace(/�$/, ''), clipped: true};
 }

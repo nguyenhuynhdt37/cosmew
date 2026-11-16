@@ -1,4 +1,4 @@
-import { FutrynError } from '@futryn/contracts';
+import {FutrynError} from '@futryn/contracts';
 
 /**
  * Port of Codex `tools/parallel.rs` `ToolCallRuntime::parallel_execution` (an `RwLock<()>`, pinned
@@ -13,20 +13,31 @@ import { FutrynError } from '@futryn/contracts';
 export class ExecutionGate {
   private shared = 0;
   private exclusive = false;
-  private readonly queue: { exclusive: boolean; grant: () => void }[] = [];
+  private readonly queue: {exclusive: boolean; grant: () => void}[] = [];
   constructor(private readonly maxShared: number) {}
 
   /** Resolves with a release function; rejects with CANCELLED if `signal` aborts while queued. */
   acquire(exclusive: boolean, signal?: AbortSignal): Promise<() => void> {
     return new Promise((resolve, reject) => {
-      if (signal?.aborted) { reject(new FutrynError('CANCELLED')); return; }
+      if (signal?.aborted) {
+        reject(new FutrynError('CANCELLED'));
+        return;
+      }
       const abort = () => {
         const at = this.queue.indexOf(waiter);
         if (at < 0) return;
-        this.queue.splice(at, 1); reject(new FutrynError('CANCELLED')); this.pump();
+        this.queue.splice(at, 1);
+        reject(new FutrynError('CANCELLED'));
+        this.pump();
       };
-      const waiter = { exclusive, grant: () => { signal?.removeEventListener('abort', abort); resolve(this.releaser(exclusive)); } };
-      signal?.addEventListener('abort', abort, { once: true });
+      const waiter = {
+        exclusive,
+        grant: () => {
+          signal?.removeEventListener('abort', abort);
+          resolve(this.releaser(exclusive));
+        },
+      };
+      signal?.addEventListener('abort', abort, {once: true});
       this.queue.push(waiter);
       this.pump();
     });
@@ -39,7 +50,8 @@ export class ExecutionGate {
   private pump(): void {
     while (this.queue.length && this.fits(this.queue[0]!.exclusive)) {
       const next = this.queue.shift()!;
-      if (next.exclusive) this.exclusive = true; else this.shared++;
+      if (next.exclusive) this.exclusive = true;
+      else this.shared++;
       next.grant();
     }
   }
@@ -49,7 +61,8 @@ export class ExecutionGate {
     return () => {
       if (released) return;
       released = true;
-      if (exclusive) this.exclusive = false; else this.shared--;
+      if (exclusive) this.exclusive = false;
+      else this.shared--;
       this.pump();
     };
   }

@@ -1,5 +1,5 @@
-import { expect, test } from 'bun:test';
-import { FynCompanion, renderFyn, type FynState, deriveTokensFromTriplet } from '@futryn/tui';
+import {expect, test} from 'bun:test';
+import {FynCompanion, renderFyn, type FynState, deriveTokensFromTriplet} from '@futryn/tui';
 
 test('Fyn never sleeps during a request, holds errors and approvals, settles terminal outcomes', () => {
   const pet = new FynCompanion();
@@ -41,11 +41,23 @@ test('Fyn freezes motion without freezing state updates; invalid deltas cannot p
 test('Fyn uses only theme colors and bounded single-cell glyphs, with compact terminal fallback', () => {
   const tokens = deriveTokensFromTriplet('#101520', '#edf2ff', '#f69e6f');
   const palette = new Set(Object.values(tokens));
-  for (const state of ['idle', 'thinking', 'streaming', 'waiting', 'done', 'error', 'cancelled', 'sleep'] as FynState[]) {
+  for (const state of [
+    'idle',
+    'thinking',
+    'streaming',
+    'waiting',
+    'done',
+    'error',
+    'cancelled',
+    'sleep',
+  ] as FynState[]) {
     for (const time of [0, 0.3, 0.9, 4.5]) {
       for (const width of [19, 20, 27, 28, 60]) {
-        const lines = renderFyn({ state, time, tokens, width });
-        if (width < 20) { expect(lines).toEqual([]); continue; }
+        const lines = renderFyn({state, time, tokens, width});
+        if (width < 20) {
+          expect(lines).toEqual([]);
+          continue;
+        }
         expect(lines.length).toBe(width < 28 ? 3 : 13);
         for (const line of lines) {
           expect(line.spans.reduce((n, span) => n + span.text.length, 0)).toBeLessThanOrEqual(width);

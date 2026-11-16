@@ -21,5 +21,5 @@ export function screenMetrics(cols: number, rows: number, sidebarEnabled: boolea
   // Use the full main width, leaving one cell at each edge when wide enough so borders do not touch the terminal.
   const colWidth = mainWidth >= 40 ? mainWidth - 2 : mainWidth;
   const colLeft = mainWidth >= 40 ? 1 : 0;
-  return { cols, rows, showSidebar, sidebarWidth, mainWidth, colWidth, colLeft };
+  return {cols, rows, showSidebar, sidebarWidth, mainWidth, colWidth, colLeft};
 }

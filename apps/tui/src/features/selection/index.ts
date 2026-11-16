@@ -1,1 +1,1 @@
-export { TextSelection, type CellPoint } from './logic';
+export {TextSelection, type CellPoint} from './logic';

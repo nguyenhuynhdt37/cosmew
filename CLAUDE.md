@@ -17,7 +17,8 @@ bun install --frozen-lockfile --ignore-scripts
 bun run hannes            # CLI (apps/cli/src/index.ts); bare interactive run opens the TUI
 bun run futryn            # full-screen TUI (same as `hannes tui`)
 bun run typecheck         # tsc --noEmit
-bun run lint              # tsc with noUnusedLocals/Parameters + git diff --check
+bun run lint              # tsc with noUnusedLocals/Parameters + prettier --check + git diff --check
+bun run format            # Prettier 3.9.10 (.prettierrc.json) on all .ts/.tsx/.js; run before committing
 bun test tests            # all tests
 bun test tests/contracts/theme-engine.test.ts          # single file
 UPDATE_GOLDEN=1 bun test tests/contracts/tui-golden.test.ts   # re-record rendered frames; review the diff first

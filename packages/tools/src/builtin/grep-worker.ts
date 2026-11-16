@@ -1,7 +1,7 @@
 /// <reference lib="webworker" />
-import { evaluateRead } from '@futryn/security';
-import { WorkspaceRoot, looksBinary } from '@futryn/workspace';
-import { LIMITS } from '../limits';
+import {evaluateRead} from '@futryn/security';
+import {WorkspaceRoot, looksBinary} from '@futryn/workspace';
+import {LIMITS} from '../limits';
 
 /**
  * Runs in a Worker so a pathological regular expression can be stopped by terminating the
@@ -10,8 +10,10 @@ import { LIMITS } from '../limits';
  */
 declare const self: Worker;
 
-self.onmessage = (event: MessageEvent<{ root: string; files: string[]; pattern: string; ignoreCase?: boolean; stateDirectory?: string }>) => {
-  const { root, files, pattern, ignoreCase, stateDirectory } = event.data;
+self.onmessage = (
+  event: MessageEvent<{root: string; files: string[]; pattern: string; ignoreCase?: boolean; stateDirectory?: string}>,
+) => {
+  const {root, files, pattern, ignoreCase, stateDirectory} = event.data;
   const workspace = new WorkspaceRoot(root);
   const regex = new RegExp(pattern, ignoreCase ? 'i' : '');
   const matches: string[] = [];
@@ -19,13 +21,24 @@ self.onmessage = (event: MessageEvent<{ root: string; files: string[]; pattern: 
   let total = 0;
   for (const path of files) {
     let file;
-    try { file = workspace.resolve(path); } catch { continue; }
+    try {
+      file = workspace.resolve(path);
+    } catch {
+      continue;
+    }
     if (file.kind !== 'file') continue;
-    const decision = evaluateRead(file.relative, file.absolute, { stateDirectory });
+    const decision = evaluateRead(file.relative, file.absolute, {stateDirectory});
     if (decision.effect === 'deny') continue;
-    if (decision.effect === 'ask') { skippedSecret++; continue; }
+    if (decision.effect === 'ask') {
+      skippedSecret++;
+      continue;
+    }
     let bytes: Uint8Array;
-    try { ({ bytes } = workspace.readBytes(file, LIMITS.searchFileBytes)); } catch { continue; }
+    try {
+      ({bytes} = workspace.readBytes(file, LIMITS.searchFileBytes));
+    } catch {
+      continue;
+    }
     if (looksBinary(bytes)) continue;
     const lines = new TextDecoder().decode(bytes).split(/\r?\n/);
     for (let i = 0; i < lines.length; i++) {
@@ -36,5 +49,5 @@ self.onmessage = (event: MessageEvent<{ root: string; files: string[]; pattern: 
       }
     }
   }
-  self.postMessage({ matches, total, skippedSecret });
+  self.postMessage({matches, total, skippedSecret});
 };

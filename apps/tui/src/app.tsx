@@ -1,30 +1,30 @@
-import type { FutrynClient } from '@futryn/sdk';
-import type { FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost } from './core/feature';
-import { ChatController, drawChatScreen } from './features/chat';
-import { CommandRouter } from './features/commands';
-import type { ComposerState } from './features/composer';
-import { ConnectFeature, describeProviderError } from './features/connect';
-import { DiffFeature } from './features/diff';
-import { EffortFeature } from './features/effort';
-import { HelpFeature } from './features/help';
-import { ModelsFeature } from './features/models';
-import { PaletteFeature } from './features/palette';
-import { PermissionsFeature } from './features/permissions';
-import { ReportsFeature } from './features/reports';
-import { renderSidebarPanel } from './features/sidebar';
-import { TextSelection } from './features/selection';
-import { SessionsFeature } from './features/sessions';
-import { SettingsFeature } from './features/settings';
-import { StartupGate } from './features/startup-gate';
-import { ThemeEditorFeature } from './features/theme-editor';
-import { ThemesFeature } from './features/themes';
-import type { TranscriptItem } from './features/transcript';
-import { renderAnsiDiff } from './render/ansi-diff';
-import { screenMetrics } from './render/metrics';
-import { paintWallpaper } from './render/wallpaper';
-import { ThemeEngine } from './theme/theme';
-import { Canvas, type RenderedBoxLine } from './ui';
-import type { ActiveOverlay, FrameCell, FrameSnapshot, FutrynTuiOptions } from './types';
+import type {FutrynClient} from '@futryn/sdk';
+import type {FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost} from './core/feature';
+import {ChatController, drawChatScreen} from './features/chat';
+import {CommandRouter} from './features/commands';
+import type {ComposerState} from './features/composer';
+import {ConnectFeature, describeProviderError} from './features/connect';
+import {DiffFeature} from './features/diff';
+import {EffortFeature} from './features/effort';
+import {HelpFeature} from './features/help';
+import {ModelsFeature} from './features/models';
+import {PaletteFeature} from './features/palette';
+import {PermissionsFeature} from './features/permissions';
+import {ReportsFeature} from './features/reports';
+import {renderSidebarPanel} from './features/sidebar';
+import {TextSelection} from './features/selection';
+import {SessionsFeature} from './features/sessions';
+import {SettingsFeature} from './features/settings';
+import {StartupGate} from './features/startup-gate';
+import {ThemeEditorFeature} from './features/theme-editor';
+import {ThemesFeature} from './features/themes';
+import type {TranscriptItem} from './features/transcript';
+import {renderAnsiDiff} from './render/ansi-diff';
+import {screenMetrics} from './render/metrics';
+import {paintWallpaper} from './render/wallpaper';
+import {ThemeEngine} from './theme/theme';
+import {Canvas, type RenderedBoxLine} from './ui';
+import type {ActiveOverlay, FrameCell, FrameSnapshot, FutrynTuiOptions} from './types';
 
 export class FutrynTuiApp {
   public readonly client: FutrynClient;
@@ -42,8 +42,14 @@ export class FutrynTuiApp {
   private statusBanner: string | null = null;
   private readonly textSelection = new TextSelection();
   private clipboardSequence = '';
-  public selectedText(): string { return this.textSelection.text(); }
-  public takeClipboardSequence(): string { const value = this.clipboardSequence; this.clipboardSequence = ''; return value; }
+  public selectedText(): string {
+    return this.textSelection.text();
+  }
+  public takeClipboardSequence(): string {
+    const value = this.clipboardSequence;
+    this.clipboardSequence = '';
+    return value;
+  }
   private previousCells: FrameCell[][] | null = null;
   private animationTimeSeconds = 0;
   private exitRequested = false;
@@ -69,17 +75,38 @@ export class FutrynTuiApp {
     return {
       client: this.client,
       themeEngine: this.themeEngine,
-      get cols() { return app.cols; },
-      get rows() { return app.rows; },
-      get isStreaming() { return app.chat.isStreaming; },
-      get overlay() { return app.overlay; },
-      get composerDraft() { return app.chat.composer.value; },
-      get workspaceAccess() { return app.workspaceAccess; },
-      grantWorkspaceAccess: () => { this.workspaceAccess = true; this.client.setToolsEnabled(true); },
+      get cols() {
+        return app.cols;
+      },
+      get rows() {
+        return app.rows;
+      },
+      get isStreaming() {
+        return app.chat.isStreaming;
+      },
+      get overlay() {
+        return app.overlay;
+      },
+      get composerDraft() {
+        return app.chat.composer.value;
+      },
+      get workspaceAccess() {
+        return app.workspaceAccess;
+      },
+      grantWorkspaceAccess: () => {
+        this.workspaceAccess = true;
+        this.client.setToolsEnabled(true);
+      },
       openOverlay: target => this.openOverlay(target),
-      closeOverlay: () => { this.overlay = 'none'; },
-      setBanner: message => { this.statusBanner = message; },
-      requestExit: () => { this.exitRequested = true; },
+      closeOverlay: () => {
+        this.overlay = 'none';
+      },
+      setBanner: message => {
+        this.statusBanner = message;
+      },
+      requestExit: () => {
+        this.exitRequested = true;
+      },
       syncTranscript: () => this.chat.syncFromSession(),
       clearTranscript: () => this.chat.clear(),
       clearSelection: () => this.textSelection.clear(),
@@ -99,8 +126,18 @@ export class FutrynTuiApp {
     host.features.accounts = this.connect;
     host.features.models = models;
     const all: OverlayFeature[] = [
-      this.connect, models, new PaletteFeature(host), new SessionsFeature(host), new PermissionsFeature(host), new DiffFeature(host),
-      new HelpFeature(host), new ReportsFeature(host), new EffortFeature(host), new SettingsFeature(host), new ThemesFeature(host), new ThemeEditorFeature(host),
+      this.connect,
+      models,
+      new PaletteFeature(host),
+      new SessionsFeature(host),
+      new PermissionsFeature(host),
+      new DiffFeature(host),
+      new HelpFeature(host),
+      new ReportsFeature(host),
+      new EffortFeature(host),
+      new SettingsFeature(host),
+      new ThemesFeature(host),
+      new ThemeEditorFeature(host),
     ];
     for (const feature of all) {
       this.featureList.push(feature);
@@ -125,12 +162,21 @@ export class FutrynTuiApp {
   }
 
   /** Non-interactive runs have no way to ask, so they must not read the workspace. */
-  public denyWorkspaceAccess(): void { this.workspaceAccess = false; this.client.setToolsEnabled(false); }
+  public denyWorkspaceAccess(): void {
+    this.workspaceAccess = false;
+    this.client.setToolsEnabled(false);
+  }
 
   public advanceStartupGate(): void {
     this.gate.advance();
     // A tool of the running turn waiting for approval brings up the permission dialog once nothing else is open.
-    if (!this.gate.active && this.chat.isStreaming && this.overlay === 'none' && this.client.listPendingPermissions().length) this.openOverlay('permissions');
+    if (
+      !this.gate.active &&
+      this.chat.isStreaming &&
+      this.overlay === 'none' &&
+      this.client.listPendingPermissions().length
+    )
+      this.openOverlay('permissions');
   }
 
   public isExitRequested(): boolean {
@@ -170,7 +216,6 @@ export class FutrynTuiApp {
     this.advanceStartupGate();
   }
 
-
   public openOverlay(target: ActiveOverlay): void {
     this.textSelection.clear();
     if (!this.workspaceAccess && this.features.get(target)?.needsWorkspace) {
@@ -187,11 +232,18 @@ export class FutrynTuiApp {
     return describeProviderError(this.client, error, providerId ?? this.client.status().activeProvider?.id);
   }
 
-  public executeSlashCommand(rawInput: string): Promise<void> { return this.commands.execute(rawInput); }
+  public executeSlashCommand(rawInput: string): Promise<void> {
+    return this.commands.execute(rawInput);
+  }
 
   public async shutdown(): Promise<void> {
-    this.textSelection.clear(); this.clipboardSequence = '';
-    await Promise.allSettled([this.gate.shutdown(), this.chat.shutdown(), ...this.featureList.map(feature => feature.shutdown?.())]);
+    this.textSelection.clear();
+    this.clipboardSequence = '';
+    await Promise.allSettled([
+      this.gate.shutdown(),
+      this.chat.shutdown(),
+      ...this.featureList.map(feature => feature.shutdown?.()),
+    ]);
   }
 
   public async submitPrompt(content: string): Promise<void> {
@@ -200,32 +252,47 @@ export class FutrynTuiApp {
   }
 
   public async handleKey(key: string): Promise<void> {
-    if (this.gate.active && await this.gate.handleKey(key)) return;
+    if (this.gate.active && (await this.gate.handleKey(key))) return;
     if (['WheelUp', 'WheelDown', 'PageUp', 'PageDown'].includes(key) && this.textSelection.frame) {
       const amount = key.startsWith('Wheel') ? 2 : Math.max(1, this.rows - 8);
       if (this.textSelection.scroll(key === 'WheelUp' || key === 'PageUp' ? -amount : amount)) return;
     }
     const mouse = /^(MouseDown|MouseDrag|MouseUp):(\d+):(\d+)$/.exec(key);
     if (mouse) {
-      const point = {row:Number(mouse[2]), col:Number(mouse[3])};
-      if (mouse[1] === 'MouseDown') { this.textSelection.clear(); this.textSelection.begin(this.computeFrameSnapshot(), point); }
-      else if (mouse[1] === 'MouseDrag') this.textSelection.move(point);
+      const point = {row: Number(mouse[2]), col: Number(mouse[3])};
+      if (mouse[1] === 'MouseDown') {
+        this.textSelection.clear();
+        this.textSelection.begin(this.computeFrameSnapshot(), point);
+      } else if (mouse[1] === 'MouseDrag') this.textSelection.move(point);
       else {
         const clickFrame = this.textSelection.frame;
         const wasSelection = this.textSelection.active();
         this.textSelection.release(point);
         if (!wasSelection && !this.textSelection.frame && this.overlay === 'none' && !this.gate.active) {
           const viewport = clickFrame?.transcriptViewport;
-          const hit = viewport && point.row >= viewport.top && point.row < viewport.top + viewport.height && point.col >= viewport.left && point.col < viewport.left + viewport.width
-            ? viewport.disclosures.find(hit => hit.row === viewport.offset + point.row - viewport.top) : undefined;
+          const hit =
+            viewport &&
+            point.row >= viewport.top &&
+            point.row < viewport.top + viewport.height &&
+            point.col >= viewport.left &&
+            point.col < viewport.left + viewport.width
+              ? viewport.disclosures.find(hit => hit.row === viewport.offset + point.row - viewport.top)
+              : undefined;
           const item = hit && this.chat.transcript.find(item => item.id === hit.itemId);
           if (item && hit && viewport) {
             this.chat.scrollOffset = viewport.offset;
             const expanded = new Set(item.expandedActivities);
             const collapsed = new Set(item.collapsedActivities);
-            const wasExpanded = !collapsed.has(hit.key) && (expanded.has(hit.key) || hit.key.startsWith('reasoning:') && item.reasoningExpanded === true);
-            if (wasExpanded) { expanded.delete(hit.key); collapsed.add(hit.key); }
-            else { expanded.add(hit.key); collapsed.delete(hit.key); }
+            const wasExpanded =
+              !collapsed.has(hit.key) &&
+              (expanded.has(hit.key) || (hit.key.startsWith('reasoning:') && item.reasoningExpanded === true));
+            if (wasExpanded) {
+              expanded.delete(hit.key);
+              collapsed.add(hit.key);
+            } else {
+              expanded.add(hit.key);
+              collapsed.delete(hit.key);
+            }
             item.expandedActivities = [...expanded];
             item.collapsedActivities = [...collapsed];
           }
@@ -241,7 +308,8 @@ export class FutrynTuiApp {
       return;
     }
     if (key !== 'FocusIn' && key !== 'FocusOut' && this.textSelection.frame) {
-      this.textSelection.clear(); if (key === 'Escape') return;
+      this.textSelection.clear();
+      if (key === 'Escape') return;
     }
 
     if (key !== 'FocusIn' && key !== 'FocusOut') this.chat.companion.activity();
@@ -298,14 +366,16 @@ export class FutrynTuiApp {
     }
     if (key === 'Ctrl+B' && this.overlay === 'none') {
       const current = this.themeEngine.getActiveAppearance().sidebar;
-      await this.themeEngine.updateAppearance({ sidebar: !current });
+      await this.themeEngine.updateAppearance({sidebar: !current});
       this.statusBanner = `Sidebar ${!current ? 'shown' : 'collapsed'}.`;
       return;
     }
 
     // Route to active overlay if open
     if (this.overlay !== 'none') {
-      await this.features.get(this.overlay)?.handleKey(this.overlay, key === 'WheelUp' ? 'PageUp' : key === 'WheelDown' ? 'PageDown' : key);
+      await this.features
+        .get(this.overlay)
+        ?.handleKey(this.overlay, key === 'WheelUp' ? 'PageUp' : key === 'WheelDown' ? 'PageDown' : key);
       return;
     }
 
@@ -318,7 +388,7 @@ export class FutrynTuiApp {
 
   public computeFrameSnapshot(): FrameSnapshot {
     if (this.textSelection.frame) return this.textSelection.view(this.themeEngine.getActiveTokens());
-    const { cols, rows } = this;
+    const {cols, rows} = this;
     const tokens = this.themeEngine.getActiveTokens();
     const manifest = this.themeEngine.getActiveThemeManifest();
     const appearance = this.themeEngine.getActiveAppearance();
@@ -336,17 +406,35 @@ export class FutrynTuiApp {
     const metrics = screenMetrics(cols, rows, appearance.sidebar);
     if (wallpaperId && appearance.animations.enabled) {
       paintWallpaper(canvas, {
-        engine: this.themeEngine, wallpaperId, appearance, tokens, metrics,
+        engine: this.themeEngine,
+        wallpaperId,
+        appearance,
+        tokens,
+        metrics,
         timeSeconds: this.animationTimeSeconds,
         eventKind: appearance.animations.reactiveEffects ? reactiveEvent.kind : undefined,
       });
     }
 
     const transcriptViewport = drawChatScreen(canvas, {
-      client: this.client, rows, metrics, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId,
-      composer: this.chat.composer, transcript: this.chat.transcript, scrollOffset: this.chat.scrollOffset,
-      isStreaming: this.chat.isStreaming, turnStartedAt: this.chat.turnStartedAt, isPreviewing: this.themeEngine.isPreviewing(),
-      focused: this.overlay === 'none', workspaceAccess: this.workspaceAccess,
+      client: this.client,
+      rows,
+      metrics,
+      tokens,
+      manifest,
+      appearance,
+      status,
+      reactiveEvent,
+      companionView,
+      wallpaperId,
+      composer: this.chat.composer,
+      transcript: this.chat.transcript,
+      scrollOffset: this.chat.scrollOffset,
+      isStreaming: this.chat.isStreaming,
+      turnStartedAt: this.chat.turnStartedAt,
+      isPreviewing: this.themeEngine.isPreviewing(),
+      focused: this.overlay === 'none',
+      workspaceAccess: this.workspaceAccess,
     });
 
     if (transcriptViewport) {
@@ -380,15 +468,22 @@ export class FutrynTuiApp {
       }
       const overlayWidth = layout?.width ?? 0;
       const overlayHeight = layout?.height ?? 0;
-      const theme: ThemeFrame = { tokens, borderStyle: manifest.borderStyle, effectiveMode };
-      const overlayLines: RenderedBoxLine[] = feature ? feature.render(this.overlay, { width: overlayWidth, height: overlayHeight }, theme) : [];
+      const theme: ThemeFrame = {tokens, borderStyle: manifest.borderStyle, effectiveMode};
+      const overlayLines: RenderedBoxLine[] = feature
+        ? feature.render(this.overlay, {width: overlayWidth, height: overlayHeight}, theme)
+        : [];
 
       const startCol = Math.max(0, Math.floor((cols - overlayWidth) / 2));
       const startRow = Math.max(1, Math.floor((rows - overlayLines.length) / 2));
-      canvas.block(Math.max(0, Math.min(startRow, rows - 1 - overlayLines.length)), startCol, overlayLines.slice(0, rows - 1), overlayWidth);
+      canvas.block(
+        Math.max(0, Math.min(startRow, rows - 1 - overlayLines.length)),
+        startCol,
+        overlayLines.slice(0, rows - 1),
+        overlayWidth,
+      );
     }
 
-    const gateLayout = this.gate.render(cols, rows, { tokens, borderStyle: manifest.borderStyle, effectiveMode });
+    const gateLayout = this.gate.render(cols, rows, {tokens, borderStyle: manifest.borderStyle, effectiveMode});
     if (gateLayout) {
       canvas.clear(tokens.foreground, tokens.background);
       canvas.block(gateLayout.y, gateLayout.x, gateLayout.lines, gateLayout.width);
@@ -397,19 +492,24 @@ export class FutrynTuiApp {
     // 8. Dòng trạng thái mờ, không nền (thông báo tạm thời hoặc đường dẫn + model).
     const shortWs = status.workspace.split('/').slice(-2).join('/');
     const thinking = this.chat.isStreaming ? '● ' : '';
-    const focusedDialog = this.gate.active || (this.features.get(this.overlay)?.layout(this.overlay, cols, rows).backdrop ?? false);
-    const leftText = focusedDialog ? '' : this.statusBanner
-      ? ` ${this.statusBanner}`
-      : this.overlay === 'connect' ? '' : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
+    const focusedDialog =
+      this.gate.active || (this.features.get(this.overlay)?.layout(this.overlay, cols, rows).backdrop ?? false);
+    const leftText = focusedDialog
+      ? ''
+      : this.statusBanner
+        ? ` ${this.statusBanner}`
+        : this.overlay === 'connect'
+          ? ''
+          : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
     const rightText = this.statusBanner || focusedDialog ? '' : cols >= 55 ? 'Ctrl+P commands' : 'Ctrl+P';
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     canvas.spans(
       rows - 1,
       0,
       [
-        { text: leftText.slice(0, cols), fg: this.statusBanner ? tokens.info : tokens.foregroundSubtle },
-        { text: ' '.repeat(pad), fg: tokens.foregroundSubtle },
-        { text: rightText, fg: tokens.foregroundSubtle },
+        {text: leftText.slice(0, cols), fg: this.statusBanner ? tokens.info : tokens.foregroundSubtle},
+        {text: ' '.repeat(pad), fg: tokens.foregroundSubtle},
+        {text: rightText, fg: tokens.foregroundSubtle},
       ],
       cols,
     );
@@ -434,7 +534,12 @@ export class FutrynTuiApp {
 
   public renderAnsiFrame(forceFull = false): string {
     const snap = this.computeFrameSnapshot();
-    const out = renderAnsiDiff(snap.cells, snap.rows, this.themeEngine.colorCapability, forceFull ? null : this.previousCells);
+    const out = renderAnsiDiff(
+      snap.cells,
+      snap.rows,
+      this.themeEngine.colorCapability,
+      forceFull ? null : this.previousCells,
+    );
     this.previousCells = snap.cells;
     return out;
   }

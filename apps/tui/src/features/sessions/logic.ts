@@ -1,4 +1,4 @@
-import type { SessionSummary } from '@futryn/contracts';
+import type {SessionSummary} from '@futryn/contracts';
 
 export function filterSessions(sessions: SessionSummary[], query: string): SessionSummary[] {
   const q = query.trim().toLowerCase();

@@ -139,3 +139,12 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
 - **Runtime verification:** accepted only when its layer chain equals the pinned base chain plus exactly one layer and the label `futryn.exec.recipe` equals the recipe hash; the container is then created from the image **ID**, not the tag. Otherwise the base image (no git) is used and `git` is not advertised.
 - **Bun/OS compatibility:** built and tested linux/arm64 on Docker Engine 29.8.2 (OrbStack, Darwin 24.6.0 arm64). amd64 and standalone Linux hosts: Needs verification.
 - **Threat surface:** git can read `.git` (mounted read-only) including `.git/config`; it cannot write it. Network stays off unless a command's network escalation is approved. No npm dependency or lockfile change.
+
+### Formatter: Prettier (evaluated 2026-11-16)
+
+- **Name/version:** `prettier` **3.9.10**, pinned exactly (published 2026-10-10; 3.10.x was under two weeks old and is not used). Dev dependency only; never imported by product code or shipped in a runtime path.
+- **License:** MIT. **Provenance:** npm `prettier`, source https://github.com/prettier/prettier, integrity `sha512-skGHTH1Yb9QvaTC4hWnRTzEYtCpApF0UMBPz+t/0ZPzP8ihefo/btKd+QA7pUE0fEwA1SbS/NmhyEcstdXOIdA==`.
+- **Dependencies / install scripts:** none / none (installed with `--ignore-scripts` anyway).
+- **Bun/OS compatibility:** pure JavaScript; runs under Bun 1.4.4 on macOS/Linux/Windows. Verified on Darwin arm64.
+- **Threat surface:** runs locally on source files when a developer or `bun run lint` invokes it; no network access. Layout-only changes; behavior is verified by the full test suites after formatting.
+- **Purpose:** consistent, readable formatting of all TypeScript/JavaScript (`bun run format`); `bun run lint` checks it so unformatted code cannot return.

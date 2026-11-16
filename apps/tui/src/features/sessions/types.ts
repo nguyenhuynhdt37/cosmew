@@ -4,5 +4,5 @@ export interface SessionPickerState {
 }
 
 export function createInitialSessionPickerState(): SessionPickerState {
-  return { query: '', selectedIndex: 0 };
+  return {query: '', selectedIndex: 0};
 }

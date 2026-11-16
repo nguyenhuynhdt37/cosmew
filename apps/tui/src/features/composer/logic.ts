@@ -1,13 +1,22 @@
-import { SLASH_COMMANDS, type SlashCommandDef } from '@futryn/sdk';
-import { createInitialComposerState, type ComposerState } from './types';
+import {SLASH_COMMANDS, type SlashCommandDef} from '@futryn/sdk';
+import {createInitialComposerState, type ComposerState} from './types';
 
-export { SLASH_COMMANDS, type SlashCommandDef };
+export {SLASH_COMMANDS, type SlashCommandDef};
 
 export function getMatchingSlashCommands(input: string): SlashCommandDef[] {
   const trimmed = input.trimStart();
   if (!trimmed.startsWith('/')) return [];
   const q = trimmed.toLowerCase();
-  const ranked = (item: SlashCommandDef) => item.command.toLowerCase() === q ? 0 : item.command.toLowerCase().startsWith(q) ? 1 : item.aliases.some(name => name.toLowerCase() === q) ? 2 : item.aliases.some(name => name.toLowerCase().startsWith(q)) ? 3 : 4;
+  const ranked = (item: SlashCommandDef) =>
+    item.command.toLowerCase() === q
+      ? 0
+      : item.command.toLowerCase().startsWith(q)
+        ? 1
+        : item.aliases.some(name => name.toLowerCase() === q)
+          ? 2
+          : item.aliases.some(name => name.toLowerCase().startsWith(q))
+            ? 3
+            : 4;
   return SLASH_COMMANDS.filter(
     item =>
       item.command.toLowerCase().startsWith(q) ||
@@ -17,13 +26,13 @@ export function getMatchingSlashCommands(input: string): SlashCommandDef[] {
   ).sort((a, b) => ranked(a) - ranked(b));
 }
 
-export function extractActiveFileMention(value: string, cursor: number): { start: number; query: string } | null {
+export function extractActiveFileMention(value: string, cursor: number): {start: number; query: string} | null {
   const before = value.slice(0, cursor);
   const match = /(?:^|\s)@([^\s@]*)$/.exec(before);
   if (!match) return null;
   const query = match[1] ?? '';
   const start = before.lastIndexOf('@');
-  return start >= 0 ? { start, query } : null;
+  return start >= 0 ? {start, query} : null;
 }
 
 export function updateComposerValue(
@@ -67,9 +76,7 @@ export function applyFileReferenceSelection(state: ComposerState, filePath: stri
 
 export function recordComposerHistory(state: ComposerState, submitted: string): ComposerState {
   const clean = submitted.trim();
-  const nextHistory = clean
-    ? [...state.history.filter(h => h !== clean), clean].slice(-100)
-    : state.history;
+  const nextHistory = clean ? [...state.history.filter(h => h !== clean), clean].slice(-100) : state.history;
   return {
     ...createInitialComposerState(),
     history: nextHistory,

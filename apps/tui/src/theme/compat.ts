@@ -10,7 +10,7 @@ import {
   type ThemeManifest,
   type ThemeTokens,
 } from '@futryn/contracts';
-import { ALL_BUILTIN_THEMES, deriveTokensFromTriplet, mixHex, relativeLuminance } from './presets';
+import {ALL_BUILTIN_THEMES, deriveTokensFromTriplet, mixHex, relativeLuminance} from './presets';
 
 export interface ThemeImportResult {
   manifest: ThemeManifest | null;
@@ -112,7 +112,8 @@ function convertOpenCodeTheme(raw: Record<string, unknown>, suggestedId?: string
     id = `${id}-custom`;
   }
   const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim().slice(0, 80) : `OpenCode (${id})`;
-  const attribution = typeof raw.attribution === 'string' ? raw.attribution : 'Imported from OpenCode theme JSON format';
+  const attribution =
+    typeof raw.attribution === 'string' ? raw.attribution : 'Imported from OpenCode theme JSON format';
 
   const manifest = themeManifestSchema.parse({
     schemaVersion: 1,
@@ -173,7 +174,9 @@ function convertClaudeDesktopTheme(
         compatible: false,
         convertedProperties: [],
         unsupportedProperties: [],
-        warnings: ['Invalid Claude Desktop Theme: requires valid id, name, and #rrggbb hex values for bg, text, and accent.'],
+        warnings: [
+          'Invalid Claude Desktop Theme: requires valid id, name, and #rrggbb hex values for bg, text, and accent.',
+        ],
         refusedExecutableContent: hasExternalSceneJs,
       }),
     };
@@ -252,14 +255,18 @@ function convertClaudeDesktopTheme(
       refusedExecutableContent = true;
       warnings.push('Refused unsafe CSS containing external @import, remote url(), or escape sequences.');
     } else {
-      warnings.push('Desktop CSS rules were inspected and ignored; terminal uses semantic color tokens and native reactive effects.');
+      warnings.push(
+        'Desktop CSS rules were inspected and ignored; terminal uses semantic color tokens and native reactive effects.',
+      );
     }
   }
 
   if (hasExternalSceneJs || typeof raw.scene === 'string') {
     refusedExecutableContent = true;
     unsupported.push('scene.js (arbitrary JavaScript wallpaper execution is forbidden in FUTRYN)');
-    warnings.push('Refused arbitrary JavaScript scene file: FUTRYN only executes declarative built-in terminal scenes.');
+    warnings.push(
+      'Refused arbitrary JavaScript scene file: FUTRYN only executes declarative built-in terminal scenes.',
+    );
   }
 
   let wallpaper: string | null = null;
@@ -271,7 +278,9 @@ function convertClaudeDesktopTheme(
       converted.push(`wallpaper (${requested} -> ${mapped})`);
     } else {
       unsupported.push(`wallpaper (${requested} is not a built-in declarative terminal scene)`);
-      warnings.push(`Custom wallpaper "${requested}" is not a built-in declarative scene; falling back to static theme colors.`);
+      warnings.push(
+        `Custom wallpaper "${requested}" is not a built-in declarative scene; falling back to static theme colors.`,
+      );
     }
   }
 
@@ -282,9 +291,7 @@ function convertClaudeDesktopTheme(
   const counterpartTokens = deriveTokensFromTriplet(counterpartBg, counterpartText, accent);
 
   const attribution =
-    typeof raw.attribution === 'string'
-      ? raw.attribution
-      : `Imported from Claude Desktop Themes format (${rawName})`;
+    typeof raw.attribution === 'string' ? raw.attribution : `Imported from Claude Desktop Themes format (${rawName})`;
 
   const manifest = themeManifestSchema.parse({
     schemaVersion: 1,
@@ -327,7 +334,7 @@ function convertClaudeDesktopTheme(
  */
 export function importThemeManifest(
   input: string | unknown,
-  options?: { externalCss?: string; hasExternalSceneJs?: boolean; suggestedId?: string },
+  options?: {externalCss?: string; hasExternalSceneJs?: boolean; suggestedId?: string},
 ): ThemeImportResult {
   let parsed: unknown;
   if (typeof input === 'string') {
@@ -409,7 +416,9 @@ export function importThemeManifest(
           compatible: false,
           convertedProperties: [],
           unsupportedProperties: [`schemaVersion=${String(obj.schemaVersion)}`],
-          warnings: [`Unsupported FUTRYN theme schemaVersion "${String(obj.schemaVersion)}"; only version 1 is supported.`],
+          warnings: [
+            `Unsupported FUTRYN theme schemaVersion "${String(obj.schemaVersion)}"; only version 1 is supported.`,
+          ],
           refusedExecutableContent: false,
         }),
       };

@@ -1,15 +1,21 @@
-import type { ThemeManifest, ThemeTokens, AppearanceConfig } from '@futryn/contracts';
-import type { FutrynClient, ReactiveAgentEvent } from '@futryn/sdk';
-import type { Canvas } from '../../ui';
-import type { TranscriptViewport } from '../../types';
-import { renderContextIndicator } from '../context-meter';
-import { renderTopHeaderBar } from '../header';
-import { FYN_LABELS, type FynCompanion } from '../companion';
-import { renderWeepinbell } from '../companion/weepinbell';
-import { renderPromptComposerLines, type ComposerState } from '../composer';
-import { explorationRows, formatElapsed, reasoningTitle, renderTranscriptViewport, type TranscriptItem } from '../transcript';
-import { renderWelcomeScreen } from '../welcome';
-import type { ScreenMetrics } from '../../render/metrics';
+import type {ThemeManifest, ThemeTokens, AppearanceConfig} from '@futryn/contracts';
+import type {FutrynClient, ReactiveAgentEvent} from '@futryn/sdk';
+import type {Canvas} from '../../ui';
+import type {TranscriptViewport} from '../../types';
+import {renderContextIndicator} from '../context-meter';
+import {renderTopHeaderBar} from '../header';
+import {FYN_LABELS, type FynCompanion} from '../companion';
+import {renderWeepinbell} from '../companion/weepinbell';
+import {renderPromptComposerLines, type ComposerState} from '../composer';
+import {
+  explorationRows,
+  formatElapsed,
+  reasoningTitle,
+  renderTranscriptViewport,
+  type TranscriptItem,
+} from '../transcript';
+import {renderWelcomeScreen} from '../welcome';
+import type {ScreenMetrics} from '../../render/metrics';
 
 /** Everything the chat screen needs to paint one frame; no hidden state. */
 export interface ChatScreenInput {
@@ -38,20 +44,15 @@ export interface ChatScreenInput {
 /** Welcome card or live conversation, with the composer docked at the bottom. */
 export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptViewport | undefined {
   let viewport: TranscriptViewport | undefined;
-  const { rows, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId } = v;
-  const { mainWidth, colWidth } = v.metrics;
+  const {rows, tokens, manifest, appearance, status, reactiveEvent, companionView, wallpaperId} = v;
+  const {mainWidth, colWidth} = v.metrics;
 
-  const workspaceFiles = v.composer.fileMenuOpen && v.workspaceAccess
-    ? v.client.listWorkspaceFiles(v.composer.fileQuery)
-    : [];
+  const workspaceFiles =
+    v.composer.fileMenuOpen && v.workspaceAccess ? v.client.listWorkspaceFiles(v.composer.fileQuery) : [];
   const chatting = v.transcript.length > 0;
   const framePad = chatting && mainWidth >= 32 ? 1 : 0;
-  const contentWidth = chatting
-    ? Math.max(18, mainWidth - framePad * 2)
-    : Math.min(56, colWidth);
-  const contentLeft = chatting
-    ? framePad
-    : Math.max(0, Math.floor((mainWidth - contentWidth) / 2));
+  const contentWidth = chatting ? Math.max(18, mainWidth - framePad * 2) : Math.min(56, colWidth);
+  const contentLeft = chatting ? framePad : Math.max(0, Math.floor((mainWidth - contentWidth) / 2));
   const composerLines = renderPromptComposerLines({
     width: contentWidth,
     state: v.composer,
@@ -66,8 +67,15 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     borderStyle: manifest.borderStyle,
     workspaceFiles,
     maxHeight: Math.max(4, rows - 2),
-    placeholder: !status.activeAccount ? 'Use /login to connect…' : !status.selection ? 'Use /model to choose…' : undefined,
-    contextLine: status.selection && rows >= 12 ? renderContextIndicator(v.client.context(v.composer.value), contentWidth, tokens) : undefined,
+    placeholder: !status.activeAccount
+      ? 'Use /login to connect…'
+      : !status.selection
+        ? 'Use /model to choose…'
+        : undefined,
+    contextLine:
+      status.selection && rows >= 12
+        ? renderContextIndicator(v.client.context(v.composer.value), contentWidth, tokens)
+        : undefined,
   });
 
   if (!chatting) {
@@ -83,17 +91,23 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     });
     const availableHeight = rows - 2 - welcomeLines.length - composerLines.length;
     if (availableHeight >= 8) {
-      const mascotLines = renderWeepinbell(tokens, {compact:availableHeight < 12, ...companionView});
-      mascotLines.push({spans:[{text:`Weepinbell · ${FYN_LABELS[companionView.state]}`,fg:tokens.foregroundMuted,bg:tokens.background}]});
+      const mascotLines = renderWeepinbell(tokens, {compact: availableHeight < 12, ...companionView});
+      mascotLines.push({
+        spans: [
+          {text: `Weepinbell · ${FYN_LABELS[companionView.state]}`, fg: tokens.foregroundMuted, bg: tokens.background},
+        ],
+      });
       const welcomeWidth = welcomeLines[0]?.spans.reduce((sum, span) => sum + span.text.length, 0) ?? colWidth;
       const centered = mascotLines.map(line => {
         const width = line.spans.reduce((sum, span) => sum + span.text.length, 0);
         const left = Math.max(0, Math.floor((welcomeWidth - width) / 2));
-        return { spans: [
-          { text: ' '.repeat(left), fg: tokens.foreground, bg: tokens.background },
-          ...line.spans,
-          { text: ' '.repeat(Math.max(0, welcomeWidth - left - width)), fg: tokens.foreground, bg: tokens.background },
-        ] };
+        return {
+          spans: [
+            {text: ' '.repeat(left), fg: tokens.foreground, bg: tokens.background},
+            ...line.spans,
+            {text: ' '.repeat(Math.max(0, welcomeWidth - left - width)), fg: tokens.foreground, bg: tokens.background},
+          ],
+        };
       });
       welcomeLines.unshift(...centered);
     }
@@ -139,16 +153,29 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
         borderStyle: manifest.borderStyle,
         syntaxHighlighting: appearance.syntaxHighlighting,
         awaitingApproval: call => {
-          const cmd = (call.input as { cmd?: unknown } | null)?.cmd;
+          const cmd = (call.input as {cmd?: unknown} | null)?.cmd;
           const plain = (text: string) => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
-          return typeof cmd === 'string' && v.client.listPendingPermissions().some(p => p.capability === 'process.execute' && plain(p.target) === plain(cmd));
+          return (
+            typeof cmd === 'string' &&
+            v.client
+              .listPendingPermissions()
+              .some(p => p.capability === 'process.execute' && plain(p.target) === plain(cmd))
+          );
         },
       });
       canvas.block(transcriptStartRow, contentLeft, vp.lines, transcriptWidth);
-      viewport = {top: transcriptStartRow, left: contentLeft, width: transcriptWidth, height: transcriptHeight, offset: vp.clampedOffset, lines: vp.allLines,
-        disclosures: vp.allLines.flatMap((line, row) => line.disclosure ? [{row, ...line.disclosure}] : [])};
+      viewport = {
+        top: transcriptStartRow,
+        left: contentLeft,
+        width: transcriptWidth,
+        height: transcriptHeight,
+        offset: vp.clampedOffset,
+        lines: vp.allLines,
+        disclosures: vp.allLines.flatMap((line, row) => (line.disclosure ? [{row, ...line.disclosure}] : [])),
+      };
     }
-    if (statusRow > transcriptStartRow) canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
+    if (statusRow > transcriptStartRow)
+      canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);
   }
   return viewport;
@@ -159,29 +186,39 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
  * `◦ Exploring (12s • Esc to interrupt)`. The label is the latest reasoning title when the
  * provider sends one, otherwise what the turn is doing now.
  */
-export function turnStatusSpans(v: Pick<ChatScreenInput, 'client' | 'status' | 'tokens' | 'transcript' | 'turnStartedAt'>, time: number): { text: string; fg: string; bold?: boolean }[] {
-  const { tokens } = v;
+export function turnStatusSpans(
+  v: Pick<ChatScreenInput, 'client' | 'status' | 'tokens' | 'transcript' | 'turnStartedAt'>,
+  time: number,
+): {text: string; fg: string; bold?: boolean}[] {
+  const {tokens} = v;
   const turn = v.transcript.at(-1);
   const waitingTool = turn?.toolCalls?.some(call => !turn.toolResults?.some(result => result.callId === call.id));
   const pendingApproval = v.client.listPendingPermissions().length > 0;
   const last = turn?.parts?.at(-1);
-  const label = pendingApproval ? 'Waiting for your approval'
-    : waitingTool ? (() => {
-      const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
-      if (running.some(call => call.name === 'exec_command')) return 'Command pending';
-      if (running.some(call => call.name === 'apply_patch')) return 'Patch pending';
-      return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
-    })()
-    : turn?.awaitingModel ? 'Waiting for model'
-    : last?.kind === 'reasoning' ? reasoningTitle(last.text) ?? 'Thinking'
-    : last?.kind === 'text' ? 'Replying'
-    : v.status.phase === 'waiting' ? 'Waiting for provider' : 'Working';
+  const label = pendingApproval
+    ? 'Waiting for your approval'
+    : waitingTool
+      ? (() => {
+          const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
+          if (running.some(call => call.name === 'exec_command')) return 'Command pending';
+          if (running.some(call => call.name === 'apply_patch')) return 'Patch pending';
+          return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
+        })()
+      : turn?.awaitingModel
+        ? 'Waiting for model'
+        : last?.kind === 'reasoning'
+          ? (reasoningTitle(last.text) ?? 'Thinking')
+          : last?.kind === 'text'
+            ? 'Replying'
+            : v.status.phase === 'waiting'
+              ? 'Waiting for provider'
+              : 'Working';
   const elapsed = v.turnStartedAt ? formatElapsed(Date.now() - v.turnStartedAt) : '0s';
   return [
-    { text: Math.floor(time * 2) % 2 ? '◦ ' : '• ', fg: tokens.accent },
-    { text: label, fg: tokens.foreground, bold: true },
-    { text: ` (${elapsed} • `, fg: tokens.foregroundSubtle },
-    { text: 'Esc', fg: tokens.foregroundMuted },
-    { text: ' to interrupt)', fg: tokens.foregroundSubtle },
+    {text: Math.floor(time * 2) % 2 ? '◦ ' : '• ', fg: tokens.accent},
+    {text: label, fg: tokens.foreground, bold: true},
+    {text: ` (${elapsed} • `, fg: tokens.foregroundSubtle},
+    {text: 'Esc', fg: tokens.foregroundMuted},
+    {text: ' to interrupt)', fg: tokens.foregroundSubtle},
   ];
 }

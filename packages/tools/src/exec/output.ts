@@ -13,7 +13,8 @@ export class HeadTailBuffer {
   private dropped = 0;
 
   constructor(maxBytes: number) {
-    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 60000) throw new RangeError('Invalid output byte budget');
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 60000)
+      throw new RangeError('Invalid output byte budget');
     this.headLimit = Math.ceil(maxBytes / 2);
     this.tailLimit = Math.floor(maxBytes / 2);
   }
@@ -21,7 +22,8 @@ export class HeadTailBuffer {
   push(chunk: Buffer): void {
     if (this.headBytes < this.headLimit) {
       const take = Math.min(chunk.byteLength, this.headLimit - this.headBytes);
-      this.head.push(Buffer.from(chunk.subarray(0, take))); this.headBytes += take;
+      this.head.push(Buffer.from(chunk.subarray(0, take)));
+      this.headBytes += take;
       chunk = chunk.subarray(take);
       if (!chunk.byteLength) return;
     }
@@ -32,17 +34,30 @@ export class HeadTailBuffer {
       this.tailBytes = this.tailLimit;
       return;
     }
-    this.tail.push(Buffer.from(chunk)); this.tailBytes += chunk.byteLength;
+    this.tail.push(Buffer.from(chunk));
+    this.tailBytes += chunk.byteLength;
     while (this.tailBytes > this.tailLimit) {
-      const first = this.tail[0]!; const extra = this.tailBytes - this.tailLimit;
-      if (first.byteLength <= extra) { this.tail.shift(); this.tailBytes -= first.byteLength; this.dropped += first.byteLength; }
-      else { this.tail[0] = Buffer.from(first.subarray(extra)); this.tailBytes -= extra; this.dropped += extra; }
+      const first = this.tail[0]!;
+      const extra = this.tailBytes - this.tailLimit;
+      if (first.byteLength <= extra) {
+        this.tail.shift();
+        this.tailBytes -= first.byteLength;
+        this.dropped += first.byteLength;
+      } else {
+        this.tail[0] = Buffer.from(first.subarray(extra));
+        this.tailBytes -= extra;
+        this.dropped += extra;
+      }
     }
   }
 
   /** Bytes dropped from the middle. */
-  get omittedBytes(): number { return this.dropped; }
-  get totalBytes(): number { return this.headBytes + this.tailBytes + this.dropped; }
+  get omittedBytes(): number {
+    return this.dropped;
+  }
+  get totalBytes(): number {
+    return this.headBytes + this.tailBytes + this.dropped;
+  }
 
   text(): string {
     const decode = (parts: Buffer[]) => new TextDecoder().decode(Buffer.concat(parts));
@@ -63,11 +78,13 @@ export function redactUrlCredentials(text: string): string {
 
 export function plainTerminalText(text: string): string {
   // Redact last: escape/control stripping could otherwise join a credential split by an escape sequence.
-  return redactUrlCredentials(text
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b[PX^_][^\x1b]*(?:\x1b\\)?/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''));
+  return redactUrlCredentials(
+    text
+      .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?/g, '')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/\x1b[PX^_][^\x1b]*(?:\x1b\\)?/g, '')
+      .replace(/\x1b[@-Z\\-_]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ''),
+  );
 }

@@ -1,9 +1,9 @@
-import { wideLayout } from '../../core/layout';
-import type { OverlayFeature, ThemeFrame, TuiHost } from '../../core/feature';
-import { editField, stepIndex } from '../../ui';
-import { filterSessions } from './logic';
-import { createInitialSessionPickerState, type SessionPickerState } from './types';
-import { renderSessionPickerOverlay } from './view';
+import {wideLayout} from '../../core/layout';
+import type {OverlayFeature, ThemeFrame, TuiHost} from '../../core/feature';
+import {editField, stepIndex} from '../../ui';
+import {filterSessions} from './logic';
+import {createInitialSessionPickerState, type SessionPickerState} from './types';
+import {renderSessionPickerOverlay} from './view';
 
 export class SessionsFeature implements OverlayFeature {
   readonly overlays = ['sessions'] as const;
@@ -11,12 +11,16 @@ export class SessionsFeature implements OverlayFeature {
 
   constructor(private readonly host: TuiHost) {}
 
-  open(): void { this.state = createInitialSessionPickerState(); }
+  open(): void {
+    this.state = createInitialSessionPickerState();
+  }
 
-  layout(_overlay: 'sessions', cols: number, rows: number) { return wideLayout(cols, rows); }
+  layout(_overlay: 'sessions', cols: number, rows: number) {
+    return wideLayout(cols, rows);
+  }
 
-  render(_overlay: 'sessions', size: { width: number; height: number }, theme: ThemeFrame) {
-    const { client } = this.host;
+  render(_overlay: 'sessions', size: {width: number; height: number}, theme: ThemeFrame) {
+    const {client} = this.host;
     return renderSessionPickerOverlay({
       ...size,
       sessions: client.listSessions(),
@@ -28,12 +32,18 @@ export class SessionsFeature implements OverlayFeature {
   }
 
   async handleKey(_overlay: 'sessions', key: string): Promise<void> {
-    const { host, state } = this;
+    const {host, state} = this;
     const filtered = filterSessions(host.client.listSessions(), state.query);
-    if (key === 'Escape') { host.closeOverlay(); return; }
-    if (key === 'Ctrl+N') { await host.runSlashCommand('/new'); return; }
+    if (key === 'Escape') {
+      host.closeOverlay();
+      return;
+    }
+    if (key === 'Ctrl+N') {
+      await host.runSlashCommand('/new');
+      return;
+    }
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-      if (filtered.length) this.state = { ...state, selectedIndex: stepIndex(state.selectedIndex, key, filtered.length) };
+      if (filtered.length) this.state = {...state, selectedIndex: stepIndex(state.selectedIndex, key, filtered.length)};
       return;
     }
     if (key === 'Ctrl+X' || key === 'Delete') {
@@ -59,7 +69,7 @@ export class SessionsFeature implements OverlayFeature {
       }
       return;
     }
-    const query = editField(state.query, key, { max: Number.MAX_SAFE_INTEGER });
-    if (query !== null) this.state = { ...state, query, selectedIndex: 0 };
+    const query = editField(state.query, key, {max: Number.MAX_SAFE_INTEGER});
+    if (query !== null) this.state = {...state, query, selectedIndex: 0};
   }
 }

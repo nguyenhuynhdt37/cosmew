@@ -5,8 +5,15 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
   let i = 0;
 
   while (i < str.length) {
-    if (str.startsWith('\x1b[200~', i) || str.startsWith('\x1b[201~', i)) { i += 6; continue; }
-    if (str.startsWith('\x1b\r', i)) { keys.push('Alt+Enter'); i += 2; continue; }
+    if (str.startsWith('\x1b[200~', i) || str.startsWith('\x1b[201~', i)) {
+      i += 6;
+      continue;
+    }
+    if (str.startsWith('\x1b\r', i)) {
+      keys.push('Alt+Enter');
+      i += 2;
+      continue;
+    }
     if (str.startsWith('\x1b[<', i)) {
       const endM = str.indexOf('M', i + 3);
       const endLowerM = str.indexOf('m', i + 3);
@@ -22,7 +29,9 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       if (termIdx !== -1) {
         const match = /^(\d{1,5});(\d{1,5});(\d{1,5})$/.exec(str.slice(i + 3, termIdx));
         if (match) {
-          const button = Number(match[1]); const col = Number(match[2]) - 1; const row = Number(match[3]) - 1;
+          const button = Number(match[1]);
+          const col = Number(match[2]) - 1;
+          const row = Number(match[3]) - 1;
           const released = str[termIdx] === 'm';
           if (col >= 0 && row >= 0) {
             if (button === 64 && !released) keys.push('WheelUp');
@@ -173,21 +182,34 @@ export class TerminalInputDecoder {
   private pending = '';
   private readonly decoder = new TextDecoder();
   private discardCSI = false;
-  get waiting(): boolean { return !!this.pending; }
+  get waiting(): boolean {
+    return !!this.pending;
+  }
   feed(chunk: Uint8Array | string): string[] {
-    let text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, {stream:true});
+    let text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, {stream: true});
     if (this.discardCSI) {
-      const final = text.search(/[@-~]/); if (final < 0) return [];
-      text = text.slice(final + 1); this.discardCSI = false;
+      const final = text.search(/[@-~]/);
+      if (final < 0) return [];
+      text = text.slice(final + 1);
+      this.discardCSI = false;
     }
     this.pending += text;
     const at = this.pending.lastIndexOf('\x1b');
     const tail = at >= 0 ? this.pending.slice(at) : '';
     if (tail === '\x1b' || /^\x1b\[[0-?]*$/.test(tail)) {
-      const ready = this.pending.slice(0, at); this.pending = tail.length <= 128 ? tail : ''; if (tail.length > 128) this.discardCSI = true;
+      const ready = this.pending.slice(0, at);
+      this.pending = tail.length <= 128 ? tail : '';
+      if (tail.length > 128) this.discardCSI = true;
       return parseRawTerminalKey(ready);
     }
-    const ready = this.pending; this.pending = ''; return parseRawTerminalKey(ready);
+    const ready = this.pending;
+    this.pending = '';
+    return parseRawTerminalKey(ready);
   }
-  flush(): string[] { const escape = this.pending === '\x1b'; if (this.pending.startsWith('\x1b[')) this.discardCSI = true; this.pending = ''; return escape ? ['Escape'] : []; }
+  flush(): string[] {
+    const escape = this.pending === '\x1b';
+    if (this.pending.startsWith('\x1b[')) this.discardCSI = true;
+    this.pending = '';
+    return escape ? ['Escape'] : [];
+  }
 }

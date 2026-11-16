@@ -55,11 +55,22 @@ export interface ToolDispatcherOptions {
   sandbox?: () => {mode: CommandSandbox['mode']; escalation: SandboxEscalation};
 }
 
-export const sandboxConfig = (options: ToolDispatcherOptions) => options.sandbox?.() ?? {mode: 'read-only' as const, escalation: 'on-request' as const};
+export const sandboxConfig = (options: ToolDispatcherOptions) =>
+  options.sandbox?.() ?? {mode: 'read-only' as const, escalation: 'on-request' as const};
 
 /** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
-export function commandGrantTarget(command: string, workdirAbsolute: string, runtimeId: string,executionKey?:string): string {
-  return JSON.stringify({ exec: command, cwd: workdirAbsolute, sandbox: runtimeId,...(executionKey?{executionKey}:{}) });
+export function commandGrantTarget(
+  command: string,
+  workdirAbsolute: string,
+  runtimeId: string,
+  executionKey?: string,
+): string {
+  return JSON.stringify({
+    exec: command,
+    cwd: workdirAbsolute,
+    sandbox: runtimeId,
+    ...(executionKey ? {executionKey} : {}),
+  });
 }
 
 export type ToolOutput = Omit<ToolResult, 'callId' | 'name'>;
@@ -69,7 +80,10 @@ export type Audit = (record: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) =>
  * The sandbox a command actually gets: the configured mode when the runtime can enforce it, otherwise
  * read-only when that is enforceable (stricter, never looser). Undefined means nothing can run.
  */
-export function effectiveSandboxMode(options: ToolDispatcherOptions, runtime: CommandRuntime): CommandSandbox['mode'] | undefined {
+export function effectiveSandboxMode(
+  options: ToolDispatcherOptions,
+  runtime: CommandRuntime,
+): CommandSandbox['mode'] | undefined {
   const modes = runtime.capabilities?.().modes ?? ['read-only'];
   const configured = sandboxConfig(options).mode;
   return modes.includes(configured) ? configured : modes.includes('read-only') ? 'read-only' : undefined;

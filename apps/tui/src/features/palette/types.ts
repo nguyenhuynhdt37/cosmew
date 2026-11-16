@@ -4,5 +4,5 @@ export interface CommandPaletteState {
 }
 
 export function createInitialCommandPaletteState(): CommandPaletteState {
-  return { query: '', selectedIndex: 0 };
+  return {query: '', selectedIndex: 0};
 }

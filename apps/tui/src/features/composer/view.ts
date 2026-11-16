@@ -1,16 +1,22 @@
-import type { BorderStyle, PermissionMode, ThemeTokens } from '@futryn/contracts';
-import type { AgentMode } from '@futryn/sdk';
-import { getBorderGlyphs } from '../../theme/theme';
-import type { RenderedBoxLine, StyledSpan } from '../../ui';
-import { getMatchingSlashCommands } from './logic';
-import type { ComposerState } from './types';
+import type {BorderStyle, PermissionMode, ThemeTokens} from '@futryn/contracts';
+import type {AgentMode} from '@futryn/sdk';
+import {getBorderGlyphs} from '../../theme/theme';
+import type {RenderedBoxLine, StyledSpan} from '../../ui';
+import {getMatchingSlashCommands} from './logic';
+import type {ComposerState} from './types';
 
 /**
  * Prompt composer as a soft card: rounded frame, one text row, pill footer.
  * Mode reads Chat / Plan / Review. Focus tints the border with the accent token.
  */
 /** Chip text for each permission mode; Shift+Tab cycles them. */
-export const PERMISSION_LABELS: Record<PermissionMode, string> = { default: 'Ask', acceptEdits: 'Accept edits', auto: 'Auto', plan: 'Plan', bypassPermissions: 'Bypass' };
+export const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  default: 'Ask',
+  acceptEdits: 'Accept edits',
+  auto: 'Auto',
+  plan: 'Plan',
+  bypassPermissions: 'Bypass',
+};
 
 export function renderPromptComposerLines(options: {
   width: number;
@@ -54,7 +60,7 @@ export function renderPromptComposerLines(options: {
   const fill = (text: string, len: number) => text.slice(0, len).padEnd(len, ' ');
 
   // 1. Autocomplete Popup Menu (Slash commands or @file mentions)
-  const popupItems: { label: string; hint: string }[] = [];
+  const popupItems: {label: string; hint: string}[] = [];
   let popupHeader = '';
   const popupLimit = Math.min(5, Math.max(0, (options.maxHeight ?? 20) - 7 - (options.contextLine ? 1 : 0)));
   if (state.slashMenuOpen) {
@@ -72,23 +78,33 @@ export function renderPromptComposerLines(options: {
     const topFiles = workspaceFiles.slice(0, popupLimit);
     popupHeader = `Files (${workspaceFiles.length})`;
     for (const f of topFiles) {
-      popupItems.push({ label: `@${f}`, hint: '' });
+      popupItems.push({label: `@${f}`, hint: ''});
     }
   }
 
   if (popupItems.length > 0) {
-    const selIdx =
-      state.slashMenuOpen
-        ? state.slashSelectedIndex - Math.max(0, Math.min(state.slashSelectedIndex - popupLimit + 1, getMatchingSlashCommands(state.value).length - popupLimit))
-        : state.fileSelectedIndex % popupItems.length;
+    const selIdx = state.slashMenuOpen
+      ? state.slashSelectedIndex -
+        Math.max(
+          0,
+          Math.min(
+            state.slashSelectedIndex - popupLimit + 1,
+            getMatchingSlashCommands(state.value).length - popupLimit,
+          ),
+        )
+      : state.fileSelectedIndex % popupItems.length;
     const topTitle = ` ${popupHeader} `;
     const padTop = Math.max(0, innerWidth - topTitle.length - 1);
 
     lines.push({
       spans: [
-        { text: `${glyphs.topLeft}${glyphs.horizontal}`, fg: tokens.accent, bg: tokens.overlayBackground },
-        { text: topTitle, fg: tokens.accent, bg: tokens.overlayBackground, bold: true },
-        { text: `${glyphs.horizontal.repeat(padTop)}${glyphs.topRight}`, fg: tokens.accent, bg: tokens.overlayBackground },
+        {text: `${glyphs.topLeft}${glyphs.horizontal}`, fg: tokens.accent, bg: tokens.overlayBackground},
+        {text: topTitle, fg: tokens.accent, bg: tokens.overlayBackground, bold: true},
+        {
+          text: `${glyphs.horizontal.repeat(padTop)}${glyphs.topRight}`,
+          fg: tokens.accent,
+          bg: tokens.overlayBackground,
+        },
       ],
     });
 
@@ -104,10 +120,10 @@ export function renderPromptComposerLines(options: {
 
       lines.push({
         spans: [
-          { text: glyphs.vertical, fg: tokens.accent, bg: tokens.overlayBackground },
-          { text: ` ${labelCol}`, fg: isSelected ? tokens.accent : rowFg, bg: rowBg, bold: isSelected },
-          { text: `${hintCol} `, fg: isSelected ? rowFg : tokens.foregroundMuted, bg: rowBg },
-          { text: glyphs.vertical, fg: tokens.accent, bg: tokens.overlayBackground },
+          {text: glyphs.vertical, fg: tokens.accent, bg: tokens.overlayBackground},
+          {text: ` ${labelCol}`, fg: isSelected ? tokens.accent : rowFg, bg: rowBg, bold: isSelected},
+          {text: `${hintCol} `, fg: isSelected ? rowFg : tokens.foregroundMuted, bg: rowBg},
+          {text: glyphs.vertical, fg: tokens.accent, bg: tokens.overlayBackground},
         ],
       });
     });
@@ -122,7 +138,7 @@ export function renderPromptComposerLines(options: {
       ],
     });
     // Khoảng đệm giữa popup và composer
-    lines.push({ spans: [] });
+    lines.push({spans: []});
   }
 
   // 2. Composer frame. A quiet label on the rule, a prompt mark, then a footer.
@@ -131,29 +147,33 @@ export function renderPromptComposerLines(options: {
   const titleRest = Math.max(0, innerWidth - title.length - titleDash.length);
   lines.push({
     spans: [
-      { text: `${glyphs.topLeft}${titleDash}`, fg: borderColor, bg },
-      { text: title, fg: tokens.foregroundSubtle, bg },
-      { text: `${glyphs.horizontal.repeat(titleRest)}${glyphs.topRight}`, fg: borderColor, bg },
+      {text: `${glyphs.topLeft}${titleDash}`, fg: borderColor, bg},
+      {text: title, fg: tokens.foregroundSubtle, bg},
+      {text: `${glyphs.horizontal.repeat(titleRest)}${glyphs.topRight}`, fg: borderColor, bg},
     ],
   });
 
   // 3. Text input. One row until the draft wraps. The prompt mark stays on the first line.
   const lead = '  › ';
   const textCols = Math.max(1, innerWidth - lead.length);
-  const placeholder = isStreaming ? 'Replying…' : options.placeholder && options.placeholder.length <= textCols - 1 ? options.placeholder : 'Ask anything…';
+  const placeholder = isStreaming
+    ? 'Replying…'
+    : options.placeholder && options.placeholder.length <= textCols - 1
+      ? options.placeholder
+      : 'Ask anything…';
 
   const pushInputRow = (body: StyledSpan[], prefix: string) => {
     const used = body.reduce((sum, span) => sum + span.text.length, 0);
     const markAt = Math.max(0, prefix.length - 2);
     lines.push({
       spans: [
-        { text: glyphs.vertical, fg: borderColor, bg },
-        { text: prefix.slice(0, markAt), fg: tokens.foreground, bg },
-        { text: prefix.slice(markAt, markAt + 1), fg: tokens.accent, bg },
-        { text: prefix.slice(markAt + 1), fg: tokens.foreground, bg },
+        {text: glyphs.vertical, fg: borderColor, bg},
+        {text: prefix.slice(0, markAt), fg: tokens.foreground, bg},
+        {text: prefix.slice(markAt, markAt + 1), fg: tokens.accent, bg},
+        {text: prefix.slice(markAt + 1), fg: tokens.foreground, bg},
         ...body,
-        { text: ' '.repeat(Math.max(0, textCols - used)), fg: tokens.foreground, bg },
-        { text: glyphs.vertical, fg: borderColor, bg },
+        {text: ' '.repeat(Math.max(0, textCols - used)), fg: tokens.foreground, bg},
+        {text: glyphs.vertical, fg: borderColor, bg},
       ],
     });
   };
@@ -161,84 +181,122 @@ export function renderPromptComposerLines(options: {
   if (state.value.length === 0) {
     const cursorGlyph = focused ? '▌' : ' ';
     const shown = placeholder.slice(0, Math.max(0, textCols - 1));
-    pushInputRow([
-      { text: cursorGlyph, fg: tokens.cursor, bg, bold: true },
-      { text: shown, fg: tokens.foregroundSubtle, bg },
-    ], lead);
+    pushInputRow(
+      [
+        {text: cursorGlyph, fg: tokens.cursor, bg, bold: true},
+        {text: shown, fg: tokens.foregroundSubtle, bg},
+      ],
+      lead,
+    );
   } else {
-    const visual: { text: string; start: number }[] = [];
+    const visual: {text: string; start: number}[] = [];
     let offset = 0;
     for (const line of state.value.split('\n')) {
       for (let start = 0; start <= line.length; start += textCols) {
-        visual.push({ text: line.slice(start, start + textCols), start: offset + start });
+        visual.push({text: line.slice(start, start + textCols), start: offset + start});
         if (start + textCols > line.length) break;
       }
       offset += line.length + 1;
     }
-    const cursorRow = Math.max(0, visual.findLastIndex(row => row.start <= state.cursor));
-    const maxInput = Math.max(1, Math.min(6, (options.maxHeight ?? 20) - lines.length - 3 - (options.contextLine ? 1 : 0)));
+    const cursorRow = Math.max(
+      0,
+      visual.findLastIndex(row => row.start <= state.cursor),
+    );
+    const maxInput = Math.max(
+      1,
+      Math.min(6, (options.maxHeight ?? 20) - lines.length - 3 - (options.contextLine ? 1 : 0)),
+    );
     const first = Math.max(0, cursorRow - maxInput + 1);
     for (const [index, row] of visual.slice(first, first + maxInput).entries()) {
       const cursorCol = state.cursor - row.start;
       const hasCursor = focused && first + index === cursorRow;
-      pushInputRow(hasCursor ? [
-        { text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg },
-        { text: row.text[cursorCol] ?? ' ', fg: tokens.accentForeground, bg: tokens.cursor, bold: true },
-        { text: row.text.slice(cursorCol + 1), fg: tokens.foreground, bg },
-      ] : [{ text: row.text, fg: tokens.foreground, bg }], first + index === 0 ? lead : ' '.repeat(lead.length));
+      pushInputRow(
+        hasCursor
+          ? [
+              {text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg},
+              {text: row.text[cursorCol] ?? ' ', fg: tokens.accentForeground, bg: tokens.cursor, bold: true},
+              {text: row.text.slice(cursorCol + 1), fg: tokens.foreground, bg},
+            ]
+          : [{text: row.text, fg: tokens.foreground, bg}],
+        first + index === 0 ? lead : ' '.repeat(lead.length),
+      );
     }
   }
 
-  lines.push({ spans: [{
-    text: `${glyphs.bottomLeft}${glyphs.horizontal.repeat(innerWidth)}${glyphs.bottomRight}`,
-    fg: borderColor, bg,
-  }] });
+  lines.push({
+    spans: [
+      {
+        text: `${glyphs.bottomLeft}${glyphs.horizontal.repeat(innerWidth)}${glyphs.bottomRight}`,
+        fg: borderColor,
+        bg,
+      },
+    ],
+  });
 
-  const modeName = permissionMode ? PERMISSION_LABELS[permissionMode] : mode === 'plan' ? 'Plan' : mode === 'review' ? 'Review' : 'Chat';
-  const modeColor = permissionMode === 'bypassPermissions' ? tokens.error
-    : permissionMode === 'auto' || permissionMode === 'acceptEdits' ? tokens.warning
-    : permissionMode === 'plan' ? tokens.info
-    : permissionMode ? tokens.accent
-    : mode === 'plan' ? tokens.warning : mode === 'review' ? tokens.info : tokens.accent;
+  const modeName = permissionMode
+    ? PERMISSION_LABELS[permissionMode]
+    : mode === 'plan'
+      ? 'Plan'
+      : mode === 'review'
+        ? 'Review'
+        : 'Chat';
+  const modeColor =
+    permissionMode === 'bypassPermissions'
+      ? tokens.error
+      : permissionMode === 'auto' || permissionMode === 'acceptEdits'
+        ? tokens.warning
+        : permissionMode === 'plan'
+          ? tokens.info
+          : permissionMode
+            ? tokens.accent
+            : mode === 'plan'
+              ? tokens.warning
+              : mode === 'review'
+                ? tokens.info
+                : tokens.accent;
   const modeChip = ` ${modeName} `;
   const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
   const shortHints: StyledSpan[] = [
-    { text: '@', fg: tokens.accent, bg },
-    { text: '  ', fg: tokens.foregroundSubtle, bg },
-    { text: '/', fg: tokens.accent, bg },
+    {text: '@', fg: tokens.accent, bg},
+    {text: '  ', fg: tokens.foregroundSubtle, bg},
+    {text: '/', fg: tokens.accent, bg},
   ];
   const longHints: StyledSpan[] = [
-    { text: '@', fg: tokens.accent, bg },
-    { text: ' files   ', fg: tokens.foregroundSubtle, bg },
-    { text: '/', fg: tokens.accent, bg },
-    { text: ' commands', fg: tokens.foregroundSubtle, bg },
+    {text: '@', fg: tokens.accent, bg},
+    {text: ' files   ', fg: tokens.foregroundSubtle, bg},
+    {text: '/', fg: tokens.accent, bg},
+    {text: ' commands', fg: tokens.foregroundSubtle, bg},
   ];
   const hintLenOf = (parts: StyledSpan[]) => parts.reduce((sum, span) => sum + span.text.length, 0);
   const roomFor = (hintLen: number) => Math.max(0, innerWidth - modeChip.length - 1 - hintLen);
   const hintParts = isStreaming
-    ? [{ text: innerWidth >= 40 ? 'Esc interrupt' : 'Esc', fg: tokens.foregroundSubtle, bg }]
+    ? [{text: innerWidth >= 40 ? 'Esc interrupt' : 'Esc', fg: tokens.foregroundSubtle, bg}]
     : options.telemetryLabel
-    ? [{ text: options.telemetryLabel, fg: tokens.foregroundMuted, bg }]
-    : meta.length + 2 <= roomFor(hintLenOf(longHints))
-      ? longHints
-      : shortHints;
+      ? [{text: options.telemetryLabel, fg: tokens.foregroundMuted, bg}]
+      : meta.length + 2 <= roomFor(hintLenOf(longHints))
+        ? longHints
+        : shortHints;
   const metaRoom = Math.max(0, roomFor(hintLenOf(hintParts)) - 1);
-  const truncate = (value: string, room: number) => value.length <= room ? value : room > 1 ? value.slice(0, room - 1) + '…' : value.slice(0, room);
+  const truncate = (value: string, room: number) =>
+    value.length <= room ? value : room > 1 ? value.slice(0, room - 1) + '…' : value.slice(0, room);
   const account = activeAccountLabel ? ` · ${activeAccountLabel}` : '';
-  const shownMeta = meta.length <= metaRoom ? meta : account && metaRoom >= account.length + 6
-    ? truncate(activeModelLabel, metaRoom - account.length) + account
-    : truncate(meta, metaRoom);
+  const shownMeta =
+    meta.length <= metaRoom
+      ? meta
+      : account && metaRoom >= account.length + 6
+        ? truncate(activeModelLabel, metaRoom - account.length) + account
+        : truncate(meta, metaRoom);
   const gap = Math.max(0, metaRoom - shownMeta.length) + 1;
 
   lines.push({
     spans: [
-      { text: ' ', fg: borderColor, bg: tokens.background },
-      { text: modeChip, fg: modeColor, bg: tokens.backgroundElevated, bold: true },
-      { text: ' ', fg: tokens.foreground, bg },
-      { text: shownMeta, fg: tokens.foregroundSubtle, bg },
-      { text: ' '.repeat(gap), fg: tokens.foreground, bg },
+      {text: ' ', fg: borderColor, bg: tokens.background},
+      {text: modeChip, fg: modeColor, bg: tokens.backgroundElevated, bold: true},
+      {text: ' ', fg: tokens.foreground, bg},
+      {text: shownMeta, fg: tokens.foregroundSubtle, bg},
+      {text: ' '.repeat(gap), fg: tokens.foreground, bg},
       ...hintParts,
-      { text: ' ', fg: borderColor, bg: tokens.background },
+      {text: ' ', fg: borderColor, bg: tokens.background},
     ],
   });
 

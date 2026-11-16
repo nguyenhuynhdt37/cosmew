@@ -1,6 +1,6 @@
-import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { FutrynError } from '@futryn/contracts';
+import {closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync} from 'node:fs';
+import {isAbsolute, relative, resolve, sep} from 'node:path';
+import {FutrynError} from '@futryn/contracts';
 
 export interface ResolvedPath {
   /** Canonical absolute path (symlinks resolved), always inside the root. */
@@ -38,11 +38,17 @@ export class WorkspaceRoot {
     const lexical = resolve(this.root, input);
     if (!inside(this.root, lexical)) throw new WorkspaceDenied('outside-workspace');
     let absolute: string;
-    try { absolute = realpathSync.native(lexical); } catch (error) { throw new WorkspaceDenied(['ENOENT', 'ENOTDIR'].includes((error as {code?:string}).code ?? '') ? 'not-found' : 'inaccessible'); }
+    try {
+      absolute = realpathSync.native(lexical);
+    } catch (error) {
+      throw new WorkspaceDenied(
+        ['ENOENT', 'ENOTDIR'].includes((error as {code?: string}).code ?? '') ? 'not-found' : 'inaccessible',
+      );
+    }
     if (!inside(this.root, absolute)) throw new WorkspaceDenied('outside-workspace');
     const stat = statSync(absolute);
     if (!stat.isFile() && !stat.isDirectory()) throw new WorkspaceDenied('invalid-path');
-    return { absolute, relative: this.relativeOf(absolute), kind: stat.isFile() ? 'file' : 'directory' };
+    return {absolute, relative: this.relativeOf(absolute), kind: stat.isFile() ? 'file' : 'directory'};
   }
 
   relativeOf(absolute: string): string {
@@ -55,15 +61,31 @@ export class WorkspaceRoot {
    * symlinks, and the path must still resolve to the same inode inside the root after opening, so
    * a swap between the policy check and the read is detected.
    */
-  readBytes(file: ResolvedPath, maxBytes: number): { bytes: Uint8Array; size: number } {
+  readBytes(file: ResolvedPath, maxBytes: number): {bytes: Uint8Array; size: number} {
     let fd: number;
-    try { fd = openSync(file.absolute, constants.O_RDONLY | constants.O_NOFOLLOW); } catch (error) { throw new WorkspaceDenied(['ENOENT', 'ENOTDIR'].includes((error as {code?:string}).code ?? '') ? 'not-found' : 'inaccessible'); }
+    try {
+      fd = openSync(file.absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      throw new WorkspaceDenied(
+        ['ENOENT', 'ENOTDIR'].includes((error as {code?: string}).code ?? '') ? 'not-found' : 'inaccessible',
+      );
+    }
     try {
       const opened = fstatSync(fd);
       let again: string;
-      try { again = realpathSync.native(file.absolute); } catch { throw new WorkspaceDenied('not-found'); }
+      try {
+        again = realpathSync.native(file.absolute);
+      } catch {
+        throw new WorkspaceDenied('not-found');
+      }
       const now = statSync(again);
-      if (again !== file.absolute || !inside(this.root, again) || now.ino !== opened.ino || now.dev !== opened.dev || !opened.isFile()) {
+      if (
+        again !== file.absolute ||
+        !inside(this.root, again) ||
+        now.ino !== opened.ino ||
+        now.dev !== opened.dev ||
+        !opened.isFile()
+      ) {
         throw new WorkspaceDenied('outside-workspace');
       }
       const length = Math.min(opened.size, maxBytes);
@@ -74,8 +96,10 @@ export class WorkspaceRoot {
         if (read <= 0) break;
         offset += read;
       }
-      return { bytes: bytes.subarray(0, offset), size: opened.size };
-    } finally { closeSync(fd); }
+      return {bytes: bytes.subarray(0, offset), size: opened.size};
+    } finally {
+      closeSync(fd);
+    }
   }
 }
 

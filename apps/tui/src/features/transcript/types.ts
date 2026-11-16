@@ -1,4 +1,4 @@
-import type { Message, RuntimeActivity, ToolCall, ToolResult, Usage } from '@futryn/contracts';
+import type {Message, RuntimeActivity, ToolCall, ToolResult, Usage} from '@futryn/contracts';
 
 export interface TranscriptItem {
   id: string;
@@ -10,7 +10,7 @@ export interface TranscriptItem {
   toolCalls?: ToolCall[];
   /** Results matched to `toolCalls` by call id; a call without a result is still running. */
   toolResults?: ToolResult[];
-  toolOutput?:Record<string,string>;
+  toolOutput?: Record<string, string>;
   streaming?: boolean;
   /** Live wait indicator, not provider reasoning or a claim that a tool has started. */
   awaitingModel?: boolean;
@@ -32,10 +32,10 @@ export interface TranscriptItem {
 }
 
 export type TranscriptPart =
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'tools'; callIds: string[] }
-  | { kind: 'activity'; id: string };
+  | {kind: 'reasoning'; text: string}
+  | {kind: 'text'; text: string}
+  | {kind: 'tools'; callIds: string[]}
+  | {kind: 'activity'; id: string};
 
 /** One row under an `Explored` header, e.g. `Read routes.ts, service.ts`. */
 export interface ExplorationRow {

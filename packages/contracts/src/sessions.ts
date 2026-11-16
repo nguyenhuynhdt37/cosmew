@@ -1,5 +1,5 @@
-import { z } from 'zod';
-import type { Message, Selection } from './models';
+import {z} from 'zod';
+import type {Message, Selection} from './models';
 
 export interface StoredMessage extends Message {
   revision: number;
@@ -52,21 +52,32 @@ export interface WorkspaceDiffReport {
  * input is durable and is delivered to the model before the active turn's next request.
  */
 export type SteerOutcome =
-  | { accepted: true; turnId: string; steerId: string }
-  | { accepted: false; reason: 'no_active_turn' | 'turn_mismatch' | 'not_steerable' | 'empty_input' };
+  | {accepted: true; turnId: string; steerId: string}
+  | {accepted: false; reason: 'no_active_turn' | 'turn_mismatch' | 'not_steerable' | 'empty_input'};
 
 export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
   /** `carried` lists undelivered steering (by steerId) that this turn consumes as input before `user`. */
-  beginExecution?(id:string,user:Message,receipt:import('./telemetry').TurnReceipt,carried?:string[]):number;
-  recordExecution?(id:string,turnId:string,event:import('./recovery').ExecutionEventData):number;
-  recover?(id:string):import('./recovery').RecoveredConversation;
-  saveTask?(id:string,task:import('./recovery').ActiveTaskCheckpoint):void;
-  saveContextSnapshot?(id:string,snapshot:import('./recovery').ContextSnapshot):void;
-  append(id: string, message: Message, state: 'pending' | 'committed', receipt?: import('./telemetry').TurnReceipt): number;
+  beginExecution?(id: string, user: Message, receipt: import('./telemetry').TurnReceipt, carried?: string[]): number;
+  recordExecution?(id: string, turnId: string, event: import('./recovery').ExecutionEventData): number;
+  recover?(id: string): import('./recovery').RecoveredConversation;
+  saveTask?(id: string, task: import('./recovery').ActiveTaskCheckpoint): void;
+  saveContextSnapshot?(id: string, snapshot: import('./recovery').ContextSnapshot): void;
+  append(
+    id: string,
+    message: Message,
+    state: 'pending' | 'committed',
+    receipt?: import('./telemetry').TurnReceipt,
+  ): number;
   /** Commit the pending user message, any tool rounds of this turn (`intermediate`) and the final answer atomically. */
-  complete(id: string, revision: number, message: Message, receipt?: import('./telemetry').TurnReceipt, intermediate?: Message[]): void;
+  complete(
+    id: string,
+    revision: number,
+    message: Message,
+    receipt?: import('./telemetry').TurnReceipt,
+    intermediate?: Message[],
+  ): void;
   interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt, appliedSteps?: Message[]): void;
   observeTurn?(id: string, revision: number, receipt: import('./telemetry').TurnReceipt): void;
   list?(): SessionSummary[];

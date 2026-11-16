@@ -5,17 +5,29 @@ import type {ToolOutput} from '../context';
 
 /** Only the execution shapes needed by the registered built-ins. No plugin or arbitrary runtime port. */
 export type PreparedTool = {
-  execute(signal?: AbortSignal,onOutput?:(chunk:CommandOutputChunk)=>void): ToolOutput | Promise<ToolOutput>;
+  execute(signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): ToolOutput | Promise<ToolOutput>;
 } & (
-  | {kind:'patch'; plan:PatchPlan; runtime:ApplyPatchRuntime}
+  | {kind: 'patch'; plan: PatchPlan; runtime: ApplyPatchRuntime}
   | {kind: 'read'; file: ResolvedPath}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}
-  | {kind: 'command'; file: ResolvedPath; command: string; workdir: string; label: string; runtime: CommandRuntime; runtimeId: string;executionKey?:string;sessionId?:string;toolName?:string;
+  | {
+      kind: 'command';
+      file: ResolvedPath;
+      command: string;
+      workdir: string;
+      label: string;
+      runtime: CommandRuntime;
+      runtimeId: string;
+      executionKey?: string;
+      sessionId?: string;
+      toolName?: string;
       /** Effective sandbox of a launch; stdin carries its session's launch sandbox instead. */
-      sandbox?:CommandSandbox;justification?:string;
-      stdin?:{chars:string;interrupt:boolean;tty:boolean;launch:CommandSandbox};
+      sandbox?: CommandSandbox;
+      justification?: string;
+      stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox};
       /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
-      grantCommand?:string}
+      grantCommand?: string;
+    }
 );
 export interface ToolHandler {
   readonly descriptor: ToolDescriptor;

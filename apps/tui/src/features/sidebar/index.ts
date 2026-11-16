@@ -1,1 +1,1 @@
-export { renderSidebarPanel } from './view';
+export {renderSidebarPanel} from './view';

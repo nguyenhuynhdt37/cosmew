@@ -1,8 +1,8 @@
-import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
-import type { FutrynClient } from '@futryn/sdk';
-import type { ThemeEngine } from '../theme/theme';
-import type { ActiveOverlay } from '../types';
-import type { RenderedBoxLine } from '../ui/types';
+import type {BorderStyle, ThemeTokens} from '@futryn/contracts';
+import type {FutrynClient} from '@futryn/sdk';
+import type {ThemeEngine} from '../theme/theme';
+import type {ActiveOverlay} from '../types';
+import type {RenderedBoxLine} from '../ui/types';
 
 /** Theme values a feature needs to paint itself. */
 export interface ThemeFrame {
@@ -65,7 +65,7 @@ export interface OverlayFeature {
   close?(next: ActiveOverlay): void;
   handleKey(overlay: ActiveOverlay, key: string): Promise<void> | void;
   layout(overlay: ActiveOverlay, cols: number, rows: number): OverlayLayout;
-  render(overlay: ActiveOverlay, size: { width: number; height: number }, theme: ThemeFrame): RenderedBoxLine[];
+  render(overlay: ActiveOverlay, size: {width: number; height: number}, theme: ThemeFrame): RenderedBoxLine[];
   /** Ctrl+C while this overlay is open. Return true when it consumed the interrupt. */
   interrupt?(): boolean;
   /** Abort background work and wipe sensitive drafts. */

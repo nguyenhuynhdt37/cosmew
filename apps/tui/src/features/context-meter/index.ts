@@ -1,1 +1,1 @@
-export { renderContextIndicator } from './view';
+export {renderContextIndicator} from './view';

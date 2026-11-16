@@ -16,7 +16,7 @@ import {
   type ThemeTokenKey,
   type ThemeTokens,
 } from '@futryn/contracts';
-import type { FutrynClient } from '@futryn/sdk';
+import type {FutrynClient} from '@futryn/sdk';
 import {
   ALL_BUILTIN_THEMES,
   BUILTIN_COLOR_THEMES,
@@ -28,15 +28,15 @@ import {
   parseHexRgb,
   relativeLuminance,
 } from './presets';
-import { importThemeManifest, validateHexColor, type ThemeImportResult } from './compat';
-import { WALLPAPER_SCENES, WallpaperEngine } from './wallpaper';
+import {importThemeManifest, validateHexColor, type ThemeImportResult} from './compat';
+import {WALLPAPER_SCENES, WallpaperEngine} from './wallpaper';
 
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
 
 const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light']);
-const MODE_THEME_IDS: Record<ThemeMode, string> = { system: 'auto', dark: 'dark', light: 'light' };
-const THEME_MODES: Record<string, ThemeMode> = { auto: 'system', dark: 'dark', light: 'light' };
+const MODE_THEME_IDS: Record<ThemeMode, string> = {system: 'auto', dark: 'dark', light: 'light'};
+const THEME_MODES: Record<string, ThemeMode> = {auto: 'system', dark: 'dark', light: 'light'};
 
 export function detectTerminalColorCapability(
   env: Record<string, string | undefined> = process.env,
@@ -56,13 +56,29 @@ export function detectTerminalColorCapability(
   }
   const term = (env.TERM ?? '').toLowerCase();
   if (term === 'dumb') return 'none';
-  if (term.includes('256color') || term.includes('xterm-kitty') || term.includes('alacritty') || term.includes('wezterm')) {
+  if (
+    term.includes('256color') ||
+    term.includes('xterm-kitty') ||
+    term.includes('alacritty') ||
+    term.includes('wezterm')
+  ) {
     return colorterm ? 'truecolor' : '256';
   }
-  if (env.WT_SESSION || env.TERM_PROGRAM === 'iTerm.app' || env.TERM_PROGRAM === 'WezTerm' || env.TERM_PROGRAM === 'vscode') {
+  if (
+    env.WT_SESSION ||
+    env.TERM_PROGRAM === 'iTerm.app' ||
+    env.TERM_PROGRAM === 'WezTerm' ||
+    env.TERM_PROGRAM === 'vscode'
+  ) {
     return 'truecolor';
   }
-  if (term.includes('color') || term.includes('xterm') || term.includes('screen') || term.includes('tmux') || term.includes('vt100')) {
+  if (
+    term.includes('color') ||
+    term.includes('xterm') ||
+    term.includes('screen') ||
+    term.includes('tmux') ||
+    term.includes('vt100')
+  ) {
     return '16';
   }
   return 'truecolor';
@@ -234,9 +250,15 @@ export class ThemeEngine {
     if (modeEnv === 'dark') return true;
     if (process.platform === 'darwin') {
       try {
-        const result = Bun.spawnSync({ cmd: ['/usr/bin/defaults', 'read', '-g', 'AppleInterfaceStyle'], stdout: 'pipe', stderr: 'ignore' });
+        const result = Bun.spawnSync({
+          cmd: ['/usr/bin/defaults', 'read', '-g', 'AppleInterfaceStyle'],
+          stdout: 'pipe',
+          stderr: 'ignore',
+        });
         return result.exitCode === 0 && new TextDecoder().decode(result.stdout).trim().toLowerCase() === 'dark';
-      } catch { return true; }
+      } catch {
+        return true;
+      }
     }
     return true;
   }
@@ -285,8 +307,9 @@ export class ThemeEngine {
     // dark/light palette. Correct global and project overrides independently.
     const migrate = (appearance: AppearanceConfig): PartialAppearanceConfig | null => {
       const id = this.normalizeThemeId(appearance.theme);
-      const desired = this.builtInMap.has(id) && THEME_MODES[id] === appearance.mode ? id : MODE_THEME_IDS[appearance.mode];
-      return appearance.theme !== desired || appearance.wallpaper !== null ? { theme: desired, wallpaper: null } : null;
+      const desired =
+        this.builtInMap.has(id) && THEME_MODES[id] === appearance.mode ? id : MODE_THEME_IDS[appearance.mode];
+      return appearance.theme !== desired || appearance.wallpaper !== null ? {theme: desired, wallpaper: null} : null;
     };
     if (this.client) {
       try {
@@ -299,10 +322,18 @@ export class ThemeEngine {
         this.committedAppearance = appearanceSchema.parse(this.client.getAppearance(true));
       } catch {
         this.warnings.push('Could not save appearance; using it for this session.');
-        this.committedAppearance = { ...this.committedAppearance, theme: MODE_THEME_IDS[this.committedAppearance.mode], wallpaper: null };
+        this.committedAppearance = {
+          ...this.committedAppearance,
+          theme: MODE_THEME_IDS[this.committedAppearance.mode],
+          wallpaper: null,
+        };
       }
     } else {
-      this.committedAppearance = { ...this.committedAppearance, theme: MODE_THEME_IDS[this.committedAppearance.mode], wallpaper: null };
+      this.committedAppearance = {
+        ...this.committedAppearance,
+        theme: MODE_THEME_IDS[this.committedAppearance.mode],
+        wallpaper: null,
+      };
     }
 
     this.notify();
@@ -347,10 +378,7 @@ export class ThemeEngine {
   }
 
   public listThemes(tab: ThemePickerTab = 'all', query = ''): ThemeManifest[] {
-    const all: ThemeManifest[] = [
-      ...BUILTIN_COLOR_THEMES,
-      ...BUILTIN_LIVE_THEMES,
-    ];
+    const all: ThemeManifest[] = [...BUILTIN_COLOR_THEMES, ...BUILTIN_LIVE_THEMES];
 
     let filtered = all;
     if (tab === 'featured') {
@@ -382,10 +410,7 @@ export class ThemeEngine {
     return {
       theme: this.previewDraft?.id ?? this.previewThemeId ?? this.committedAppearance.theme,
       mode: this.previewMode ?? this.committedAppearance.mode,
-      wallpaper:
-        this.previewWallpaper !== undefined
-          ? this.previewWallpaper
-          : this.committedAppearance.wallpaper,
+      wallpaper: this.previewWallpaper !== undefined ? this.previewWallpaper : this.committedAppearance.wallpaper,
       animations: this.previewAnimations ?? this.committedAppearance.animations,
       syntaxHighlighting: this.committedAppearance.syntaxHighlighting,
       sidebar: this.committedAppearance.sidebar,
@@ -416,11 +441,7 @@ export class ThemeEngine {
       return this.previewDraft;
     }
     const activeId = this.previewThemeId ?? this.committedAppearance.theme;
-    return (
-      this.getTheme(activeId) ??
-      this.builtInMap.get('auto') ??
-      ALL_BUILTIN_THEMES[0]!
-    );
+    return this.getTheme(activeId) ?? this.builtInMap.get('auto') ?? ALL_BUILTIN_THEMES[0]!;
   }
 
   public getActiveTokens(): ThemeTokens {
@@ -504,9 +525,10 @@ export class ThemeEngine {
     patch: PartialAppearanceConfig,
     scope: 'global' | 'project' = 'global',
   ): Promise<AppearanceConfig> {
-    const normalizedPatch: PartialAppearanceConfig = { ...patch };
+    const normalizedPatch: PartialAppearanceConfig = {...patch};
     if (normalizedPatch.wallpaper != null) throw new FutrynError('UNSUPPORTED');
-    if (normalizedPatch.mode && normalizedPatch.theme === undefined) normalizedPatch.theme = MODE_THEME_IDS[normalizedPatch.mode];
+    if (normalizedPatch.mode && normalizedPatch.theme === undefined)
+      normalizedPatch.theme = MODE_THEME_IDS[normalizedPatch.mode];
     if (normalizedPatch.theme !== undefined) {
       const normId = this.normalizeThemeId(normalizedPatch.theme);
       const manifest = this.getTheme(normId);
@@ -519,7 +541,7 @@ export class ThemeEngine {
       if (manifest.wallpaper && normalizedPatch.wallpaper === undefined) {
         normalizedPatch.wallpaper = manifest.wallpaper;
         normalizedPatch.animations = {
-          ...(this.committedAppearance.animations),
+          ...this.committedAppearance.animations,
           ...(normalizedPatch.animations ?? {}),
           enabled: true,
         };
@@ -566,7 +588,7 @@ export class ThemeEngine {
   }
 
   public async setMode(mode: ThemeMode, scope: 'global' | 'project' = 'global'): Promise<AppearanceConfig> {
-    return this.updateAppearance({ mode }, scope);
+    return this.updateAppearance({mode}, scope);
   }
 
   public async setWallpaper(
@@ -631,11 +653,7 @@ export class ThemeEngine {
     return validated;
   }
 
-  public async duplicateTheme(
-    sourceId: string,
-    newId: string,
-    newName?: string,
-  ): Promise<ThemeManifest> {
+  public async duplicateTheme(sourceId: string, newId: string, newName?: string): Promise<ThemeManifest> {
     const source = this.getTheme(sourceId);
     if (!source) {
       throw new FutrynError('NOT_FOUND');
@@ -651,8 +669,8 @@ export class ThemeEngine {
       category: 'custom',
       builtIn: false,
       sourceFormat: 'futryn',
-      dark: { ...source.dark },
-      light: { ...source.light },
+      dark: {...source.dark},
+      light: {...source.light},
     });
     return this.saveCustomTheme(copy);
   }
@@ -726,10 +744,7 @@ export class ThemeEngine {
     return this.saveCustomTheme(updated);
   }
 
-  public async resetCustomTheme(
-    id: string,
-    baseThemeId = 'auto',
-  ): Promise<ThemeManifest> {
+  public async resetCustomTheme(id: string, baseThemeId = 'auto'): Promise<ThemeManifest> {
     const norm = this.normalizeThemeId(id);
     if (this.builtInMap.has(norm)) {
       throw new FutrynError('UNSUPPORTED');
@@ -741,8 +756,8 @@ export class ThemeEngine {
     const base = this.getTheme(baseThemeId) ?? this.builtInMap.get('auto')!;
     const updated: ThemeManifest = {
       ...existing,
-      dark: { ...base.dark },
-      light: { ...base.light },
+      dark: {...base.dark},
+      light: {...base.light},
       borderStyle: base.borderStyle,
       wallpaper: base.wallpaper,
     };

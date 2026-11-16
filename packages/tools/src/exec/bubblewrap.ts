@@ -38,26 +38,45 @@ export class BubblewrapSandbox implements NativeSandbox {
 
     return [
       bwrap,
-      '--die-with-parent', '--new-session', '--unshare-pid', '--unshare-ipc',
+      '--die-with-parent',
+      '--new-session',
+      '--unshare-pid',
+      '--unshare-ipc',
       ...(sandbox.network ? [] : ['--unshare-net']),
-      '--ro-bind', '/', '/',
-      '--dev', '/dev',
-      '--proc', '/proc',
-      '--tmpfs', '/tmp',
-      '--tmpfs', home,
-      '--bind', join(scratch, 'home'), join(scratch, 'home'),
-      '--bind', join(scratch, 'tmp'), join(scratch, 'tmp'),
-      sandbox.mode === 'workspace-write' ? '--bind' : '--ro-bind', workspace.root, workspace.root,
+      '--ro-bind',
+      '/',
+      '/',
+      '--dev',
+      '/dev',
+      '--proc',
+      '/proc',
+      '--tmpfs',
+      '/tmp',
+      '--tmpfs',
+      home,
+      '--bind',
+      join(scratch, 'home'),
+      join(scratch, 'home'),
+      '--bind',
+      join(scratch, 'tmp'),
+      join(scratch, 'tmp'),
+      sandbox.mode === 'workspace-write' ? '--bind' : '--ro-bind',
+      workspace.root,
+      workspace.root,
       ...masks.readOnly.flatMap(path => ['--ro-bind', inWorkspace(path), inWorkspace(path)]),
       // Same as the Docker mask: git works with an empty repository config; credentials stay hidden.
-      ...masks.readOnly.flatMap(path => ['config', 'config.worktree']
-        .filter(file => existsSync(join(inWorkspace(path), file)))
-        .flatMap(file => ['--ro-bind', '/dev/null', join(inWorkspace(path), file)])),
+      ...masks.readOnly.flatMap(path =>
+        ['config', 'config.worktree']
+          .filter(file => existsSync(join(inWorkspace(path), file)))
+          .flatMap(file => ['--ro-bind', '/dev/null', join(inWorkspace(path), file)]),
+      ),
       ...masks.hiddenFiles.flatMap(path => ['--ro-bind', '/dev/null', inWorkspace(path)]),
       ...masks.hiddenDirectories.flatMap(path => ['--tmpfs', inWorkspace(path), '--remount-ro', inWorkspace(path)]),
       ...this.stateOutsideWorkspace(workspace),
-      '--chdir', cwd,
-      '--', ...argv,
+      '--chdir',
+      cwd,
+      '--',
+      ...argv,
     ];
   }
 

@@ -13,7 +13,10 @@ export interface ProjectInstructionSource {
   fileBytes: number;
   truncated: boolean;
 }
-export interface ProjectContextDiagnostic { code: string; path?: string }
+export interface ProjectContextDiagnostic {
+  code: string;
+  path?: string;
+}
 export interface ProjectContextReport {
   root: string;
   workingDirectory: string | null;

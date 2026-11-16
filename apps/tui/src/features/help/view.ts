@@ -1,6 +1,6 @@
-import type { BorderStyle, ThemeTokens } from '@futryn/contracts';
-import { SLASH_COMMANDS } from '../composer';
-import { Modal, type RenderedBoxLine } from '../../ui';
+import type {BorderStyle, ThemeTokens} from '@futryn/contracts';
+import {SLASH_COMMANDS} from '../composer';
+import {Modal, type RenderedBoxLine} from '../../ui';
 
 export function renderHelpOverlay(options: {
   scrollOffset?: number;
@@ -9,9 +9,9 @@ export function renderHelpOverlay(options: {
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
-  const { width, height, tokens, borderStyle } = options;
-  const modal = new Modal({ width, height, tokens, borderStyle, minInner: 30 });
-  const row = (text: string, fg = tokens.foreground, bold = false) => modal.text(text, { fg, bold });
+  const {width, height, tokens, borderStyle} = options;
+  const modal = new Modal({width, height, tokens, borderStyle, minInner: 30});
+  const row = (text: string, fg = tokens.foreground, bold = false) => modal.text(text, {fg, bold});
 
   modal.top(' KEYBOARD SHORTCUTS & SLASH COMMANDS (/help) ', ' Esc Close ');
   row(' Global Keyboard Navigation:', tokens.markdownHeading, true);

@@ -1,1 +1,1 @@
-export { renderWelcomeScreen } from './view';
+export {renderWelcomeScreen} from './view';

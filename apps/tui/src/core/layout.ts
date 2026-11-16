@@ -1,4 +1,4 @@
-import type { OverlayLayout } from './feature';
+import type {OverlayLayout} from './feature';
 
 /** Wide dialog filling most of the terminal; the default for list-style overlays. */
 export function wideLayout(cols: number, rows: number, backdrop = false): OverlayLayout {

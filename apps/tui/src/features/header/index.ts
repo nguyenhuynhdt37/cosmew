@@ -1,1 +1,1 @@
-export { renderTopHeaderBar } from './view';
+export {renderTopHeaderBar} from './view';

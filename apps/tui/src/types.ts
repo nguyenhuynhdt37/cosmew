@@ -1,6 +1,6 @@
-import type { FutrynClient } from '@futryn/sdk';
-import type { ThemeEngine } from './theme/theme';
-import type { RenderedBoxLine } from './ui/types';
+import type {FutrynClient} from '@futryn/sdk';
+import type {ThemeEngine} from './theme/theme';
+import type {RenderedBoxLine} from './ui/types';
 
 export type ActiveOverlay =
   | 'none'
@@ -36,7 +36,7 @@ export interface TranscriptViewport {
   height: number;
   offset: number;
   lines: RenderedBoxLine[];
-  disclosures: { row: number; itemId: string; key: string }[];
+  disclosures: {row: number; itemId: string; key: string}[];
 }
 
 export interface FrameSnapshot {
