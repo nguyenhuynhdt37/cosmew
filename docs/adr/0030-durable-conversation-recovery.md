@@ -80,3 +80,6 @@ Several calls in one response are executed by `executeBatch`: consecutive `fs.re
 ### Remaining differences from Codex Core
 
 Codex retries stream errors per provider policy and may fall back transports; Hannes retries only empty rounds, twice. Codex marks parallel safety per tool and uses a read/write lock with cancellation before admission; Hannes groups by `fs.read` capability without a lock. Codex compaction can be model-generated or remote; Hannes uses the deterministic extractive compactor only. The Codex bridge loop remains owned by the Codex app-server. Unified Exec/PTY, MCP, hooks and subagents are not implemented.
+
+## Code layout (refactor 2026-11-16, no behavior change)
+`ExecutionJournal.recover` (`packages/persistence/src/event-store.ts`) only reads SQLite. The reconstruction is pure and lives in `journal-reconstruction.ts`: `groupEvents` (gapless sequence, owned events), `validateTurn` (integrity rules per event type), `reconstructTurn` with `ResponseSegments` (provisional text committed only by `model.completed`; superseded text dropped; a turn-ending partial response labelled incomplete), `unresolvedCallMessages` (unknown vs not executed) and `reconstructConversation` (legacy interleaving, carried pending input).
