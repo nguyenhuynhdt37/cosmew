@@ -1,7 +1,7 @@
 import { permissionRuleSetSchema } from './permissions';
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.14' as const;
+export const CONTRACT_VERSION = '1.15' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
@@ -138,7 +138,15 @@ export type ModelEvent =
   | { type: 'steered'; steerId: string; content: string }
   /** A runtime's own tool (ADR 0027): display only, never a Futryn tool call or result. Same `id` updates in place. */
   | { type: 'activity'; activity: RuntimeActivity }
-  | { type: 'completed'; finishReason: string; usage: Usage };
+  /**
+   * `endTurn: false` is a provider statement that the turn is not over (Codex `Completed { end_turn }`;
+   * Anthropic `pause_turn`). Absent means the provider exposed no such signal.
+   */
+  | { type: 'completed'; finishReason: string; usage: Usage; endTurn?: boolean }
+  /** Streamed text/reasoning of the current response is void: it is being retried or was preempted by steering. */
+  | { type: 'responseDiscarded'; reason: 'retry' | 'preempted'; attempt?: number }
+  /** Accepted steering the turn could not deliver (budget, context or interruption); it opens the next turn. */
+  | { type: 'inputDeferred'; steerIds: string[]; reason: string };
 export interface RuntimeActivity {
   id: string;
   /** The delegated runtime that ran it; always shown, so it is never mistaken for a Futryn tool. */

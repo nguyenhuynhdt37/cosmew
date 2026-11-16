@@ -5,10 +5,14 @@ import { toolResultSchema } from './tools';
 export const turnStateSchema = z.enum(['pending','running','interrupted','completed','failed','cancelled']);
 export type TurnState = z.infer<typeof turnStateSchema>;
 export const executionEventDataSchema = z.discriminatedUnion('type',[
-  z.object({type:z.literal('user.accepted'),message:messageSchema}),
+  /** `carried`: steering accepted by an earlier turn but never delivered, now part of this turn's input (ADR 0033). */
+  z.object({type:z.literal('user.accepted'),message:messageSchema,carried:z.array(z.string().uuid()).max(64).optional()}),
   /** User input accepted into the active turn (Codex steer_input). Model-visible at the next request boundary. */
   z.object({type:z.literal('user.steered'),steerId:z.string().uuid(),message:messageSchema}),
-  z.object({type:z.literal('model.requested'),stepId:z.string().uuid()}),
+  /** `protocol: 2` marks a request whose streamed text is provisional until `model.completed` (ADR 0033). */
+  z.object({type:z.literal('model.requested'),stepId:z.string().uuid(),protocol:z.literal(2).optional()}),
+  /** The provider completed this request's response (Codex ResponseEvent::Completed); its text is committed. */
+  z.object({type:z.literal('model.completed'),stepId:z.string().uuid()}),
   z.object({type:z.literal('assistant.text'),text:z.string().max(262144)}),
   z.object({type:z.literal('tool.call'),call:toolCallSchema}),
   z.object({type:z.literal('tool.intent'),callId:z.string(),executionId:z.string().uuid(),capability:z.string()}),
@@ -43,6 +47,8 @@ export interface RecoveredConversation {
   turns:DurableTurn[];
   task?:ActiveTaskCheckpoint;
   compaction?:ContextSnapshot;
+  /** Steering a finished turn accepted but never delivered; it opens the next turn (Codex on_task_finished keeps it). */
+  pendingInput?:{steerId:string;message:z.infer<typeof messageSchema>}[];
 }
 export const activeTaskCheckpointSchema = z.object({
  objective:z.string(),latestRequest:z.string(),artifactTargets:z.array(z.string()),

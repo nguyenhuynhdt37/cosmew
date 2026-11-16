@@ -186,6 +186,28 @@ export function appendStreamPart(item: TranscriptItem, kind: 'text' | 'reasoning
   else parts.push({ kind, text });
 }
 
+/** Where the current model response started in an item's stream, so provisional output can be voided. */
+export interface ResponseMark { content: number; reasoning: number; parts: number; lastText: number }
+export function markResponse(item: TranscriptItem): ResponseMark {
+  const last = item.parts?.at(-1);
+  return { content: item.content.length, reasoning: item.reasoning?.length ?? 0, parts: item.parts?.length ?? 0, lastText: last && (last.kind === 'text' || last.kind === 'reasoning') ? last.text.length : 0 };
+}
+/**
+ * A retried or preempted response is void (ADR 0033): drop the text and reasoning it streamed after
+ * `mark`, keep tool groups and runtime activity (completed calls stay real), and keep earlier output.
+ */
+export function discardResponse(item: TranscriptItem, mark: ResponseMark): void {
+  item.content = item.content.slice(0, mark.content);
+  if (item.reasoning !== undefined) item.reasoning = item.reasoning.slice(0, mark.reasoning);
+  const parts = item.parts ?? [];
+  const kept = parts.slice(0, mark.parts).map(part => ({ ...part }));
+  const boundary = kept.at(-1);
+  // The part that was last at the mark may have grown since; cut it back to its marked length.
+  if (boundary && (boundary.kind === 'text' || boundary.kind === 'reasoning')) boundary.text = boundary.text.slice(0, mark.lastText);
+  kept.push(...parts.slice(mark.parts).filter(part => part.kind === 'tools' || part.kind === 'activity'));
+  item.parts = kept.filter(part => !((part.kind === 'text' || part.kind === 'reasoning') && !part.text));
+}
+
 /** A pending batch shares one group. A completed batch fences the next model/tool round. */
 export function appendToolPart(item: TranscriptItem, callId: string): void {
   const parts = item.parts ??= [];

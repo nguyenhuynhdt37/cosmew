@@ -53,7 +53,7 @@ test('no default ceiling: 50 rounds and 50 calls run until the model ends with t
   expect(h.receipt().stopReason).toBe('completed');
 });
 
-test('a round that fails before producing anything is retried (bounded); output means no retry', async () => {
+test('a failed stream is retried (bounded); partial output is discarded visibly, never committed', async () => {
   const transient = harness((_, attempt) => attempt < 2 ? new FutrynError('TRANSPORT', true) : answer('recovered'));
   expect((await transient.send()).at(-1)?.type).toBe('completed');
   expect(transient.requests).toHaveLength(3);
@@ -67,10 +67,12 @@ test('a round that fails before producing anything is retried (bounded); output 
   const auth = harness(() => new FutrynError('AUTH'));
   await expect(auth.send()).rejects.toMatchObject({ code: 'AUTH' });
   expect(auth.requests).toHaveLength(1);
-  // Once text came back, a later failure is not hidden by a silent re-sample.
-  const partial = harness(() => [{ type: 'textDelta', text: 'half' }, new FutrynError('TRANSPORT', true) as unknown as ModelEvent]);
-  await expect(partial.send()).rejects.toMatchObject({ code: 'TRANSPORT' });
-  expect(partial.requests).toHaveLength(1);
+  // ADR 0033 (Codex responses_retry): partial text does not block the retry, but it is discarded
+  // visibly and never committed as an answer.
+  const partial = harness((_, attempt) => attempt === 0 ? [{ type: 'textDelta', text: 'half' }, new FutrynError('TRANSPORT', true) as unknown as ModelEvent] : answer('whole'));
+  const events = await partial.send();
+  expect(partial.requests).toHaveLength(2); expect(events.some(e => e.type === 'responseDiscarded' && e.reason === 'retry')).toBe(true);
+  expect(partial.conversation.history().map(m => m.content)).toEqual(['go', 'whole']);
 });
 
 test('cancellation while waiting to retry ends the turn as cancelled', async () => {

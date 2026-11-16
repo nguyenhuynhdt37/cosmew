@@ -25,3 +25,22 @@ containerTest('closing a live command iterator cancels its namespace and persist
  const c=await setup('chat',()=>({calls:[{name:'exec_command',input:{cmd:'printf OWNED_RUNNING; sleep 20',timeout_ms:10000}}]}));let closed=false;const start=Date.now();const work=(async()=>{for await(const event of c.client.sendMessage('Run until I cancel.'))if(event.type==='toolOutputDelta'&&event.text.includes('OWNED_RUNNING')){closed=true;break;}})();
  const deadline=Date.now()+12000;while(!c.client.listPendingPermissions().length&&Date.now()<deadline)await Bun.sleep(10);const prompt=c.client.listPendingPermissions()[0]!;c.client.resolvePermission(prompt.approvalId,prompt.scopeHash,'once');await work;expect(closed).toBe(true);expect(Date.now()-start).toBeLessThan(7000);const recovery=c.app.conversations.recover(c.client.activeSession()!.id);expect(recovery.turns.at(-1)!.state).toBe('cancelled');const result=recovery.turns.at(-1)!.events.find(e=>e.data.type==='tool.result')!.data;expect(result.type).toBe('tool.result');if(result.type==='tool.result'){expect(result.result.code).toBe('CANCELLED');expect(result.result.content).toContain('OWNED_RUNNING');expect(result.result.content).toContain('Descendant termination: terminated.');}
 },30000);
+containerTest('ADR 0033 Q: a real failing test, an approved fix and a passing rerun, with steering accepted while the command runs',async()=>{
+ const c=await setup('chat',v=>{const last=v.results.at(-1);
+  if(!last)return{calls:[{name:'exec_command',input:{cmd:'bun test',timeout_ms:20000}}]};
+  if(last.name==='exec_command'&&!/Exit code: 0/.test(last.content))return{calls:[{name:'apply_patch',input:{patch:'*** Begin Patch\n*** Update File: entry.ts\n@@\n-export const answer = 41;\n+export const answer = 42;\n*** End Patch'}}]};
+  if(last.name==='apply_patch')return{calls:[{name:'exec_command',input:{cmd:'bun test',timeout_ms:20000}}]};
+  return{text:'FIXED_AND_VERIFIED'};});
+ writeFileSync(join(c.root,'entry.ts'),'export const answer = 41;\n');
+ const events:any[]=[];let finished=false;let steer:unknown;const approved:string[]=[];
+ const sending=(async()=>{try{for await(const event of c.client.sendMessage('Make the tests pass.')){events.push(event);if(event.type==='toolOutputDelta'&&steer===undefined)steer=c.client.submitWhileBusy('Keep the export name answer.');}}finally{finished=true;}})();
+ const deadline=Date.now()+60000;while(!finished&&Date.now()<deadline){for(const p of c.client.listPendingPermissions())if(!approved.includes(p.approvalId)){approved.push(p.approvalId);c.client.resolvePermission(p.approvalId,p.scopeHash,'once');}await Bun.sleep(10);}
+ await sending;
+ const results=events.filter(e=>e.type==='toolResult').map(e=>e.result);
+ expect(results.map(r=>r.name)).toEqual(['exec_command','apply_patch','exec_command']);
+ expect(results[0].exitCode).not.toBe(0);expect(results[2].exitCode).toBe(0);
+ expect(events.filter(e=>e.type==='textDelta').map(e=>e.text).join('')).toBe('FIXED_AND_VERIFIED');
+ expect(steer).toMatchObject({disposition:'steered'});expect(events.some(e=>e.type==='steered')).toBe(true);
+ expect(JSON.stringify(c.server.requests.filter(r=>r.body).at(-1)!.body)).toContain('Keep the export name answer.');
+ const stored=c.app.conversations.recover(c.client.activeSession()!.id);expect(stored.turns.at(-1)!.state).toBe('completed');expect(stored.pendingInput).toBeUndefined();
+},90000);

@@ -10,7 +10,7 @@ export const memoryVault = (): CredentialVault & { values: Map<string, string> }
 });
 /** What a scripted fixture model sees: the request as it arrived on the wire, protocol-neutral. */
 export interface ScriptedView {
-  protocol: 'chat' | 'anthropic';
+  protocol: 'chat' | 'anthropic' | 'responses' | 'gemini';
   /** System/developer channel text. */
   system: string;
   /** Tool names offered in this request. */
@@ -21,11 +21,29 @@ export interface ScriptedView {
   orphanResults: number; unansweredCalls: number;
 }
 /** A scripted model answers with text or with tool calls, decided only from the view. */
-export type ScriptedReply = { text?: string; calls?: { name: string; input: unknown }[] };
+export type ScriptedReply = { text?: string; calls?: { name: string; input: unknown }[]; /** Anthropic only: stop with `pause_turn`. */ endTurn?: false };
 const blockText = (content: any): string => typeof content === 'string' ? content : Array.isArray(content) ? content.map(part => part?.text ?? '').join('') : '';
-export function scriptedView(protocol: 'chat' | 'anthropic', body: any): ScriptedView {
+export function scriptedView(protocol: ScriptedView['protocol'], body: any): ScriptedView {
   const calls = new Map<string, { name: string; input: any }>(); const results: ScriptedView['results'] = []; let orphanResults = 0;
-  const result = (id: string, content: any) => { const call = calls.get(id); if (!call) orphanResults++; else results.push({ callId: id, ...call, content: blockText(content) }); };
+  const result = (id: string, content: any) => { const call = calls.get(id); if (!call) orphanResults++; else results.push({ callId: id, ...call, content: typeof content === 'string' || Array.isArray(content) ? blockText(content) : JSON.stringify(content) }); };
+  if (protocol === 'responses') {
+    for (const item of body.input ?? []) {
+      if (item.type === 'function_call') calls.set(item.call_id, { name: item.name, input: JSON.parse(item.arguments) });
+      if (item.type === 'function_call_output') result(item.call_id, item.output);
+    }
+    const system = (body.input ?? []).filter((m: any) => m.role === 'system' || m.role === 'developer').map((m: any) => blockText(m.content)).join('\n') + (body.instructions ?? '');
+    return { protocol, system, tools: (body.tools ?? []).map((t: any) => t.name), results, orphanResults, unansweredCalls: calls.size - new Set(results.map(r => r.callId)).size };
+  }
+  if (protocol === 'gemini') {
+    // Gemini has no call ids on the wire: a response answers the oldest unanswered call of its name.
+    let n = 0; const open: string[] = [];
+    for (const content of body.contents ?? []) for (const part of content.parts ?? []) {
+      if (part.functionCall) { const id = `g${n++}`; calls.set(id, { name: part.functionCall.name, input: part.functionCall.args }); open.push(id); }
+      if (part.functionResponse) { const at = open.findIndex(id => calls.get(id)!.name === part.functionResponse.name); if (at < 0) orphanResults++; else result(open.splice(at, 1)[0]!, part.functionResponse.response?.content ?? part.functionResponse.response); }
+    }
+    const tools = (body.tools ?? []).flatMap((t: any) => (t.functionDeclarations ?? []).map((d: any) => d.name));
+    return { protocol, system: blockText(body.systemInstruction?.parts ?? ''), tools, results, orphanResults, unansweredCalls: open.length };
+  }
   for (const m of body.messages ?? []) {
     if (protocol === 'chat') {
       if (m.role === 'assistant') for (const c of m.tool_calls ?? []) calls.set(c.id, { name: c.function.name, input: JSON.parse(c.function.arguments) });
@@ -70,6 +88,11 @@ export function fixtureServer() {
       if (path.startsWith('/gemini')) return Response.json({ models: [{ name: 'models/' + modelName, displayName: 'Fixture', supportedGenerationMethods: ['generateContent'] }, { name: 'models/embedding-only', supportedGenerationMethods: ['embedContent'] }] });
       return Response.json({ data: [{ id: pages && url.searchParams.has('after_id') ? 'page-two' : modelName }], ...(pages ? { has_more: !url.searchParams.has('after_id'), last_id: 'cursor-one' } : {}) });
     }
+    if (script && path.includes('streamGenerateContent')) {
+      const reply = script(scriptedView('gemini', body));
+      const parts = [...(reply.text ? [{ text: reply.text }] : []), ...(reply.calls ?? []).map(call => ({ functionCall: { name: call.name, args: call.input } }))];
+      return sse([{ candidates: [{ content: { role: 'model', parts }, finishReason: 'STOP', index: 0 }], usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2, totalTokenCount: 6 }, modelVersion: 'fixture' }]);
+    }
     if (path.includes('generateContent') || path.includes('streamGenerateContent')) {
       const response = { candidates: [{ content: { role: 'model', parts: tools ? [{ functionCall: { name: 'lookup', args: { query: 'hello' } } }] : [{ text: 'Hello fixture' }] }, finishReason: 'STOP', index: 0 }], ...(includeUsage ? { usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2, totalTokenCount: 6 } } : {}), modelVersion: 'fixture' };
       return path.includes('streamGenerateContent') ? sse([response]) : Response.json(response);
@@ -83,7 +106,7 @@ export function fixtureServer() {
         return sse([
           { type: 'message_start', message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: modelName, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 4, output_tokens: 0 } } },
           ...blocks,
-          { type: 'message_delta', delta: { stop_reason: reply.calls?.length ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }, { type: 'message_stop' },
+          { type: 'message_delta', delta: { stop_reason: reply.calls?.length ? 'tool_use' : reply.endTurn === false ? 'pause_turn' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }, { type: 'message_stop' },
         ], true);
       }
       if (!body.stream) return Response.json({ id: 'msg_fixture', type: 'message', role: 'assistant', model: modelName, content: [{ type: 'text', text: 'Hello fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 4, output_tokens: 2 } });
@@ -95,6 +118,17 @@ export function fixtureServer() {
       ];
       if (!dropped) events.push({ type: 'message_delta', delta: { stop_reason: tools ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 2 } }, { type: 'message_stop' });
       return sse(events, true);
+    }
+    if (script && path.includes('responses') && body.stream) {
+      const reply = script(scriptedView('responses', body));
+      const output: any[] = [...(reply.text ? [{ type: 'message', id: `msg_${requests.length}`, role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: reply.text, annotations: [] }] }] : []),
+        ...(reply.calls ?? []).map((call, index) => ({ type: 'function_call', id: `fc_${requests.length}_${index}`, call_id: `call_${requests.length}_${index}`, name: call.name, arguments: JSON.stringify(call.input), status: 'completed' }))];
+      const response = { id: `resp_${requests.length}`, object: 'response', created_at: 1234567890, model: modelName, status: 'completed', output, error: null, incomplete_details: null, usage: { input_tokens: 4, output_tokens: 2, total_tokens: 6 } };
+      return sse([{ type: 'response.created', response: { ...response, status: 'in_progress', output: [] } },
+        ...output.flatMap((item, index) => item.type === 'message'
+          ? [{ type: 'response.output_item.added', output_index: index, item: { ...item, content: [] } }, { type: 'response.content_part.added', item_id: item.id, output_index: index, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } }, { type: 'response.output_text.delta', item_id: item.id, output_index: index, content_index: 0, delta: reply.text }, { type: 'response.output_item.done', output_index: index, item }]
+          : [{ type: 'response.output_item.added', output_index: index, item: { ...item, arguments: '' } }, { type: 'response.function_call_arguments.delta', item_id: item.id, output_index: index, delta: item.arguments }, { type: 'response.output_item.done', output_index: index, item }]),
+        { type: 'response.completed', response }]);
     }
     if (path.includes('responses')) {
       const output = tools ? [{ type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'lookup', arguments: '{"query":"hello"}', status: 'completed' }] : [{ type: 'message', id: 'msg_fixture', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello fixture', annotations: [] }] }];

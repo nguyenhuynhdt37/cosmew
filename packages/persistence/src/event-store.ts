@@ -22,11 +22,13 @@ export class ExecutionJournal {
     return seq;
   }
   /** A live owner cannot be stolen, even by another client in the same process. */
-  claim(id:string,turnId:string,revision:number,user:Message):void {
+  claim(id:string,turnId:string,revision:number,user:Message,carried:string[]=[]):void {
     this.abandonDead(id);
     if(this.db.query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')").get(id))throw new FutrynError('POLICY');
+    // Carried input must still be pending; a stale or duplicate id would deliver an instruction twice.
+    if(carried.length){const pending=new Set((this.recover(id,[]).pendingInput??[]).map(p=>p.steerId));if(new Set(carried).size!==carried.length||carried.some(c=>!pending.has(c)))throw new FutrynError('POLICY');}
     this.db.query("INSERT INTO execution_turns VALUES(?,?,?,NULL,'pending',?,?)").run(id,turnId,revision,process.pid,owner);
-    this.append(id,turnId,{type:'user.accepted',message:user});
+    this.append(id,turnId,{type:'user.accepted',message:user,...(carried.length?{carried}:{})});
   }
   record(id:string,turnId:string,event:ExecutionEventData):number {
     try{return this.db.transaction(()=>{
@@ -75,48 +77,65 @@ export class ExecutionJournal {
         const event:ConversationEvent={seq:row.seq,turnId:row.turn_id,at:row.at,data:executionEventDataSchema.parse(JSON.parse(row.data))};turn.events.push(event);
       }
       const messages:Message[]=[];let cursor=0;
+      /** Steering of finished turns that no request delivered, in acceptance order, until a later turn carries it. */
+      const pendingInput=new Map<string,Message>();
       for(const [index,row]of rows.entries()){
         while(cursor<legacy.length&&legacy[cursor]!.revision<row.user_revision){const {revision:_r,state:_s,...message}=legacy[cursor++]!;messages.push(message);}
         const turn=turns[index]!;if(turn.events[0]?.data.type!=='user.accepted'||row.user_revision<1||(row.end_revision!==null&&row.end_revision<row.user_revision))throw new FutrynError('STORAGE');
-        const calls=new Map<string,string>(),intents=new Set<string>(),results=new Set<string>(),steers=new Set<string>();let finished=false;
+        const calls=new Map<string,string>(),intents=new Set<string>(),results=new Set<string>(),steers=new Set<string>(),steps=new Set<string>(),completedSteps=new Set<string>();let finished=false;
         for(const [position,event]of turn.events.entries()){
           const e=event.data;if(finished||!Number.isFinite(Date.parse(event.at)))throw new FutrynError('STORAGE');
           if(e.type==='user.accepted'&&(position!==0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId))throw new FutrynError('STORAGE');
           if(e.type==='user.steered'&&(position===0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId||steers.has(e.steerId)))throw new FutrynError('STORAGE');
           if(e.type==='user.steered')steers.add(e.steerId);
+          if(e.type==='user.accepted'&&e.carried?.some(c=>!pendingInput.has(c)))throw new FutrynError('STORAGE');
+          if(e.type==='model.requested'){if(steps.has(e.stepId))throw new FutrynError('STORAGE');steps.add(e.stepId);}
+          if(e.type==='model.completed'){if(!steps.has(e.stepId)||completedSteps.has(e.stepId))throw new FutrynError('STORAGE');completedSteps.add(e.stepId);}
           if(e.type==='tool.call'){if(calls.has(e.call.id))throw new FutrynError('STORAGE');calls.set(e.call.id,e.call.name);}
           if(e.type==='tool.intent'){if(!calls.has(e.callId)||intents.has(e.callId)||results.has(e.callId))throw new FutrynError('STORAGE');intents.add(e.callId);}
           if(e.type==='tool.result'){if(calls.get(e.result.callId)!==e.result.name||results.has(e.result.callId))throw new FutrynError('STORAGE');results.add(e.result.callId);}
           if(e.type==='turn.finished'){if(e.state!==turn.state||['pending','running'].includes(e.state))throw new FutrynError('STORAGE');finished=true;}
         }
         if(finished===['pending','running'].includes(turn.state))throw new FutrynError('STORAGE');
-        // Steering is durable when accepted but model-visible only where the loop delivers it (Codex
-        // turn.rs drains pending input before every request except the turn's first): before the next
-        // non-first model request, or after everything else when the turn ends before delivering it.
-        let text='',requests=0;const steered:Message[]=[];const flush=()=>{if(text){messages.push({role:'assistant',content:text});text='';}};
+        // Model-visible reconstruction (Codex normalize + rollout reconstruction, ADR 0033):
+        // - Steering is visible where the loop delivered it: before the next non-first model request.
+        //   Undelivered steering of a finished turn is pending input for the next turn, not history.
+        // - In `protocol: 2` requests, text is committed only by `model.completed` (Codex records an
+        //   item at OutputItemDone). A superseded response's text (retry or preemption) is dropped; a
+        //   turn that ended inside an unfinished response keeps it, labelled incomplete.
+        // - Completed tool calls and confirmed results always stay; unresolved calls get explicit outcomes.
+        const live=['pending','running'].includes(turn.state);
+        let text='',requests=0,provisional=false,segment:Message[]=[],segmentCommitted=true,segmentText='';const steered:{steerId:string;message:Message}[]=[];
+        const flushText=()=>{if(text){segment.push({role:'assistant',content:text});if(provisional)segmentText+=text;text='';}};
+        const closeSegment=(superseded:boolean)=>{flushText();
+          if(segmentCommitted||!segmentText)messages.push(...segment);
+          else{for(const m of segment)if(m.role!=='assistant'||m.toolCalls)messages.push(m);if(!superseded)messages.push({role:'assistant',content:'[incomplete response: the stream ended before the provider completed it; not a final answer]\n'+segmentText});}
+          segment=[];segmentText='';segmentCommitted=true;provisional=false;};
         for(const event of turn.events){const e=event.data;
           if(e.type==='assistant.text')text+=e.text;
-          else if(e.type==='user.accepted'){flush();messages.push(e.message);}
-          else if(e.type==='user.steered')steered.push(e.message);
-          else if(e.type==='tool.call'){flush();messages.push({role:'assistant',content:'',toolCalls:[e.call]});}
-          else if(e.type==='tool.result'){flush();messages.push({role:'tool',content:e.result.status==='ok'?e.result.content||'(empty)':`[${e.result.status}${e.result.code?': '+e.result.code:''}] ${e.result.content}`,toolCallId:e.result.callId,toolName:e.result.name});}
-          else if(e.type==='model.requested'){flush();if(requests++>0)messages.push(...steered.splice(0));}
-        }flush();
-        if(!['pending','running'].includes(turn.state)){
+          else if(e.type==='user.accepted'){for(const c of e.carried??[]){messages.push(pendingInput.get(c)!);pendingInput.delete(c);}messages.push(e.message);}
+          else if(e.type==='user.steered')steered.push({steerId:e.steerId,message:e.message});
+          else if(e.type==='tool.call'){flushText();segment.push({role:'assistant',content:'',toolCalls:[e.call]});}
+          else if(e.type==='tool.result'){flushText();segment.push({role:'tool',content:e.result.status==='ok'?e.result.content||'(empty)':`[${e.result.status}${e.result.code?': '+e.result.code:''}] ${e.result.content}`,toolCallId:e.result.callId,toolName:e.result.name});}
+          else if(e.type==='model.completed'){flushText();segmentCommitted=true;}
+          else if(e.type==='model.requested'){closeSegment(true);provisional=e.protocol===2;segmentCommitted=!provisional;if(requests++>0)messages.push(...steered.splice(0).map(s=>s.message));}
+        }
+        closeSegment(false);
+        if(!live){
           const attempted=new Set(turn.events.flatMap(e=>e.data.type==='tool.intent'?[e.data.callId]:[]));
           const results=new Set(turn.events.flatMap(e=>e.data.type==='tool.result'?[e.data.result.callId]:[]));
           for(const event of turn.events)if(event.data.type==='tool.call'&&!results.has(event.data.call.id)){
             const call=event.data.call;
             messages.push({role:'tool',toolCallId:call.id,toolName:call.name,content:attempted.has(call.id)?'[unknown: interrupted execution] Intent was recorded but no result was confirmed. Inspect current filesystem state; do not replay or reuse an old approval.':'[not executed] The turn ended before Futryn dispatched this call. A new call requires current policy and fresh revalidation.'});
           }
+          for(const s of steered)pendingInput.set(s.steerId,s.message);
         }
-        messages.push(...steered);
         const end=row.end_revision??((rows[index+1]?.user_revision??Infinity)-1);
         while(cursor<legacy.length&&legacy[cursor]!.revision<=end)cursor++;
       }
       while(cursor<legacy.length){const {revision:_r,state:_s,...message}=legacy[cursor++]!;messages.push(message);}
       const saved=this.db.query('SELECT task,context FROM conversation_checkpoints WHERE conversation=?').get(id) as {task:string|null;context:string|null}|null;
-      return{messages,turns,...(saved?.task?{task:activeTaskCheckpointSchema.parse(JSON.parse(saved.task))}:{}),...(saved?.context?{compaction:contextSnapshotSchema.parse(JSON.parse(saved.context))}:{})};
+      return{messages,turns,...(pendingInput.size?{pendingInput:[...pendingInput].map(([steerId,message])=>({steerId,message}))}:{}),...(saved?.task?{task:activeTaskCheckpointSchema.parse(JSON.parse(saved.task))}:{}),...(saved?.context?{compaction:contextSnapshotSchema.parse(JSON.parse(saved.context))}:{})};
     }).immediate();}catch{throw new FutrynError('STORAGE');}
   }
 }

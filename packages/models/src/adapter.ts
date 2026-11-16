@@ -115,7 +115,10 @@ export class ProviderAdapter implements ModelPort {
           yield { type: 'usage', usage: reported };
           if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new FutrynError('PROTOCOL');
           for (const call of held.splice(0)) yield { type: 'toolCallComplete', call };
-          complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported };
+          // Codex Completed { end_turn: Some(false) }: the only such signal these transports expose is
+          // Anthropic's `pause_turn` (the AI SDK folds it into "stop" but keeps the raw reason).
+          const raw = (part as { rawFinishReason?: unknown }).rawFinishReason;
+          complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported, ...(raw === 'pause_turn' ? { endTurn: false } : {}) };
         }
       }
       if (!complete) throw new FutrynError('PROTOCOL');

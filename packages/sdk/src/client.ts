@@ -132,6 +132,8 @@ export interface FutrynBackendPorts {
   ): AsyncIterable<ModelEvent>;
   /** Steer the active turn of `sessionId` (ADR 0033). Absent when the backend cannot steer. */
   steerTurn?(sessionId: string, content: string, expectedTurnId?: string): SteerOutcome;
+  /** Accepted instructions of `sessionId` that no turn processed yet (durable; they open its next turn). */
+  queuedInput?(sessionId: string): readonly { steerId: string; content: string }[];
   loadCustomThemes(): { themes: ThemeManifest[]; errors: { file: string; message: string }[] };
   saveCustomTheme(manifest: ThemeManifest): ThemeManifest;
   removeCustomTheme(id: string): boolean;
@@ -153,6 +155,8 @@ export class FutrynClient {
   private sending = false;
   /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
   private activeTurnId: string | undefined;
+  /** Messages submitted while a turn was finishing (Codex start_or_steer → next turn), in order. */
+  private nextTurnMessages: string[] = [];
   private streamingText = '';
   private streamingSteps: Message[] = [];
   /** Live limit results by account id, from the last refreshLimits(). */
@@ -662,7 +666,7 @@ export class FutrynClient {
     const session = this.currentSession;
     this.sending = true; this.streamingText = ''; this.streamingSteps = []; this.lastUsage = null; this.activeTurnId = undefined;
     this.emitReactiveEvent('thinking', 'Preparing request');
-    let assistantText = '';
+    let assistantText = ''; let responseStart = 0;
     try {
       for await (const event of this.ports.sendTurn(
         session.id,
@@ -673,7 +677,7 @@ export class FutrynClient {
         this.status().reasoningEffort ?? undefined,
       )) {
         if (event.type === 'started') {
-          this.activeTurnId ??= event.requestId;
+          this.activeTurnId ??= event.requestId; responseStart = assistantText.length;
           this.emitReactiveEvent('waiting', 'Waiting for provider');
         } else if (event.type === 'textDelta') {
           assistantText += event.text; this.streamingText = assistantText;
@@ -698,6 +702,12 @@ export class FutrynClient {
         } else if (event.type === 'toolResult') {
           this.streamingSteps.push({role: 'tool', content: event.result.content, toolCallId: event.result.callId, toolName: event.result.name});
           this.notifyStateChange();
+        } else if (event.type === 'responseDiscarded') {
+          // Provisional text of a retried or preempted response is void (ADR 0033).
+          assistantText = assistantText.slice(0, responseStart); this.streamingText = assistantText;
+          this.notifyStateChange();
+        } else if (event.type === 'inputDeferred') {
+          this.emitReactiveEvent('thinking', `${event.steerIds.length} accepted instruction(s) deferred to the next turn (${event.reason})`);
         } else if (event.type === 'steered') {
           if (assistantText) this.streamingSteps.push({role: 'assistant', content: assistantText});
           this.streamingSteps.push({role: 'user', content: event.content});
@@ -725,6 +735,26 @@ export class FutrynClient {
    * before its next request. It is plain user text: it never changes mode, grants or approvals.
    * `no_active_turn` means the turn already finished (or is finishing); send it as a new message.
    */
+  /**
+   * Input typed while the agent is busy (Codex `start_or_steer`): join the running turn when it still
+   * accepts steering; when it is finishing, keep the message in order for the next turn instead of
+   * losing it. Callers send queued messages with `takeQueuedMessage` once the turn has ended.
+   */
+  submitWhileBusy(content: string): { disposition: 'steered'; steerId: string } | { disposition: 'queued'; position: number } | { disposition: 'rejected'; reason: 'not_steerable' | 'empty_input' | 'idle' } {
+    const trimmed = content.trim();
+    if (!trimmed) return { disposition: 'rejected', reason: 'empty_input' };
+    if (!this.sending) return { disposition: 'rejected', reason: 'idle' };
+    const outcome = this.steerMessage(trimmed);
+    if (outcome.accepted) return { disposition: 'steered', steerId: outcome.steerId };
+    if (outcome.reason === 'no_active_turn' || outcome.reason === 'turn_mismatch') { this.nextTurnMessages.push(trimmed); this.notifyStateChange(); return { disposition: 'queued', position: this.nextTurnMessages.length }; }
+    return { disposition: 'rejected', reason: outcome.reason };
+  }
+  /** Next message queued by `submitWhileBusy`, removed from the queue. Undefined while a turn runs. */
+  takeQueuedMessage(): string | undefined { if (this.sending) return undefined; const next = this.nextTurnMessages.shift(); if (next !== undefined) this.notifyStateChange(); return next; }
+  queuedMessages(): readonly string[] { return [...this.nextTurnMessages]; }
+  /** Accepted instructions the last turn could not process; the next sent message delivers them first. */
+  queuedInput(): readonly { steerId: string; content: string }[] { return this.currentSession ? this.ports.queuedInput?.(this.currentSession.id) ?? [] : []; }
+
   steerMessage(content: string): SteerOutcome {
     const trimmed = content.trim();
     if (!trimmed) return { accepted: false, reason: 'empty_input' };

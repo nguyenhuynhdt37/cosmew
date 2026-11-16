@@ -376,14 +376,21 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       output(app, 'Chưa có tài khoản/model đang dùng. Gõ /login để bắt đầu.');
       return;
     }
-    let text = '';
+    let text = ''; let responseStart = 0;
     let final: unknown;
     const streamRedactor = app.redactor.stream();
     for await (const event of conversation.send(message, signal, maxOutput, estimatedBudget, telemetryClient().status().reasoningEffort ?? undefined)) {
+      if (event.type === 'started') responseStart = text.length;
       if (event.type === 'textDelta') {
         text += event.text;
         if (!options.json) process.stdout.write(terminalText(streamRedactor.push(event.text)));
       }
+      // Printed text cannot be unprinted: mark it void so it is never read as part of the answer (ADR 0033).
+      if (event.type === 'responseDiscarded') {
+        text = text.slice(0, responseStart);
+        if (!options.json) process.stdout.write(terminalText(streamRedactor.finish()) + `\n[${event.reason === 'retry' ? 'stream interrupted; partial output above discarded, retrying' : 'preempted; partial output above discarded'}]\n`);
+      }
+      if (event.type === 'inputDeferred' && process.stderr.isTTY) process.stderr.write(`[${event.steerIds.length} accepted instruction(s) deferred to the next turn: ${event.reason}]\n`);
       if (event.type === 'completed') final = event;
     }
     if (options.json) output(app, { conversationId: conversation.id, text, result: final }, true);

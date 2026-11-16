@@ -48,7 +48,7 @@ export interface ConversationOptions {
 }
 
 /** The single owner of a running turn. Steering is accepted only while `accepting` is true. */
-interface ActiveTurn { id: string; accepting: boolean; steerable: boolean; pending: { steerId: string; message: Message }[] }
+interface ActiveTurn { id: string; accepting: boolean; steerable: boolean; pending: { steerId: string; message: Message }[]; wake?: () => void }
 /** One dispatched call: `settled` never rejects; a cancellation or failure travels in `error`. */
 interface InFlight { call: ToolCall; settled: Promise<{ result: ToolResult; error?: unknown }> }
 
@@ -90,6 +90,11 @@ export class Conversation {
   private messages: Message[] = [];
   private running = false;
   private active?: ActiveTurn;
+  /**
+   * Session-owned input queue (Codex keeps pending input when a task finishes): steering a finished
+   * turn accepted but never delivered. It is durable in the journal and opens the next turn.
+   */
+  private pendingInput: { steerId: string; message: Message }[] = [];
   private task?: ActiveTaskCheckpoint;
   private snapshot?: ContextSnapshot;
   constructor(
@@ -107,12 +112,14 @@ export class Conversation {
       this.id = existing.id;
       const recovery=store.recover?.(existing.id);
       this.messages = normalizeHistory((recovery?.messages.length?recovery.messages:existing.messages).map(m => messageSchema.parse(m)));
-      this.task=recovery?.task;this.snapshot=recovery?.compaction;
+      this.task=recovery?.task;this.snapshot=recovery?.compaction;this.pendingInput=recovery?.pendingInput??[];
     } else {
       this.id = store.create(selection);
     }
   }
   history(): readonly Message[] { return this.messages.map(m => ({ ...m })); }
+  /** Accepted instructions that no turn processed yet; the next `send` delivers them first. */
+  queuedInput(): readonly { steerId: string; content: string }[] { return this.pendingInput.map(p => ({ steerId: p.steerId, content: p.message.content })); }
   /** Identity of the turn that currently accepts steering, if any. */
   activeTurnId(): string | undefined { return this.active?.accepting ? this.active.id : undefined; }
 
@@ -131,6 +138,7 @@ export class Conversation {
     const steerId = crypto.randomUUID();
     this.store.recordExecution(this.id, turn.id, { type: 'user.steered', steerId, message });
     turn.pending.push({ steerId, message });
+    turn.wake?.(); // Codex watch_user_input: arriving input preempts the response being sampled.
     return { accepted: true, turnId: turn.id, steerId };
   }
 
@@ -144,6 +152,9 @@ export class Conversation {
     const startedAt = Date.now();
     const receipt: TurnReceipt = { requestId: crypto.randomUUID(), accountId: this.selection.accountId, modelId: this.selection.modelId, startedAt: new Date(startedAt).toISOString(), finishedAt: null, outcome: 'pending', usage: null, context: null };
     const turn: ActiveTurn = { id: receipt.requestId, accepting: false, steerable: !this.model.inlineTools, pending: [] };
+    let carried: Message[] = [];
+    /** Hands accepted-but-undelivered steering to the session queue with an explicit, visible disposition. */
+    const defer=()=>{const left=turn.pending.splice(0);this.pendingInput.push(...left);return left.map(item=>item.steerId);};
     this.running = true; let revision: number | undefined; let completed = false; let settled=false;
     let stagnant=0, corrections=0;
     let progressNotice='';
@@ -180,6 +191,9 @@ export class Conversation {
       if (budget.maxToolCalls !== undefined && executed >= budget.maxToolCalls) {
         const refused:ToolResult={callId:call.id,name:call.name,status:'error',code:'TOOL_BUDGET',content:budgetRefusal(budget.maxToolCalls)};settle(call,refused);return refused;
       }
+      // Codex tool_start_denial: a work budget used up while the call waited for its slot refuses it.
+      const spent=exhaustedWork();
+      if(spent){const refused:ToolResult={callId:call.id,name:call.name,status:'error',code:'TOOL_BUDGET',content:`[budget] The ${spent.replace('budget_','')} budget set for this turn is used up, so this call was not run.`};settle(call,refused);return refused;}
       if(writeDenied&&capability(call)==='fs.write'){
         const refused:ToolResult={callId:call.id,name:call.name,status:'denied',code:'DENIED',content:'A write was denied in this turn. No mutation was retried; wait for a new user instruction.'};settle(call,refused);return refused;
       }
@@ -240,14 +254,17 @@ export class Conversation {
     };
     /** A user budget that is used up, checked before each model round. */
     const exhausted = (round: number): TurnStopReason | undefined => {
-      const tokens = receipt.usage ? (receipt.usage.inputTokens ?? 0) + (receipt.usage.outputTokens ?? 0) : 0;
       if (budget.maxSteps !== undefined && round >= budget.maxSteps) return 'budget_steps';
       if (budget.maxToolCalls !== undefined && executed >= budget.maxToolCalls) return 'budget_tool_calls';
+      return exhaustedWork();
+    };
+    function exhaustedWork(): TurnStopReason | undefined {
+      const tokens = receipt.usage ? (receipt.usage.inputTokens ?? 0) + (receipt.usage.outputTokens ?? 0) : 0;
       if (budget.maxTokens !== undefined && tokens >= budget.maxTokens) return 'budget_tokens';
       if (budget.maxDurationMs !== undefined && Date.now() - startedAt >= budget.maxDurationMs) return 'budget_time';
       if (budget.maxCostUSD !== undefined && (receipt.usage?.costUSD ?? 0) >= budget.maxCostUSD) return 'budget_cost';
       return undefined;
-    };
+    }
     const inlineLimit = budget.maxToolCalls !== undefined ? Math.min(SAFETY_LIMITS.bridgeCallsPerTurn, budget.maxToolCalls + SAFETY_LIMITS.bridgeRefusalGrace) : SAFETY_LIMITS.bridgeCallsPerTurn;
     try {
       const recovered=this.store.recover?.(this.id);
@@ -255,7 +272,12 @@ export class Conversation {
       recoveryNeeded=(recovered?.task??this.task)?.state==='unfinished'||!!recovered?.turns.some(t=>['interrupted','failed','cancelled'].includes(t.state));
       this.task=taskForRequest(content,recovered?.task??this.task);
       this.snapshot=recovered?.compaction??this.snapshot;
-      revision=this.store.beginExecution?this.store.beginExecution(this.id,user,receipt):this.store.append(this.id,user,'pending',receipt);
+      if(recovered)this.pendingInput=recovered.pendingInput??[];
+      // Accepted-but-undelivered instructions open this turn, before the new message (Codex records
+      // leftover input into history before the next turn). Only a journal can prove they were pending.
+      const carry=this.store.beginExecution?this.pendingInput.slice():[];
+      revision=this.store.beginExecution?this.store.beginExecution(this.id,user,receipt,carry.map(c=>c.steerId)):this.store.append(this.id,user,'pending',receipt);
+      carried=carry.map(c=>c.message);this.pendingInput=this.pendingInput.filter(p=>!carry.includes(p));
       this.store.saveTask?.(this.id,this.task);
       // The turn is durable: from here it is the one active owner and may receive steering.
       this.active=turn;turn.accepting=true;
@@ -280,7 +302,7 @@ export class Conversation {
         }
         const normalized=normalizeHistory(this.messages);
         let visible=useContextSnapshot(normalized,this.snapshot);
-        const current=normalizeHistory([user,...steps]);
+        const current=normalizeHistory([...carried,user,...steps]);
         const taskMessage=this.task&&recoveryNeeded&&(this.task.artifactTargets.length>0||this.messages.some(m=>m.role==='assistant'||m.role==='tool'))?[recoveryContext(this.task,this.messages)]:[];
         let history = [...projectMessages,...visible,...taskMessage,...current];
         // Context window (ADR 0030): measured input of the last round or a conservative estimate,
@@ -322,13 +344,19 @@ export class Conversation {
         const calls: ToolCall[] = [];
         const flights: InFlight[] = [];
         let drained = false; let streamError: unknown;
+        /** Codex InstantInterrupt: accepted steering stopped this response; its unfinished items are void. */
+        let preempted = false; let reasoned = false;
+        const stepId = crypto.randomUUID();
+        // Preemption requests another model call, so it is off once a budget or the context window
+        // has stopped tool use: then steering waits (deferred) instead of bypassing the stop.
+        const preemptable = turn.steerable && !stop;
         /** A bridge runtime already acted (inline tool or activity): its stream is never re-sampled. */
         let acted = false;
         // Aborting the request closes only the model stream; dispatched tools keep the turn signal.
         const requestAbort = new AbortController();
         try {
           try {
-            record({type:'model.requested',stepId:crypto.randomUUID()});
+            record({type:'model.requested',stepId,protocol:2});
             const iterator = this.model.stream({ requestId: requests === 0 ? receipt.requestId : crypto.randomUUID(), modelId: this.selection.modelId, messages: history, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, tools, ...(instructions ? { instructions } : {}) }, AbortSignal.any([signal, requestAbort.signal]), this.model.inlineTools && this.tools ? async (call, toolSignal) => {
               acted = true;
               if (!available.some(d => d.name === call.name) || inlineIds.has(call.id)) throw new FutrynError('POLICY');
@@ -347,7 +375,10 @@ export class Conversation {
               for (;;) {
                 if (progress.length) { yield takeProgress(); continue; }
                 next ??= iterator.next();
-                const step = await Promise.race([next.then(r => ({ r }), (e: unknown) => ({ e })), progressReady()]);
+                const preempt = preemptable ? new Promise<'preempt'>(resolve => { turn.wake = () => resolve('preempt'); if (turn.pending.length) resolve('preempt'); }) : undefined;
+                const step = await Promise.race([next.then(r => ({ r }), (e: unknown) => ({ e })), progressReady(), ...(preempt ? [preempt] : [])]);
+                turn.wake = undefined;
+                if (step === 'preempt') { preempted = true; break; }
                 if (!step) continue;
                 next = undefined;
                 if ('e' in step) throw step.e;
@@ -363,7 +394,7 @@ export class Conversation {
                   record({type:'assistant.text',text:event.text});
                   if (textBytes > SAFETY_LIMITS.textBytesPerResponse) throw new FutrynError('PROTOCOL');
                 }
-                if(event.type==='reasoningDelta'){reasoningBytes+=Buffer.byteLength(event.text);if(reasoningBytes>SAFETY_LIMITS.textBytesPerResponse){stop='safety_limit';throw new FutrynError('PROTOCOL');}}
+                if(event.type==='reasoningDelta'){reasoned=true;reasoningBytes+=Buffer.byteLength(event.text);if(reasoningBytes>SAFETY_LIMITS.textBytesPerResponse){stop='safety_limit';throw new FutrynError('PROTOCOL');}}
                 if (event.type === 'usage' || event.type === 'completed') receipt.usage = combine(before, event.usage);
                 if (event.type === 'usage' || event.type === 'completed') { lastInput = event.usage.inputTokens; lastOutput = event.usage.outputTokens; }
                 if (event.type === 'context') receipt.context = event.context;
@@ -377,11 +408,11 @@ export class Conversation {
                   if (!this.model.inlineTools) { calls.push(event.call); flights.push(dispatch(event.call)); }
                 }
                 if(event.type==='toolResult'&&(!this.model.inlineTools||stable(outcomes.get(event.result.callId))!==stable(event.result)))throw new FutrynError('PROTOCOL');
-                if (event.type === 'completed') terminal = event;
+                if (event.type === 'completed') { terminal = event; record({ type: 'model.completed', stepId }); }
                 else yield event.type === 'usage' ? { type: 'usage', usage: receipt.usage! } : event;
               }
             } catch (error) { failed = true; throw error; } finally {
-              wakeProgress = undefined;
+              wakeProgress = undefined; turn.wake = undefined;
               if (next) { requestAbort.abort(); await next.catch(() => undefined); }
               // Same as `for await`: closing errors surface unless the body is already failing.
               if (failed) await iterator.return?.()?.catch(() => undefined); else await iterator.return?.();
@@ -391,7 +422,9 @@ export class Conversation {
             // Complete calls are answered and recorded even when the response failed afterwards, so a
             // retry or a later turn sees their real outcome instead of repeating them.
             const { results, failure } = yield* drain(flights); drained = true;
-            steps.push({ role: 'assistant', content: text, toolCalls: calls }, ...calls.map((call, index) => toolMessage(call, results[index]!)));
+            // Unfinished text of a response that did not complete is not history (Codex discards items
+            // that never reached OutputItemDone); its completed calls and their results are.
+            steps.push({ role: 'assistant', content: terminal ? text : '', toolCalls: calls }, ...calls.map((call, index) => toolMessage(call, results[index]!)));
             if (failure && !streamError) streamError = failure;
             stagnant=results.some(result=>result.status==='ok'&&!result.content.startsWith('[unchanged]'))?0:stagnant+1;
           }
@@ -401,22 +434,35 @@ export class Conversation {
         }
         if (streamError !== undefined) {
           if (signal?.aborted) throw new FutrynError('CANCELLED');
-          // Codex run_sampling_request retries the request with the history recorded so far: transport
-          // retries never re-run a tool. Visible text is journaled as it streams, so a response that
-          // already produced text is not silently re-sampled.
-          const retryable = streamError instanceof FutrynError && streamError.retryable && !text && !acted && attempt < SAFETY_LIMITS.roundRetries;
+          // Codex run_sampling_request + responses_retry: a retryable stream error re-samples with the
+          // history recorded so far. Streamed text stays provisional (no `model.completed`), so it is
+          // discarded visibly, never committed; completed tools keep their results and never re-run.
+          // A bridge runtime that already acted owns side effects Futryn cannot reconcile: no retry.
+          const retryable = streamError instanceof FutrynError && streamError.retryable && !acted && attempt < SAFETY_LIMITS.roundRetries;
           if (!retryable || !(streamError instanceof FutrynError)) throw streamError;
+          if (text || reasoned) yield { type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1 };
           await sleep(Math.min(10000, Math.max(streamError.retryAfterMs ?? 0, 250 * 2 ** attempt)), signal);
           attempt++; continue;
         }
+        if (preempted) {
+          // Codex try_run_sampling_request on preempt: needs_follow_up, pending input drained next.
+          if (text || reasoned) yield { type: 'responseDiscarded', reason: 'preempted' };
+          attempt = 0; round++; continue;
+        }
         if (!terminal) throw new FutrynError('PROTOCOL');
         attempt = 0; round++;
+        // Codex is_terminal_sampling_outcome(ResponseIncomplete): output cut by the token limit is not a
+        // final answer and is not retried. Completed calls above already have recorded results.
+        if (terminal.finishReason === 'length') throw new FutrynError('PROTOCOL');
         if (calls.length) {
           // Codex needs_follow_up: tool output always goes back to the model.
           if(stagnant>=3)progressNotice='Progress correction: recent calls produced only identical reads, refusals or failures. Use existing evidence; choose a different justified step or report the blocker. Never retry a denied mutation.';
           if(stagnant>=6){stop='stalled';throw new FutrynError('STALLED');}
           continue;
         }
+        // Codex Completed { end_turn: Some(false) } → needs_follow_up. Only providers that expose such a
+        // signal set it (Anthropic pause_turn); absence is never treated as "continue".
+        if (terminal.endTurn === false && !stop) { if (text) steps.push({ role: 'assistant', content: text }); continue; }
         if (!text.trim() || ['error', 'unknown', 'tool-calls', 'tool_calls'].includes(terminal.finishReason)) throw new FutrynError('PROTOCOL');
         // Codex: needs_follow_up = model_needs_follow_up || has_pending_input. Accepted steering that
         // arrived during this response continues the same turn instead of starting an unrelated one.
@@ -434,17 +480,18 @@ export class Conversation {
         }
         // Completion: no follow-up remains. Steering that arrives from now on starts a new turn.
         turn.accepting = false;
-        const undelivered = turn.pending.splice(0).map(item => item.message);
+        const deferred = defer();
         if(this.task){this.task.state=needsArtifact?(verified?'verified':'unfinished'):(this.task.failures.length||this.task.pending.some(p=>p.startsWith('Collect command session '))?'unfinished':'verified');this.task.pending=this.task.state==='verified'?[]:this.task.pending;this.store.saveTask?.(this.id,this.task);}
         receipt.outcome = 'completed'; receipt.stopReason = stop ?? 'completed'; receipt.finishedAt = new Date().toISOString();
         const answer: Message = { role: 'assistant', content: text };
         this.store.complete(this.id, revision, answer, receipt, steps);
-        completed = true; this.messages.push(user, ...steps, answer, ...undelivered);
+        completed = true; this.messages.push(...carried, user, ...steps, answer);
+        if (deferred.length) yield { type: 'inputDeferred', steerIds: deferred, reason: stop ?? 'completed' };
         yield { ...terminal, usage: receipt.usage ?? terminal.usage };
         return;
       }
     } catch (e) {
-      turn.accepting = false;
+      turn.accepting = false; defer();
       const cancelled = signal?.aborted || (e instanceof FutrynError && e.code === 'CANCELLED');
       if (revision !== undefined && !completed) {
         receipt.outcome = cancelled ? 'cancelled' : 'failed';
@@ -464,11 +511,11 @@ export class Conversation {
       if (e instanceof FutrynError) throw e;
       throw new FutrynError('PROTOCOL');
     } finally {
-      turn.accepting = false; if (this.active === turn) this.active = undefined;
+      turn.accepting = false; defer(); if (this.active === turn) this.active = undefined;
       if(!completed)turnAbort.abort();
       try{
         if(revision!==undefined&&!completed&&!settled){receipt.outcome='cancelled';receipt.stopReason='cancelled';receipt.finishedAt=new Date().toISOString();this.store.interrupt(this.id,revision,receipt,appliedSteps);}
-        if(revision!==undefined){const recovery=this.store.recover?.(this.id);if(recovery)this.messages=normalizeHistory(recovery.messages);}
+        if(revision!==undefined){const recovery=this.store.recover?.(this.id);if(recovery){this.messages=normalizeHistory(recovery.messages);this.pendingInput=recovery.pendingInput??[];}}
       }finally{this.running=false;}
     }
   }

@@ -8,12 +8,13 @@
  * prove live provider, sandbox or container acceptance.
  */
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { FutrynError, type CommandOutputChunk, type ModelEvent, type ModelPort, type ModelRequest, type ToolCall, type ToolCapability, type ToolPort, type ToolResult, type TurnBudget, type Usage } from '@futryn/contracts';
 import { Conversation, ExecutionGate, normalizeHistory } from '@futryn/core';
 import { openPrivateDatabase, SqliteConversations } from '@futryn/persistence';
+import { FutrynTuiApp } from '@futryn/tui';
 import { startup } from '../../apps/cli/src/bootstrap/startup';
 import { fixtureServer, memoryVault } from '../fixtures';
 
@@ -191,7 +192,7 @@ test('9: cancelling during a command keeps a finished mutation, marks the runnin
 /** Lets a responder or tool steer the conversation created after it. */
 function steering() { const holder: { h?: Harness; outcomes: unknown[] } = { outcomes: [] }; return { holder, steer: (content: string) => { const outcome = holder.h!.conversation.steer(content); holder.outcomes.push(outcome); return outcome; } }; }
 
-test('10: steering during model sampling is journaled at once and delivered after the tool results, before the next request', async () => {
+test('10 / E: steering during model sampling is journaled at once and preempts the stream (Codex InstantInterrupt)', async () => {
   const s = steering(); let journaledBeforeDelivery = false;
   s.holder.h = harness([async function* () {
     yield text('Working. ');
@@ -201,12 +202,24 @@ test('10: steering during model sampling is journaled at once and delivered afte
   }, reply(text('Done with the design kept.'), done())], [tool('read')]);
   const h = s.holder.h; await h.send('Build a login page.');
   expect(s.holder.outcomes[0]).toMatchObject({ accepted: true, turnId: h.receipt().requestId }); expect(journaledBeforeDelivery).toBe(true);
-  expect(tail(h.requests[1]!, 4)).toEqual(['user:Build a login page.', 'call:c1', 'tool:c1', 'user:Keep the existing design and use the current auth backend.']);
-  expect(h.events.map(e => e.type)).toEqual(['textDelta', 'toolCallComplete', 'toolResult', 'steered', 'textDelta', 'completed']);
-  // Recovery reproduces the delivered order: the steer follows the tool result and precedes the answer.
-  const roles = paired(h).map(m => m.role === 'user' ? `user:${m.content.slice(0, 5)}` : m.role);
-  expect(roles.slice(-3)).toEqual(['tool', 'user:Keep ', 'assistant']);
+  // The unfinished response (its text and the call that had not completed) is void; nothing ran.
+  expect(h.invoked).toEqual([]);
+  expect(tail(h.requests[1]!, 2)).toEqual(['user:Build a login page.', 'user:Keep the existing design and use the current auth backend.']);
+  expect(h.events.map(e => e.type)).toEqual(['textDelta', 'responseDiscarded', 'steered', 'textDelta', 'completed']);
+  const messages = paired(h); expect(messages.map(m => m.content)).toEqual(['Build a login page.', 'Keep the existing design and use the current auth backend.', 'Done with the design kept.']);
   expect(h.conversations.get(h.conversation.id)!.turns).toHaveLength(1);
+});
+
+test('F: preemption keeps a completed call and its result, and never runs the call that had not completed', async () => {
+  const s = steering(); const ran = deferred();
+  s.holder.h = harness([async function* () {
+    yield call('c1', 'read'); await within(ran.promise, 'c1 dispatched'); s.steer('Stop exploring; summarize.');
+    yield call('c2', 'read'); yield done('tool_calls');
+  }, reply(text('Summary.'), done())], [tool('read', 'fs.read', async c => { ran.resolve(); return `r ${c.id}`; })]);
+  const h = s.holder.h; await h.send();
+  expect(h.invoked).toEqual(['c1']);
+  expect(tail(h.requests[1]!, 3)).toEqual(['call:c1', 'tool:c1', 'user:Stop exploring; summarize.']);
+  const messages = paired(h); expect(messages.some(m => m.toolCalls?.some(c => c.id === 'c2'))).toBe(false);
 });
 
 test('11: steering during tool execution is delivered with the next request after that tool result', async () => {
@@ -216,12 +229,12 @@ test('11: steering during tool execution is delivered with the next request afte
   expect(tail(s.holder.h.requests[1]!, 3)).toEqual(['call:c1', 'tool:c1', 'user:Also run the linter.']);
 });
 
-test('12: steering that races turn completion either continues the same turn or is refused as no active turn', async () => {
-  // Accepted while the final answer streams: Codex needs_follow_up = has_pending_input.
+test('12 / B: steering that races turn completion either continues the same turn or is refused as no active turn', async () => {
+  // Accepted while the final answer streams: the answer is preempted and the turn continues with it.
   const s = steering();
   s.holder.h = harness([async function* () { yield text('Almost done.'); s.steer('Wait, also add a logout button.'); yield done(); }, reply(text('Added logout too.'), done())], []);
   await s.holder.h.send();
-  expect(s.holder.h.requests).toHaveLength(2); expect(tail(s.holder.h.requests[1]!, 3)).toEqual(['user:go', 'assistant:Almost done.', 'user:Wait, also add a logout button.']);
+  expect(s.holder.h.requests).toHaveLength(2); expect(tail(s.holder.h.requests[1]!, 2)).toEqual(['user:go', 'user:Wait, also add a logout button.']);
   expect(s.holder.h.receipt()).toMatchObject({ outcome: 'completed' });
   // Arriving while completion is delivered, or after it, is refused; the caller starts a new turn.
   const late = harness([reply(text('done'), done())], []); let atCompletion: unknown;
@@ -308,15 +321,25 @@ test('18: restart after an uncertain modification presents it as unknown and nev
   expect(h.invoked).toEqual([]); expect(h.requests[0]!.messages.find(m => m.toolCallId === 'w')!.content).toContain('unknown');
 });
 
-test('19: an exhausted tool budget withdraws tools; pending steering is still delivered, later steering is kept undelivered', async () => {
+test('19 / A: with an exhausted budget, steering is delivered to the final tool-less request or deferred durably to the next turn', async () => {
   const s = steering();
-  s.holder.h = harness([reply(call('c1', 'read'), done('tool_calls')), async function* () { s.steer('Late note.'); yield text('Budget used; here is what I found.'); yield done(); }],
+  s.holder.h = harness([reply(call('c1', 'read'), done('tool_calls')), async function* () { s.steer('Late note.'); yield text('Budget used; here is what I found.'); yield done(); }, reply(text('Handled the late note.'), done())],
     [tool('read', 'fs.read', async () => { s.steer('Prefer the current backend.'); return 'evidence'; })], { budget: { maxToolCalls: 1 } });
   const h = s.holder.h; await h.send();
   expect(h.invoked).toEqual(['c1']); expect(h.requests).toHaveLength(2); expect(h.requests[1]!.tools).toEqual([]);
   expect(h.requests[1]!.messages.at(-1)).toMatchObject({ role: 'user', content: 'Prefer the current backend.' });
   expect(h.receipt()).toMatchObject({ outcome: 'completed', stopReason: 'budget_tool_calls' });
-  expect(paired(h).at(-1)).toMatchObject({ role: 'user', content: 'Late note.' });
+  // The late instruction was not processed: explicit disposition, not history, survives a reload.
+  const deferredEvent = h.events.find(e => e.type === 'inputDeferred');
+  expect(deferredEvent).toMatchObject({ type: 'inputDeferred', reason: 'budget_tool_calls' });
+  expect(paired(h).some(m => m.content === 'Late note.')).toBe(false);
+  expect(h.journal().pendingInput!.map(p => p.message.content)).toEqual(['Late note.']);
+  expect(h.conversation.queuedInput().map(q => q.content)).toEqual(['Late note.']);
+  // The next turn opens with it, before its own message, exactly once.
+  await h.send('Next request.');
+  expect(tail(h.requests[2]!, 2)).toEqual(['user:Late note.', 'user:Next request.']);
+  expect(h.conversation.queuedInput()).toEqual([]); expect(h.journal().pendingInput).toBeUndefined();
+  expect(paired(h).filter(m => m.content === 'Late note.')).toHaveLength(1);
 });
 
 test('20: the context window during a tool continuation withdraws tools near the limit and fails honestly past it, keeping tool evidence', async () => {
@@ -343,12 +366,12 @@ test('23: results keep stable call ids and model-output order even when they fin
   expect(recovered).toEqual(['c1', 'c2', 'c3']);
 });
 
-for (const protocol of ['chat', 'anthropic'] as const) test(`24: the same Futryn loop drives the ${protocol} adapter, with SDK steering that grants nothing`, async () => {
+for (const protocol of ['chat', 'anthropic', 'responses', 'gemini'] as const) test(`24 / W / X: the same Futryn loop drives the ${protocol} adapter with the real dispatcher, with SDK steering that grants nothing`, async () => {
   const home = mkdtempSync(join(tmpdir(), 'futryn-matrix-')), root = mkdtempSync(join(tmpdir(), 'futryn-matrix-ws-')); const server = fixtureServer();
   writeFileSync(join(root, 'README.md'), 'Auth backend: sessions in server/auth.ts.\n');
   const app = startup(home, { vault: memoryVault() }); const client = app.createFutrynClient(root);
   cleanup.push(async () => { await app.shutdownCommands(); app.db.close(); server.server.stop(true); rmSync(home, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true }); });
-  const id = protocol === 'chat' ? 'matrix-chat' : 'matrix-anthropic';
+  const id = `matrix-${protocol}`;
   app.registry.add(server.provider(protocol, { id, auth: 'none' })); await app.accounts.add(id, 'fixture', { kind: 'none' });
   await client.discoverModels(); client.selectModel('fixture-model'); client.setToolsEnabled(true);
   server.set({ script: view => {
@@ -367,4 +390,182 @@ for (const protocol of ['chat', 'anthropic'] as const) test(`24: the same Futryn
   expect(client.permissionMode()).toBe(mode); expect(client.listToolGrants()).toEqual(grants);
   expect(client.steerMessage('after the turn')).toEqual({ accepted: false, reason: 'no_active_turn' });
   expect((app.db.query("SELECT count(*) AS n FROM tool_audit WHERE tool='read' AND phase='completed'").get() as { n: number }).n).toBe(1);
+});
+
+/** Real startup client against the fixture HTTP server, for SDK/TUI/dispatcher paths. */
+async function realClient(protocol: 'chat' | 'anthropic' | 'responses' | 'gemini' = 'chat') {
+  const home = mkdtempSync(join(tmpdir(), 'futryn-real-')), root = mkdtempSync(join(tmpdir(), 'futryn-real-ws-')); const server = fixtureServer();
+  writeFileSync(join(root, 'README.md'), 'Project notes.\n');
+  const app = startup(home, { vault: memoryVault() }); const client = app.createFutrynClient(root);
+  cleanup.push(async () => { await app.shutdownCommands(); app.db.close(); server.server.stop(true); rmSync(home, { recursive: true, force: true }); rmSync(root, { recursive: true, force: true }); });
+  const id = `real-${protocol}`; app.registry.add(server.provider(protocol, { id, auth: 'none' })); await app.accounts.add(id, 'fixture', { kind: 'none' });
+  await client.discoverModels(); client.selectModel('fixture-model'); client.setToolsEnabled(true);
+  const lastUser = (body: any) => JSON.stringify(body).match(/QUEUE-\d/g) ?? [];
+  return { app, client, server, root, lastUser };
+}
+
+test('C + D: messages entered while a turn completes are queued once by the SDK and run in order by the TUI', async () => {
+  const { client, server } = await realClient();
+  server.set({ script: () => ({ text: 'answered' }) });
+  const tui = new FutrynTuiApp({ client, cols: 100, rows: 30 }); await tui.initialize(); cleanup.push(() => tui.shutdown());
+  const dispositions: unknown[] = []; let fired = false;
+  const stop = client.onReactiveEvent(event => {
+    // `done` is emitted while the finished turn no longer accepts steering but the client is still busy.
+    if (event.kind === 'done' && !fired) { fired = true; for (const text of ['QUEUE-1 first', 'QUEUE-2 second']) { void tui.submitPrompt(text); dispositions.push(client.queuedMessages().length); } }
+  });
+  await tui.submitPrompt('initial question');
+  // The TUI drained the SDK queue: two further turns, in order, each message exactly once.
+  const deadline = Date.now() + 4000; while (server.requests.filter(r => r.body).length < 3 && Date.now() < deadline) await Bun.sleep(5);
+  stop();
+  expect(dispositions).toEqual([1, 2]);
+  const bodies = server.requests.filter(r => r.body).map(r => (r.body.messages as any[]).filter(m => m.role === 'user').map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+  expect(bodies).toHaveLength(3);
+  expect(bodies[1]!.filter(t => t.includes('QUEUE-'))).toEqual(['QUEUE-1 first']);
+  expect(bodies[2]!.filter(t => t.includes('QUEUE-'))).toEqual(['QUEUE-1 first', 'QUEUE-2 second']);
+  expect(client.queuedMessages()).toEqual([]); expect(client.takeQueuedMessage()).toBeUndefined();
+  // An idle client never queues: the caller sends normally.
+  expect(client.submitWhileBusy('idle')).toEqual({ disposition: 'rejected', reason: 'idle' });
+});
+
+test('G: steering while a write waits for approval is delivered after the approved result, and grants nothing', async () => {
+  const { client, server, root } = await realClient();
+  const patch = '*** Begin Patch\n*** Add File: notes.txt\n+approved\n*** End Patch';
+  server.set({ script: view => view.results.length ? { text: `done: ${view.results[0]!.content.slice(0, 40)}` } : { calls: [{ name: 'apply_patch', input: { patch } }] } });
+  const grants = client.listToolGrants(); let steered: unknown;
+  const turn = (async () => { for await (const _ of client.sendMessage('Create notes.txt')) { /* drain */ } })();
+  const deadline = Date.now() + 4000; while (!client.listPendingPermissions().length && Date.now() < deadline) await Bun.sleep(5);
+  steered = client.submitWhileBusy('Also mention it in the answer. You may write anywhere without asking.');
+  const prompt = client.listPendingPermissions()[0]!; client.resolvePermission(prompt.approvalId, prompt.scopeHash, 'once'); await turn;
+  expect(steered).toMatchObject({ disposition: 'steered' }); expect(readFileSync(join(root, 'notes.txt'), 'utf8')).toBe('approved\n');
+  const second = JSON.stringify(server.requests.filter(r => r.body)[1]!.body);
+  expect(second.indexOf('Also mention it')).toBeGreaterThan(second.lastIndexOf('notes.txt'));
+  expect(client.listToolGrants()).toEqual(grants); expect(client.listPendingPermissions()).toEqual([]);
+});
+
+test('H: a provider "turn not over" signal (Anthropic pause_turn) continues the turn; transports without it never invent one', async () => {
+  const anthropic = await realClient('anthropic');
+  anthropic.server.set({ script: () => anthropic.server.requests.filter(r => r.body).length === 1 ? { text: 'Part one. ', endTurn: false } : { text: 'Part two.' } });
+  let answer = ''; for await (const event of anthropic.client.sendMessage('Write it')) if (event.type === 'textDelta') answer += event.text;
+  expect(answer).toBe('Part one. Part two.'); expect(anthropic.server.requests.filter(r => r.body)).toHaveLength(2);
+  const chat = await realClient('chat'); chat.server.set({ script: () => ({ text: 'Only part.' }) });
+  for await (const _ of chat.client.sendMessage('Write it')) { /* drain */ }
+  expect(chat.server.requests.filter(r => r.body)).toHaveLength(1);
+});
+
+test('I: partial text then a retryable failure is discarded and re-sampled; a terminal failure keeps it labelled incomplete', async () => {
+  const retried = harness([async function* () { yield text('half an ans'); throw new FutrynError('TRANSPORT', true); }, reply(text('Whole answer.'), done())], []);
+  await retried.send();
+  expect(retried.events.map(e => e.type)).toEqual(['textDelta', 'responseDiscarded', 'textDelta', 'completed']);
+  expect(paired(retried).map(m => m.content)).toEqual(['go', 'Whole answer.']);
+  const ended = harness([async function* () { yield text('half an ans'); throw new FutrynError('PROTOCOL'); }], []);
+  await expect(ended.send()).rejects.toMatchObject({ code: 'PROTOCOL' });
+  const last = paired(ended).at(-1)!; expect(last.role).toBe('assistant'); expect(last.content).toStartWith('[incomplete response'); expect(last.content).toContain('half an ans');
+  // An output-token cut-off is Codex ResponseIncomplete: terminal, not a final answer, not retried.
+  const cut = harness([reply(text('truncated'), done('length'))], []);
+  await expect(cut.send()).rejects.toMatchObject({ code: 'PROTOCOL' }); expect(cut.requests).toHaveLength(1);
+});
+
+test('J + L: a stream failure after one confirmed mutation retries with its recorded result and never re-runs it', async () => {
+  let writes = 0; const applied = deferred();
+  const h = harness([async function* () { yield text('Editing. '); yield call('w', 'apply_patch'); await within(applied.promise, 'write applied'); throw new FutrynError('TRANSPORT', true); }, reply(text('Edited once.'), done())],
+    [tool('apply_patch', 'fs.write', async () => { writes++; applied.resolve(); return 'Applied 1 change'; })]);
+  await h.send();
+  expect(writes).toBe(1); expect(tail(h.requests[1]!, 2)).toEqual(['call:w', 'tool:w']);
+  // The unfinished text of the failed response is not committed next to the call.
+  expect(h.requests[1]!.messages.at(-2)).toMatchObject({ role: 'assistant', content: '' });
+  expect(paired(h).map(m => m.content)).not.toContain('Editing. ');
+});
+
+test('K: a stream failure while a mutation ends without a confirmed outcome leaves it unknown, and later turns never replay it', async () => {
+  const conversations = store();
+  const h = harness([async function* () { yield call('w', 'apply_patch'); await Bun.sleep(1); throw new FutrynError('PROTOCOL'); }],
+    [tool('apply_patch', 'fs.write', async () => { throw new Error('runtime lost'); })], { conversations });
+  await expect(h.send()).rejects.toBeInstanceOf(FutrynError);
+  expect(paired(h).find(m => m.toolCallId === 'w')!.content).toContain('EXECUTION_UNKNOWN');
+  const next = harness([reply(text('Inspecting first.'), done())], [tool('apply_patch', 'fs.write')], { conversations, existing: h.conversation.id });
+  await next.send('continue'); expect(next.invoked).toEqual([]);
+  expect(next.requests[0]!.messages.find(m => m.toolCallId === 'w')!.content).toContain('EXECUTION_UNKNOWN');
+});
+
+test('N: cancelling while calls wait for the shared slot behind an exclusive call runs none of them', async () => {
+  const controller = new AbortController(); const streamed = deferred();
+  const write = tool('apply_patch', 'fs.write', (_c, signal) => new Promise((_r, reject) => { signal?.addEventListener('abort', () => reject(new FutrynError('CANCELLED')), { once: true }); }));
+  const h = harness([async function* () { yield call('w', 'apply_patch'); yield call('r1', 'read'); yield call('r2', 'read'); yield done('tool_calls'); streamed.resolve(); }], [write, tool('read')]);
+  const sending = h.send('go', controller.signal); await within(streamed.promise, 'response streamed'); controller.abort();
+  await expect(sending).rejects.toMatchObject({ code: 'CANCELLED' });
+  expect(h.invoked).toEqual(['w']);
+  const messages = paired(h); for (const id of ['r1', 'r2']) expect(messages.find(m => m.toolCallId === id)!.content).toContain('aborted before dispatch');
+  expect(messages.find(m => m.toolCallId === 'w')!.content).toContain('EXECUTION_UNKNOWN');
+});
+
+test('budget re-check at dispatch: a call admitted after the time budget ran out is refused, not run', async () => {
+  let now = 0; const realNow = Date.now; const base = realNow();
+  Date.now = () => base + now; cleanup.push(() => { Date.now = realNow; });
+  const h = harness([reply(call('slow', 'apply_patch'), call('late', 'apply_patch'), done('tool_calls')), reply(text('Out of time.'), done())],
+    [tool('apply_patch', 'fs.write', async c => { if (c.id === 'slow') now += 60_000; return 'ok'; })], { budget: { maxDurationMs: 30_000 } });
+  await h.send();
+  expect(h.invoked).toEqual(['slow']);
+  expect(h.requests[1]!.messages.find(m => m.toolCallId === 'late')!.content).toContain('TOOL_BUDGET');
+  expect(h.receipt().stopReason).toBe('budget_time');
+});
+
+test('S + T: a crash after steering was accepted keeps the instruction for the next turn; resume never replays the interrupted call', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'futryn-crash-')); cleanup.push(() => rmSync(home, { recursive: true, force: true }));
+  const script = `import {openPrivateDatabase,SqliteConversations} from ${JSON.stringify(resolve('packages/persistence/src/index.ts'))};
+  import {Conversation} from ${JSON.stringify(resolve('packages/core/src/index.ts'))};
+  const store=new SqliteConversations(openPrivateDatabase(${JSON.stringify(home)}));let c;
+  const model={generate:async()=>{throw new Error();},async *stream(){yield {type:'toolCallComplete',call:{id:'w',name:'apply_patch',input:{}}};yield {type:'completed',finishReason:'tool_calls',usage:{inputTokens:1,outputTokens:1,costUSD:null}};}};
+  const tools={descriptors:()=>[{name:'apply_patch',description:'p',inputSchema:{type:'object'},capability:'fs.write'}],invoke:async()=>{c.steer('Keep the old header.');await Bun.write(Bun.stdout,c.id+'\\n');process.exit(0);}};
+  c=new Conversation(${JSON.stringify(selection)},model,store,undefined,tools);for await (const _ of c.send('Edit the page')){}`;
+  const child = Bun.spawnSync([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
+  expect(child.exitCode).toBe(0); const id = child.stdout.toString().trim();
+  const db = openPrivateDatabase(home); cleanup.push(() => db.close()); const conversations = new SqliteConversations(db);
+  const recovered = conversations.recover(id);
+  expect(recovered.turns[0]!.state).toBe('interrupted'); expect(recovered.pendingInput!.map(p => p.message.content)).toEqual(['Keep the old header.']);
+  expect(normalizeHistory(recovered.messages).find(m => m.toolCallId === 'w')!.content).toContain('unknown');
+  const resumed = harness([reply(text('Checked the page state first.'), done())], [tool('apply_patch', 'fs.write')], { conversations, existing: id });
+  expect(resumed.conversation.queuedInput().map(q => q.content)).toEqual(['Keep the old header.']);
+  await resumed.send('Resume.');
+  expect(resumed.invoked).toEqual([]); expect(tail(resumed.requests[0]!, 2)).toEqual(['user:Keep the old header.', 'user:Resume.']);
+  expect(conversations.recover(id).pendingInput).toBeUndefined();
+});
+
+test('U: a turn mixing retry, preemption, tools and steering reconstructs without orphans, duplicates or committed partial text', async () => {
+  const s = steering(); const ran = deferred();
+  s.holder.h = harness([
+    async function* () { yield text('lost draft'); throw new FutrynError('TRANSPORT', true); },
+    async function* () { yield call('c1', 'read'); await within(ran.promise, 'c1'); yield text('preempted draft'); s.steer('Change of plan.'); yield done('tool_calls'); },
+    reply(call('c2', 'read'), done('tool_calls')),
+    reply(text('Final.'), done()),
+  ], [tool('read', 'fs.read', async c => { if (c.id === 'c1') ran.resolve(); return `r ${c.id}`; })]);
+  const h = s.holder.h; await h.send();
+  const messages = paired(h);
+  expect(messages.map(m => m.role === 'tool' ? `tool:${m.toolCallId}` : m.toolCalls ? `call:${m.toolCalls[0]!.id}` : `${m.role}:${m.content}`))
+    .toEqual(['user:go', 'call:c1', 'tool:c1', 'user:Change of plan.', 'call:c2', 'tool:c2', 'assistant:Final.']);
+  expect(JSON.stringify(messages)).not.toContain('draft');
+  // Corrupt journals fail explicitly instead of becoming model-visible history.
+  const db = (h.conversations as unknown as { db: import('bun:sqlite').Database }).db;
+  const row = db.query("SELECT seq,data FROM conversation_events WHERE conversation=? AND data LIKE '%model.completed%' LIMIT 1").get(h.conversation.id) as { seq: number; data: string };
+  db.query('UPDATE conversation_events SET data=? WHERE conversation=? AND seq=?').run(JSON.stringify({ type: 'model.completed', stepId: crypto.randomUUID() }), h.conversation.id, row.seq);
+  expect(() => h.conversations.recover(h.conversation.id)).toThrow(FutrynError);
+});
+
+test('carried input must be pending: a stale or duplicate carry is refused before a turn starts', () => {
+  const conversations = store(); const id = conversations.create(selection);
+  const receipt = () => ({ requestId: crypto.randomUUID(), ...selection, startedAt: new Date().toISOString(), finishedAt: null, outcome: 'pending' as const, usage: null, context: null });
+  expect(() => conversations.beginExecution(id, { role: 'user', content: 'x' }, receipt(), [crypto.randomUUID()])).toThrow(FutrynError);
+  expect(conversations.recover(id).turns).toHaveLength(0);
+});
+
+test('V: command output beyond the progress bound is dropped from live deltas only; the final result and its pairing remain', async () => {
+  const chunk = 'x'.repeat(4096);
+  const exec = tool('exec_command', 'process.execute', async (_c, _s, onOutput) => { for (let i = 0; i < 64; i++) onOutput?.({ stream: 'stdout', text: chunk }); return { exitCode: 0, content: 'Exit code: 0' }; });
+  const h = harness([reply(call('x', 'exec_command'), done('tool_calls')), reply(text('ok'), done())], [exec]);
+  await h.send();
+  const streamed = h.events.filter(e => e.type === 'toolOutputDelta').reduce((n, e) => n + (e.type === 'toolOutputDelta' ? e.text.length : 0), 0);
+  expect(streamed).toBeLessThanOrEqual(64000); expect(streamed).toBeGreaterThan(0);
+  expect(paired(h).find(m => m.toolCallId === 'x')!.content).toBe('Exit code: 0');
+  // Visible text past the per-response bound is a protocol failure, not a silently cut answer.
+  const flood = harness([async function* () { for (let i = 0; i < 70; i++) yield text('y'.repeat(4096)); yield done(); }], []);
+  await expect(flood.send()).rejects.toMatchObject({ code: 'PROTOCOL' });
 });

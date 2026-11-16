@@ -58,7 +58,8 @@ export type SteerOutcome =
 export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
-  beginExecution?(id:string,user:Message,receipt:import('./telemetry').TurnReceipt):number;
+  /** `carried` lists undelivered steering (by steerId) that this turn consumes as input before `user`. */
+  beginExecution?(id:string,user:Message,receipt:import('./telemetry').TurnReceipt,carried?:string[]):number;
   recordExecution?(id:string,turnId:string,event:import('./recovery').ExecutionEventData):number;
   recover?(id:string):import('./recovery').RecoveredConversation;
   saveTask?(id:string,task:import('./recovery').ActiveTaskCheckpoint):void;

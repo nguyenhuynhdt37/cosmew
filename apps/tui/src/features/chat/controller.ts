@@ -7,7 +7,7 @@ import {
   applyFileReferenceSelection, createInitialComposerState, getMatchingSlashCommands, navigateComposerHistory,
   recordComposerHistory, updateComposerValue, type ComposerState,
 } from '../composer';
-import { appendStreamPart, appendToolPart, applyActivity, messagesToTranscript, type TranscriptItem } from '../transcript';
+import { appendStreamPart, appendToolPart, applyActivity, discardResponse, markResponse, messagesToTranscript, type ResponseMark, type TranscriptItem } from '../transcript';
 
 /**
  * The main screen: prompt composer, transcript and the streaming turn. Owns their state so
@@ -28,8 +28,6 @@ export class ChatController {
   readonly companion = new FynCompanion();
   private activeAbortController: AbortController | null = null;
   private turnTask: Promise<void> | null = null;
-  /** Prompts typed while a turn was finishing (steering arrived too late); sent in order afterwards. */
-  private queuedPrompts: string[] = [];
 
   constructor(private readonly host: TuiHost) {}
 
@@ -53,26 +51,26 @@ export class ChatController {
     const task = this.runTurn(content);
     this.turnTask = task;
     try { await task; } finally { if (this.turnTask === task) this.turnTask = null; }
-    // Codex TUI: input that missed the finishing turn becomes the next turn, in submission order.
-    const next = this.queuedPrompts.shift();
+    // Input that missed the finishing turn is queued by the SDK (Codex start_or_steer) and becomes
+    // the next turn, in submission order, exactly once.
+    const next = this.host.client.takeQueuedMessage();
     if (next !== undefined && !this.isStreaming) await this.submit(next);
   }
 
-  /** Enter while a turn runs: steer it (ADR 0033). Shell and slash input are never steering. */
+  /** Enter while a turn runs: steer it or queue it for the next turn (ADR 0033). Shell input is never steering. */
   private steer(content: string): void {
     const trimmed = content.trim();
     if (!trimmed || trimmed.startsWith('!')) return;
-    let outcome: ReturnType<typeof this.host.client.steerMessage>;
+    let outcome: ReturnType<typeof this.host.client.submitWhileBusy>;
     // Acceptance requires a durable journal write; if that fails nothing was accepted and the draft stays.
-    try { outcome = this.host.client.steerMessage(trimmed); }
+    try { outcome = this.host.client.submitWhileBusy(trimmed); }
     catch (error) { this.banner = `Steering not accepted [${error instanceof FutrynError ? error.code : 'ERROR'}]; your draft was kept.`; return; }
-    if (outcome.accepted) {
+    if (outcome.disposition === 'steered') {
       this.composer = recordComposerHistory(this.composer, trimmed);
       this.banner = 'Steering queued: it reaches the model before its next request.';
-    } else if (outcome.reason === 'no_active_turn' || outcome.reason === 'turn_mismatch') {
+    } else if (outcome.disposition === 'queued') {
       this.composer = recordComposerHistory(this.composer, trimmed);
-      this.queuedPrompts.push(trimmed);
-      this.banner = 'The turn is finishing; your message will be sent as the next turn.';
+      this.banner = `The turn is finishing; queued as the next turn (${outcome.position} waiting).`;
     } else if (outcome.reason === 'not_steerable') {
       this.banner = 'This turn cannot be steered (review mode or a runtime-owned loop). Wait for it or press Ctrl+C.';
     }
@@ -117,7 +115,7 @@ export class ChatController {
     this.companion.transition('thinking');
     const abortController = new AbortController();
     this.activeAbortController = abortController;
-    let completed = false;
+    let completed = false; let responseMark: ResponseMark = markResponse(assistantItem);
     const startTime = Date.now();
     this.turnStartedAt = startTime;
 
@@ -126,6 +124,7 @@ export class ChatController {
         signal: abortController.signal,
       })) {
         if (event.type === 'started') {
+          responseMark = markResponse(assistantItem);
           assistantItem.awaitingModel = true;
           this.companion.transition('thinking');
         } else if (event.type === 'textDelta') {
@@ -156,13 +155,18 @@ export class ChatController {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
           assistantItem.awaitingModel = Boolean(assistantItem.toolCalls?.length) && assistantItem.toolCalls!.every(call => assistantItem.toolResults!.some(result => result.callId === call.id));
           if(assistantItem.awaitingModel)this.companion.transition('thinking');
+        } else if (event.type === 'responseDiscarded') {
+          discardResponse(assistantItem, responseMark);
+          this.banner = event.reason === 'retry' ? `Stream interrupted; retrying (${event.attempt ?? 1}). Partial output discarded.` : 'Response preempted by your new instruction.';
+        } else if (event.type === 'inputDeferred') {
+          this.banner = `${event.steerIds.length} accepted instruction(s) were not processed (${event.reason.replace('_', ' ')}); they open your next turn.`;
         } else if (event.type === 'steered') {
           // The steering message became model-visible here; later output answers it.
           assistantItem.streaming = false; assistantItem.awaitingModel = false;
           const steeredItem: TranscriptItem = { id: `user-steer-${event.steerId}`, role: 'user', content: event.content, modelId: status.selection?.modelId, accountAlias: status.activeAccount?.alias };
           assistantItem = { id: `assistant-${event.steerId}`, role: 'assistant', content: '', modelId: status.selection?.modelId, accountAlias: status.activeAccount?.alias, streaming: true, awaitingModel: true, toolCalls: [] };
           this.transcript = [...this.transcript, steeredItem, assistantItem];
-          this.scrollOffset = -1;
+          this.scrollOffset = -1; responseMark = markResponse(assistantItem);
         } else if (event.type === 'completed') {
           completed = true;
           assistantItem.usage = event.usage;
@@ -180,6 +184,8 @@ export class ChatController {
         ? 'Completed turn · token usage not reported.' : `Completed turn (${totalTok} tokens).`;
       const notes = this.host.client.projectContext()?.diagnostics.length ?? 0;
       if (notes) this.banner += ` Project context: ${notes} note(s); /context.`;
+      const pending = this.host.client.queuedInput().length;
+      if (pending) this.banner += ` ${pending} accepted instruction(s) not processed yet; they open your next turn.`;
       this.companion.transition('done');
     } catch (err) {
       this.companion.transition(abortController.signal.aborted || (err instanceof FutrynError && err.code === 'CANCELLED') ? 'cancelled' : 'error');

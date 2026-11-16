@@ -44,8 +44,8 @@ export class SqliteConversations implements ConversationStore {
     if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,this.clean(v)]));
     return value;
   }
-  beginExecution(id:string,user:Message,receipt:TurnReceipt):number {
-    try{if(user.role!=='user'||user.toolCalls||user.toolCallId)throw new FutrynError('INVALID_INPUT');return this.db.transaction(()=>{const current=this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}|null;if(!current)throw new FutrynError('STORAGE');this.journal.claim(id,receipt.requestId,current.revision+1,{...user,content:this.redact(user.content)});return this.append(id,{...user,content:this.redact(user.content)},'pending',receipt);}).immediate();}
+  beginExecution(id:string,user:Message,receipt:TurnReceipt,carried:string[]=[]):number {
+    try{if(user.role!=='user'||user.toolCalls||user.toolCallId)throw new FutrynError('INVALID_INPUT');return this.db.transaction(()=>{const current=this.db.query('SELECT revision FROM conversations WHERE id=?').get(id) as {revision:number}|null;if(!current)throw new FutrynError('STORAGE');this.journal.claim(id,receipt.requestId,current.revision+1,{...user,content:this.redact(user.content)},carried);return this.append(id,{...user,content:this.redact(user.content)},'pending',receipt);}).immediate();}
     catch(e){if(e instanceof FutrynError)throw e;throw new FutrynError('STORAGE');}
   }
   recordExecution(id:string,turnId:string,event:import('@futryn/contracts').ExecutionEventData):number{return this.journal.record(id,turnId,event);}

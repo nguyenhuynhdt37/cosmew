@@ -57,3 +57,12 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 - `SteerOutcome` (`accepted` + `turnId`/`steerId`, or `no_active_turn` / `turn_mismatch` / `not_steerable` / `empty_input`), returned by `Conversation.steer`, the optional `FutrynBackendPorts.steerTurn` and `FutrynClient.steerMessage`.
 
 `toolCallComplete` is now dispatched as soon as it arrives; results are still emitted and recorded in model-output order after the response. Adapters must emit it only for calls whose arguments are complete.
+
+## Codex-parity completion (contract 1.15)
+
+[ADR 0033](../adr/0033-codex-parity-agent-loop.md), additive:
+
+- `model.requested.protocol: 2` + journal event `model.completed(stepId)`: streamed text of a protocol-2 request is provisional until its response completed. Reconstruction drops a superseded (retried/preempted) response's text and labels text of a turn that ended mid-response `[incomplete response …]`. Legacy requests stay committed.
+- `user.accepted.carried[]`: undelivered steering of earlier turns that this turn consumed, placed before its user message. Undelivered steering of finished turns is `RecoveredConversation.pendingInput`, never history. A stale or duplicate carry is refused.
+- Model events `completed.endTurn` (only `false` from a provider signal such as Anthropic `pause_turn`), `responseDiscarded(reason: retry|preempted, attempt?)`, `inputDeferred(steerIds, reason)`.
+- SDK: `submitWhileBusy` (steer or queue for the next turn), `takeQueuedMessage`, `queuedMessages`, `queuedInput`; port `queuedInput`.
