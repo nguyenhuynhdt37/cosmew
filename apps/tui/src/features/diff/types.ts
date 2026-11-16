@@ -1,4 +1,5 @@
 export interface DiffViewState {
+  view?: 'all' | 'staged' | 'unstaged' | 'untracked';
   selectedFileIndex: number;
   scrollOffset: number;
 }

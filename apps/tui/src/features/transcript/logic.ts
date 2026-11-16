@@ -1,3 +1,4 @@
+import {graphemes, textWidth} from '../../input/text';
 import type {Message, ThemeTokens, ToolCall, ToolResult} from '@futryn/contracts';
 import type {ExplorationRow, ToolExecutionSummary, TranscriptItem, TranscriptPart} from './types';
 import type {StyledSpan} from '../../ui';
@@ -85,29 +86,30 @@ export function highlightCodeLine(
 }
 
 export function wrapTextToWidth(text: string, maxWidth: number): string[] {
-  const safeMax = Math.max(8, maxWidth);
-  const rawLines = text.split('\n');
-  const out: string[] = [];
-
-  for (const raw of rawLines) {
-    if (raw.length <= safeMax) {
-      out.push(raw);
-      continue;
-    }
+  const width = Math.max(1, maxWidth);
+  const rows: string[] = [];
+  for (const raw of text.split('\n')) {
     let remaining = raw;
-    while (remaining.length > safeMax) {
-      let splitAt = remaining.lastIndexOf(' ', safeMax);
-      if (splitAt <= Math.floor(safeMax * 0.35)) {
-        splitAt = safeMax;
+    while (textWidth(remaining) > width) {
+      let size = 0,
+        end = 0,
+        word = 0;
+      for (const {segment, index} of graphemes(remaining)) {
+        const cells = textWidth(segment);
+        if (size + cells > width) break;
+        size += cells;
+        end = index + segment.length;
+        if (segment === ' ') word = index;
       }
-      out.push(remaining.slice(0, splitAt));
-      remaining = remaining.slice(splitAt).trimStart();
+      // A two-cell glyph cannot fit a one-cell surface; preserve progress without splitting UTF-16.
+      if (!end) end = graphemes(remaining)[0]!.segment.length;
+      const split = word > end * 0.35 ? word : end;
+      rows.push(remaining.slice(0, split));
+      remaining = remaining.slice(split).trimStart();
     }
-    if (remaining.length > 0) {
-      out.push(remaining);
-    }
+    rows.push(remaining);
   }
-  return out.length > 0 ? out : [''];
+  return rows.length ? rows : [''];
 }
 
 /** Short human label for a tool call, e.g. `src/app.ts` for read or `"TODO" in src` for grep. */
@@ -161,7 +163,10 @@ function storedResult(m: Message): ToolResult {
   const match = /^\[(denied|error)(?:: ([A-Z_]+))?\] /.exec(m.content);
   const content = match ? m.content.slice(match[0].length) : m.content;
   // Commands keep their exit code in the stored text (ADR 0022), so a resumed session shows it.
-  const exit = m.toolName === 'exec_command' ? /^Exit code: (-?\d+)\nWall time: /.exec(content) : null;
+  const exit = ['exec_command', 'write_stdin'].includes(m.toolName ?? '')
+    ? /^Exit code: (-?\d+)\n/.exec(content)
+    : null;
+  const wallTime = /(?:^|\n)Wall time: ([\d.]+) s/.exec(content);
   return {
     callId: m.toolCallId!,
     name: m.toolName!,
@@ -169,6 +174,7 @@ function storedResult(m: Message): ToolResult {
     code: match?.[2],
     content,
     ...(exit ? {exitCode: Number(exit[1])} : {}),
+    ...(wallTime ? {durationMs: Math.round(Number(wallTime[1]) * 1000)} : {}),
   };
 }
 
@@ -465,6 +471,14 @@ export function commandSummary(
       preview,
       hidden,
       note: 'Session retained at last poll; hard deadline unchanged.',
+    };
+  if (!context.live && !result.sessionId && /^Running session: /.test(result.content))
+    return {
+      state: 'stopped',
+      command,
+      preview,
+      hidden,
+      note: 'Historical running session; runtime and input authority were not restored.',
     };
   if (result.status === 'error')
     return {

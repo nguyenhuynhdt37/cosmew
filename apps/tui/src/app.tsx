@@ -1,4 +1,4 @@
-import type {FutrynClient} from '@futryn/sdk';
+import {commandForShortcut, type FutrynClient} from '@futryn/sdk';
 import type {FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost} from './core/feature';
 import {ChatController, drawChatScreen} from './features/chat';
 import {CommandRouter} from './features/commands';
@@ -110,7 +110,13 @@ export class FutrynTuiApp {
       syncTranscript: () => this.chat.syncFromSession(),
       clearTranscript: () => this.chat.clear(),
       clearSelection: () => this.textSelection.clear(),
+      copyText: text => {
+        const bytes = Buffer.from(text).subarray(0, 65536);
+        this.clipboardSequence = `\x1b]52;c;${bytes.toString('base64')}\x07`;
+        this.statusBanner = 'Copied displayed diff; clipboard support depends on the terminal host.';
+      },
       runSlashCommand: raw => this.executeSlashCommand(raw),
+      submitPrompt: content => this.chat.submit(content),
       describeError: (error, providerId) => this.connectionError(error, providerId),
       features: {} as FeatureRegistry,
     };
@@ -323,11 +329,6 @@ export class FutrynTuiApp {
       return;
     }
 
-    if (this.chat.isStreaming && ['Ctrl+L', 'Ctrl+S', 'Ctrl+N'].includes(key)) {
-      this.statusBanner = 'Cancel the active response with Esc before changing model or session.';
-      return;
-    }
-
     if (this.connect.switching && key !== 'Escape' && key !== 'Ctrl+C') return;
 
     // Global shortcuts
@@ -344,24 +345,15 @@ export class FutrynTuiApp {
       this.openOverlay(this.overlay === 'palette' ? 'none' : 'palette');
       return;
     }
-    if (key === 'Ctrl+T') {
-      this.openOverlay(this.overlay === 'themes' ? 'none' : 'themes');
-      return;
-    }
-    if (key === 'Ctrl+L') {
-      this.openOverlay(this.overlay === 'models' ? 'none' : 'models');
-      return;
-    }
-    if (key === 'Ctrl+S' && this.overlay !== 'theme-editor') {
-      this.openOverlay(this.overlay === 'sessions' ? 'none' : 'sessions');
-      return;
-    }
-    if (key === 'Ctrl+N' && this.overlay === 'none') {
-      await this.executeSlashCommand('/clear');
-      return;
-    }
-    if (key === 'Ctrl+D' && this.overlay === 'none') {
-      this.openOverlay('diff');
+    const shortcut = commandForShortcut(key);
+    if (
+      shortcut &&
+      key !== 'Ctrl+C' &&
+      !(key === 'Ctrl+S' && this.overlay === 'theme-editor') &&
+      (!(key === 'Ctrl+N' || key === 'Ctrl+D') || this.overlay === 'none')
+    ) {
+      if (shortcut.overlay && this.overlay === shortcut.overlay) this.openOverlay('none');
+      else await this.executeSlashCommand(shortcut.command);
       return;
     }
     if (key === 'Ctrl+B' && this.overlay === 'none') {

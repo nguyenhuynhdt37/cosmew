@@ -96,6 +96,7 @@ export class Conversation {
     maxOutputTokens?: number,
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
+    queuedInputId?: string,
   ): AsyncIterable<ModelEvent> {
     if (this.running) throw new FutrynError('POLICY');
     let user: Message;
@@ -105,7 +106,13 @@ export class Conversation {
       throw new FutrynError('INVALID_INPUT');
     }
 
-    const turn = new TurnRun(this.host(), user, {signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort});
+    const turn = new TurnRun(this.host(), user, {
+      signal,
+      maxOutputTokens,
+      maxEstimatedCostUSD,
+      reasoningEffort,
+      queuedInputId,
+    });
     this.running = true;
     try {
       yield* turn.run();

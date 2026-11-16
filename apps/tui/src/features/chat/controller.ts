@@ -1,6 +1,7 @@
 import {PERMISSION_MODE_HINTS} from '@futryn/contracts';
 import {FutrynError, type ToolCall} from '@futryn/contracts';
-import {acceptSlashSelection} from '@futryn/sdk';
+import {acceptSlashSelection, parseSlashCommand} from '@futryn/sdk';
+import {nextGrapheme, previousGrapheme, verticalCursor} from '../../input/text';
 import type {TuiHost} from '../../core/feature';
 import {FynCompanion} from '../companion';
 import {
@@ -42,6 +43,7 @@ export class ChatController {
   readonly companion = new FynCompanion();
   private activeAbortController: AbortController | null = null;
   private turnTask: Promise<void> | null = null;
+  private sessionGeneration = 0;
 
   constructor(private readonly host: TuiHost) {}
 
@@ -50,6 +52,7 @@ export class ChatController {
   }
 
   syncFromSession(): void {
+    this.invalidateTurn();
     const active = this.host.client.activeSession();
     if (!active) {
       this.transcript = [];
@@ -63,7 +66,16 @@ export class ChatController {
     });
   }
 
+  private invalidateTurn(): void {
+    this.sessionGeneration++;
+    this.activeAbortController?.abort();
+    this.activeAbortController = null;
+    this.isStreaming = false;
+    this.turnStartedAt = null;
+  }
+
   clear(): void {
+    this.invalidateTurn();
     this.transcript = [];
   }
 
@@ -76,6 +88,7 @@ export class ChatController {
       this.steer(content);
       return;
     }
+    const generation = this.sessionGeneration;
     const task = this.runTurn(content);
     this.turnTask = task;
     try {
@@ -85,6 +98,7 @@ export class ChatController {
     }
     // Input that missed the finishing turn is queued by the SDK (Codex start_or_steer) and becomes
     // the next turn, in submission order, exactly once.
+    if (generation !== this.sessionGeneration) return;
     const next = this.host.client.takeQueuedMessage();
     if (next !== undefined && !this.isStreaming) await this.submit(next);
   }
@@ -92,7 +106,11 @@ export class ChatController {
   /** Enter while a turn runs: steer it or queue it for the next turn (ADR 0033). Shell input is never steering. */
   private steer(content: string): void {
     const trimmed = content.trim();
-    if (!trimmed || trimmed.startsWith('!')) return;
+    if (!trimmed) return;
+    if (trimmed.startsWith('!')) {
+      this.banner = 'Shell input cannot steer a running turn; your draft was kept. Wait or press Esc to cancel.';
+      return;
+    }
     let outcome: ReturnType<typeof this.host.client.submitWhileBusy>;
     // Acceptance requires a durable journal write; if that fails nothing was accepted and the draft stays.
     try {
@@ -107,6 +125,8 @@ export class ChatController {
     } else if (outcome.disposition === 'queued') {
       this.composer = recordComposerHistory(this.composer, trimmed);
       this.banner = `The turn is finishing; queued as the next turn (${outcome.position} waiting).`;
+    } else if (outcome.reason === 'queue_unavailable') {
+      this.banner = 'The turn is finishing, but this backend cannot durably queue input; your draft was kept.';
     } else if (outcome.reason === 'not_steerable') {
       this.banner = 'This turn cannot be steered (review mode or a runtime-owned loop). Wait for it or press Ctrl+C.';
     }
@@ -126,8 +146,9 @@ export class ChatController {
       this.banner = 'Shell mode needs workspace tools: approve this folder first. Nothing was run.';
       return;
     }
+    const generation = this.sessionGeneration;
     this.composer = recordComposerHistory(this.composer, input);
-    const call: ToolCall = {id: `shell-${Date.now()}`, name: 'exec_command', input: {cmd: command}};
+    const call: ToolCall = {id: `shell-${crypto.randomUUID()}`, name: 'exec_command', input: {cmd: command}};
     const item: TranscriptItem = {
       id: `assistant-${call.id}`,
       role: 'assistant',
@@ -145,7 +166,9 @@ export class ChatController {
     try {
       const result = await this.host.client.runShellCommand(command, {
         signal: abortController.signal,
+        callId: call.id,
         onOutput: chunk => {
+          if (generation !== this.sessionGeneration) return;
           item.toolOutput ??= {};
           item.toolOutput[call.id] = (
             (item.toolOutput[call.id] ?? '') +
@@ -154,17 +177,24 @@ export class ChatController {
           ).slice(-16000);
         },
       });
+      if (generation !== this.sessionGeneration) return;
       item.toolResults = [{...result, callId: call.id}];
-      this.banner =
-        result.status === 'ok'
+      this.banner = result.sessionId
+        ? `Shell command still running (session ${result.sessionId}); collect its final result with write_stdin.`
+        : result.status === 'ok'
           ? `Shell command finished${result.exitCode === undefined || result.exitCode === null ? '' : ` (exit ${result.exitCode})`}.`
           : `Shell command ${result.status}${result.code ? ` [${result.code}]` : ''}.`;
     } catch (error) {
+      if (generation !== this.sessionGeneration) return;
+      if (!this.composer.value && !abortController.signal.aborted)
+        this.composer = updateComposerValue(this.composer, input);
       item.errorText = `Error [${error instanceof FutrynError ? error.code : 'ERROR'}]: the shell command did not complete.`;
     } finally {
       item.streaming = false;
-      this.isStreaming = false;
-      if (this.activeAbortController === abortController) this.activeAbortController = null;
+      if (generation === this.sessionGeneration) {
+        this.isStreaming = false;
+        if (this.activeAbortController === abortController) this.activeAbortController = null;
+      }
     }
   }
 
@@ -176,22 +206,26 @@ export class ChatController {
       await this.runShell(trimmed);
       return;
     }
-    this.composer = recordComposerHistory(this.composer, trimmed);
     if (trimmed.startsWith('/')) {
+      const parsed = parseSlashCommand(trimmed);
+      if (!parsed.error && !parsed.definition?.unavailable && (!this.isStreaming || parsed.definition?.duringRequest))
+        this.composer = recordComposerHistory(this.composer, trimmed);
       await this.host.runSlashCommand(trimmed);
       return;
     }
+    this.composer = recordComposerHistory(this.composer, trimmed);
 
+    const generation = this.sessionGeneration;
     const status = this.host.client.status();
     const userItem: TranscriptItem = {
-      id: `user-${Date.now()}`,
+      id: `user-${crypto.randomUUID()}`,
       role: 'user',
       content: trimmed,
       modelId: status.selection?.modelId,
       accountAlias: status.activeAccount?.alias,
     };
     let assistantItem: TranscriptItem = {
-      id: `assistant-${Date.now()}`,
+      id: `assistant-${crypto.randomUUID()}`,
       role: 'assistant',
       content: '',
       modelId: status.selection?.modelId,
@@ -216,6 +250,7 @@ export class ChatController {
       for await (const event of this.host.client.sendMessage(trimmed, {
         signal: abortController.signal,
       })) {
+        if (generation !== this.sessionGeneration) return;
         if (event.type === 'started') {
           responseMark = markResponse(assistantItem);
           assistantItem.awaitingModel = true;
@@ -259,11 +294,18 @@ export class ChatController {
           if (assistantItem.awaitingModel) this.companion.transition('thinking');
         } else if (event.type === 'responseDiscarded') {
           discardResponse(assistantItem, responseMark);
+          assistantItem.notices = [...(assistantItem.notices ?? []), `Response discarded (${event.reason}).`].slice(
+            -16,
+          );
           this.banner =
             event.reason === 'retry'
               ? `Reconnecting... ${event.attempt ?? 1}/${event.maxRetries ?? '?'}` // Codex notify_stream_error
               : 'Response preempted by your new instruction.';
         } else if (event.type === 'inputDeferred') {
+          assistantItem.notices = [
+            ...(assistantItem.notices ?? []),
+            `${event.steerIds.length} accepted instruction(s) deferred (${event.reason.replaceAll('_', ' ')}).`,
+          ].slice(-16);
           this.banner = `${event.steerIds.length} accepted instruction(s) were not processed (${event.reason.replace('_', ' ')}); they open your next turn.`;
         } else if (event.type === 'steered') {
           // The steering message became model-visible here; later output answers it.
@@ -311,6 +353,10 @@ export class ChatController {
       if (pending) this.banner += ` ${pending} accepted instruction(s) not processed yet; they open your next turn.`;
       this.companion.transition('done');
     } catch (err) {
+      if (generation !== this.sessionGeneration) return;
+      // A failed send is retryable from the composer; preserve any newer draft typed while waiting.
+      if (!this.composer.value && !abortController.signal.aborted)
+        this.composer = updateComposerValue(this.composer, content);
       this.companion.transition(
         abortController.signal.aborted || (err instanceof FutrynError && err.code === 'CANCELLED')
           ? 'cancelled'
@@ -334,9 +380,11 @@ export class ChatController {
       }
     } finally {
       assistantItem.awaitingModel = false;
-      this.isStreaming = false;
-      this.turnStartedAt = null;
-      this.activeAbortController = null;
+      if (generation === this.sessionGeneration) {
+        this.isStreaming = false;
+        this.turnStartedAt = null;
+        this.activeAbortController = null;
+      }
     }
   }
 
@@ -367,7 +415,29 @@ export class ChatController {
       }
       return;
     }
-    if (key === 'Alt+Enter' || key === 'Ctrl+J') {
+    if (key.startsWith('Paste:')) {
+      const pasted = key.slice(6);
+      const next =
+        this.composer.value.slice(0, this.composer.cursor) + pasted + this.composer.value.slice(this.composer.cursor);
+      this.composer = {
+        ...updateComposerValue(this.composer, next, this.composer.cursor + pasted.length),
+        slashMenuOpen: false,
+        fileMenuOpen: false,
+      };
+      if (pasted.length >= 1_048_576) this.banner = 'Paste limited to 1 MiB of text.';
+      return;
+    }
+    if (key === 'Home' || key === 'Ctrl+A' || key === 'End' || key === 'Ctrl+E') {
+      const start =
+        this.composer.cursor === 0 ? 0 : this.composer.value.lastIndexOf('\n', this.composer.cursor - 1) + 1;
+      const at = this.composer.value.indexOf('\n', this.composer.cursor);
+      this.composer = {
+        ...this.composer,
+        cursor: key === 'Home' || key === 'Ctrl+A' ? start : at < 0 ? this.composer.value.length : at,
+      };
+      return;
+    }
+    if (key === 'Alt+Enter' || key === 'Ctrl+J' || key === 'Shift+Enter') {
       const next =
         this.composer.value.slice(0, this.composer.cursor) + '\n' + this.composer.value.slice(this.composer.cursor);
       this.composer = updateComposerValue(this.composer, next, this.composer.cursor + 1);
@@ -438,8 +508,7 @@ export class ChatController {
       if (key === 'Enter') {
         const chosen = matches[this.composer.slashSelectedIndex % Math.max(1, matches.length)];
         const toRun = acceptSlashSelection(this.composer.value, chosen);
-        this.composer = recordComposerHistory(this.composer, toRun);
-        await this.host.runSlashCommand(toRun);
+        await this.submit(toRun);
         return;
       }
     }
@@ -472,39 +541,47 @@ export class ChatController {
     }
 
     if (key === 'ArrowUp') {
-      this.composer = navigateComposerHistory(this.composer, 'up');
+      const cursor = verticalCursor(this.composer.value, this.composer.cursor, -1);
+      this.composer = cursor === null ? navigateComposerHistory(this.composer, 'up') : {...this.composer, cursor};
       return;
     }
     if (key === 'ArrowDown') {
-      this.composer = navigateComposerHistory(this.composer, 'down');
+      const cursor = verticalCursor(this.composer.value, this.composer.cursor, 1);
+      this.composer = cursor === null ? navigateComposerHistory(this.composer, 'down') : {...this.composer, cursor};
       return;
     }
     if (key === 'ArrowLeft') {
       this.composer = {
         ...this.composer,
-        cursor: Math.max(0, this.composer.cursor - 1),
+        cursor: previousGrapheme(this.composer.value, this.composer.cursor),
       };
       return;
     }
     if (key === 'ArrowRight') {
       this.composer = {
         ...this.composer,
-        cursor: Math.min(this.composer.value.length, this.composer.cursor + 1),
+        cursor: nextGrapheme(this.composer.value, this.composer.cursor),
       };
       return;
     }
     if (key === 'Backspace') {
       if (this.composer.cursor > 0) {
         const nextVal =
-          this.composer.value.slice(0, this.composer.cursor - 1) + this.composer.value.slice(this.composer.cursor);
-        this.composer = updateComposerValue(this.composer, nextVal, this.composer.cursor - 1);
+          this.composer.value.slice(0, previousGrapheme(this.composer.value, this.composer.cursor)) +
+          this.composer.value.slice(this.composer.cursor);
+        this.composer = updateComposerValue(
+          this.composer,
+          nextVal,
+          previousGrapheme(this.composer.value, this.composer.cursor),
+        );
       }
       return;
     }
     if (key === 'Delete') {
       if (this.composer.cursor < this.composer.value.length) {
         const nextVal =
-          this.composer.value.slice(0, this.composer.cursor) + this.composer.value.slice(this.composer.cursor + 1);
+          this.composer.value.slice(0, this.composer.cursor) +
+          this.composer.value.slice(nextGrapheme(this.composer.value, this.composer.cursor));
         this.composer = updateComposerValue(this.composer, nextVal, this.composer.cursor);
       }
       return;
@@ -514,10 +591,10 @@ export class ChatController {
       return;
     }
 
-    if (key.length === 1) {
+    if ([...key].length === 1 && !/[\x00-\x1f\x7f-\x9f]/.test(key)) {
       const nextVal =
         this.composer.value.slice(0, this.composer.cursor) + key + this.composer.value.slice(this.composer.cursor);
-      this.composer = updateComposerValue(this.composer, nextVal, this.composer.cursor + 1);
+      this.composer = updateComposerValue(this.composer, nextVal, this.composer.cursor + key.length);
     }
   }
 

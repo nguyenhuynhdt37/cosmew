@@ -47,7 +47,11 @@ export interface TuiHost {
   clearTranscript(): void;
   /** Drop any mouse text selection so it cannot outlive the screen it was made on. */
   clearSelection(): void;
+  /** Copy bounded, already displayed information using the existing terminal clipboard bridge. */
+  copyText(text: string): void;
   runSlashCommand(raw: string): Promise<void>;
+  /** Submit a mode workflow through the existing chat controller and independent agent loop. */
+  submitPrompt(content: string): Promise<void>;
   /** Human-readable, redacted explanation of a failure for the current context. */
   describeError(error: unknown, providerId?: string): string;
   /** Peer workflows, for the few flows that cross feature boundaries. */

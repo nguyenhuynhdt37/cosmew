@@ -1,36 +1,19 @@
+import {SLASH_COMMANDS, parseSlashCommand} from '@futryn/sdk';
 import type {EffortPlan, OverlayCommandTable} from './types';
 
-/** Commands that only open an overlay, by lowercase text (aliases included). */
-export const OVERLAY_COMMANDS: OverlayCommandTable = {
-  '/models': 'models',
-  '/model': 'models',
-  '/sessions': 'sessions',
-  '/resume': 'sessions',
-  '/continue': 'sessions',
-  '/permissions': 'permissions',
-  '/perm': 'permissions',
-  '/diff': 'diff',
-  '/settings': 'settings',
-  '/config': 'settings',
-  '/status': 'status',
-  '/help': 'help',
-  '/?': 'help',
-};
+/** Overlay aliases are a projection of the command registry, never a second definition table. */
+export const OVERLAY_COMMANDS: OverlayCommandTable = Object.fromEntries(
+  SLASH_COMMANDS.filter(command => command.overlay).flatMap(command =>
+    [command.command, ...command.aliases].map(name => [name, command.overlay!]),
+  ),
+);
 
-/** Commands whose backend does not exist yet; they explain instead of failing silently. */
-const UNSUPPORTED = ['/mcp', '/plugin', '/plugins', '/compact'];
-
-export function isUnsupported(lower: string): boolean {
-  return UNSUPPORTED.some(c => lower === c || lower.startsWith(c + ' '));
+export function isUnsupported(input: string): boolean {
+  return parseSlashCommand(input).definition?.handler === 'unavailable';
 }
 
-export function unsupportedMessage(trimmed: string, lower: string): string {
-  const detail = lower.startsWith('/mcp')
-    ? 'MCP authentication remains separate from provider authentication.'
-    : lower.startsWith('/compact')
-      ? 'Context summarization backend is unavailable; use /clear or /resume.'
-      : 'No plugin host or plugin authentication drivers are enabled.';
-  return `${trimmed.split(' ')[0]}: Not implemented in PA1/TUI1. ${detail}`;
+export function unsupportedMessage(trimmed: string, _lower: string): string {
+  return parseSlashCommand(trimmed).definition?.unavailable ?? 'Not implemented.';
 }
 
 /** Decide what `/effort [arg]` should do given the model's advertised levels. */

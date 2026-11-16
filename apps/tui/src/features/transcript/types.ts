@@ -15,6 +15,8 @@ export interface TranscriptItem {
   /** Live wait indicator, not provider reasoning or a claim that a tool has started. */
   awaitingModel?: boolean;
   errorText?: string;
+  /** Actual retry, discard and input-delivery events; never invented reasoning. */
+  notices?: string[];
   durationMs?: number;
   reasoning?: string;
   reasoningExpanded?: boolean;

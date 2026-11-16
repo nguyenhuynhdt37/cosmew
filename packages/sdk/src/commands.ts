@@ -1,4 +1,41 @@
+export type CommandOverlay =
+  | 'usage'
+  | 'context'
+  | 'effort'
+  | 'themes'
+  | 'models'
+  | 'sessions'
+  | 'permissions'
+  | 'diff'
+  | 'settings'
+  | 'status'
+  | 'help'
+  | 'connect';
+export type CommandHandler =
+  | 'overlay'
+  | 'effort'
+  | 'permissions'
+  | 'backend'
+  | 'switch'
+  | 'model'
+  | 'resume'
+  | 'fork'
+  | 'doctor'
+  | 'login'
+  | 'logout'
+  | 'accounts'
+  | 'clear'
+  | 'exit'
+  | 'mode'
+  | 'unavailable';
+
 export interface SlashCommandDef {
+  /** Dispatch key, interpreted by the UI command router; every definition has one handler. */
+  handler: CommandHandler;
+  overlay?: CommandOverlay;
+  requires?: 'model' | 'workspace' | 'independent';
+  autocomplete?: boolean;
+  help?: boolean;
   command: string;
   aliases: string[];
   title: string;
@@ -7,12 +44,16 @@ export interface SlashCommandDef {
   shortcut?: string;
   arguments?: 'optional' | 'required';
   duringRequest?: boolean;
+  /** Read-only inspection may be available while mutating arguments remain blocked. */
+  argumentsDuringRequest?: boolean;
   unavailable?: string;
 }
 
 export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/usage',
+    handler: 'overlay',
+    overlay: 'usage',
     aliases: ['/cost', '/stats'],
     title: 'Usage & Estimated Cost',
     description: 'Per-turn and session usage with coverage and pricing provenance',
@@ -21,6 +62,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/context',
+    handler: 'overlay',
+    overlay: 'context',
     aliases: [],
     title: 'Context Window',
     description: 'Model limits, output reserve, measured or estimated context',
@@ -29,6 +72,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/effort',
+    handler: 'effort',
     aliases: ['/model effort'],
     title: 'Reasoning Effort',
     description: 'Set an effort advertised by the active provider/model',
@@ -37,6 +81,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/theme',
+    handler: 'overlay',
+    overlay: 'themes',
     duringRequest: true,
     aliases: ['/themes'],
     title: 'Theme Picker',
@@ -46,6 +92,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/model',
+    handler: 'model',
+    overlay: 'models',
     arguments: 'optional',
     aliases: ['/models'],
     title: 'Select Model',
@@ -55,6 +103,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/login',
+    handler: 'login',
     arguments: 'optional',
     aliases: ['/connect'],
     title: 'Connect Provider Account',
@@ -63,6 +112,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/logout',
+    handler: 'logout',
     arguments: 'optional',
     aliases: [],
     title: 'Sign Out',
@@ -71,6 +121,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/switch',
+    handler: 'switch',
     aliases: ['/account'],
     title: 'Switch Account',
     description: 'Use another connected account; the chat continues in a new session',
@@ -79,6 +130,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/doctor',
+    handler: 'doctor',
     aliases: [],
     title: 'Diagnose Connection',
     description: 'Validate active provider connectivity and runtime configuration',
@@ -86,7 +138,9 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/mcp',
-    unavailable: 'Not implemented: MCP integration.',
+    handler: 'unavailable',
+    autocomplete: false,
+    unavailable: 'Not implemented: MCP integration. MCP authentication remains separate from provider authentication.',
     aliases: [],
     title: 'MCP Management',
     description: 'Not implemented in PA1/TUI1; MCP authentication is separate',
@@ -94,6 +148,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/plugin',
+    handler: 'unavailable',
+    autocomplete: false,
     unavailable: 'Not implemented: plugin host.',
     aliases: ['/plugins'],
     title: 'Plugin Management',
@@ -102,14 +158,19 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/compact',
-    unavailable: 'Not implemented: context compaction backend. Use /clear or /resume.',
+    handler: 'unavailable',
+    autocomplete: false,
+    unavailable:
+      'Not implemented: manual compaction. Automatic extractive compaction exists, but no safe manual checkpoint action is exposed by the session backend.',
     aliases: [],
     title: 'Compact Context',
-    description: 'Not implemented: summarization and provenance backend unavailable',
+    description: 'Unavailable: automatic compaction exists; manual checkpoint action is not exposed',
     category: 'Sessions',
   },
   {
     command: '/resume',
+    handler: 'resume',
+    overlay: 'sessions',
     arguments: 'optional',
     aliases: ['/sessions', '/continue'],
     title: 'Session Picker',
@@ -118,7 +179,19 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     shortcut: 'Ctrl+S',
   },
   {
+    command: '/fork',
+    handler: 'fork',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Fork Session',
+    description: 'Copy committed conversation history into a new session without replaying tools',
+    category: 'Sessions',
+  },
+  {
     command: '/permissions',
+    duringRequest: true,
+    handler: 'permissions',
+    overlay: 'permissions',
     arguments: 'optional',
     aliases: ['/perm'],
     title: 'Permissions',
@@ -128,6 +201,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/backend',
+    duringRequest: true,
+    handler: 'backend',
     arguments: 'optional',
     aliases: ['/delegate'],
     title: 'Execution Backend',
@@ -137,6 +212,10 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/diff',
+    duringRequest: true,
+    handler: 'overlay',
+    overlay: 'diff',
+    requires: 'workspace',
     aliases: [],
     title: 'Workspace Diff Viewer',
     description: 'Inspect git working tree changes with syntax-colored unified diff hunks',
@@ -145,13 +224,17 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/config',
+    handler: 'overlay',
+    overlay: 'settings',
     aliases: ['/settings'],
-    title: 'Appearance & TUI Settings',
-    description: 'Configure Auto/Dark/Light appearance, motion, and sidebar',
+    title: 'Configuration',
+    description: 'Inspect effective coding-agent configuration and edit supported settings',
     category: 'Appearance',
   },
   {
     command: '/status',
+    handler: 'overlay',
+    overlay: 'status',
     duringRequest: true,
     aliases: [],
     title: 'System & Provider Status',
@@ -159,7 +242,37 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     category: 'Navigation',
   },
   {
+    command: '/plan',
+    handler: 'mode',
+    requires: 'independent',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Plan Mode',
+    description: 'Plan with read-only tools; optional request starts a planning turn',
+    category: 'Workspace & Security',
+  },
+  {
+    command: '/review',
+    handler: 'mode',
+    requires: 'independent',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Review Changes',
+    description: 'Review actual workspace changes without modifying files',
+    category: 'Workspace & Security',
+  },
+  {
+    command: '/chat',
+    handler: 'mode',
+    aliases: ['/implement'],
+    title: 'Chat / Implementation Mode',
+    description: 'Return to chat; modifications still require the current permission policy',
+    category: 'Workspace & Security',
+  },
+  {
     command: '/clear',
+    handler: 'clear',
+    shortcut: 'Ctrl+N',
     aliases: ['/new', '/reset'],
     title: 'Clear Conversation',
     description: 'Start a fresh conversation; previous sessions remain available via /resume',
@@ -167,6 +280,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/help',
+    handler: 'overlay',
+    overlay: 'help',
     duringRequest: true,
     aliases: ['/?'],
     title: 'Keyboard & Command Help',
@@ -175,6 +290,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/exit',
+    handler: 'exit',
     aliases: ['/quit'],
     title: 'Exit FUTRYN',
     description: 'Restore terminal state cleanly and exit the TUI',
@@ -188,6 +304,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
 const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/theme set',
+    handler: 'unavailable',
     aliases: ['/themes set'],
     title: 'Legacy Theme Command',
     description: 'Use /theme',
@@ -197,6 +314,7 @@ const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/theme edit',
+    handler: 'unavailable',
     aliases: ['/editor', '/customize'],
     title: 'Theme Editor',
     description: 'Custom theme editing is unavailable',
@@ -205,6 +323,7 @@ const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/accounts',
+    handler: 'accounts',
     arguments: 'optional',
     aliases: [],
     title: 'Manage Accounts',
@@ -253,4 +372,9 @@ export function acceptSlashSelection(input: string, chosen?: SlashCommandDef): s
   if (!chosen) return raw;
   const prefix = [chosen.command, ...chosen.aliases].some(name => name.toLowerCase().startsWith(raw.toLowerCase()));
   return prefix || (!/\s/.test(raw) && !parseSlashCommand(raw).definition) ? chosen.command : raw;
+}
+
+/** Canonical shortcut lookup used by the application, with no second command table. */
+export function commandForShortcut(key: string): SlashCommandDef | undefined {
+  return SLASH_COMMANDS.find(command => command.shortcut === key);
 }

@@ -59,11 +59,13 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
     } catch {
       // Ignore cleanup error
     }
-    stdout.write('\x1b[0m\x1b[?7h\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1007l\x1b[?1004l\x1b[?25h\x1b[?1049l');
+    stdout.write(
+      '\x1b[0m\x1b[?7h\x1b[?2004l\x1b[?1006l\x1b[?1002l\x1b[?1000l\x1b[?1007l\x1b[?1004l\x1b[?25h\x1b[?1049l',
+    );
   };
 
   stdout.write(
-    '\x1b[?1049h\x1b[?7l\x1b[?25l\x1b[?1004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1007h\x1b[2J\x1b[3J\x1b[H',
+    '\x1b[?1049h\x1b[?7l\x1b[?2004h\x1b[?25l\x1b[?1004h\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?1007h\x1b[2J\x1b[3J\x1b[H',
   );
   if (typeof stdin.setRawMode === 'function') {
     stdin.setRawMode(true);

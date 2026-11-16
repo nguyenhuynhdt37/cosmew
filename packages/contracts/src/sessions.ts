@@ -36,12 +36,20 @@ export const workspaceDiffFileSchema = z.strictObject({
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),
   lines: z.array(diffLineSchema).max(5000),
+  layer: z.enum(['staged', 'unstaged', 'untracked']).optional(),
+  oldPath: z.string().optional(),
+  binary: z.boolean().optional(),
+  truncated: z.boolean().optional(),
 });
 export type WorkspaceDiffFile = z.infer<typeof workspaceDiffFileSchema>;
 
 export interface WorkspaceDiffReport {
   workspace: string;
   gitAvailable: boolean;
+  branch?: string;
+  state?: 'ready' | 'not-repository' | 'git-unavailable' | 'denied' | 'error';
+  message?: string;
+  truncated?: boolean;
   files: WorkspaceDiffFile[];
   totalAdditions: number;
   totalDeletions: number;
@@ -59,7 +67,16 @@ export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
   /** `carried` lists undelivered steering (by steerId) that this turn consumes as input before `user`. */
-  beginExecution?(id: string, user: Message, receipt: import('./telemetry').TurnReceipt, carried?: string[]): number;
+  beginExecution?(
+    id: string,
+    user: Message,
+    receipt: import('./telemetry').TurnReceipt,
+    carried?: string[],
+    queuedInputId?: string,
+  ): number;
+  /** User input accepted after the active turn stopped accepting steering. Never grants execution authority. */
+  enqueueNextTurn?(id: string, content: string): {id: string; content: string};
+  listNextTurn?(id: string): readonly {id: string; content: string}[];
   recordExecution?(id: string, turnId: string, event: import('./recovery').ExecutionEventData): number;
   recover?(id: string): import('./recovery').RecoveredConversation;
   saveTask?(id: string, task: import('./recovery').ActiveTaskCheckpoint): void;

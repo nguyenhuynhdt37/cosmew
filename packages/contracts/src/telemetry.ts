@@ -56,6 +56,7 @@ export const turnStopReasonSchema = z.enum([
 ]);
 export type TurnStopReason = z.infer<typeof turnStopReasonSchema>;
 export const turnReceiptSchema = z.strictObject({
+  kind: z.enum(['agent', 'user-shell']).optional(),
   requestId: z.string().uuid(),
   accountId: z.string().uuid(),
   modelId: z.string().min(1).max(300),

@@ -5,6 +5,21 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
   let i = 0;
 
   while (i < str.length) {
+    if (str.startsWith('\x1b[200~', i)) {
+      const end = str.indexOf('\x1b[201~', i + 6);
+      if (end < 0) break;
+      keys.push(`Paste:${sanitizePaste(str.slice(i + 6, end))}`);
+      i = end + 6;
+      continue;
+    }
+    const special = /^(?:\x1b\[(?:H|1~)|\x1bOH)/.exec(str.slice(i));
+    const endKey = /^(?:\x1b\[(?:F|4~)|\x1bOF)/.exec(str.slice(i));
+    const newline = /^(?:\x1b\[13;2u|\x1b\[27;2;13~)/.exec(str.slice(i));
+    if (special || endKey || newline) {
+      keys.push(special ? 'Home' : endKey ? 'End' : 'Shift+Enter');
+      i += (special ?? endKey ?? newline)![0].length;
+      continue;
+    }
     if (str.startsWith('\x1b[200~', i) || str.startsWith('\x1b[201~', i)) {
       i += 6;
       continue;
@@ -96,7 +111,7 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       i += 4;
       continue;
     }
-    const ch = str[i]!;
+    const ch = String.fromCodePoint(str.codePointAt(i)!);
     const code = ch.charCodeAt(0);
     if (ch === '\x1b') {
       keys.push('Escape');
@@ -169,7 +184,7 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       i++;
     } else if (code >= 32) {
       keys.push(ch);
-      i++;
+      i += ch.length;
     } else {
       i++;
     }
@@ -177,13 +192,28 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
   return keys;
 }
 
-/** Preserve split CSI/mouse sequences and UTF-8 characters across PTY chunks. */
+/** Strip terminal controls from pasted data, keeping only literal newlines and spaces. */
+export function sanitizePaste(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\t/g, '  ')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
+}
+
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+export const MAX_PASTE_LENGTH = 1_048_576;
+
+/** Preserve split sequences/UTF-8 and keep bracketed paste out of the shortcut parser. */
 export class TerminalInputDecoder {
   private pending = '';
+  private paste: string | null = null;
   private readonly decoder = new TextDecoder();
   private discardCSI = false;
   get waiting(): boolean {
-    return !!this.pending;
+    return this.paste === null && !!this.pending;
   }
   feed(chunk: Uint8Array | string): string[] {
     let text = typeof chunk === 'string' ? chunk : this.decoder.decode(chunk, {stream: true});
@@ -194,19 +224,50 @@ export class TerminalInputDecoder {
       this.discardCSI = false;
     }
     this.pending += text;
-    const at = this.pending.lastIndexOf('\x1b');
-    const tail = at >= 0 ? this.pending.slice(at) : '';
-    if (tail === '\x1b' || /^\x1b\[[0-?]*$/.test(tail)) {
-      const ready = this.pending.slice(0, at);
-      this.pending = tail.length <= 128 ? tail : '';
-      if (tail.length > 128) this.discardCSI = true;
-      return parseRawTerminalKey(ready);
+    const keys: string[] = [];
+    while (this.pending) {
+      if (this.paste !== null) {
+        const end = this.pending.indexOf(PASTE_END);
+        if (end >= 0) {
+          this.paste += this.pending.slice(0, end).slice(0, Math.max(0, MAX_PASTE_LENGTH - this.paste.length));
+          keys.push(`Paste:${sanitizePaste(this.paste)}`);
+          this.paste = null;
+          this.pending = this.pending.slice(end + PASTE_END.length);
+          continue;
+        }
+        // Keep a possible split closing marker, while bounding the retained payload.
+        let suffix = Math.min(PASTE_END.length - 1, this.pending.length);
+        while (suffix && !PASTE_END.startsWith(this.pending.slice(-suffix))) suffix--;
+        const consumed = this.pending.length - suffix;
+        this.paste += this.pending.slice(0, consumed).slice(0, Math.max(0, MAX_PASTE_LENGTH - this.paste.length));
+        this.pending = this.pending.slice(consumed);
+        break;
+      }
+      const begin = this.pending.indexOf(PASTE_START);
+      if (begin >= 0) {
+        keys.push(...parseRawTerminalKey(this.pending.slice(0, begin)));
+        this.pending = this.pending.slice(begin + PASTE_START.length);
+        this.paste = '';
+        continue;
+      }
+      const at = this.pending.lastIndexOf('\x1b');
+      const tail = at >= 0 ? this.pending.slice(at) : '';
+      if (tail === '\x1b' || /^\x1b\[[0-?]*$/.test(tail)) {
+        keys.push(...parseRawTerminalKey(this.pending.slice(0, at)));
+        this.pending = tail.length <= 128 ? tail : '';
+        if (tail.length > 128) this.discardCSI = true;
+        break;
+      }
+      keys.push(...parseRawTerminalKey(this.pending));
+      this.pending = '';
     }
-    const ready = this.pending;
-    this.pending = '';
-    return parseRawTerminalKey(ready);
+    return keys;
   }
   flush(): string[] {
+    // A timer is only for standalone Esc/CSI, never for an unfinished paste.
+    if (this.paste !== null) return [];
+    // A delayed paste marker must not expire and expose its payload as shortcuts.
+    if (this.pending.length > 1 && PASTE_START.startsWith(this.pending)) return [];
     const escape = this.pending === '\x1b';
     if (this.pending.startsWith('\x1b[')) this.discardCSI = true;
     this.pending = '';

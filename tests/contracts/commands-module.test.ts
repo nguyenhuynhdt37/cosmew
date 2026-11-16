@@ -25,3 +25,23 @@ test('effort planning handles models without levels, unknown levels, auto and st
   expect(planEffort('status', ['low'])).toEqual({kind: 'apply', level: null, available: ['low']});
   expect(planEffort('high', ['low', 'high'])).toEqual({kind: 'apply', level: 'high', available: ['low', 'high']});
 });
+
+test('one registry supplies handlers, overlay aliases and non-conflicting command shortcuts', async () => {
+  const {SLASH_COMMANDS, parseSlashCommand} = await import('@futryn/sdk');
+  const shortcuts = new Set<string>();
+  for (const entry of SLASH_COMMANDS) {
+    expect(entry.handler).toBeDefined();
+    for (const name of [entry.command, ...entry.aliases]) {
+      const parsed = parseSlashCommand(name);
+      expect(parsed.definition).toBe(entry);
+      if (entry.overlay) expect(OVERLAY_COMMANDS[name]).toBe(entry.overlay);
+    }
+    if (entry.shortcut) {
+      expect(shortcuts.has(entry.shortcut)).toBe(false);
+      shortcuts.add(entry.shortcut);
+    }
+  }
+  expect(parseSlashCommand('/plan fix Unicode').args).toBe('fix Unicode');
+  expect(parseSlashCommand('/review').definition?.handler).toBe('mode');
+  expect(parseSlashCommand('/chat').definition?.handler).toBe('mode');
+});

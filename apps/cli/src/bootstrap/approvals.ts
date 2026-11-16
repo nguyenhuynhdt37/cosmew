@@ -14,7 +14,7 @@ type PermissionInput = Parameters<FutrynClient['requestPermission']>[0];
 const APPROVAL_REASONS: Record<string, string> = {
   'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
   'process-execute':
-    'Runs a shell command in the Futryn sandbox: project files only, .git read-only, secrets hidden, no network.',
+    'Runs a shell command in the Futryn sandbox: workspace policy enforced, .git read-only, configured secret-file policy, no network.',
   'network-escalation':
     'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
   'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',

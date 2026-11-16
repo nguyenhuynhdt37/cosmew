@@ -4,6 +4,7 @@ import {mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, readFileSy
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {NativeCommandRuntime} from '@futryn/tools';
+import {FutrynTuiApp} from '@futryn/tui';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
@@ -111,6 +112,15 @@ nativeTest(
             : 'NOT VERIFIED',
       };
     });
+    const git = (...args: string[]) => {
+      const result = Bun.spawnSync(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args], {
+        cwd: c.root,
+      });
+      expect(result.exitCode).toBe(0);
+    };
+    git('init', '-q');
+    git('add', '.');
+    git('commit', '-qm', 'base');
     const {events, approvals} = await sendApproved(c);
     const results = events.filter(e => e.type === 'toolResult').map(e => e.result);
     expect(results.map(r => r.exitCode)).toEqual([0, 1, 0, 0]);
@@ -127,6 +137,62 @@ nativeTest(
     const stored = c.app.conversations.recover(c.client.activeSession()!.id);
     expect(stored.turns.at(-1)!.state).toBe('completed');
     expect(stored.messages.filter(m => m.toolName === 'exec_command')).toHaveLength(4);
+    const tui = new FutrynTuiApp({client: c.client, cols: 100, rows: 30});
+    await tui.initialize();
+    try {
+      const report = await c.client.refreshWorkspaceDiff();
+      expect(
+        report.files.find(file => file.path === 'src/math.ts')?.lines.some(line => line.content.includes('a + b')),
+      ).toBe(true);
+      await tui.submitPrompt('/diff');
+      expect(tui.getActiveOverlay()).toBe('diff');
+      expect(tui.computeFrameSnapshot().plainText).toContain('src/math');
+      await tui.handleKey('Escape');
+      c.server.set({
+        script: view => {
+          expect(view.system).toContain('Current session mode: REVIEW');
+          expect(view.tools).not.toContain('exec_command');
+          return view.results.at(-1)?.name === 'read'
+            ? {
+                text: 'No actionable findings in src/math.ts:1. Addition is correct; the test passes. Review is limited to fixture evidence.',
+              }
+            : {calls: [{name: 'read', input: {path: 'src/math.ts'}}]};
+        },
+      });
+      await tui.submitPrompt('/review');
+      expect(c.client.mode()).toBe('review');
+      expect(tui.getTranscript().at(-1)?.content).toContain('No actionable findings');
+      expect(readFileSync(join(c.root, 'src/math.ts'), 'utf8')).toContain('a + b');
+      const sessionId = c.client.activeSession()!.id;
+      await tui.submitPrompt('/chat');
+      expect(c.client.activeSession()!.id).toBe(sessionId);
+      c.client.setDefaultTurnBudget({maxToolCalls: 16});
+      for (const [cols, rows] of [
+        [80, 24],
+        [100, 30],
+        [120, 40],
+        [160, 48],
+        [30, 10],
+      ]) {
+        tui.resize(cols!, rows!);
+        expect(tui.computeFrameSnapshot().plainLines).toHaveLength(rows!);
+      }
+      const restarted = startup(c.home, {vault: memoryVault()});
+      try {
+        const resumed = restarted.createFutrynClient(c.root);
+        resumed.resumeSession(sessionId);
+        expect(resumed.turnBudget()).toEqual({maxToolCalls: 16});
+        expect(resumed.activeSession()!.messages.filter(message => message.toolName === 'exec_command')).toHaveLength(
+          4,
+        );
+        expect(resumed.activeSession()!.messages.at(-1)?.content).toContain('No actionable findings');
+      } finally {
+        await restarted.shutdownCommands();
+        restarted.db.close();
+      }
+    } finally {
+      await tui.shutdown();
+    }
   },
   120000,
 );

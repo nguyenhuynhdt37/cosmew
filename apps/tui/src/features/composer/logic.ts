@@ -19,10 +19,11 @@ export function getMatchingSlashCommands(input: string): SlashCommandDef[] {
             : 4;
   return SLASH_COMMANDS.filter(
     item =>
-      item.command.toLowerCase().startsWith(q) ||
-      item.aliases.some(a => a.toLowerCase().startsWith(q)) ||
-      item.title.toLowerCase().includes(q.slice(1)) ||
-      item.command.toLowerCase().includes(q),
+      item.autocomplete !== false &&
+      (item.command.toLowerCase().startsWith(q) ||
+        item.aliases.some(a => a.toLowerCase().startsWith(q)) ||
+        item.title.toLowerCase().includes(q.slice(1)) ||
+        item.command.toLowerCase().includes(q)),
   ).sort((a, b) => ranked(a) - ranked(b));
 }
 

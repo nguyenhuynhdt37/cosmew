@@ -15,10 +15,10 @@ export function renderHelpOverlay(options: {
 
   modal.top(' KEYBOARD SHORTCUTS & SLASH COMMANDS (/help) ', ' Esc Close ');
   row(' Global Keyboard Navigation:', tokens.markdownHeading, true);
-  row('   Ctrl+P       Open Command Palette           Ctrl+T       Open /theme Picker');
-  row('   Ctrl+L       Open /model Picker            Ctrl+S       Open /resume Picker');
-  row('   Ctrl+N       Start New Session              Ctrl+D       Open /diff Viewer');
-  row('   Ctrl+B       Toggle Sidebar                 Shift+Tab    View mode only; tool modes unavailable');
+  row('   Ctrl+P       Open Command Palette           Ctrl+B       Toggle Sidebar');
+  for (const command of SLASH_COMMANDS.filter(command => command.shortcut && command.command !== '/exit'))
+    row(`   ${command.shortcut!.padEnd(13)} ${command.command.padEnd(14)} ${command.title}`);
+  row('   Shift+Tab    Cycle permission mode; explicit deny rules still win');
   row('   /            Slash Command Autocomplete     @            Workspace File Autocomplete');
   row('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
   row('   !            Sandboxed shell command         Alt+Enter    Newline (also Ctrl+J)');
@@ -26,8 +26,11 @@ export function renderHelpOverlay(options: {
   row('   Ctrl+R       Toggle reasoning summary        /model: Ctrl+E cycles active model effort');
   row('');
   row(' Slash Commands:', tokens.markdownHeading, true);
-  for (const cmd of SLASH_COMMANDS) {
-    row(`   ${cmd.command.padEnd(14, ' ')} ${cmd.title.padEnd(26, ' ')} ${cmd.description}`, tokens.foregroundMuted);
+  for (const cmd of SLASH_COMMANDS.filter(command => command.help !== false)) {
+    row(
+      `   ${cmd.command.padEnd(14, ' ')} ${cmd.title.padEnd(26, ' ')} ${cmd.unavailable ?? cmd.description}`,
+      tokens.foregroundMuted,
+    );
   }
   modal.fill().bottom(' ↑/↓ or PgUp/PgDown Scroll · Esc Close ');
 

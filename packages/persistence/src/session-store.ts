@@ -63,7 +63,38 @@ export class SqliteConversations implements ConversationStore {
       return Object.fromEntries(Object.entries(value).map(([key, v]) => [key, this.clean(v)]));
     return value;
   }
-  beginExecution(id: string, user: Message, receipt: TurnReceipt, carried: string[] = []): number {
+  /** A durable inbox, consumed only by beginExecution's user-acceptance transaction. */
+  enqueueNextTurn(id: string, content: string): {id: string; content: string} {
+    try {
+      const message = messageSchema.parse({role: 'user', content: this.redact(content.trim())});
+      if (!message.content.trim()) throw new FutrynError('INVALID_INPUT');
+      const input = {id: crypto.randomUUID(), content: message.content};
+      this.db
+        .query('INSERT INTO next_turn_input(conversation,id,content) VALUES(?,?,?)')
+        .run(id, input.id, input.content);
+      return input;
+    } catch (error) {
+      if (error instanceof FutrynError) throw error;
+      throw new FutrynError('STORAGE');
+    }
+  }
+  listNextTurn(id: string): readonly {id: string; content: string}[] {
+    try {
+      return this.db.query('SELECT id,content FROM next_turn_input WHERE conversation=? ORDER BY position').all(id) as {
+        id: string;
+        content: string;
+      }[];
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  beginExecution(
+    id: string,
+    user: Message,
+    receipt: TurnReceipt,
+    carried: string[] = [],
+    queuedInputId?: string,
+  ): number {
     try {
       if (user.role !== 'user' || user.toolCalls || user.toolCallId) throw new FutrynError('INVALID_INPUT');
       return this.db
@@ -72,6 +103,12 @@ export class SqliteConversations implements ConversationStore {
             revision: number;
           } | null;
           if (!current) throw new FutrynError('STORAGE');
+          if (queuedInputId) {
+            // Validate session, FIFO ordering and exact redacted content before acknowledging anything.
+            const pending = this.listNextTurn(id)[0];
+            if (!pending || pending.id !== queuedInputId || pending.content !== this.redact(user.content))
+              throw new FutrynError('POLICY');
+          }
           this.journal.claim(
             id,
             receipt.requestId,
@@ -79,7 +116,10 @@ export class SqliteConversations implements ConversationStore {
             {...user, content: this.redact(user.content)},
             carried,
           );
-          return this.append(id, {...user, content: this.redact(user.content)}, 'pending', receipt);
+          const revision = this.append(id, {...user, content: this.redact(user.content)}, 'pending', receipt);
+          if (queuedInputId)
+            this.db.query('DELETE FROM next_turn_input WHERE conversation=? AND id=?').run(id, queuedInputId);
+          return revision;
         })
         .immediate();
     } catch (e) {
@@ -308,6 +348,7 @@ export class SqliteConversations implements ConversationStore {
               .get(id)
           )
             throw new FutrynError('POLICY');
+          this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
           this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);

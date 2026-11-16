@@ -13,12 +13,20 @@ export function renderDiffViewerOverlay(options: {
 }): RenderedBoxLine[] {
   const {width, height, report, state, tokens, borderStyle} = options;
   const modal = new Modal({width, height, tokens, borderStyle, minInner: 1});
-  modal.top(' /diff ', ` ${report.files.length} files +${report.totalAdditions} -${report.totalDeletions} `);
+  modal.top(
+    ` /diff · ${state.view ?? 'all'}${report.truncated ? ' · bounded' : ''} `,
+    ` ${report.files.length} files +${report.totalAdditions} -${report.totalDeletions} `,
+  );
   const rows = Math.max(0, height - 2);
   if (!report.files.length) {
-    modal.text(report.gitAvailable ? ' Clean working tree' : ' Workspace diff unavailable', {
-      fg: report.gitAvailable ? tokens.success : tokens.foregroundMuted,
-    });
+    modal.text(
+      report.gitAvailable
+        ? ' No changes in this view'
+        : ` ${report.message ?? (report.state === 'not-repository' ? 'Not a Git repository' : report.state === 'denied' ? 'Permission required' : report.state === 'git-unavailable' ? 'Git is unavailable' : 'Workspace diff unavailable')}`,
+      {
+        fg: report.gitAvailable ? tokens.success : tokens.foregroundMuted,
+      },
+    );
     modal.fill();
   } else {
     const selected = clampIndex(state.selectedFileIndex, report.files.length),
@@ -30,7 +38,9 @@ export function renderDiffViewerOverlay(options: {
       codeRows.push({
         spans: [
           {
-            text: ` (${active.status}) Binary or empty diff`.slice(0, codeWidth).padEnd(codeWidth),
+            text: ` (${active.status}${active.binary ? ' · binary' : ''}) Empty or binary diff`
+              .slice(0, codeWidth)
+              .padEnd(codeWidth),
             fg: tokens.foregroundMuted,
             bg: modal.bg,
           },
@@ -56,7 +66,9 @@ export function renderDiffViewerOverlay(options: {
       }
       if (row === 0)
         spans.push({
-          text: ` ${active.path}  +${active.additions} -${active.deletions}`.slice(0, codeWidth).padEnd(codeWidth),
+          text: ` ${active.path} · ${active.layer ?? active.status}${active.oldPath ? ` ← ${active.oldPath}` : ''}${active.truncated ? ' · bounded' : ''}  +${active.additions} -${active.deletions}`
+            .slice(0, codeWidth)
+            .padEnd(codeWidth),
           fg: tokens.foreground,
           bg: tokens.backgroundElevated,
           bold: true,
@@ -70,5 +82,7 @@ export function renderDiffViewerOverlay(options: {
       modal.spans(spans);
     }
   }
-  return modal.bottom(' ←/→ File · ↑/↓ Line · PgUp/PgDn Page · Esc Close ').lines;
+  return modal.bottom(
+    ' ←/→ File · ↑/↓ Scroll · A All · S Staged · U Unstaged · N New · R Refresh · C Copy · Esc Close ',
+  ).lines;
 }

@@ -169,3 +169,56 @@ test('write approval uses colored proposed code and keeps denial selected', asyn
   const colors = new Set(rendered.flatMap(line => line.spans.map(span => span.bg)));
   expect(colors.size).toBeGreaterThan(2);
 });
+
+test('diff keeps one snapshot per refresh, filters layers and copies actual selected file data', async () => {
+  const {DiffFeature} = await import('../../apps/tui/src/features/diff/controller');
+  let reads = 0,
+    refreshes = 0,
+    copied = '';
+  const files = ['staged', 'unstaged', 'untracked'].map(layer => ({
+    path: `${layer}.ts`,
+    layer,
+    status: 'modified',
+    additions: 1,
+    deletions: 1,
+    lines: parseUnifiedDiff(diff),
+  }));
+  const report = {workspace: '/fixture', gitAvailable: true, files, totalAdditions: 3, totalDeletions: 3};
+  const host = {
+    cols: 120,
+    rows: 30,
+    client: {
+      getWorkspaceDiff: () => {
+        reads++;
+        return report;
+      },
+      refreshWorkspaceDiff: async () => {
+        refreshes++;
+        return report;
+      },
+    },
+    copyText: (text: string) => {
+      copied = text;
+    },
+    closeOverlay: () => {},
+    setBanner: () => {},
+  };
+  const feature = new DiffFeature(host as unknown as import('../../apps/tui/src/core/feature').TuiHost);
+  feature.open();
+  await Promise.resolve();
+  const render = () =>
+    plain(feature.render('diff', {width: 110, height: 18}, {tokens, borderStyle: 'rounded', effectiveMode: 'light'}));
+  render();
+  render();
+  expect(refreshes).toBe(1);
+  expect(reads).toBe(2);
+  feature.handleKey('diff', 's');
+  expect(render()).toContain('staged.ts');
+  expect(render()).not.toContain('unstaged.ts');
+  feature.handleKey('diff', 'c');
+  expect(copied).toContain('staged.ts');
+  expect(copied).toContain('+new();');
+  feature.handleKey('diff', 'r');
+  await Promise.resolve();
+  expect(refreshes).toBe(2);
+});

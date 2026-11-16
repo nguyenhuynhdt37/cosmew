@@ -1389,3 +1389,41 @@ test('closing the turn stream surfaces a failure to close the model stream and r
   await expect(iterator.return!()).rejects.toMatchObject({code: 'POLICY'});
   expect(h.receipt().outcome).toBe('failed');
 });
+
+test('finishing-turn input remains with its original session across clear, resume and client restart', async () => {
+  const {app, client, server, root} = await realClient();
+  server.set({script: () => ({text: 'answered'})});
+  let fired = false;
+  const stop = client.onReactiveEvent(event => {
+    if (event.kind !== 'done' || fired) return;
+    fired = true;
+    expect(client.submitWhileBusy('QUEUE-1 original session')).toMatchObject({disposition: 'queued'});
+    expect(client.submitWhileBusy('QUEUE-2 keep in order')).toMatchObject({disposition: 'queued'});
+  });
+  for await (const _event of client.sendMessage('initial question')) {
+    /* drain */
+  }
+  stop();
+  const original = client.activeSession()!.id;
+  client.clearSessionView();
+  expect(client.queuedMessages()).toEqual([]);
+  expect(client.takeQueuedMessage()).toBeUndefined();
+  const fresh = client.createSession().id;
+  expect(client.takeQueuedMessage()).toBeUndefined();
+  client.resumeSession(original);
+  expect(client.queuedMessages()).toEqual(['QUEUE-1 original session', 'QUEUE-2 keep in order']);
+  expect(client.takeQueuedMessage()).toBe('QUEUE-1 original session');
+  // Taking reserves, without deleting data. A crash before send must retain the input.
+  const restarted = app.createFutrynClient(root);
+  restarted.resumeSession(original);
+  expect(restarted.takeQueuedMessage()).toBe('QUEUE-1 original session');
+  for await (const _event of restarted.sendMessage('QUEUE-1 original session')) {
+    /* drain */
+  }
+  expect(restarted.queuedMessages()).toEqual(['QUEUE-2 keep in order']);
+  const third = app.createFutrynClient(root);
+  third.resumeSession(original);
+  expect(third.queuedMessages()).toEqual(['QUEUE-2 keep in order']);
+  third.resumeSession(fresh);
+  expect(third.takeQueuedMessage()).toBeUndefined();
+});

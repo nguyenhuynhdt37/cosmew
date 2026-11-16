@@ -16,6 +16,8 @@ export class ReportsFeature implements OverlayFeature {
   open(overlay: ReportKind): void {
     this.state = {offset: 0, details: false};
     if (overlay === 'usage') this.refreshLimits();
+    if (overlay === 'status' && this.host.client.toolsEnabled())
+      void this.host.client.refreshWorkspaceDiff().catch(() => {});
   }
 
   close(): void {

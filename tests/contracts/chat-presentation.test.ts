@@ -133,3 +133,26 @@ test('composer prioritizes interruption and preserves account identity when mode
     .join('');
   expect(busy).toContain('Esc interrupt');
 });
+
+test('expanded terminal output wraps long Unicode lines without losing the suffix', () => {
+  const item = {
+    id: 'wrap',
+    role: 'assistant' as const,
+    content: '',
+    toolCalls: [{id: 'cmd', name: 'exec_command', input: {cmd: 'print unicode'}}],
+    toolResults: [
+      {
+        callId: 'cmd',
+        name: 'exec_command',
+        status: 'ok' as const,
+        exitCode: 0,
+        content: `Exit code: 0\nWall time: 1.00 s\nOutput:\n${'界🙂'.repeat(35)}SUFFIX`,
+      },
+    ],
+    expandedActivities: ['tools:cmd'],
+  };
+  const rows = renderTranscriptMessages({items: [item], width: 40, tokens, borderStyle: 'rounded'});
+  const shown = rows.map(row => row.spans.map(span => span.text).join('')).join('\n');
+  expect(shown).toContain('SUFFIX');
+  expect(rows.every(row => row.spans.reduce((sum, span) => sum + Bun.stringWidth(span.text), 0) <= 40)).toBe(true);
+});

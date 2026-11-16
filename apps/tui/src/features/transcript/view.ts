@@ -246,6 +246,15 @@ export function renderTranscriptMessages(options: {
         ],
       });
     }
+    for (const notice of item.notices ?? []) {
+      for (const text of wrapTextToWidth(notice, Math.max(8, innerWidth - 5)))
+        lines.push({
+          spans: [
+            {text: '  ⎿  ', fg: tokens.foregroundSubtle, bg},
+            {text, fg: tokens.foregroundMuted, bg, italic: true},
+          ],
+        });
+    }
     if (item.errorText) {
       gap();
       for (const text of wrapTextToWidth(item.errorText, Math.max(8, innerWidth - 4)))
@@ -289,14 +298,15 @@ function outputRows(
     .replace(/\r/g, '')
     .split('\n')
     .filter((line, index, list) => line.trim() || index < list.length - 1);
-  const shown = expanded ? all.slice(0, 200) : all.slice(0, 4);
+  const wrapped = all.flatMap(line => wrapTextToWidth(line.replace(/\t/g, '  '), Math.max(1, width - 5)));
+  const shown = wrapped.slice(0, expanded ? 1000 : 4);
   const rows: RenderedBoxLine[] = shown.map((line, index) => ({
     spans: [
       {text: index === 0 ? '  ⎿  ' : '     ', fg: tokens.foregroundSubtle, bg},
-      {text: line.replace(/\t/g, '  ').slice(0, Math.max(4, width - 5)), fg, bg},
+      {text: line, fg, bg},
     ],
   }));
-  const hidden = all.length - shown.length;
+  const hidden = wrapped.length - shown.length;
   if (hidden > 0)
     rows.push({
       spans: [
@@ -441,7 +451,17 @@ function renderToolCall(options: {
   }
   if (call.name === 'exec_command' || call.name === 'write_stdin') {
     const summary = commandSummary(call, result, {live});
-    const body = [...summary.preview, ...(summary.note ? [summary.note] : [])].join('\n');
+    const facts = [
+      result.sessionId
+        ? `Session ${result.sessionId} · running at last poll`
+        : result.exitCode != null
+          ? `Exit ${result.exitCode}`
+          : '',
+      result.durationMs != null ? `${(result.durationMs / 1000).toFixed(2)}s` : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    const body = [...summary.preview, ...(summary.note ? [summary.note] : []), ...(facts ? [facts] : [])].join('\n');
     return [
       ...lines,
       ...outputRows(

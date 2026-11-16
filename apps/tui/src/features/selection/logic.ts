@@ -109,12 +109,20 @@ export class TextSelection {
     for (let y = start.row; y <= end.row; y++) {
       const from = y === start.row ? start.col : 0;
       const to = y === end.row ? end.col + 1 : (this.document?.width ?? this.frame!.cols);
-      const line = this.document
-        ? this.documentRow(y)
-            .map(cell => cell.ch)
-            .join('')
-        : this.frame!.plainLines[y]!;
-      rows.push(line.slice(from, to).replace(/\s+$/g, ''));
+      const cells = this.document ? this.documentRow(y) : this.frame!.cells[y];
+      if (!cells) {
+        rows.push(this.frame!.plainLines[y]!.slice(from, to).replace(/\s+$/g, ''));
+        continue;
+      }
+      // Selection coordinates are terminal cells, not UTF-16 offsets.
+      const begin = cells[from]?.ch === '' ? Math.max(0, from - 1) : from;
+      rows.push(
+        cells
+          .slice(begin, to)
+          .map(cell => cell.ch)
+          .join('')
+          .replace(/\s+$/g, ''),
+      );
     }
     return rows.join('\n').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '');
   }

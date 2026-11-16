@@ -191,9 +191,11 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('light');
       expect(engine.getActiveTokens().background).toBe('#ffffff');
       await engine.setTheme('futryn-default');
-      expect(engine.getActiveAppearance().theme).toBe('auto');
+      expect(settings.read().appearance?.theme).toBe('auto');
+      expect(engine.getActiveAppearance().theme).toBe('light'); // explicit workspace override
       await engine.setTheme('monochrome-dark');
-      expect(engine.getActiveAppearance().theme).toBe('dark');
+      expect(settings.read().appearance?.theme).toBe('dark');
+      expect(engine.getActiveAppearance().theme).toBe('light');
     } finally {
       await rm(dir, {recursive: true, force: true});
     }

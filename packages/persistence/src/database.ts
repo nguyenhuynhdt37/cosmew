@@ -22,7 +22,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 4) {
+    if (version > 5) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -51,7 +51,11 @@ export function openPrivateDatabase(directory: string): Database {
       const auditColumns = db.query('PRAGMA table_info(tool_audit)').all() as {name: string}[];
       if (!auditColumns.some(column => column.name === 'scope_hash'))
         db.exec('ALTER TABLE tool_audit ADD COLUMN scope_hash TEXT');
-      db.exec('PRAGMA user_version=4;');
+      db.exec(`CREATE TABLE IF NOT EXISTS next_turn_input (
+        position INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL UNIQUE, content TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS next_turn_input_session ON next_turn_input(conversation,position);`);
+      db.exec('PRAGMA user_version=5;');
     })();
     return db;
   } catch {

@@ -244,6 +244,7 @@ export class TurnRun {
           this.user,
           this.receipt,
           carry.map(c => c.steerId),
+          this.request.queuedInputId,
         )
       : store.append(host.id, this.user, 'pending', this.receipt);
     this.carried = carry.map(c => c.message);

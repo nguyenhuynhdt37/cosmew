@@ -1,3 +1,4 @@
+import {graphemes, textWidth} from '../input/text';
 import type {FrameCell} from '../types';
 import type {RenderedBoxLine, StyledSpan} from './types';
 
@@ -40,18 +41,23 @@ export class Canvas {
     let col = startCol;
     const limit = maxWidth !== undefined ? Math.min(this.cols, startCol + maxWidth) : this.cols;
     for (const span of spans) {
-      for (let i = 0; i < span.text.length; i++) {
-        if (col >= limit) return;
+      const text = [...span.text].map(printable).join('');
+      for (const {segment} of graphemes(text)) {
+        const width = textWidth(segment);
+        if (!width) continue;
+        if (col + width > limit) return;
         if (col >= 0) {
-          this.cells[row]![col] = {
-            ch: printable(span.text[i]!),
+          const style = {
             fg: span.fg,
             bg: span.bg ?? this.cells[row]![col]!.bg,
             bold: Boolean(span.bold),
             ...(span.italic ? {italic: true} : {}),
           };
+          this.cells[row]![col] = {ch: segment, ...style};
+          // An empty continuation occupies a cell, but emits no second glyph during ANSI repaint.
+          for (let offset = 1; offset < width; offset++) this.cells[row]![col + offset] = {ch: '', ...style};
         }
-        col++;
+        col += width;
       }
     }
   }

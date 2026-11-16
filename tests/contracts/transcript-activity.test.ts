@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import type {Message, ToolCall, ToolResult} from '@futryn/contracts';
 import {
   FutrynTuiApp,
+  commandSummary,
   deriveTokensFromTriplet,
   explorationRows,
   formatElapsed,
@@ -445,4 +446,34 @@ test('malformed patch receipts and pending/stopped/denied calls never invent fil
   ];
   expect(plain(item).join('\n')).toContain('Created directory src');
   expect(plain(item).join('\n')).toContain('Not applied: src/a.ts');
+});
+
+test('resumed stdin completion retains its real exit and historical running sessions stay unconfirmed', () => {
+  const calls = [{id: 'stdin-final', name: 'write_stdin', input: {session_id: 'old'}}];
+  const items = messagesToTranscript(
+    [
+      {role: 'user', content: 'collect output'},
+      {role: 'assistant', content: '', toolCalls: calls},
+      {
+        role: 'tool',
+        toolName: 'write_stdin',
+        toolCallId: 'stdin-final',
+        content: 'Exit code: 0\nWall time: 1.25 s\nOutput:\nPASS',
+      },
+      {role: 'assistant', content: 'verified'},
+    ],
+    {idPrefix: 'resume'},
+  );
+  expect(items[1]!.toolResults![0]!.exitCode).toBe(0);
+  expect(items[1]!.toolResults![0]!.durationMs).toBe(1250);
+  const result = {
+    callId: 'old',
+    name: 'exec_command',
+    status: 'ok' as const,
+    content:
+      'Running session: old. Poll or send input with write_stdin; the original hard deadline still applies.\nWall time: 1.00 s\nOutput:\npartial',
+  };
+  const summary = commandSummary(call('old', 'exec_command', {cmd: 'slow'}), result, {live: false});
+  expect(summary.state).toBe('stopped');
+  expect(summary.note).toContain('not restored');
 });

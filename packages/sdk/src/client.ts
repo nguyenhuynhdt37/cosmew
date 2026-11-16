@@ -85,8 +85,18 @@ export interface ConnectAccountInput {
   authorizationCode?: string;
 }
 
+export interface TerminalRuntimeReport {
+  label: string;
+  available: boolean;
+  reason?: string;
+  sandbox: 'read-only' | 'workspace-write' | 'unavailable';
+  escalation: 'on-request' | 'never';
+  limitations: string[];
+}
+
 export interface FutrynBackendPorts {
   workspace: string;
+  terminalRuntime?(): TerminalRuntimeReport;
   /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
   /** `!command` shell mode (ADR 0034): the same exec_command dispatcher, approval and sandbox as model calls. */
@@ -94,6 +104,7 @@ export interface FutrynBackendPorts {
     command: string,
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
+    context?: {sessionId: string; callId: string},
   ): Promise<ToolResult>;
   getProjectContext?(): ProjectContextReport | null;
   settings: SettingsStore;
@@ -145,16 +156,21 @@ export interface FutrynBackendPorts {
     maxOutputTokens?: number,
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
+    queuedInputId?: string,
   ): AsyncIterable<ModelEvent>;
   /** Steer the active turn of `sessionId` (ADR 0033). Absent when the backend cannot steer. */
   steerTurn?(sessionId: string, content: string, expectedTurnId?: string): SteerOutcome;
   /** Accepted instructions of `sessionId` that no turn processed yet (durable; they open its next turn). */
   queuedInput?(sessionId: string): readonly {steerId: string; content: string}[];
+  /** Finishing-turn input is durable before the SDK reports it accepted. */
+  enqueueNextTurn?(sessionId: string, content: string): {id: string; content: string};
+  listNextTurn?(sessionId: string): readonly {id: string; content: string}[];
   loadCustomThemes(): {themes: ThemeManifest[]; errors: {file: string; message: string}[]};
   saveCustomTheme(manifest: ThemeManifest): ThemeManifest;
   removeCustomTheme(id: string): boolean;
   listWorkspaceFiles(query?: string): string[];
   getWorkspaceDiff(): WorkspaceDiffReport;
+  refreshWorkspaceDiff?(): Promise<WorkspaceDiffReport>;
   sanitizeText(text: string): string;
 }
 
@@ -180,7 +196,7 @@ export class FutrynClient {
   /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
   private activeTurnId: string | undefined;
   /** Messages submitted while a turn was finishing (Codex start_or_steer → next turn), in order. */
-  private nextTurnMessages: string[] = [];
+  private readonly claimedNextTurn = new Map<string, {id: string; content: string}>();
   private streamingText = '';
   private streamingSteps: Message[] = [];
   /** Live limit results by account id, from the last refreshLimits(). */
@@ -196,9 +212,41 @@ export class FutrynClient {
   /** Workspace tools are offered only after the UI obtained folder consent (ADR 0014/0017). */
   private toolsAllowed = false;
 
-  constructor(private readonly ports: FutrynBackendPorts) {}
+  constructor(private readonly ports: FutrynBackendPorts) {
+    this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
+  }
+
+  /** User preferences constrain work, never authorize tools or restore session grants. */
+  defaultTurnBudget(): {value: TurnBudget | undefined; source: 'default' | 'user'} {
+    const value = this.ports.settings.read().agentPreferences?.turnBudget;
+    return {value: value ? {...value} : undefined, source: value ? 'user' : 'default'};
+  }
+
+  /** Persist an explicitly chosen budget and apply it to subsequent turns of this client. */
+  setDefaultTurnBudget(budget: TurnBudget | null): void {
+    if (this.sending) throw new FutrynError('POLICY');
+    const parsed = budget === null ? undefined : turnBudgetSchema.safeParse(budget);
+    if (parsed && !parsed.success) throw new FutrynError('INVALID_INPUT');
+    const value = parsed?.success && Object.keys(parsed.data).length ? parsed.data : undefined;
+    this.ports.settings.update(settings => {
+      settings.agentPreferences ??= {};
+      if (value) settings.agentPreferences.turnBudget = value;
+      else delete settings.agentPreferences.turnBudget;
+    });
+    this.turnBudgetValue = value;
+    this.notifyStateChange();
+  }
+
+  /** Source of an effective appearance field; workspace overrides outrank user preferences. */
+  appearanceSource(key: keyof AppearanceConfig): 'default' | 'user' | 'workspace' {
+    const state = this.ports.settings.read();
+    if (state.projectAppearances?.[this.ports.workspace]?.[key] !== undefined) return 'workspace';
+    return state.appearance ? 'user' : 'default';
+  }
 
   private clearSessionAuthorization(): void {
+    this.permissionModeValue = 'default';
+    this.delegatedAgentValue = false;
     this.sessionGrants.clear();
     this.ports.toolGrants?.clear();
     for (const request of this.permissions.values()) {
@@ -255,9 +303,20 @@ export class FutrynClient {
   }
 
   setMode(mode: AgentMode): AgentMode {
+    if (!['chat', 'plan', 'review'].includes(mode)) throw new FutrynError('INVALID_INPUT');
+    if (this.sending || (mode !== 'chat' && this.delegatedAgentValue)) throw new FutrynError('POLICY');
+    if (this.currentSession) this.rememberSessionMode(this.currentSession.id, mode);
     this.currentMode = mode;
     this.notifyStateChange();
     return this.currentMode;
+  }
+
+  /** Modes restrict behavior; unlike grants or delegation, they are safe to restore with a session. */
+  private rememberSessionMode(sessionId: string, mode: AgentMode): void {
+    this.ports.settings.update(settings => {
+      settings.sessionModes ??= {};
+      settings.sessionModes[sessionId] = mode;
+    });
   }
 
   permissionMode(): PermissionMode {
@@ -286,10 +345,12 @@ export class FutrynClient {
    * workspace (ADR 0029). Requires folder consent and a runtime provider; switching account ends it.
    */
   setDelegatedAgent(enabled: boolean): ExecutionBackend | null {
+    if (this.sending) throw new FutrynError('POLICY');
     if (enabled) {
       if (!this.toolsAllowed) throw new FutrynError('POLICY');
       if (!this.status().activeProvider?.runtime) throw new FutrynError('UNSUPPORTED');
     }
+    if (enabled && this.currentMode !== 'chat') throw new FutrynError('POLICY');
     this.delegatedAgentValue = enabled;
     this.notifyStateChange();
     return this.status().executionBackend;
@@ -356,10 +417,29 @@ export class FutrynClient {
    */
   async runShellCommand(
     command: string,
-    options: {signal?: AbortSignal; onOutput?: (chunk: CommandOutputChunk) => void} = {},
+    options: {signal?: AbortSignal; onOutput?: (chunk: CommandOutputChunk) => void; callId?: string} = {},
   ): Promise<ToolResult> {
+    if (this.currentMode !== 'chat' || this.delegatedAgentValue || this.sending) throw new FutrynError('POLICY');
     if (!this.toolsAllowed || !this.ports.runShellCommand) throw new FutrynError('UNSUPPORTED');
-    return this.ports.runShellCommand(command, options.signal, options.onOutput);
+    if (!command.trim()) throw new FutrynError('INVALID_INPUT');
+    if (!this.currentSession) {
+      const session = this.ports.startSession();
+      this.rememberSessionMode(session.id, this.currentMode);
+      this.currentSession = session;
+    }
+    const session = this.currentSession;
+    this.sending = true;
+    try {
+      return await this.ports.runShellCommand(command, options.signal, options.onOutput, {
+        sessionId: session.id,
+        callId: options.callId ?? `shell-${crypto.randomUUID()}`,
+      });
+    } finally {
+      this.sending = false;
+      const stored = this.ports.getSession(session.id);
+      if (stored) session.messages = committedSessionMessages(stored);
+      this.notifyStateChange();
+    }
   }
   availableTools(): string[] {
     try {
@@ -460,6 +540,22 @@ export class FutrynClient {
     return () => this.eventListeners.delete(listener);
   }
 
+  private effectiveTerminalRuntime(): TerminalRuntimeReport {
+    const unavailable: TerminalRuntimeReport = {
+      label: 'Unavailable',
+      available: false,
+      sandbox: 'unavailable',
+      escalation: 'never',
+      limitations: [],
+    };
+    if (!this.toolsAllowed) return {...unavailable, label: 'Disabled', reason: 'Folder consent required.'};
+    try {
+      return this.ports.terminalRuntime?.() ?? {...unavailable, reason: 'Runtime details unavailable.'};
+    } catch {
+      return {...unavailable, reason: 'Runtime inspection failed; execution remains unavailable.'};
+    }
+  }
+
   status(projectScoped = false) {
     const project = projectScoped ? this.ports.workspace : undefined;
     const state = this.ports.settings.read();
@@ -507,6 +603,7 @@ export class FutrynClient {
       reasoningEffort: activeAccount && activeModel ? this.effort(activeAccount.id, activeModel) : null,
       phase: this.latestEvent.kind,
       pendingPermissions: this.listPendingPermissions().length,
+      terminalRuntime: this.effectiveTerminalRuntime(),
       capabilities: this.capabilities(),
     };
   }
@@ -760,8 +857,10 @@ export class FutrynClient {
 
   createSession(projectScoped = false): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
+    const session = this.ports.startSession(projectScoped ? this.ports.workspace : undefined);
+    this.rememberSessionMode(session.id, this.currentMode);
     this.clearSessionAuthorization();
-    this.currentSession = this.ports.startSession(projectScoped ? this.ports.workspace : undefined);
+    this.currentSession = session;
     this.lastUsage = null;
     this.notifyStateChange();
     return {
@@ -773,9 +872,14 @@ export class FutrynClient {
 
   resumeSession(id: string): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
+    const mode = this.ports.settings.read().sessionModes?.[id] ?? 'chat';
+    const stored = this.ports.getSession(id);
+    const session = this.ports.resumeSession(id);
+    if (this.currentSession) this.claimedNextTurn.delete(this.currentSession.id);
     this.clearSessionAuthorization();
-    this.currentSession = this.ports.resumeSession(id);
-    this.lastUsage = this.ports.getSession(id)?.turns?.at(-1)?.usage ?? null;
+    this.currentSession = session;
+    this.currentMode = mode;
+    this.lastUsage = stored?.turns?.at(-1)?.usage ?? null;
     this.notifyStateChange();
     return {
       id: this.currentSession.id,
@@ -784,19 +888,49 @@ export class FutrynClient {
     };
   }
 
+  /** Copy committed conversation history; the persistence port never replays tools or grants. */
+  forkSession(id = this.currentSession?.id): {id: string; selection: Selection; messages: Message[]} {
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
+    if (!id) throw new FutrynError('NOT_FOUND');
+    const source = this.ports.getSession(id);
+    if (!source) throw new FutrynError('NOT_FOUND');
+    // Validate/create the copy first, so an invalid target leaves the active conversation intact.
+    const mode =
+      id === this.currentSession?.id ? this.currentMode : (this.ports.settings.read().sessionModes?.[id] ?? 'chat');
+    const fork = this.ports.forkSession(id, source.selection);
+    this.rememberSessionMode(fork.id, mode);
+    this.clearSessionAuthorization();
+    this.currentSession = fork;
+    this.currentMode = mode;
+    this.lastUsage = null;
+    this.notifyStateChange();
+    return {id: fork.id, selection: {...fork.selection}, messages: fork.messages.map(message => ({...message}))};
+  }
+
   deleteSession(id: string): boolean {
     if (this.currentSession?.id === id && this.sending) throw new FutrynError('POLICY');
+    const deleted = this.ports.deleteSession(id);
+    if (!deleted) return false;
+    this.claimedNextTurn.delete(id);
     if (this.currentSession?.id === id) {
+      this.clearSessionAuthorization();
       this.currentSession = null;
       this.lastUsage = null;
     }
-    const deleted = this.ports.deleteSession(id);
-    this.notifyStateChange();
-    return deleted;
+    try {
+      this.ports.settings.update(settings => {
+        delete settings.sessionModes?.[id];
+      });
+    } finally {
+      this.notifyStateChange();
+    }
+    return true;
   }
 
   clearSessionView(): void {
     if (this.sending) throw new FutrynError('POLICY');
+    if (this.currentSession) this.claimedNextTurn.delete(this.currentSession.id);
     this.clearSessionAuthorization();
     this.currentSession = null;
     this.lastUsage = null;
@@ -820,9 +954,13 @@ export class FutrynClient {
     if (!trimmed) throw new FutrynError('INVALID_INPUT');
     if (this.sending) throw new FutrynError('POLICY');
     if (!this.currentSession) {
-      this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
+      const session = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
+      this.rememberSessionMode(session.id, this.currentMode);
+      this.currentSession = session;
     }
     const session = this.currentSession;
+    const claimed = this.claimedNextTurn.get(session.id);
+    const queuedInputId = claimed?.content === trimmed ? claimed.id : undefined;
     this.sending = true;
     this.streamingText = '';
     this.streamingSteps = [];
@@ -839,6 +977,7 @@ export class FutrynClient {
         options?.maxOutputTokens,
         options?.maxEstimatedCostUSD,
         this.status().reasoningEffort ?? undefined,
+        queuedInputId,
       )) {
         switch (event.type) {
           case 'started':
@@ -914,6 +1053,9 @@ export class FutrynClient {
       this.emitReactiveEvent('error', err instanceof FutrynError ? err.code : 'ERROR');
       throw err;
     } finally {
+      // Reservations are transient; the inbox row is acknowledged atomically by the backend.
+      // If acceptance failed, the durable row remains available for a later explicit retry.
+      this.claimedNextTurn.delete(session.id);
       this.sending = false;
       this.activeTurnId = undefined;
       this.streamingText = '';
@@ -958,28 +1100,35 @@ export class FutrynClient {
   ):
     | {disposition: 'steered'; steerId: string}
     | {disposition: 'queued'; position: number}
-    | {disposition: 'rejected'; reason: 'not_steerable' | 'empty_input' | 'idle'} {
+    | {disposition: 'rejected'; reason: 'not_steerable' | 'empty_input' | 'idle' | 'queue_unavailable'} {
     const trimmed = content.trim();
     if (!trimmed) return {disposition: 'rejected', reason: 'empty_input'};
-    if (!this.sending) return {disposition: 'rejected', reason: 'idle'};
+    if (!this.sending || !this.currentSession) return {disposition: 'rejected', reason: 'idle'};
     const outcome = this.steerMessage(trimmed);
     if (outcome.accepted) return {disposition: 'steered', steerId: outcome.steerId};
     if (outcome.reason === 'no_active_turn' || outcome.reason === 'turn_mismatch') {
-      this.nextTurnMessages.push(trimmed);
+      if (!this.ports.enqueueNextTurn || !this.ports.listNextTurn)
+        return {disposition: 'rejected', reason: 'queue_unavailable'};
+      this.ports.enqueueNextTurn(this.currentSession.id, trimmed);
       this.notifyStateChange();
-      return {disposition: 'queued', position: this.nextTurnMessages.length};
+      return {disposition: 'queued', position: this.queuedMessages().length};
     }
     return {disposition: 'rejected', reason: outcome.reason};
   }
-  /** Next message queued by `submitWhileBusy`, removed from the queue. Undefined while a turn runs. */
+  /** Reserve the next message for this session; deletion happens only with durable user acceptance. */
   takeQueuedMessage(): string | undefined {
-    if (this.sending) return undefined;
-    const next = this.nextTurnMessages.shift();
-    if (next !== undefined) this.notifyStateChange();
-    return next;
+    const id = this.currentSession?.id;
+    if (this.sending || !id || this.claimedNextTurn.has(id)) return undefined;
+    const next = this.ports.listNextTurn?.(id)[0];
+    if (!next) return undefined;
+    this.claimedNextTurn.set(id, next);
+    this.notifyStateChange();
+    return next.content;
   }
   queuedMessages(): readonly string[] {
-    return [...this.nextTurnMessages];
+    return this.currentSession
+      ? (this.ports.listNextTurn?.(this.currentSession.id) ?? []).map(input => input.content)
+      : [];
   }
   /** Accepted instructions the last turn could not process; the next sent message delivers them first. */
   queuedInput(): readonly {steerId: string; content: string}[] {
@@ -1223,9 +1372,15 @@ export class FutrynClient {
     if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
     const fork = continueHistory && source?.messages.length ? this.ports.forkSession!(source.id, selection) : null;
     try {
+      if (fork) this.rememberSessionMode(fork.id, this.currentMode);
       this.ports.selectModel(target, model);
     } catch (error) {
-      if (fork) this.ports.deleteSession(fork.id);
+      if (fork) {
+        this.ports.deleteSession(fork.id);
+        this.ports.settings.update(settings => {
+          delete settings.sessionModes?.[fork.id];
+        });
+      }
       throw error;
     }
     this.clearSessionAuthorization();
@@ -1277,16 +1432,7 @@ export class FutrynClient {
             ...(validatedPatch.animations ?? {}),
           },
         });
-        // If project also had an override for the same keys, keep global authoritative unless project was explicitly targeted
-        if (s.projectAppearances?.[this.ports.workspace]) {
-          const proj = s.projectAppearances[this.ports.workspace]!;
-          if (validatedPatch.theme !== undefined) delete proj.theme;
-          if (validatedPatch.mode !== undefined) delete proj.mode;
-          if (validatedPatch.wallpaper !== undefined) delete proj.wallpaper;
-          if (validatedPatch.syntaxHighlighting !== undefined) delete proj.syntaxHighlighting;
-          if (validatedPatch.sidebar !== undefined) delete proj.sidebar;
-          if (validatedPatch.animations !== undefined) delete proj.animations;
-        }
+        // Explicit workspace overrides retain precedence over user defaults.
       } else {
         s.projectAppearances = s.projectAppearances ?? {};
         const prevProj = s.projectAppearances[this.ports.workspace] ?? {};
@@ -1321,7 +1467,22 @@ export class FutrynClient {
   }
 
   getWorkspaceDiff(): WorkspaceDiffReport {
+    if (!this.toolsAllowed)
+      return {
+        workspace: this.workspace(),
+        gitAvailable: false,
+        state: 'denied',
+        message: 'Folder consent required.',
+        files: [],
+        totalAdditions: 0,
+        totalDeletions: 0,
+      };
     return this.ports.getWorkspaceDiff();
+  }
+
+  async refreshWorkspaceDiff(): Promise<WorkspaceDiffReport> {
+    if (!this.toolsAllowed) return this.getWorkspaceDiff();
+    return this.ports.refreshWorkspaceDiff ? this.ports.refreshWorkspaceDiff() : this.ports.getWorkspaceDiff();
   }
 
   // Permission Dialog & Policy Gate

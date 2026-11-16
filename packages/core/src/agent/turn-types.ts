@@ -98,6 +98,8 @@ export interface TurnHost {
 
 /** Per-request settings of one `send` call. */
 export interface TurnRequest {
+  /** Durable finishing-turn inbox entry acknowledged with user acceptance. */
+  queuedInputId?: string;
   signal?: AbortSignal;
   /** Absent: no output cap is sent (Codex); the model's own limit applies. */
   maxOutputTokens?: number;

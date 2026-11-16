@@ -68,6 +68,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
   const usage = client.usage();
   const context = client.context(draft);
   const project = client.projectContext();
+  const git = client.toolsEnabled() ? client.getWorkspaceDiff() : null;
   const limits = kind === 'usage' ? limitRows(client.limits()) : [];
   if (!details) {
     const short = (value: number | null | undefined) =>
@@ -168,36 +169,33 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
         } as Record<string, string>
       )[status.phase] ?? status.phase;
     return [
-      field('Account', status.activeAccount?.alias ?? 'Not connected'),
-      field('Provider', status.activeProvider?.name ?? '—'),
+      field('Workspace', `${status.workspace}${git?.branch ? ` · ${git.branch}` : ''}`),
+      field('Session', status.activeSessionId ?? 'Not started'),
+      field('Account', `${status.activeAccount?.alias ?? 'Not connected'} · ${status.activeProvider?.name ?? '—'}`),
       field('Model', status.selection?.modelId ?? 'Not selected'),
-      // ADR 0029: say who runs the loop and the tools, and whether a Futryn terminal exists at all.
-      field(
-        'Backend',
-        status.executionBackend?.label ??
-          (status.workspaceReadStatus === 'disabled' ? 'Tools off · folder consent required' : '—'),
-      ),
+      field('Mode', status.mode),
+      field('Permissions', `${status.permissionMode} · ${status.pendingPermissions} pending`),
+      field('Backend', status.executionBackend?.label ?? 'No model selected'),
       field(
         'Terminal',
         status.executionBackend?.kind === 'delegated'
-          ? "Runtime's own shell (not Futryn-contained)"
-          : client.availableTools().includes('exec_command')
-            ? 'Futryn exec_command · sandboxed, approval per command'
-            : 'Unavailable · OS containment not proven (ADR 0022)',
+          ? "Runtime's own shell; Futryn sandbox not applied"
+          : status.terminalRuntime.available
+            ? status.terminalRuntime.label
+            : (status.terminalRuntime.reason ?? 'Unavailable'),
       ),
-      '',
-      field('Request', phase),
-      field('Reasoning', status.reasoningEffort ?? 'Provider default'),
       field(
-        'Context',
-        `${display.measured ? '' : '~'}${short(display.used)} / ${short(display.total)} ${display.measured ? 'measured' : 'local'}`,
+        'Sandbox',
+        status.executionBackend?.kind === 'delegated'
+          ? 'Runtime-owned policy'
+          : `${status.terminalRuntime.sandbox} · network ${status.terminalRuntime.escalation}`,
       ),
-      field('Session usage', tokens(usage.inputTokens, usage.outputTokens)),
-      ...(usage.costUSD != null ? [field('Est. cost', money(usage.costUSD))] : []),
-      '',
-      status.activeAccount?.validatedAt
-        ? 'Previously validated · /doctor checks now'
-        : 'Connection not checked · /doctor',
+      field('Request', `${phase} · effort ${status.reasoningEffort ?? 'provider default'}`),
+      field('Context', `~${short(display.used)} / ${short(display.total)} local`),
+      field(
+        'Session usage',
+        `${tokens(usage.inputTokens, usage.outputTokens)}${usage.costUSD != null ? ` · est. ${money(usage.costUSD)}` : ''}`,
+      ),
     ];
   }
   const usageRows = [
@@ -280,12 +278,18 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Measured at: ${context.lastMeasured?.measuredAt ?? 'Never'}`,
     'This historical measurement is not the next request estimate.',
     'Session cumulative token consumption is not context occupancy.',
-    'Automatic context compaction: Not implemented; use /clear or /resume.',
+    'Automatic context compaction: extractive snapshots during active turns; source history is retained. Manual /compact is unavailable.',
   ];
   if (kind === 'usage') return usageRows;
   if (kind === 'context') return contextRows;
   return [
     'CONNECTION & SESSION',
+    `Workspace: ${status.workspace}`,
+    `Git: ${git?.state === 'ready' ? `${git.branch ?? 'branch unknown'} · ${git.files.length} change entries +${git.totalAdditions} -${git.totalDeletions}${git.truncated ? ' (bounded)' : ''}` : (git?.message ?? 'Not inspected; folder consent is required.')}`,
+    `Mode: ${status.mode} · Permission mode: ${status.permissionMode} · Pending approvals: ${status.pendingPermissions}`,
+    `Terminal runtime: ${status.terminalRuntime.label} · ${status.terminalRuntime.available ? 'available' : (status.terminalRuntime.reason ?? 'unavailable')}`,
+    `Sandbox: ${status.terminalRuntime.sandbox} · Network escalation: ${status.terminalRuntime.escalation}`,
+    ...status.terminalRuntime.limitations,
     `Provider: ${status.activeProvider?.name ?? 'None'} · Account: ${status.activeAccount?.alias ?? 'None'}`,
     `Authentication: ${status.activeProvider?.runtime ?? status.activeAccount?.credential.kind ?? 'None'}`,
     `Model: ${status.selection?.modelId ?? 'None'}`,

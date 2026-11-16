@@ -1,3 +1,4 @@
+import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {
@@ -6,6 +7,9 @@ import {
   type CredentialVault,
   type Message,
   type ModelInfo,
+  type ModelPort,
+  type ModelRequest,
+  type WorkspaceDiffReport,
   type ProjectContextOptions,
   type ProjectContextPort,
   type ProjectContextReport,
@@ -38,7 +42,7 @@ import {
   ToolAuditStore,
   openPrivateDatabase,
 } from '@futryn/persistence';
-import {FutrynClient} from '@futryn/sdk';
+import {FutrynClient, type TerminalRuntimeReport} from '@futryn/sdk';
 import {
   ConfiguredNetworkPolicy,
   OpenRouterPKCE,
@@ -53,7 +57,7 @@ import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} fr
 import {grantLabel, runtimeApprover, toolPermissionRequest} from './approvals';
 import {CommandRuntimes, createCommandRuntime, sandboxSettingsFromEnv} from './commands';
 import {defaultStateDirectory} from './paths';
-import {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
+import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 
 export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 export {sandboxSettingsFromEnv} from './commands';
@@ -93,6 +97,7 @@ interface ConversationWiring {
   budget?: () => TurnBudget | undefined;
   /** Plan/review modes cannot be turned into mutating artifact recovery. */
   analysisOnly?: () => boolean;
+  modeInstructions?: () => string;
 }
 
 /**
@@ -210,9 +215,21 @@ export function startup(
     if (!info) throw new FutrynError('NOT_FOUND');
     const isRuntime = !!registry.get(account.providerId).runtime;
 
+    const baseModel: ModelPort = modelPort(account, selection, info, wiring);
+    const prepare = (request: ModelRequest): ModelRequest => ({
+      ...request,
+      ...([request.instructions, wiring.modeInstructions?.()].filter(Boolean).length
+        ? {instructions: [request.instructions, wiring.modeInstructions?.()].filter(Boolean).join('\n\n')}
+        : {}),
+    });
+    const guidedModel: ModelPort = {
+      inlineTools: baseModel.inlineTools,
+      stream: (request, signal, executeTool) => baseModel.stream(prepare(request), signal, executeTool),
+      generate: (request, signal) => baseModel.generate(prepare(request), signal),
+    };
     return new Conversation(
       selection,
-      redactModel(modelPort(account, selection, info, wiring), redactor),
+      redactModel(guidedModel, redactor),
       conversations,
       existingSession,
       modelTools(account, selection.modelId, wiring),
@@ -358,6 +375,17 @@ export function startup(
     let commandRuntime: CommandRuntime | undefined;
     let dispatcher: ToolDispatcher | undefined;
     let workspace: WorkspaceRoot | undefined;
+    let diffReport: WorkspaceDiffReport = {
+      workspace: resolve(workspaceRoot),
+      gitAvailable: false,
+      state: 'error',
+      message: 'Not inspected. Press R to refresh.',
+      files: [],
+      totalAdditions: 0,
+      totalDeletions: 0,
+    };
+    let diffRefresh: Promise<WorkspaceDiffReport> | undefined;
+    let terminalReport: TerminalRuntimeReport | undefined;
     const toolsEnabled = () => client?.toolsEnabled() === true;
 
     // Everything below is created lazily, on first use after folder consent.
@@ -390,7 +418,21 @@ export function startup(
     const toolPort: ToolPort = {
       descriptors: () => (toolsEnabled() ? tools().descriptors() : []),
       invoke: async (call, signal, onOutput): Promise<ToolResult> => {
-        if (toolsEnabled()) return tools().invoke(call, signal, onOutput);
+        if (toolsEnabled()) {
+          const analysis = ['plan', 'review'].includes(client?.mode() ?? 'chat');
+          const descriptor = tools()
+            .descriptors()
+            .find(item => item.name === call.name);
+          if (analysis && descriptor?.capability !== 'fs.read')
+            return {
+              callId: call.id,
+              name: call.name,
+              status: 'denied',
+              code: 'MODE_RESTRICTED',
+              content: 'Plan and Review modes permit only workspace read/search tools. Nothing was executed.',
+            };
+          return tools().invoke(call, signal, onOutput);
+        }
         return {
           callId: call.id,
           name: call.name,
@@ -431,6 +473,12 @@ export function startup(
       delegated: () => client?.delegatedAgent() ?? false,
       budget: () => client?.turnBudget(),
       analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
+      modeInstructions: () =>
+        client?.mode() === 'plan'
+          ? 'Current session mode: PLAN. Inspect relevant files using read/search tools only. Preserve the user request. Return a structured actionable plan with objective, ordered steps, affected files, risks and verification. Do not execute commands or modify files. Implementation requires the user to switch to Chat mode explicitly.'
+          : client?.mode() === 'review'
+            ? 'Current session mode: REVIEW. Inspect the supplied repository diff and relevant files using read/search tools only. Do not execute commands or modify files. Report concrete correctness, security and regression findings with severity, file and line references, evidence and impact. Separate uncertainty from verified findings. If no actionable issues are supported by evidence, say so and list verification limits.'
+            : '',
     };
     const openConversation = (selection: Selection, existing?: {id: string; messages: Message[]}) => {
       const conv = createConversationForSelection(selection, existing, wiring);
@@ -452,21 +500,93 @@ export function startup(
               .descriptors()
               .map(d => d.name)
           : [],
-      runShellCommand: (command, signal, onOutput) =>
-        toolPort.invoke(
-          {id: `shell-${crypto.randomUUID()}`, name: 'exec_command', input: {cmd: command}},
-          signal,
-          onOutput,
-        ),
+      runShellCommand: async (command, signal, onOutput, context) => {
+        if (!context) throw new FutrynError('INVALID_INPUT');
+        const stored = conversations.get(context.sessionId);
+        if (!stored) throw new FutrynError('NOT_FOUND');
+        try {
+          return await runUserShellCommand({
+            store: conversations,
+            sessionId: stored.id,
+            selection: stored.selection,
+            callId: context.callId,
+            command,
+            signal,
+            onOutput,
+            invoke: (call, commandSignal, output) => toolPort.invoke(call, commandSignal, output),
+          });
+        } finally {
+          // The next model turn must reopen journal-backed history, including this user shell result.
+          activeConversations.delete(stored.id);
+        }
+      },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
       },
       workspace: resolve(workspaceRoot),
+      terminalRuntime: () => {
+        if (terminalReport) return terminalReport;
+        const runtime = commands();
+        const availability = runtime.availability();
+        return (terminalReport = {
+          label: runtime.label,
+          available: availability.ok,
+          ...(!availability.ok ? {reason: availability.reason} : {}),
+          sandbox: availability.ok ? sandboxSettings.mode : 'unavailable',
+          escalation: sandboxSettings.escalation,
+          limitations: runtime.id.startsWith('native-macos')
+            ? [
+                'Detached setsid descendants may survive; termination can be unconfirmed.',
+                'Secret files are readable unless FUTRYN_SANDBOX_HIDE_SECRETS=1.',
+              ]
+            : runtime.id.startsWith('native-linux')
+              ? ['Linux bubblewrap has not received live platform acceptance.']
+              : [],
+        });
+      },
       settings,
       listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
-      getWorkspaceDiff: () => computeWorkspaceGitDiff(workspaceRoot),
+      getWorkspaceDiff: () => diffReport,
+      refreshWorkspaceDiff: () => {
+        if (!toolsEnabled())
+          return Promise.resolve({
+            ...diffReport,
+            gitAvailable: false,
+            state: 'denied' as const,
+            files: [],
+            totalAdditions: 0,
+            totalDeletions: 0,
+          });
+        diffRefresh ??= refreshWorkspaceGitDiff(workspaceRoot)
+          .then(rawReport => {
+            const report = {
+              ...rawReport,
+              files: rawReport.files.map(file => ({
+                ...file,
+                path: terminalText(redactor.text(file.path)),
+                ...(file.oldPath ? {oldPath: terminalText(redactor.text(file.oldPath))} : {}),
+                lines: file.lines.map(line => ({...line, content: terminalText(redactor.text(line.content))})),
+              })),
+            };
+            if (toolsEnabled()) diffReport = report;
+            return toolsEnabled()
+              ? report
+              : {
+                  ...report,
+                  gitAvailable: false,
+                  state: 'denied' as const,
+                  files: [],
+                  totalAdditions: 0,
+                  totalDeletions: 0,
+                };
+          })
+          .finally(() => {
+            diffRefresh = undefined;
+          });
+        return diffRefresh;
+      },
       sanitizeText: text => terminalText(redactor.text(text)),
 
       // Providers and sign-in
@@ -578,9 +698,17 @@ export function startup(
         const {conv, record, messages} = openStoredConversation(id);
         return {id: conv.id, selection: record.selection, messages};
       },
-      sendTurn: async function* (sessionId, content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort) {
+      sendTurn: async function* (
+        sessionId,
+        content,
+        signal,
+        maxOutputTokens,
+        maxEstimatedCostUSD,
+        reasoningEffort,
+        queuedInputId,
+      ) {
         const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
-        yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
+        yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, queuedInputId);
       },
       // Steering reaches only the conversation that owns the running turn; there is nothing to steer otherwise.
       steerTurn: (sessionId, content, expectedTurnId) =>
@@ -588,6 +716,8 @@ export function startup(
           accepted: false,
           reason: 'no_active_turn',
         },
+      enqueueNextTurn: (sessionId, content) => conversations.enqueueNextTurn(sessionId, content),
+      listNextTurn: sessionId => conversations.listNextTurn(sessionId),
       queuedInput: sessionId =>
         activeConversations.get(sessionId)?.queuedInput() ??
         (conversations.recover(sessionId).pendingInput ?? []).map(p => ({

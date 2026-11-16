@@ -463,7 +463,7 @@ test('terminal keyboard decoding and multiline composer preserve navigation and 
     'Alt+Enter',
     'Ctrl+J',
   ]);
-  expect(parseRawTerminalKey('\x1b[200~text\x1b[201~')).toEqual(['t', 'e', 'x', 't']);
+  expect(parseRawTerminalKey('\x1b[200~text\x1b[201~')).toEqual(['Paste:text']);
   expect(parseRawTerminalKey('\x1b[<64;20;10M\x1b[<65;20;10M\x1b[<0;20;10M\x1b[<35;20;10m')).toEqual([
     'WheelUp',
     'WheelDown',
@@ -598,4 +598,23 @@ test('selecting a hidden key copies only the visible mask, never the secret draf
   expect(tui.computeFrameSnapshot().plainText).not.toContain('synthetic-never');
   await tui.handleKey('Escape');
   await tui.handleKey('Escape');
+});
+
+test('bracketed credential paste stays masked and never executes embedded command or newline input', async () => {
+  const {tui, app} = await setup();
+  await tui.executeSlashCommand('/login');
+  await tui.handleKey('Paste:fixture');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Fixture');
+  await tui.handleKey('Enter');
+  await tui.handleKey('Enter');
+  const secret = 'synthetic-paste-sensitive-value';
+  const keys = parseRawTerminalKey('\x1b[200~' + secret + '\r/exit\x03\x1b[201~');
+  for (const key of keys) await tui.handleKey(key);
+  const screen = tui.computeFrameSnapshot().plainText;
+  expect(screen).toContain('•'.repeat(24));
+  expect(screen).not.toContain(secret);
+  expect(screen).not.toContain('/exit');
+  expect(tui.isExitRequested()).toBe(false);
+  expect(app.accounts.list()).toHaveLength(0);
+  expect(tui.getActiveOverlay()).toBe('connect');
 });

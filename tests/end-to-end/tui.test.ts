@@ -369,7 +369,10 @@ test('chat resize keeps the composer usable without companion art at every size'
   try {
     await a.tui.submitPrompt('Responsive chat');
     for (const [cols, rows] of [
+      [80, 24],
       [100, 30],
+      [120, 40],
+      [160, 48],
       [60, 24],
       [40, 14],
       [30, 10],

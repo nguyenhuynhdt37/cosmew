@@ -1,7 +1,8 @@
+import {turnBudgetSchema} from './telemetry';
 import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 
-export const CONTRACT_VERSION = '1.17' as const;
+export const CONTRACT_VERSION = '1.18' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -421,6 +422,8 @@ export const settingsSchema = z
     projects: z.record(z.string(), selectionSchema),
     catalogs: z.array(cacheSchema).max(200),
     reasoningPreferences: z.record(z.string(), z.string().min(1).max(40)).optional(),
+    sessionModes: z.record(z.string().uuid(), z.enum(['chat', 'plan', 'review'])).optional(),
+    agentPreferences: z.strictObject({turnBudget: turnBudgetSchema.optional()}).optional(),
     appearance: appearanceSchema.optional(),
     projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
     /** Project permission rules by workspace path (ADR 0028); optional, so older files still load. */

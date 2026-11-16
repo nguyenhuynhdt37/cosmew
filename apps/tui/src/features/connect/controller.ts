@@ -1,8 +1,8 @@
 import {FutrynError, modelIdSchema, providerSchema, type Provider} from '@futryn/contracts';
 import type {AccountWorkflow, OverlayFeature, OverlayLayout, ThemeFrame, TuiHost} from '../../core/feature';
 import {wideLayout} from '../../core/layout';
-import {stepIndex} from '../../ui';
-import {CONTROL_CHARS, ENV_NAME, PROVIDER_ID, connectionChoices, describeProviderError} from './logic';
+import {editField, stepIndex} from '../../ui';
+import {ENV_NAME, PROVIDER_ID, connectionChoices, describeProviderError} from './logic';
 import {createInitialConnectProviderState, type ConnectProviderState} from './types';
 import {renderConnectProviderOverlay} from './view';
 
@@ -334,9 +334,8 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
           ? 'secretDraft'
           : 'draft';
     if (choices.length && st.step !== 'provider' && st.step !== 'accounts') return;
-    if (key === 'Backspace') st[field] = st[field].slice(0, -1);
-    else if (key.length === 1 && !CONTROL_CHARS.test(key))
-      st[field] = (st[field] + key).slice(0, field === 'secretDraft' ? 8192 : 2048);
+    const edited = editField(st[field], key, {max: field === 'secretDraft' ? 8192 : 2048});
+    if (edited !== null) st[field] = edited;
     if (field === 'query') st.selectedIndex = 0;
   }
 

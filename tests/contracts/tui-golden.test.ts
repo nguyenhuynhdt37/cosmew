@@ -44,6 +44,9 @@ const normalize = (text: string, dir: string) =>
   text
     .split(dir)
     .join('<WS>')
+    // Narrow path-tail elision can remove the temporary directory's stable prefix.
+    .split(dir.slice(-6))
+    .join('<RAND>')
     .replace(/futryn-golden-[A-Za-z0-9]{6}/g, 'futryn-golden-<RAND>')
     .replace(/127\.0\.0\.1:\d+/g, '<HOST>')
     .replace(/Worked for \d+\.\d+s/g, 'Worked for <TIME>')

@@ -1,3 +1,4 @@
+import {graphemes, textWidth, nextGrapheme} from '../../input/text';
 import type {BorderStyle, PermissionMode, ThemeTokens} from '@futryn/contracts';
 import type {AgentMode} from '@futryn/sdk';
 import {getBorderGlyphs} from '../../theme/theme';
@@ -51,7 +52,7 @@ export function renderPromptComposerLines(options: {
   } = options;
 
   const glyphs = getBorderGlyphs(borderStyle);
-  const innerWidth = Math.max(16, width - 2);
+  const innerWidth = Math.max(0, width - 2);
   const bg = tokens.composerBackground;
   // Subtle border color change on focus
   const borderColor = focused ? tokens.borderFocused : tokens.border;
@@ -163,7 +164,7 @@ export function renderPromptComposerLines(options: {
       : 'Ask anything…';
 
   const pushInputRow = (body: StyledSpan[], prefix: string) => {
-    const used = body.reduce((sum, span) => sum + span.text.length, 0);
+    const used = body.reduce((sum, span) => sum + textWidth(span.text), 0);
     const markAt = Math.max(0, prefix.length - 2);
     lines.push({
       spans: [
@@ -192,10 +193,22 @@ export function renderPromptComposerLines(options: {
     const visual: {text: string; start: number}[] = [];
     let offset = 0;
     for (const line of state.value.split('\n')) {
-      for (let start = 0; start <= line.length; start += textCols) {
-        visual.push({text: line.slice(start, start + textCols), start: offset + start});
-        if (start + textCols > line.length) break;
+      let rowText = '';
+      let rowStart = offset;
+      let columns = 0;
+      for (const {segment, index} of graphemes(line)) {
+        const cells = textWidth(segment);
+        if (columns + cells > textCols && rowText) {
+          visual.push({text: rowText, start: rowStart});
+          rowText = '';
+          rowStart = offset + index;
+          columns = 0;
+        }
+        rowText += segment;
+        columns += cells;
       }
+      visual.push({text: rowText, start: rowStart});
+      if (columns === textCols) visual.push({text: '', start: offset + line.length});
       offset += line.length + 1;
     }
     const cursorRow = Math.max(
@@ -214,8 +227,13 @@ export function renderPromptComposerLines(options: {
         hasCursor
           ? [
               {text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg},
-              {text: row.text[cursorCol] ?? ' ', fg: tokens.accentForeground, bg: tokens.cursor, bold: true},
-              {text: row.text.slice(cursorCol + 1), fg: tokens.foreground, bg},
+              {
+                text: row.text.slice(cursorCol, nextGrapheme(row.text, cursorCol)) || ' ',
+                fg: tokens.accentForeground,
+                bg: tokens.cursor,
+                bold: true,
+              },
+              {text: row.text.slice(nextGrapheme(row.text, cursorCol)), fg: tokens.foreground, bg},
             ]
           : [{text: row.text, fg: tokens.foreground, bg}],
         first + index === 0 ? lead : ' '.repeat(lead.length),
@@ -301,5 +319,20 @@ export function renderPromptComposerLines(options: {
   });
 
   if (options.contextLine) lines.push(options.contextLine);
-  return lines;
+  return lines.map(line => {
+    let room = Math.max(0, width);
+    const spans: StyledSpan[] = [];
+    for (const span of line.spans) {
+      let text = '';
+      for (const {segment} of graphemes(span.text)) {
+        const cells = textWidth(segment);
+        if (cells > room) break;
+        text += segment;
+        room -= cells;
+      }
+      if (text) spans.push({...span, text});
+      if (!room) break;
+    }
+    return {...line, spans};
+  });
 }
