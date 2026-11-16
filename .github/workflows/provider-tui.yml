@@ -1,0 +1,68 @@
+name: Provider and TUI checks
+
+# Fixture-only verification: never use paid provider credentials in CI.
+on:
+  push:
+    branches:
+      - dev
+      - "feat/**"
+      - "fix/**"
+      - "chore/**"
+  pull_request:
+    branches:
+      - dev
+      - "feat/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-tui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Bun / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    env:
+      CI: "true"
+      HANNES_TEST_KEYRING: "0"
+      HANNES_TEST_COPILOT: "0"
+      HANNES_LIVE_PUBLIC: "0"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Bun 1.4.4
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install locked dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint and whitespace
+        run: bun run lint
+
+      - name: Contract, security, integration and CLI/TUI tests
+        run: bun test tests
+
+      - name: Adapter/security integration tests
+        run: bun run test:integration
+
+      - name: CLI and terminal end-to-end tests
+        run: bun run test:e2e
+
+      - name: CLI startup and help
+        run: bun run hannes --help
