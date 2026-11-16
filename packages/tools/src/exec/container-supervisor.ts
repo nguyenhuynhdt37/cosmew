@@ -27,6 +27,30 @@ const finish=(value,status)=>{
 setTimeout(()=>finish({kind:'timeout',exitCode:null,signal:null},124),launch.lease);
 process.on('SIGINT',()=>finish({kind:'cancelled',exitCode:null,signal:'SIGINT'},130));
 process.on('SIGTERM',()=>finish({kind:'cancelled',exitCode:null,signal:'SIGTERM'},143));
+// While another write-capable session runs, it could move a protected file between the host's mask
+// scan and these mounts. Masks follow the files once mounted, so verify now, before any command
+// runs: every protected entry under /workspace must itself be a mountpoint (ADR 0034).
+const aborted=!!launch.verify&&!verifyMasks(launch.verify);
+if(aborted){finishing=true;process.stdout.write(JSON.stringify({type:'result',kind:'spawn-failed',exitCode:null,signal:null,outputClosed:true,wrapperExitCode:125})+'\n',()=>process.exit(125));setTimeout(()=>process.exit(125),250);}
+function verifyMasks(v){
+ const fs=require('node:fs');
+ let mounts;try{mounts=new Set(fs.readFileSync('/proc/self/mountinfo','utf8').split('\n').filter(Boolean).map(l=>l.split(' ')[4].replace(/\\([0-7]{3})/g,(_m,o)=>String.fromCharCode(parseInt(o,8)))));}catch{return false;}
+ const secret=v.secret.map(r=>new RegExp(r,'i')),except=v.except.map(r=>new RegExp(r,'i'));let entries=0;
+ const walk=dir=>{
+  let list;try{list=fs.readdirSync(dir,{withFileTypes:true});}catch{return false;}
+  for(const e of list){
+   if(++entries>250000)return false;
+   const path=dir+'/'+e.name,rel=path.slice('/workspace/'.length),name=e.name.toLowerCase();
+   if(e.isSymbolicLink())continue;
+   const protectedEntry=(name==='.git'&&!(rel==='.git'&&v.gitPinned))||name==='.futryn'||name==='.hannes'||name.startsWith('.futryn-patch-')||name.startsWith('.hannes-patch-')||v.hidden.includes(rel)||(!e.isDirectory()&&secret.some(r=>r.test(name))&&!except.some(r=>r.test(name)));
+   if(protectedEntry){if(!mounts.has(path))return false;continue;}
+   if(rel==='.git'){for(const f of ['config','config.worktree'])if(fs.existsSync(path+'/'+f)&&!mounts.has(path+'/'+f))return false;continue;}
+   if(e.isDirectory()&&!mounts.has(path)&&!walk(path))return false;
+  }
+  return true;
+ };
+ return walk('/workspace');
+}
 // Codex UNIFIED_EXEC_ENV, adjusted for a terminal when one exists. Nothing is inherited from the host.
 const env=['PATH=/usr/local/bin:/usr/bin:/bin','HOME=/tmp','TMPDIR=/tmp','LANG=C.UTF-8','LC_CTYPE=C.UTF-8','LC_ALL=C.UTF-8','PAGER=cat','GIT_PAGER=cat','GH_PAGER=cat','GIT_OPTIONAL_LOCKS=0','CODEX_CI=1','FUTRYN_SANDBOX=1',...(launch.tty?['TERM=xterm-256color']:['TERM=dumb','NO_COLOR=1','COLORTERM='])];
 const shell=launch.shell==='sh'?['/bin/sh']:['/bin/bash','--noprofile','--norc'];
@@ -45,7 +69,7 @@ const exited=(code,signal)=>{
  if(closed>=streams)finish(result.value,result.status);
  else setTimeout(()=>finish(result.value,result.status),1000);
 };
-if(launch.tty){
+if(aborted){/* nothing runs */}else if(launch.tty){
  try{
   child=Bun.spawn(argv,{cwd:launch.cwd,terminal:{cols:launch.cols,rows:launch.rows,data(_t,data){emit('stdout',data);}}});
   term=child.terminal;

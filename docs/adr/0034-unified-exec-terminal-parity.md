@@ -59,3 +59,9 @@ Intentional behavior changes (tests updated with the reason inline): stdin polls
 - The derived git image is verified structurally (base layer chain + one layer + recipe label); the Debian package itself is trusted via apt signatures at build time.
 - The persisted self-test proof trusts Futryn's state directory; an engine reconfigured without changing ID/version/security options/image within 24 h is not re-probed.
 - Fixture models drive the end-to-end evidence; no real-model acceptance was run for this task.
+
+## Follow-up hardening (second security review, 2026-11-16)
+- Docker: `.git/config` and `config.worktree` are masked empty (git status/diff/log still work), so remote credentials are not readable.
+- Docker: while another workspace-write session runs, PID1 verifies through `/proc/self/mountinfo` that every protected entry is a mountpoint before the command starts, closing the race where a concurrent session moves a directory holding a masked secret; mismatches fail as `SANDBOX_FAILED`.
+- `write_stdin` input that the approval prompt cannot show in full (> ~850 characters) is refused, so consent always covers exactly what is sent.
+- Superseded as the default backend by [ADR 0035](0035-native-sandbox-default.md) (native Seatbelt/bubblewrap); Docker remains selectable.

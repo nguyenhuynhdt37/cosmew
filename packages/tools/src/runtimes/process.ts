@@ -1,3 +1,4 @@
+import {FutrynError} from '@futryn/contracts';
 import type {CommandOutcome,CommandRequest,CommandRuntime} from '@futryn/contracts';
 import type {ToolOutput} from '../context';
 import {formatOutcome} from '../exec/command';
@@ -15,4 +16,12 @@ export function commandOutcomeResult(outcome:CommandOutcome,timeoutMs:number,tar
  if(outcome.sandboxDenied)return{status:'error',code:'SANDBOX_DENIED',exitCode:outcome.exitCode,...common};
  return{status:'ok',exitCode:outcome.exitCode,...common};
 }
-export async function runCommand(runtime:CommandRuntime,request:CommandRequest,target:string,signal?:AbortSignal):Promise<ToolOutput>{return commandOutcomeResult(await runtime.run(request,signal),request.timeoutMs,target);}
+export async function runCommand(runtime:CommandRuntime,request:CommandRequest,target:string,signal?:AbortSignal):Promise<ToolOutput>{
+ try{return commandOutcomeResult(await runtime.run(request,signal),request.timeoutMs,target);}
+ catch(error){
+  // Launch refusals are truthful results, not generic tool failures; nothing ran in either case.
+  if(error instanceof FutrynError&&error.code==='BUDGET')return{status:'error',code:'BUDGET',content:'Too many running sessions or protected paths. Collect or stop a session first. Nothing was run.',target};
+  if(error instanceof FutrynError&&error.code==='POLICY')return{status:'error',code:'SANDBOX_FAILED',content:'The sandbox refused to launch: the workspace changed while protections were applied, or a path cannot be protected. Nothing was run.',target};
+  throw error;
+ }
+}

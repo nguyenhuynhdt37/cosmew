@@ -14,9 +14,10 @@ export function stdinHandler(options:ToolDispatcherOptions):ToolHandler{return{
  available:()=>options.commands?.availability().ok===true&&!!options.commands.writeStdin,
  unavailable:{status:'error',code:'UNSUPPORTED',content:'No verified session runtime on this host.'},
  prepare(args){const parsed=input.safeParse(args);if(!parsed.success)return{status:'error',code:'INVALID_INPUT',content:'Expected session_id, at most 8000 input characters, optional yield_time_ms and signal. The output budget is set at launch.'};const data=parsed.data,runtime=options.commands!,session=runtime.session?.(data.session_id);if(!session)return{status:'error',code:'SESSION_NOT_FOUND',content:'No owned session with this ID; nothing was replayed.'};if(data.signal&&data.chars)return{status:'error',code:'INVALID_INPUT',content:'Send input or a signal, not both.'};
+  // Consent covers exactly what is sent: input that the approval prompt cannot show in full is refused.
+  if(JSON.stringify(data.chars).length>900)return{status:'error',code:'INVALID_INPUT',content:'Input too long to review in one approval; send it in parts of at most about 850 characters. Nothing was sent.'};
   const yieldMs=clampYield(data.yield_time_ms,data.chars||data.signal?EXEC_LIMITS.stdinDefaultYieldMs:EXEC_LIMITS.pollDefaultYieldMs);
-  // The approval label is bounded for the permission prompt; the grant scope (executionKey) binds the exact input.
-  const shown=data.signal??JSON.stringify(data.chars),file=options.workspace.resolve(session.cwd),command=`stdin ${data.session_id}: ${shown.length>900?shown.slice(0,900)+'…':shown}`,grantCommand=`stdin ${data.session_id}`;
+    const shown=data.signal??JSON.stringify(data.chars),file=options.workspace.resolve(session.cwd),command=`stdin ${data.session_id}: ${shown}`,grantCommand=`stdin ${data.session_id}`;
   const launch=session.sandbox??{mode:'read-only' as const,network:false};
   return{kind:'command',file,command,grantCommand,workdir:file.relative,label:options.redact(command).slice(0,1024),runtime,runtimeId:runtime.id,toolName:'write_stdin',sessionId:data.session_id,// A session grant covers input to this session only, never other sessions or new launches.
    executionKey:JSON.stringify({session:data.session_id,launch}),

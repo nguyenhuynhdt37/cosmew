@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync } from 'node:fs';
 import { defaultStateDirectory } from './paths';
 import { join, relative, resolve } from 'node:path';
 import {
@@ -391,10 +391,10 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
     const commands = () => {
       if (commandsClosed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
-        // ADR 0034: the verified Docker backend is the default wherever a local engine exists. Selecting
-        // a backend grants nothing; availability still requires its real containment self-tests.
-        const backend = commandBackendFromEnv(process.env.FUTRYN_COMMAND_BACKEND, () => existsSync('/var/run/docker.sock'));
-        commandRuntime = (services.commands ?? ((root, state) => backend === 'none' ? new UnsupportedRuntime('Commands are disabled (FUTRYN_COMMAND_BACKEND).') : platformCommandRuntime({workspaceRoot:root,stateDirectory:state,container:backend==='docker',extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
+        // ADR 0035: the native OS sandbox is the default (Codex model); Docker only when selected.
+        // Selecting a backend grants nothing; availability still requires the real self-test.
+        const backend = commandBackendFromEnv(process.env.FUTRYN_COMMAND_BACKEND);
+        commandRuntime = (services.commands ?? ((root, state) => backend === 'none' ? new UnsupportedRuntime('Commands are disabled (FUTRYN_COMMAND_BACKEND).') : platformCommandRuntime({workspaceRoot:root,stateDirectory:state,backend,hideSecrets:process.env.FUTRYN_SANDBOX_HIDE_SECRETS==='1'})))(workspaceTree().root,realpathSync.native(resolve(directory)));
         commandRuntimes.add(commandRuntime);
       }
       return commandRuntime;

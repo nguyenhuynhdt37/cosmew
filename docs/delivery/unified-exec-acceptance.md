@@ -6,20 +6,18 @@ Architecture, Codex mechanism comparison and limits: [ADR 0034](../adr/0034-unif
 
 **Model evidence:** deterministic fixture models only (Chat Completions transport through the real SDK/CLI/permission engine). No real GPT/Claude/Gemini run was performed for Task 02; nothing here claims real-model capability.
 
-## Platform matrix (real evidence only)
+## Platform matrix (real evidence only; updated for ADR 0035)
 
-| Feature | macOS native (Seatbelt) | Linux native | Windows | Docker backend (tested on macOS/OrbStack) |
+| Feature | macOS native (Seatbelt, default) | Linux native (bubblewrap) | Windows | Docker backend (optional) |
 |---|---|---|---|---|
-| Read-only sandbox | BLOCKED (isolation probe passes; descendant containment fails — ADR 0022) | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| Workspace-write | BLOCKED | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| Exec approval | VERIFIED (dispatcher, injected runtimes) — runtime closed | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| Process cleanup | SECURITY FAILURE (setsid descendant survives; hence closed) | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| PTY / ConPTY | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| write_stdin | UNSUPPORTED | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-| Network restrictions | BLOCKED | UNSUPPORTED | UNSUPPORTED | VERIFIED (none by default; approved escalation = bridge) |
-| Workspace isolation | BLOCKED | UNSUPPORTED | UNSUPPORTED | VERIFIED |
-
-"Docker backend on a Linux host" is IMPLEMENTED — NOT TESTED (same code path; uid/gid ownership semantics differ from OrbStack's permissive mapping and need a real Linux run).
+| Read-only sandbox | VERIFIED | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| Workspace-write | VERIFIED | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| Exec approval | VERIFIED | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| Process cleanup | VERIFIED for the process group; setsid descendants can survive (accepted, reported as unconfirmed) | IMPLEMENTED — NOT TESTED (PID namespace) | UNSUPPORTED | VERIFIED (namespace teardown) |
+| PTY / ConPTY | VERIFIED | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| write_stdin | VERIFIED | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| Network restrictions | VERIFIED (denied; approved escalation reaches the internet) | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
+| Workspace isolation | VERIFIED (home/outside writes denied; reads outside /Users allowed, as in Codex) | IMPLEMENTED — NOT TESTED | UNSUPPORTED | VERIFIED |
 
 ## Task 02 test matrix → evidence
 
@@ -35,7 +33,8 @@ All rows run against the real engine (`FUTRYN_TEST_CONTAINER=1`) unless marked d
 | 26–31 | real PTY, input, interactive shell + Ctrl-C, resize, SIGTERM and lease cleanup | unified-exec D |
 | 36–37 | restart never reclaims a session; old namespace ends at its lease | unified-exec E 36-37; container-execution owner-SIGKILL test |
 | 38–39 | unknown outcome, no replay of uncertain mutations | existing `agent-loop-codex.test.ts` K/18, container-execution |
-| 40–46 | model writes source with Bash → failing test → Bash fix → passing rerun → verified report | `tests/end-to-end/container-agent.test.ts` "Task 02 F" |
+| 40–46 | model writes source with Bash → failing test → Bash fix → passing rerun → verified report | `tests/end-to-end/native-agent.test.ts` (Seatbelt) and `container-agent.test.ts` "Task 02 F" (Docker) |
+| native A–F | the same matrix on real macOS Seatbelt | `tests/security/native-exec.test.ts` |
 | server | background dev server as an owned session, stopped through it | unified-exec "F (server)" |
 | stdin review | Codex stdin_approval semantics, long input | `tests/security/execution-session-permissions.test.ts` (dispatcher) |
 | shell mode | `!command` through the same approval; denial runs nothing; not sent to the model | `tests/end-to-end/exec-command.test.ts` (dispatcher + TUI) |

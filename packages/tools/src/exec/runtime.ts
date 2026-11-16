@@ -1,4 +1,5 @@
 import {DockerCommandRuntime} from './container';
+import {NativeCommandRuntime} from './native';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -143,23 +144,17 @@ export class SeatbeltRuntime implements CommandRuntime {
 }
 
 /**
- * The runtime for this host (ADR 0034). `container` selects the verified Docker backend whenever a
- * local engine socket exists; its availability still requires the real self-tests. Native Seatbelt
- * stays closed (no descendant containment) and Linux/Windows native sandboxes are not implemented.
+ * The runtime for this host (ADR 0035, Codex model): the native OS sandbox by default (macOS
+ * Seatbelt, Linux bubblewrap); Docker only when explicitly selected; Windows is not implemented.
  */
-export function platformCommandRuntime(options: SeatbeltOptions): CommandRuntime {
+export function platformCommandRuntime(options: SeatbeltOptions & {backend?: 'native' | 'docker'; hideSecrets?: boolean}): CommandRuntime {
   const platform = options.platform ?? process.platform;
-  if(options.container&&['darwin','linux'].includes(platform))return new DockerCommandRuntime(options);
-  if (platform === 'darwin') return new SeatbeltRuntime(options);
-  return new UnsupportedRuntime(platform === 'linux'
-    ? 'Native Linux command sandboxing (bubblewrap) is not implemented or verified; use the Docker backend.'
-    : `No verified command sandbox for ${platform}.`);
+  if ((options.backend === 'docker' || options.container) && ['darwin','linux'].includes(platform)) return new DockerCommandRuntime(options);
+  return new NativeCommandRuntime({workspaceRoot: options.workspaceRoot, stateDirectory: options.stateDirectory, platform, hostPath: options.hostPath, hideSecrets: options.hideSecrets});
 }
 
-/** FUTRYN_COMMAND_BACKEND: `auto` (default) uses Docker when a local engine socket exists; `docker` requires it; `none` disables commands. */
-export function commandBackendFromEnv(value: string | undefined, socketExists: () => boolean): 'docker' | 'native' | 'none' {
-  if (value === 'none') return 'none';
-  if (value === 'docker') return 'docker';
-  if (value !== undefined && value !== 'auto' && value !== '') return 'none';
-  return socketExists() ? 'docker' : 'native';
+/** FUTRYN_COMMAND_BACKEND: `native` (default, also `auto`), `docker`, or `none`. Unknown values disable commands. */
+export function commandBackendFromEnv(value: string | undefined): 'docker' | 'native' | 'none' {
+  if (value === undefined || value === '' || value === 'auto' || value === 'native') return 'native';
+  return value === 'docker' ? 'docker' : 'none';
 }

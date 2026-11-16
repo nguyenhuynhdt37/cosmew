@@ -7,3 +7,4 @@ export { SeatbeltRuntime, UnsupportedRuntime, platformCommandRuntime, commandBac
 export type { CommandOutcome, CommandRequest, CommandRuntime, RuntimeAvailability } from '@futryn/contracts';
 export {DockerCommandRuntime,EXECUTION_IMAGE,COMMAND_LIMITS,likelySandboxDenied} from './exec/container';
 export {GIT_IMAGE_RECIPE,GIT_IMAGE_RECIPE_HASH,GIT_IMAGE_TAG,verifiedDerivedImage} from './exec/image';
+export {NativeCommandRuntime,NATIVE_LIMITS,type NativeRuntimeOptions} from './exec/native';

@@ -162,3 +162,25 @@ containerTest('B (mount sources): nested and symlinked .git are never bind sourc
  // A session that pinned .git cannot rename or replace it.
  const pinned=await h.exec({cmd:'mv .git moved 2>&1; rm -rf .git 2>&1; test -f .git/HEAD && echo STILL'});expect(pinned.content).toContain('STILL');expect(existsSync(join(h.root,'.git','HEAD'))).toBe(true);
 },90000);
+
+containerTest('B (git credentials): .git/config is masked while git status/diff/log keep working',async()=>{
+ const h=harness();expect(h.runtime.availability().ok).toBe(true);
+ writeFileSync(join(h.root,'f.txt'),'one\n');expect(git(h.root,'init','-q').status).toBe(0);git(h.root,'add','f.txt');expect(git(h.root,'commit','-qm','init').status).toBe(0);
+ expect(git(h.root,'remote','add','origin','https://user:GIT_TOKEN_SECRET@example.invalid/r.git').status).toBe(0);writeFileSync(join(h.root,'f.txt'),'two\n');
+ const r=await h.exec({cmd:'cat .git/config; git remote -v; git status --short; git diff --stat; git log --oneline | wc -l'});
+ expect(r.exitCode).toBe(0);expect(r.content).not.toContain('GIT_TOKEN_SECRET');expect(r.content).not.toContain('example.invalid');expect(r.content).toContain('M f.txt');expect(r.content).toContain('1 file changed');
+ expect(readFileSync(join(h.root,'.git/config'),'utf8')).toContain('GIT_TOKEN_SECRET');
+},60000);
+
+containerTest('B (concurrent writer): a running session moving a directory that holds a masked secret never exposes it to later launches',async()=>{
+ const h=harness();expect(h.runtime.availability().ok).toBe(true);
+ mkdirSync(join(h.root,'a'));writeFileSync(join(h.root,'a','.env'),'RACE_SECRET');
+ // Session A flips a <-> b as fast as it can; its own mask follows the file, so it never reads the secret.
+ const flipper=await h.exec({cmd:'while true; do mv a b 2>/dev/null; mv b a 2>/dev/null; done',yield_time_ms:250,timeout_ms:60000});const fid=sessionOf(flipper)!;expect(fid).toBeDefined();
+ let launched=0,refused=0;
+ for(let i=0;i<12;i++){const r=await h.exec({cmd:'cat a/.env b/.env 2>/dev/null; echo END'});expect(r.content).not.toContain('RACE_SECRET');if(r.code==='SANDBOX_FAILED')refused++;else{expect(r.content).toContain('END');launched++;}}
+ expect(launched+refused).toBe(12);
+ await h.stdin({session_id:fid,signal:'SIGTERM'});
+ // The secret still exists on the host (wherever the flipper left it) and was never shown above.
+ expect(spawnSync('grep',['-rl','RACE_SECRET',h.root],{encoding:'utf8'}).stdout.trim()).not.toBe('');
+},180000);

@@ -4,7 +4,7 @@ import {spawn,spawnSync,type ChildProcessWithoutNullStreams} from 'node:child_pr
 import {tmpdir} from 'node:os';import {join,relative,isAbsolute} from 'node:path';
 import {FutrynError,type CommandRuntime,type CommandRequest,type CommandOutcome,type CommandOutputChunk,type CommandSandbox,type CommandSessionInfo,type CommandRuntimeCapabilities,type RuntimeAvailability} from '@futryn/contracts';
 import {WorkspaceRoot,scanExecutionMasks} from '@futryn/workspace';
-import {evaluateRead} from '@futryn/security';
+import {evaluateRead,SECRET_FILE_RULES,SECRET_FILE_EXCEPTIONS} from '@futryn/security';
 import {CONTAINER_SUPERVISOR} from './container-supervisor';
 import {HeadTailBuffer} from './output';
 import {EXECUTION_IMAGE,GIT_IMAGE_TAG,verifiedDerivedImage} from './image';
@@ -142,7 +142,9 @@ export class DockerCommandRuntime implements CommandRuntime {
    return 'keep';
   });
   if(masks.readOnly.some(p=>p!=='.git'))throw new FutrynError('POLICY');
-  if(masks.readOnly.length){const st=lstatSync(join(workspace.root,'.git'));if(st.isSymbolicLink()||!st.isDirectory())throw new FutrynError('POLICY');}
+  if(masks.readOnly.length){const st=lstatSync(join(workspace.root,'.git'));if(st.isSymbolicLink()||!st.isDirectory())throw new FutrynError('POLICY');
+   // Remote URLs and credential helpers live in config; git works without it (empty mask).
+   for(const file of ['.git/config','.git/config.worktree']){try{const f=lstatSync(join(workspace.root,file));if(f.isSymbolicLink()||!f.isFile())throw new FutrynError('POLICY');masks.hiddenFiles.push(file);}catch(error){if(error instanceof FutrynError)throw error;}}}
   const expected:Mount[]=[{Source:workspace.root,Target:'/workspace',ReadOnly:sandbox.mode==='read-only'},
    ...masks.readOnly.map(p=>({Source:join(workspace.root,p),Target:'/workspace/'+p,ReadOnly:true})),
    ...masks.hiddenFiles.map(p=>({Source:this.emptyFile,Target:'/workspace/'+p,ReadOnly:true})),
@@ -150,7 +152,10 @@ export class DockerCommandRuntime implements CommandRuntime {
   // Writes run as the workspace owner so host files keep their ownership; root-owned trees are refused.
   let uid=65534,gid=65534;
   if(sandbox.mode==='workspace-write'){const st=statSync(workspace.root);if(st.uid===0)throw new FutrynError('POLICY');uid=st.uid;gid=st.gid||65534;}
-  return {expected,uid,gid,workspace,gitPinned:masks.readOnly.length>0,args:expected.flatMap(m=>['--mount',`type=bind,src=${m.Source},dst=${m.Target}${m.ReadOnly?',readonly':''}`])};
+  const escape=(t:string)=>t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const verify={gitPinned:masks.readOnly.length>0,hidden:[...masks.hiddenDirectories,...masks.hiddenFiles].filter(p=>!p.startsWith('.git/')),
+   secret:SECRET_FILE_RULES.map(r=>r.match==='exact'?`^${escape(r.value)}$`:r.match==='prefix'?`^${escape(r.value)}${r.value.endsWith('.')?'.+':''}`:`${escape(r.value)}$`),except:SECRET_FILE_EXCEPTIONS.map(n=>`^${escape(n)}$`)};
+  return {expected,uid,gid,workspace,verify,gitPinned:masks.readOnly.length>0,args:expected.flatMap(m=>['--mount',`type=bind,src=${m.Source},dst=${m.Target}${m.ReadOnly?',readonly':''}`])};
  }
 
  private owned(session:OwnedSession){const result=this.cli(['inspect','--format','{{index .Config.Labels "futryn.exec.owner"}}',session.container]);return result.status===0&&result.stdout.trim()===this.owner;}
@@ -185,13 +190,14 @@ export class DockerCommandRuntime implements CommandRuntime {
   if(!Number.isInteger(request.timeoutMs)||request.timeoutMs<COMMAND_LIMITS.minLeaseMs||request.timeoutMs>COMMAND_LIMITS.maxLeaseMs||request.command.length>1024||request.command.includes('\u0000')||!Number.isInteger(request.maxOutputBytes)||request.maxOutputBytes<1||request.maxOutputBytes>60000||!['read-only','workspace-write'].includes(sandbox.mode)||typeof sandbox.network!=='boolean'||!['bash','sh'].includes(shell))throw new FutrynError('INVALID_INPUT');
   const engine=this.engineState();
   // A running write session whose .git is not a pinned mountpoint could swap .git for a symlink; hide it then.
-  const gitSafe=![...this.sessions.values()].some(s=>!s.ended&&s.sandbox.mode==='workspace-write'&&!s.gitPinned);
-  const {expected,uid,gid,workspace,args,gitPinned}=this.mounts(this.options.workspaceRoot,sandbox,gitSafe);
+  const writers=[...this.sessions.values()].filter(s=>!s.ended&&s.sandbox.mode==='workspace-write');
+  const gitSafe=!writers.some(s=>!s.gitPinned);
+  const {expected,uid,gid,workspace,args,gitPinned,verify}=this.mounts(this.options.workspaceRoot,sandbox,gitSafe);
   const cwd=workspace.resolve(request.cwd);if(cwd.kind!=='directory')throw new FutrynError('POLICY');
   const relativeCwd=relative(workspace.root,cwd.absolute);if(relativeCwd.startsWith('..')||isAbsolute(relativeCwd))throw new FutrynError('POLICY');
   let container='';const sessionId=randomUUID();try{
    signal?.throwIfAborted();
-   const created=this.cli(['create','--interactive','--pull=never','--label','futryn.exec.owner='+this.owner,'--label','futryn.exec.session='+sessionId,...this.flags(sandbox),'--workdir','/',...args,engine.image,...this.supervisor({lease:request.timeoutMs,command:request.command,cwd:'/workspace'+(relativeCwd?'/'+relativeCwd:''),uid,gid,tty,cols:120,rows:40,shell,login:request.login===true})]);
+   const created=this.cli(['create','--interactive','--pull=never','--label','futryn.exec.owner='+this.owner,'--label','futryn.exec.session='+sessionId,...this.flags(sandbox),'--workdir','/',...args,engine.image,...this.supervisor({lease:request.timeoutMs,command:request.command,cwd:'/workspace'+(relativeCwd?'/'+relativeCwd:''),uid,gid,tty,cols:120,rows:40,shell,login:request.login===true,...(writers.length?{verify}:{})})]);
    container=created.stdout.trim();if(created.status!==0||!/^[a-f0-9]{64}$/.test(container))throw new FutrynError('UNSUPPORTED');
    // The created container, not the request, is the authority: verify its actual policy before start.
    const configured=this.cli(['inspect','--format','{{json .HostConfig}}',container]);const host=JSON.parse(configured.stdout||'null');

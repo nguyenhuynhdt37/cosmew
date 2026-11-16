@@ -25,9 +25,11 @@ function mock(f: ReturnType<typeof fixture>, approve: ConstructorParameters<type
 }
 const invoke = (dispatcher:ToolDispatcher,input: unknown,signal?:AbortSignal) => dispatcher.invoke({id:crypto.randomUUID(),name:'exec_command',input},signal);
 
-test('production command gate is closed on every platform, without an unsafe fallback',async()=>{
+// ADR 0035: macOS Seatbelt is the default native sandbox (user decision 2026-11-16). Platforms without
+// a native sandbox (Windows; Linux without bwrap) stay closed, with no unsandboxed fallback.
+test('platforms without a native sandbox are closed, without an unsafe fallback',async()=>{
   const f=fixture(); let prompts=0;
-  for(const platform of ['darwin','linux','win32'] as const){
+  for(const platform of ['win32',...(['/usr/bin/bwrap','/usr/local/bin/bwrap'].some(p=>existsSync(p))?[]:['linux' as const])] as const){
     const commands=platformCommandRuntime({workspaceRoot:f.root,platform});
     expect(commands.availability().ok).toBe(false);
     const tools=new ToolDispatcher({workspace:f.workspace,grants:new SessionGrants(),commands,approve:async()=>{prompts++;return 'once';},redact:t=>t});
@@ -126,6 +128,8 @@ osTest('macOS candidate cancellation and timeout kill ordinary child process gro
 osTest('mandatory gate negative evidence: setsid child escapes candidate cleanup, so production stays disabled',async()=>{
   const f=candidate();const result=await f.runtime.run({command:"/usr/bin/perl -MPOSIX -e '$p=fork(); if($p){print qq(CHILD:$p\\n);exit 0;} POSIX::setsid(); sleep 20;'",cwd:f.root,timeoutMs:1000,maxOutputBytes:100});
   const pid=Number(/CHILD:(\d+)/.exec(result.output)?.[1]);expect(pid).toBeGreaterThan(0);
-  try{expect(()=>process.kill(pid,0)).not.toThrow();expect(platformCommandRuntime({workspaceRoot:f.root}).availability().ok).toBe(false);}
+  // Accepted limitation (ADR 0035, same as Codex on macOS): a setsid descendant can outlive the command,
+  // so the native runtime never claims descendant termination on macOS.
+  try{expect(()=>process.kill(pid,0)).not.toThrow();const native=platformCommandRuntime({workspaceRoot:f.root});if(native.availability().ok){const r=await native.run({command:'true',cwd:f.root,timeoutMs:2000,maxOutputBytes:100,yieldTimeMs:2000});expect(r.lifecycle?.descendants).toBe('unconfirmed');await native.shutdown?.();}}
   finally{try{process.kill(pid,'SIGKILL');}catch{/* fixture already exited */}}
 });

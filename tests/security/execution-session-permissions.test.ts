@@ -36,10 +36,10 @@ test('stdin review: polls and interrupts never prompt; input always asks; a sess
  expect((await stdin(id,{})).status).toBe('ok');expect(prompts).toBe(2);
 });
 
-test('long stdin input gets a bounded approval label, not the 1024-character command limit, and reaches the session exactly',async()=>{
- const root=fixture(),id=crypto.randomUUID();const sent:string[]=[];
+test('stdin input that the approval cannot show in full is refused before any prompt; nothing is sent',async()=>{
+ const root=fixture(),id=crypto.randomUUID();const sent:string[]=[];let prompts=0;
  const runtime:CommandRuntime={id:'fixture',label:'fixture only',availability:()=>({ok:true}),run:async()=>exited,session:s=>s===id?{cwd:root,command:'cat',tty:false,sandbox:{mode:'read-only',network:false}}:undefined,writeStdin:async(_id,chars)=>{sent.push(chars);return exited;}};
- const dispatcher=new ToolDispatcher({workspace:new WorkspaceRoot(root),grants:new SessionGrants(),commands:runtime,redact:s=>s,approve:async request=>{expect(request.target.length).toBeLessThanOrEqual(1024);return'once';}});
- const chars='x'.repeat(7000)+'\n';const result=await dispatcher.invoke({id:crypto.randomUUID(),name:'write_stdin',input:{session_id:id,chars}});
- expect(result.status).toBe('ok');expect(sent).toEqual([chars]);
+ const dispatcher=new ToolDispatcher({workspace:new WorkspaceRoot(root),grants:new SessionGrants(),commands:runtime,redact:s=>s,approve:async request=>{prompts++;expect(request.target).toContain('y'.repeat(800));return'once';}});
+ const long=await dispatcher.invoke({id:crypto.randomUUID(),name:'write_stdin',input:{session_id:id,chars:'x'.repeat(7000)}});expect(long.code).toBe('INVALID_INPUT');expect(prompts).toBe(0);expect(sent).toHaveLength(0);
+ const shown=await dispatcher.invoke({id:crypto.randomUUID(),name:'write_stdin',input:{session_id:id,chars:'y'.repeat(800)}});expect(shown.status).toBe('ok');expect(sent).toEqual(['y'.repeat(800)]);
 });
