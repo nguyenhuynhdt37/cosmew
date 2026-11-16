@@ -73,3 +73,11 @@ See [ADR 0036](../adr/0036-codex-generation-limits.md): Codex values only (`GENE
 ## Unified exec terminal (contract 1.16)
 
 ADR 0034 adds no new agent event. Command ports gain optional `CommandSandbox` (`read-only`/`workspace-write`, approved `network`), `tty`/`shell`/`login` on requests, `sandboxDenied` outcomes (tool result code `SANDBOX_DENIED`, output kept, never retried), runtime `capabilities()`/`resize()`, and session launch facts used by stdin review. Each command or stdin result carries only output produced since the previous call on that session. `toolOutputDelta` semantics are unchanged; a PTY session streams merged output as `stdout`.
+
+## Chat/config integration (contract 1.18)
+
+[ADR 0037](../adr/0037-chat-configuration-command-parity.md): optional user work-budget preferences and per-session Chat/Plan/Review mode metadata use validated atomic settings storage. Modes are workflow restrictions, not grants. Session navigation revokes delegation, permission modes and grants; persisted modes never restore execution authority. SDK registry metadata drives canonical slash dispatch, aliases, overlay discovery and command shortcuts. `/fork` uses the existing durable history-copy port without replay.
+
+Workspace diff metadata adds optional staged/unstaged/untracked layer, original path, binary/truncation and readiness diagnostics. Async refresh updates a single cached report; render must never execute Git. Report totals cover returned lines/files, and bounded results are labeled. Optional terminal-runtime status reports the actual selected sandbox and limitations. A failed probe is unavailable, never successful execution.
+
+Turn receipts may declare `kind: user-shell`; these retain execution evidence without counting a user shell operation as provider usage. Missing kind means an agent receipt for backward compatibility.
