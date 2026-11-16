@@ -1,0 +1,181 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "platform": "darwin",
+    "cpu": "Apple M1 Pro",
+    "dimensions": "120x40",
+    "measurement": "input handler through ANSI generation, excludes terminal emulator paint"
+  },
+  "results": [
+    {
+      "count": 100,
+      "restoreMs": 22.320457999999974,
+      "coldFrameMs": 23.331792000000007,
+      "typingMs": {
+        "p50": 2.6619999999999777,
+        "p95": 4.68870899999996,
+        "max": 5.473250000000007
+      },
+      "typingLayouts": 0,
+      "scrollMs": {
+        "p50": 2.08462499999996,
+        "p95": 3.4315409999999815,
+        "max": 4.1847080000000005
+      },
+      "streamAndScrollMs": {
+        "p50": 2.3175000000000523,
+        "p95": 4.030250000000024,
+        "max": 4.122707999999989
+      },
+      "resizeMs": {
+        "p50": 15.730625000000032,
+        "p95": 22.132334000000014,
+        "max": 22.132334000000014
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.1745000000000232,
+        "p95": 1.198500000000024,
+        "max": 1.2773750000000064
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 477824,
+        "system": 74858
+      },
+      "heapBefore": 11814786,
+      "heapAfter": 25652275,
+      "heapAfterForcedGc": 22442734,
+      "forcedGcMs": 20.542790999999966,
+      "cache": {
+        "entries": 100,
+        "weight": 773648
+      },
+      "pasteMs": 48.611916000000065,
+      "typingAfterPasteMs": {
+        "p50": 2.774249999999938,
+        "p95": 5.837750000000028,
+        "max": 5.837750000000028
+      }
+    },
+    {
+      "count": 1000,
+      "restoreMs": 32.47279200000003,
+      "coldFrameMs": 104.1245419999999,
+      "typingMs": {
+        "p50": 2.463124999999991,
+        "p95": 3.1917079999999487,
+        "max": 3.3101250000000846
+      },
+      "typingLayouts": 0,
+      "scrollMs": {
+        "p50": 2.404792000000043,
+        "p95": 4.347166000000016,
+        "max": 6.148750000000064
+      },
+      "streamAndScrollMs": {
+        "p50": 3.5479159999999865,
+        "p95": 38.1517080000001,
+        "max": 45.47595799999999
+      },
+      "resizeMs": {
+        "p50": 100.34137499999997,
+        "p95": 132.35308399999985,
+        "max": 132.35308399999985
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.1554579999999532,
+        "p95": 1.197832999999946,
+        "max": 2.2626249999999573
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 998476,
+        "system": 132517
+      },
+      "heapBefore": 34993742,
+      "heapAfter": 41668428,
+      "heapAfterForcedGc": 27859856,
+      "forcedGcMs": 35.05054199999995,
+      "cache": {
+        "entries": 256,
+        "weight": 1981184
+      },
+      "pasteMs": 66.35545899999988,
+      "typingAfterPasteMs": {
+        "p50": 4.385416999999961,
+        "p95": 9.37933299999986,
+        "max": 9.37933299999986
+      }
+    },
+    {
+      "count": 5000,
+      "restoreMs": 67.46837499999992,
+      "coldFrameMs": 444.123333,
+      "typingMs": {
+        "p50": 2.5174589999996897,
+        "p95": 2.9376250000000255,
+        "max": 4.552791999999954
+      },
+      "typingLayouts": 0,
+      "scrollMs": {
+        "p50": 1.710458000000017,
+        "p95": 3.843583999999737,
+        "max": 4.712833000000046
+      },
+      "streamAndScrollMs": {
+        "p50": 2.261833999999908,
+        "p95": 3.872875000000022,
+        "max": 5.645833000000039
+      },
+      "resizeMs": {
+        "p50": 455.8445419999998,
+        "p95": 481.08749999999964,
+        "max": 481.08749999999964
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.154041000000234,
+        "p95": 1.186500000000251,
+        "max": 2.0582500000000437
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 3157356,
+        "system": 294704
+      },
+      "heapBefore": 51408445,
+      "heapAfter": 84979557,
+      "heapAfterForcedGc": 45405079,
+      "forcedGcMs": 55.88270800000009,
+      "cache": {
+        "entries": 256,
+        "weight": 1981696
+      },
+      "pasteMs": 39.74383300000045,
+      "typingAfterPasteMs": {
+        "p50": 2.475583999999799,
+        "p95": 3.4899999999997817,
+        "max": 3.4899999999997817
+      }
+    }
+  ],
+  "markdown": {
+    "markdownWithoutSyntaxMs": {
+      "p50": 0.08441700000003038,
+      "p95": 0.10008300000026793,
+      "max": 0.24716699999953562
+    },
+    "markdownWithSyntaxMs": {
+      "p50": 0.10004200000003038,
+      "p95": 0.17591600000014296,
+      "max": 0.25741699999980483
+    }
+  },
+  "provenance": {
+    "startingRevision": "03d3d27",
+    "kind": "TUI V2 working tree",
+    "note": "Renderer baseline recorded before optimization. Full-app baseline re-executed against isolated git archive of starting revision; same harness and fixture."
+  }
+}

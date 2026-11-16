@@ -1,3 +1,4 @@
+import {TranscriptLayout} from '../transcript/layout';
 import {PERMISSION_MODE_HINTS} from '@futryn/contracts';
 import {FutrynError, type ToolCall} from '@futryn/contracts';
 import {acceptSlashSelection, parseSlashCommand} from '@futryn/sdk';
@@ -31,6 +32,7 @@ import {
 export class ChatController {
   composer: ComposerState = createInitialComposerState();
   transcript: TranscriptItem[] = [];
+  readonly layout = new TranscriptLayout();
   /** -1 follows the newest message. */
   scrollOffset = -1;
   viewportOffset = 0;
@@ -44,6 +46,10 @@ export class ChatController {
   private activeAbortController: AbortController | null = null;
   private turnTask: Promise<void> | null = null;
   private sessionGeneration = 0;
+  private historySearch: {query: string; index: number; draft: ComposerState} | null = null;
+  private verbose = false;
+  private presentationId: string | null = null;
+  private readonly presentations = new Map<string, {composer: ComposerState; offset: number}>();
 
   constructor(private readonly host: TuiHost) {}
 
@@ -53,7 +59,20 @@ export class ChatController {
 
   syncFromSession(): void {
     this.invalidateTurn();
+    if (this.presentationId) {
+      this.presentations.delete(this.presentationId);
+      this.presentations.set(this.presentationId, {composer: this.composer, offset: this.scrollOffset});
+      while (this.presentations.size > 20) this.presentations.delete(this.presentations.keys().next().value!);
+    }
+    this.historySearch = null;
+    this.scrollOffset = -1;
     const active = this.host.client.activeSession();
+    const saved = active && this.presentations.get(active.id);
+    this.presentationId = active?.id ?? null;
+    if (saved) {
+      this.composer = saved.composer;
+      this.scrollOffset = saved.offset;
+    } else this.composer = {...createInitialComposerState(), history: this.composer.history};
     if (!active) {
       this.transcript = [];
       return;
@@ -76,6 +95,8 @@ export class ChatController {
 
   clear(): void {
     this.invalidateTurn();
+    this.presentationId = null;
+    this.scrollOffset = -1;
     this.transcript = [];
   }
 
@@ -169,12 +190,14 @@ export class ChatController {
         callId: call.id,
         onOutput: chunk => {
           if (generation !== this.sessionGeneration) return;
+          this.layout.invalidate(item.id);
           item.toolOutput ??= {};
           item.toolOutput[call.id] = (
             (item.toolOutput[call.id] ?? '') +
             (chunk.stream === 'stderr' ? '[stderr] ' : '') +
             chunk.text
           ).slice(-16000);
+          this.host.requestRender?.();
         },
       });
       if (generation !== this.sessionGeneration) return;
@@ -190,6 +213,7 @@ export class ChatController {
         this.composer = updateComposerValue(this.composer, input);
       item.errorText = `Error [${error instanceof FutrynError ? error.code : 'ERROR'}]: the shell command did not complete.`;
     } finally {
+      this.layout.invalidate(item.id);
       item.streaming = false;
       if (generation === this.sessionGeneration) {
         this.isStreaming = false;
@@ -251,6 +275,7 @@ export class ChatController {
         signal: abortController.signal,
       })) {
         if (generation !== this.sessionGeneration) return;
+        this.layout.invalidate(assistantItem.id);
         if (event.type === 'started') {
           responseMark = markResponse(assistantItem);
           assistantItem.awaitingModel = true;
@@ -274,9 +299,15 @@ export class ChatController {
           calls.push(event.call);
           assistantItem.toolCalls = calls;
           appendToolPart(assistantItem, event.call.id);
+          if (this.verbose)
+            assistantItem.expandedActivities = [...(assistantItem.expandedActivities ?? []), `tools:${event.call.id}`];
         } else if (event.type === 'activity') {
           assistantItem.awaitingModel = false;
           applyActivity(assistantItem, event.activity);
+          if (this.verbose)
+            assistantItem.expandedActivities = [
+              ...new Set([...(assistantItem.expandedActivities ?? []), `activity:${event.activity.id}`]),
+            ];
         } else if (event.type === 'toolOutputDelta') {
           assistantItem.toolOutput ??= {};
           assistantItem.toolOutput[event.callId] = (
@@ -329,7 +360,7 @@ export class ChatController {
             toolCalls: [],
           };
           this.transcript = [...this.transcript, steeredItem, assistantItem];
-          this.scrollOffset = -1;
+          this.layout.invalidate(assistantItem.id);
           responseMark = markResponse(assistantItem);
         } else if (event.type === 'completed') {
           completed = true;
@@ -337,6 +368,7 @@ export class ChatController {
           assistantItem.streaming = false;
           assistantItem.durationMs = Date.now() - startTime;
         }
+        this.host.requestRender?.();
       }
       if (abortController.signal.aborted) throw new FutrynError('CANCELLED');
       if (!completed) throw new FutrynError('PROTOCOL');
@@ -379,11 +411,14 @@ export class ChatController {
         this.banner = assistantItem.errorText;
       }
     } finally {
+      this.layout.invalidate(assistantItem.id);
+      this.host.requestRender?.();
       assistantItem.awaitingModel = false;
       if (generation === this.sessionGeneration) {
         this.isStreaming = false;
         this.turnStartedAt = null;
         this.activeAbortController = null;
+        this.presentationId = this.host.client.status().activeSessionId ?? this.presentationId;
       }
     }
   }
@@ -404,11 +439,111 @@ export class ChatController {
   }
 
   /** Esc on the main screen. */
-  async handleKey(key: string): Promise<void> {
+  async handleKey(key: string, waitForTurn = true): Promise<void> {
+    if (key === 'Shift+ArrowLeft' || key === 'Shift+ArrowRight') {
+      this.composer = {
+        ...this.composer,
+        selectionAnchor: this.composer.selectionAnchor ?? this.composer.cursor,
+        cursor:
+          key === 'Shift+ArrowLeft'
+            ? previousGrapheme(this.composer.value, this.composer.cursor)
+            : nextGrapheme(this.composer.value, this.composer.cursor),
+      };
+      return;
+    }
+    const anchor = this.composer.selectionAnchor;
+    const selected = anchor !== undefined && anchor !== this.composer.cursor;
+    if (
+      selected &&
+      (key === 'Backspace' ||
+        key === 'Delete' ||
+        key.startsWith('Paste:') ||
+        ([...key].length === 1 && !/[\x00-\x1f\x7f-\x9f]/.test(key)))
+    ) {
+      const from = Math.min(anchor, this.composer.cursor),
+        to = Math.max(anchor, this.composer.cursor);
+      const inserted = key.startsWith('Paste:') ? key.slice(6) : key === 'Backspace' || key === 'Delete' ? '' : key;
+      this.composer = updateComposerValue(
+        this.composer,
+        this.composer.value.slice(0, from) + inserted + this.composer.value.slice(to),
+        from + inserted.length,
+      );
+      if (key.startsWith('Paste:')) this.composer = {...this.composer, slashMenuOpen: false, fileMenuOpen: false};
+      return;
+    }
+    if (selected && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+      this.composer = {
+        ...this.composer,
+        cursor: key === 'ArrowLeft' ? Math.min(anchor, this.composer.cursor) : Math.max(anchor, this.composer.cursor),
+        selectionAnchor: undefined,
+      };
+      return;
+    }
+    if (anchor !== undefined) this.composer = {...this.composer, selectionAnchor: undefined};
+    if (key === 'Alt+R') {
+      this.historySearch ??= {query: '', index: this.composer.history.length, draft: this.composer};
+      this.findHistory();
+      return;
+    }
+    if (this.historySearch) {
+      if (key === 'Escape') {
+        this.composer = this.historySearch.draft;
+        this.historySearch = null;
+        return;
+      }
+      if (key === 'Enter') {
+        this.historySearch = null;
+        this.banner = 'History match restored; Enter submits.';
+        return;
+      }
+      if (key === 'Backspace' || [...key].length === 1) {
+        const search = this.historySearch;
+        search.query =
+          key === 'Backspace'
+            ? search.query.slice(0, previousGrapheme(search.query, search.query.length))
+            : search.query + key;
+        search.index = this.composer.history.length;
+        this.findHistory();
+        return;
+      }
+      this.historySearch = null;
+    }
+    if (key === 'Ctrl+O') {
+      this.verbose = !this.verbose;
+      for (const item of this.transcript) {
+        this.layout.invalidate(item.id, false);
+        item.reasoningExpanded = this.verbose;
+        item.expandedActivities = this.verbose
+          ? [
+              ...(item.toolCalls ?? []).map(call => `tools:${call.id}`),
+              ...(item.activities ?? []).map(activity => `activity:${activity.id}`),
+            ]
+          : [];
+        item.collapsedActivities = [];
+      }
+      this.showReasoning = this.verbose;
+      this.banner = this.verbose ? 'Verbose transcript · Ctrl+O to collapse' : 'Compact transcript';
+      return;
+    }
+    if (key === 'Alt+ArrowLeft' || key === 'Alt+ArrowRight' || key === 'Ctrl+W' || key === 'Ctrl+U') {
+      const {value, cursor} = this.composer;
+      const previous = value.slice(0, cursor).replace(/\S+\s*$/, '').length;
+      const next = cursor + (/^\s*\S+\s*/.exec(value.slice(cursor))?.[0].length ?? value.length - cursor);
+      if (key === 'Ctrl+W' || key === 'Ctrl+U') {
+        const start = key === 'Ctrl+U' ? (cursor === 0 ? 0 : value.lastIndexOf('\n', cursor - 1) + 1) : previous;
+        this.composer = updateComposerValue(this.composer, value.slice(0, start) + value.slice(cursor), start);
+      } else this.composer = {...this.composer, cursor: key === 'Alt+ArrowLeft' ? previous : next};
+      return;
+    }
+    if ((key === 'Home' || key === 'End') && !this.composer.value) {
+      this.scrollOffset = key === 'Home' ? 0 : -1;
+      return;
+    }
     // Main screen key handling
     if (key === 'Ctrl+R') {
       this.showReasoning = !this.showReasoning;
       for (const item of this.transcript) {
+        this.layout.invalidate(item.id, false);
         item.reasoningExpanded = this.showReasoning;
         item.expandedActivities = item.expandedActivities?.filter(key => !key.startsWith('reasoning:'));
         item.collapsedActivities = item.collapsedActivities?.filter(key => !key.startsWith('reasoning:'));
@@ -587,6 +722,12 @@ export class ChatController {
       return;
     }
     if (key === 'Enter') {
+      if (!waitForTurn && !this.composer.value.trimStart().startsWith('/')) {
+        void this.submit(this.composer.value).catch(() => {
+          this.banner = 'Submission failed; check the retained draft.';
+        });
+        return;
+      }
       await this.submit(this.composer.value);
       return;
     }
@@ -596,6 +737,19 @@ export class ChatController {
         this.composer.value.slice(0, this.composer.cursor) + key + this.composer.value.slice(this.composer.cursor);
       this.composer = updateComposerValue(this.composer, nextVal, this.composer.cursor + key.length);
     }
+  }
+
+  private findHistory(): void {
+    const search = this.historySearch!;
+    const history = this.composer.history;
+    for (let i = search.index - 1; i >= 0; i--) {
+      if (!history[i]!.toLowerCase().includes(search.query.toLowerCase())) continue;
+      search.index = i;
+      this.composer = {...updateComposerValue(this.composer, history[i]!), slashMenuOpen: false, fileMenuOpen: false};
+      this.banner = `History search: ${search.query || '(type to search)'} · Alt+R older · Enter accept · Esc draft`;
+      return;
+    }
+    this.banner = `No older history match: ${search.query} · Esc restores draft`;
   }
 
   async shutdown(): Promise<void> {

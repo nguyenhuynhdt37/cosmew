@@ -14,6 +14,7 @@ import {parseUnifiedDiff, renderDiffCodeLine} from '../diff/code-lines';
 
 export function renderPermissionDialogOverlay(options: {
   workspaceReading?: ReturnType<FutrynClient['status']>['workspaceReadStatus'];
+  terminalRuntime?: ReturnType<FutrynClient['status']>['terminalRuntime'];
   width: number;
   height: number;
   requests: PermissionPromptRequest[];
@@ -50,6 +51,11 @@ export function renderPermissionDialogOverlay(options: {
     wrap(command ? `Command: ${request.target}` : `Target: ${JSON.stringify(request.target)}`);
     wrap(`${command ? 'Where' : 'Action'}: ${request.action}`);
     wrap(`Why: ${request.reason}`);
+    if (options.terminalRuntime && ['process.execute', 'network.connect'].includes(request.capability)) {
+      const runtime = options.terminalRuntime;
+      wrap(`Runtime: ${runtime.label} · ${runtime.sandbox}`);
+      for (const limitation of runtime.limitations) wrap(limitation);
+    }
     wrap(
       request.capability === 'fs.write'
         ? 'Once applies this exact diff. Session remembers only this patch and original file versions.'
@@ -75,7 +81,11 @@ export function renderPermissionDialogOverlay(options: {
     wrap('Project files: allowed after folder consent.');
     wrap('Secret files: ask. Outside workspace: denied.');
     wrap('Tools: read, glob, grep; edit, write and apply_patch ask before writes.');
-    wrap('Commands unavailable: process cleanup safety check failed.');
+    wrap(
+      options.terminalRuntime
+        ? `Commands: ${options.terminalRuntime.label}${options.terminalRuntime.reason ? ` · ${options.terminalRuntime.reason}` : ''}`
+        : 'Command runtime details unavailable.',
+    );
     if (grants.length) {
       wrap(`Allowed this session (${grants.length}, Ctrl+X revokes):`);
       for (const grant of grants) wrap('  ' + JSON.stringify(grant));

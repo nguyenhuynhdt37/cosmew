@@ -1,0 +1,92 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "platform": "darwin",
+    "release": "24.6.0",
+    "cpu": "Apple M1 Pro",
+    "dimensions": "120x40",
+    "iterations": 24
+  },
+  "scenarios": [
+    {
+      "count": 100,
+      "frameMs": {
+        "p50": 11.341458999999986,
+        "p95": 18.60220800000002
+      },
+      "layoutMs": {
+        "p50": 9.971042000000011,
+        "p95": 15.802624999999978
+      },
+      "canvasMs": {
+        "p50": 1.355958000000001,
+        "p95": 3.187999999999988
+      },
+      "ansiDiffMs": {
+        "p50": 0.271000000000015,
+        "p95": 0.5677500000000038
+      },
+      "ansiBytes": 14426,
+      "cpuMicros": {
+        "user": 329177,
+        "system": 48163
+      },
+      "heapDelta": 2682120
+    },
+    {
+      "count": 1000,
+      "frameMs": {
+        "p50": 69.513375,
+        "p95": 93.70737499999996
+      },
+      "layoutMs": {
+        "p50": 67.32995800000003,
+        "p95": 92.4247079999999
+      },
+      "canvasMs": {
+        "p50": 1.1637500000001637,
+        "p95": 2.1393330000000788
+      },
+      "ansiDiffMs": {
+        "p50": 0.22804100000007566,
+        "p95": 0.36095799999998235
+      },
+      "ansiBytes": 14426,
+      "cpuMicros": {
+        "user": 1876839,
+        "system": 140382
+      },
+      "heapDelta": 24950648
+    },
+    {
+      "count": 5000,
+      "frameMs": {
+        "p50": 342.563584,
+        "p95": 1021.6272090000002
+      },
+      "layoutMs": {
+        "p50": 339.6848749999999,
+        "p95": 1020.2552500000002
+      },
+      "canvasMs": {
+        "p50": 1.2513749999998254,
+        "p95": 3.555791999999201
+      },
+      "ansiDiffMs": {
+        "p50": 0.2287080000005517,
+        "p95": 0.5375420000000304
+      },
+      "ansiBytes": 14426,
+      "cpuMicros": {
+        "user": 8971058,
+        "system": 574237
+      },
+      "heapDelta": 112216090
+    }
+  ],
+  "provenance": {
+    "startingRevision": "03d3d27",
+    "kind": "baseline at starting source",
+    "note": "Renderer baseline recorded before optimization. Full-app baseline re-executed against isolated git archive of starting revision; same harness and fixture."
+  }
+}

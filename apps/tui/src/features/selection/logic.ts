@@ -17,13 +17,23 @@ export class TextSelection {
   private edgeElapsed = 0;
   private copied = false;
   private tooLarge = false;
+  get needsAnimation(): boolean {
+    return (
+      this.dragging &&
+      !!this.document &&
+      (this.pointer.row < this.document.top || this.pointer.row >= this.document.top + this.document.height)
+    );
+  }
   private clamp(point: CellPoint): CellPoint {
     if (this.document) {
       const doc = this.document;
       return {
         row: Math.max(
           0,
-          Math.min(doc.lines.length - 1, doc.offset + Math.max(0, Math.min(doc.height - 1, point.row - doc.top))),
+          Math.min(
+            (doc.totalLines ?? doc.lines.length) - 1,
+            doc.offset + Math.max(0, Math.min(doc.height - 1, point.row - doc.top)),
+          ),
         ),
         col: Math.max(0, Math.min(doc.width - 1, point.col - doc.left)),
       };
@@ -42,7 +52,7 @@ export class TextSelection {
       point.row < doc.top + doc.height &&
       point.col >= doc.left &&
       point.col < doc.left + doc.width
-        ? {...doc}
+        ? {...doc, ...doc.freeze?.()}
         : null;
     this.pointer = point;
     this.edgeElapsed = 0;
@@ -77,7 +87,10 @@ export class TextSelection {
   scroll(amount: number): boolean {
     if (!this.document) return false;
     const doc = this.document;
-    doc.offset = Math.max(0, Math.min(Math.max(0, doc.lines.length - doc.height), doc.offset + amount));
+    doc.offset = Math.max(
+      0,
+      Math.min(Math.max(0, (doc.totalLines ?? doc.lines.length) - doc.height), doc.offset + amount),
+    );
     if (this.dragging) this.end = this.clamp(this.pointer);
     return true;
   }
@@ -140,7 +153,7 @@ export class TextSelection {
     const doc = this.document!;
     const base = this.frame!.cells[doc.top]?.[doc.left];
     const canvas = new Canvas(doc.width, 1, base?.fg ?? '', base?.bg ?? '');
-    const line = doc.lines[row];
+    const line = doc.readRows ? doc.readRows(row, 1)[0] : doc.lines[row];
     if (line) canvas.block(0, 0, [line], doc.width);
     return canvas.cells[0]!;
   }
@@ -161,7 +174,11 @@ export class TextSelection {
     }
     if (this.active()) {
       const [start, end] = this.bounds();
-      for (let y = start.row; y <= end.row; y++) {
+      for (
+        let y = Math.max(start.row, this.document?.offset ?? start.row);
+        y <= Math.min(end.row, this.document ? this.document.offset + this.document.height - 1 : end.row);
+        y++
+      ) {
         const screenRow = this.document ? y - this.document.offset + this.document.top : y;
         if (this.document && (screenRow < this.document.top || screenRow >= this.document.top + this.document.height))
           continue;

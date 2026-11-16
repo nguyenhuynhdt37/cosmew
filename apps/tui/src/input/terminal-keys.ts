@@ -20,6 +20,18 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       i += (special ?? endKey ?? newline)![0].length;
       continue;
     }
+    const selection = /^\x1b\[1;2([CD])/.exec(str.slice(i));
+    if (selection) {
+      keys.push(selection[1] === 'D' ? 'Shift+ArrowLeft' : 'Shift+ArrowRight');
+      i += selection[0].length;
+      continue;
+    }
+    const word = /^(?:\x1b\[1;[35]([CD])|\x1b([bfr]))/.exec(str.slice(i));
+    if (word) {
+      keys.push(word[2] === 'r' ? 'Alt+R' : word[1] === 'D' || word[2] === 'b' ? 'Alt+ArrowLeft' : 'Alt+ArrowRight');
+      i += word[0].length;
+      continue;
+    }
     if (str.startsWith('\x1b[200~', i) || str.startsWith('\x1b[201~', i)) {
       i += 6;
       continue;
@@ -151,6 +163,9 @@ export function parseRawTerminalKey(chunk: Uint8Array | string): string[] {
       i++;
     } else if (code === 14) {
       keys.push('Ctrl+N');
+      i++;
+    } else if (code === 15) {
+      keys.push('Ctrl+O');
       i++;
     } else if (code === 16) {
       keys.push('Ctrl+P');

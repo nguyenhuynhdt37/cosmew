@@ -50,6 +50,7 @@ export function updateComposerValue(
     ...state,
     value: nextValue,
     cursor: clampedCursor,
+    selectionAnchor: undefined,
     slashMenuOpen: slashMatches.length > 0 && !trimmed.includes('\n'),
     slashSelectedIndex: 0,
     fileMenuOpen: fileMention !== null,

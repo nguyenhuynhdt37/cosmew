@@ -195,6 +195,8 @@ export class FutrynClient {
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
   private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
+  /** Status is read on every UI frame; explicit usage reports remain fresh reads. */
+  private statusUsage: ReturnType<FutrynClient['usage']> | null = null;
   private sending = false;
   /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
   private activeTurnId: string | undefined;
@@ -468,6 +470,7 @@ export class FutrynClient {
   }
 
   emitReactiveEvent(kind: ReactiveAgentEventKind, detail?: string): ReactiveAgentEvent {
+    if (kind !== 'streaming' && kind !== 'reasoning' && kind !== 'tool') this.statusUsage = null;
     const event: ReactiveAgentEvent = {
       seq: ++this.eventSeq,
       kind,
@@ -486,6 +489,7 @@ export class FutrynClient {
   }
 
   private notifyStateChange(): void {
+    this.statusUsage = null;
     this.guardElevation();
     this.emitReactiveEvent(this.sending ? this.latestEvent.kind : 'idle');
   }
@@ -579,6 +583,7 @@ export class FutrynClient {
         activeModel = null;
       }
     }
+    const usage = (this.statusUsage ??= this.usage());
     return {
       workspace: this.ports.workspace,
       mode: this.currentMode,
@@ -601,8 +606,8 @@ export class FutrynClient {
           : 'read-only',
       activeSessionId: this.currentSession?.id ?? null,
       messageCount: this.currentSession?.messages.length ?? 0,
-      lastUsage: this.usage().last?.usage ?? this.lastUsage,
-      usage: this.usage(),
+      lastUsage: usage.last?.usage ?? this.lastUsage,
+      usage,
       reasoningEffort: activeAccount && activeModel ? this.effort(activeAccount.id, activeModel) : null,
       phase: this.latestEvent.kind,
       pendingPermissions: this.listPendingPermissions().length,
@@ -1060,6 +1065,7 @@ export class FutrynClient {
       // If acceptance failed, the durable row remains available for a later explicit retry.
       this.claimedNextTurn.delete(session.id);
       this.sending = false;
+      this.statusUsage = null;
       this.activeTurnId = undefined;
       this.streamingText = '';
       this.streamingSteps = [];

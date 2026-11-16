@@ -74,6 +74,7 @@ export class PermissionsFeature implements OverlayFeature {
     return renderPermissionDialogOverlay({
       ...size,
       workspaceReading: this.host.client.status().workspaceReadStatus,
+      terminalRuntime: this.host.client.status().terminalRuntime,
       requests: this.host.client.listPermissions(),
       grants: this.host.client.listToolGrants(),
       state: this.state,

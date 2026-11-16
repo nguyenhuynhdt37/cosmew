@@ -35,7 +35,12 @@ export interface TranscriptViewport {
   width: number;
   height: number;
   offset: number;
+  /** Visible rows; legacy consumers without totalLines may still supply a full document. */
   lines: RenderedBoxLine[];
+  totalLines?: number;
+  hasNewOutput?: boolean;
+  readRows?: (offset: number, count: number) => RenderedBoxLine[];
+  freeze?: () => {totalLines: number; readRows: (offset: number, count: number) => RenderedBoxLine[]};
   disclosures: {row: number; itemId: string; key: string}[];
 }
 

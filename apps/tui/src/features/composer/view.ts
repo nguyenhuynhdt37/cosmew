@@ -1,3 +1,4 @@
+import {composerVisualRows} from './layout';
 import {graphemes, textWidth, nextGrapheme} from '../../input/text';
 import type {BorderStyle, PermissionMode, ThemeTokens} from '@futryn/contracts';
 import type {AgentMode} from '@futryn/sdk';
@@ -158,7 +159,7 @@ export function renderPromptComposerLines(options: {
   const lead = '  › ';
   const textCols = Math.max(1, innerWidth - lead.length);
   const placeholder = isStreaming
-    ? 'Replying…'
+    ? 'Type to steer the running turn…'
     : options.placeholder && options.placeholder.length <= textCols - 1
       ? options.placeholder
       : 'Ask anything…';
@@ -190,27 +191,7 @@ export function renderPromptComposerLines(options: {
       lead,
     );
   } else {
-    const visual: {text: string; start: number}[] = [];
-    let offset = 0;
-    for (const line of state.value.split('\n')) {
-      let rowText = '';
-      let rowStart = offset;
-      let columns = 0;
-      for (const {segment, index} of graphemes(line)) {
-        const cells = textWidth(segment);
-        if (columns + cells > textCols && rowText) {
-          visual.push({text: rowText, start: rowStart});
-          rowText = '';
-          rowStart = offset + index;
-          columns = 0;
-        }
-        rowText += segment;
-        columns += cells;
-      }
-      visual.push({text: rowText, start: rowStart});
-      if (columns === textCols) visual.push({text: '', start: offset + line.length});
-      offset += line.length + 1;
-    }
+    const visual = composerVisualRows(state.value, textCols);
     const cursorRow = Math.max(
       0,
       visual.findLastIndex(row => row.start <= state.cursor),
@@ -223,19 +204,31 @@ export function renderPromptComposerLines(options: {
     for (const [index, row] of visual.slice(first, first + maxInput).entries()) {
       const cursorCol = state.cursor - row.start;
       const hasCursor = focused && first + index === cursorRow;
+      const selectionStart =
+        state.selectionAnchor === undefined ? state.cursor : Math.min(state.selectionAnchor, state.cursor);
+      const selectionEnd =
+        state.selectionAnchor === undefined ? state.cursor : Math.max(state.selectionAnchor, state.cursor);
+      const from = Math.max(0, Math.min(row.text.length, selectionStart - row.start));
+      const to = Math.max(0, Math.min(row.text.length, selectionEnd - row.start));
       pushInputRow(
-        hasCursor
+        to > from
           ? [
-              {text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg},
-              {
-                text: row.text.slice(cursorCol, nextGrapheme(row.text, cursorCol)) || ' ',
-                fg: tokens.accentForeground,
-                bg: tokens.cursor,
-                bold: true,
-              },
-              {text: row.text.slice(nextGrapheme(row.text, cursorCol)), fg: tokens.foreground, bg},
+              {text: row.text.slice(0, from), fg: tokens.foreground, bg},
+              {text: row.text.slice(from, to), fg: tokens.selectionForeground, bg: tokens.selection},
+              {text: row.text.slice(to), fg: tokens.foreground, bg},
             ]
-          : [{text: row.text, fg: tokens.foreground, bg}],
+          : hasCursor
+            ? [
+                {text: row.text.slice(0, cursorCol), fg: tokens.foreground, bg},
+                {
+                  text: row.text.slice(cursorCol, nextGrapheme(row.text, cursorCol)) || ' ',
+                  fg: tokens.accentForeground,
+                  bg: tokens.cursor,
+                  bold: true,
+                },
+                {text: row.text.slice(nextGrapheme(row.text, cursorCol)), fg: tokens.foreground, bg},
+              ]
+            : [{text: row.text, fg: tokens.foreground, bg}],
         first + index === 0 ? lead : ' '.repeat(lead.length),
       );
     }

@@ -25,6 +25,7 @@ export interface OverlayLayout {
  */
 export interface TuiHost {
   readonly client: FutrynClient;
+  requestRender?: () => void;
   readonly themeEngine: ThemeEngine;
   readonly cols: number;
   readonly rows: number;

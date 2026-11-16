@@ -1,5 +1,8 @@
 # Điều hướng đặc tả Futryn
 
+TUI V2: [architecture decision](adr/0039-tui-v2-virtualized-transcript.md),
+[usage](delivery/tui-v2/usage.md), [benchmarks and acceptance](delivery/tui-v2/report.md).
+
 Latest execution milestone: [ADR 0035](adr/0035-native-sandbox-default.md) — native Seatbelt/bubblewrap by default, Docker optional. Before that: [ADR 0034](adr/0034-unified-exec-terminal-parity.md) ([acceptance](delivery/unified-exec-acceptance.md)): the verified Docker backend is auto-selected when a local engine passes its self-tests and supports workspace-write, PTY sessions and approved network escalation. Earlier: [ADR 0032](adr/0032-contained-command-sessions.md), [acceptance](delivery/execution-runtime-acceptance.md). Native host execution remains closed. Historical gate descriptions below do not enable other backends.
 
 Project/repository rename: [ADR 0031](adr/0031-futryn-project-rename.md). Futryn is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.

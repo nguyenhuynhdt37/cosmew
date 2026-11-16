@@ -1,5 +1,6 @@
 /** UTF-16 offsets for JS strings, with edits and terminal columns at grapheme boundaries. */
 const segmenter = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
+export const iterateGraphemes = (text: string) => segmenter.segment(text);
 export const graphemes = (text: string) => [...segmenter.segment(text)];
 export const textWidth = (text: string): number => Bun.stringWidth(text);
 

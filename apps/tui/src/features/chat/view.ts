@@ -1,3 +1,4 @@
+import type {TranscriptLayout} from '../transcript/layout';
 import {isFileChangeTool, type ThemeManifest, type ThemeTokens, type AppearanceConfig} from '@futryn/contracts';
 import type {FutrynClient, ReactiveAgentEvent} from '@futryn/sdk';
 import type {Canvas} from '../../ui';
@@ -32,6 +33,8 @@ export interface ChatScreenInput {
   composer: ComposerState;
   transcript: TranscriptItem[];
   scrollOffset: number;
+  transcriptLayout: TranscriptLayout;
+  contextReadout?: ReturnType<FutrynClient['context']>;
   isStreaming: boolean;
   /** Start of the running turn (ms since epoch), for the status timer. */
   turnStartedAt?: number | null;
@@ -74,7 +77,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
         : undefined,
     contextLine:
       status.selection && rows >= 12
-        ? renderContextIndicator(v.client.context(v.composer.value), contentWidth, tokens)
+        ? renderContextIndicator(v.contextReadout ?? v.client.context(v.composer.value), contentWidth, tokens)
         : undefined,
   });
 
@@ -145,6 +148,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
         items: v.transcript,
+        layout: v.transcriptLayout,
         compactActivities: true,
         width: transcriptWidth,
         height: transcriptHeight,
@@ -164,14 +168,20 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
         },
       });
       canvas.block(transcriptStartRow, contentLeft, vp.lines, transcriptWidth);
+
       viewport = {
         top: transcriptStartRow,
         left: contentLeft,
         width: transcriptWidth,
         height: transcriptHeight,
         offset: vp.clampedOffset,
-        lines: vp.allLines,
-        disclosures: vp.allLines.flatMap((line, row) => (line.disclosure ? [{row, ...line.disclosure}] : [])),
+        lines: vp.visibleLines,
+        totalLines: vp.totalLines,
+        hasNewOutput: vp.newOutput && vp.clampedOffset < Math.max(0, vp.totalLines - transcriptHeight),
+        freeze: () => v.transcriptLayout.freeze(),
+        disclosures: vp.visibleLines.flatMap((line, row) =>
+          line.disclosure ? [{row: row + vp.clampedOffset, ...line.disclosure}] : [],
+        ),
       };
     }
     if (statusRow > transcriptStartRow)

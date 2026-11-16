@@ -1,4 +1,4 @@
-import {graphemes, textWidth} from '../../input/text';
+import {iterateGraphemes, textWidth} from '../../input/text';
 import type {Message, ThemeTokens, ToolCall, ToolResult} from '@futryn/contracts';
 import type {ExplorationRow, ToolExecutionSummary, TranscriptItem, TranscriptPart} from './types';
 import type {StyledSpan} from '../../ui';
@@ -90,19 +90,24 @@ export function wrapTextToWidth(text: string, maxWidth: number): string[] {
   const rows: string[] = [];
   for (const raw of text.split('\n')) {
     let remaining = raw;
-    while (textWidth(remaining) > width) {
+    while (remaining) {
       let size = 0,
         end = 0,
-        word = 0;
-      for (const {segment, index} of graphemes(remaining)) {
+        word = 0,
+        overflow = false;
+      for (const {segment, index} of iterateGraphemes(remaining)) {
         const cells = textWidth(segment);
-        if (size + cells > width) break;
+        if (size + cells > width) {
+          overflow = true;
+          break;
+        }
         size += cells;
         end = index + segment.length;
         if (segment === ' ') word = index;
       }
+      if (!overflow) break;
       // A two-cell glyph cannot fit a one-cell surface; preserve progress without splitting UTF-16.
-      if (!end) end = graphemes(remaining)[0]!.segment.length;
+      if (!end) end = iterateGraphemes(remaining)[Symbol.iterator]().next().value!.segment.length;
       const split = word > end * 0.35 ? word : end;
       rows.push(remaining.slice(0, split));
       remaining = remaining.slice(split).trimStart();

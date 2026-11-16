@@ -16,6 +16,39 @@ const chatFixture = () => {
   return {chat, commands};
 };
 
+test('word editing, verbose transcript and reverse history search preserve drafts', async () => {
+  const {chat} = chatFixture();
+  chat.composer = updateComposerValue(chat.composer, 'first 日本語 final');
+  await chat.handleKey('Alt+ArrowLeft');
+  expect(chat.composer.cursor).toBe(10);
+  await chat.handleKey('Ctrl+W');
+  expect(chat.composer.value).toBe('first final');
+  await chat.handleKey('Ctrl+U');
+  expect(chat.composer.value).toBe('final');
+  chat.composer.history = ['inspect tests', 'build project', 'inspect module'];
+  await chat.handleKey('Alt+R');
+  for (const ch of 'inspect') await chat.handleKey(ch);
+  expect(chat.composer.value).toBe('inspect module');
+  await chat.handleKey('Alt+R');
+  expect(chat.composer.value).toBe('inspect tests');
+  await chat.handleKey('Escape');
+  expect(chat.composer.value).toBe('final');
+  expect(parseRawTerminalKey('\x1bb\x1bf\x1br\x0f')).toEqual(['Alt+ArrowLeft', 'Alt+ArrowRight', 'Alt+R', 'Ctrl+O']);
+});
+
+test('keyboard selection replaces whole graphemes on typing and paste', async () => {
+  const {chat} = chatFixture();
+  chat.composer = updateComposerValue(chat.composer, 'first 日本👩🏽‍💻');
+  await chat.handleKey('Shift+ArrowLeft');
+  await chat.handleKey('Shift+ArrowLeft');
+  await chat.handleKey('x');
+  expect(chat.composer.value).toBe('first 日x');
+  await chat.handleKey('Shift+ArrowLeft');
+  await chat.handleKey('Paste:replacement');
+  expect(chat.composer.value).toBe('first 日replacement');
+  expect(parseRawTerminalKey('\x1b[1;2D\x1b[1;2C')).toEqual(['Shift+ArrowLeft', 'Shift+ArrowRight']);
+});
+
 test('bracketed paste survives chunk boundaries as literal data, including newlines and shortcuts', async () => {
   const decoder = new TerminalInputDecoder();
   const {chat, commands} = chatFixture();
@@ -117,6 +150,32 @@ test('request failure restores submitted input', async () => {
   release();
   await task;
   expect(chat.composer.value).toBe('preserve me');
+});
+
+test('tool output events request a frame after mutation even without an SDK reactive event', async () => {
+  let observed = '';
+  let observedBeforeCompletion = '';
+  let chat!: ChatController;
+  chat = new ChatController({
+    setBanner() {},
+    requestRender() {
+      observed = chat.transcript.at(-1)?.toolOutput?.call ?? '';
+    },
+    client: {
+      status: () => ({}),
+      takeQueuedMessage: () => undefined,
+      projectContext: () => null,
+      queuedInput: () => [],
+      sendMessage: async function* () {
+        yield {type: 'toolOutputDelta', callId: 'call', name: 'exec_command', stream: 'stdout', text: 'live output'};
+        observedBeforeCompletion = observed;
+        yield {type: 'completed', usage: {inputTokens: 1, outputTokens: 1}, finishReason: 'stop'};
+      },
+    },
+  } as unknown as TuiHost);
+  await chat.submit('run');
+  expect(observedBeforeCompletion).toBe('live output');
+  expect(observed).toBe('live output');
 });
 
 test('async failures preserve a newer draft and stale events cannot repopulate a cleared transcript', async () => {

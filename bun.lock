@@ -41,7 +41,7 @@
     },
     "apps/tui": {
       "name": "@futryn/tui",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@futryn/contracts": "workspace:*",
         "@futryn/sdk": "workspace:*",

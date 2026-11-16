@@ -23,7 +23,8 @@ export function renderHelpOverlay(options: {
   row('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
   row('   !            Sandboxed shell command         Alt+Enter    Newline (also Ctrl+J)');
   row('   Mouse drag   Select text · Ctrl+C/Ctrl+Y Copy · Esc Clear · Shift+drag native selection');
-  row('   Ctrl+R       Toggle reasoning summary        /model: Ctrl+E cycles active model effort');
+  row('   Ctrl+O verbose transcript · Ctrl+R reasoning · Alt+R history search');
+  row('   Alt+←/→ word · Ctrl+W delete word · Ctrl+U clear line · Home/End scroll (empty prompt)');
   row('');
   row(' Slash Commands:', tokens.markdownHeading, true);
   for (const cmd of SLASH_COMMANDS.filter(command => command.help !== false)) {

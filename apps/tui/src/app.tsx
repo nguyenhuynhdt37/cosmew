@@ -53,6 +53,36 @@ export class FutrynTuiApp {
   private previousCells: FrameCell[][] | null = null;
   private animationTimeSeconds = 0;
   private exitRequested = false;
+  private updateListener: (() => void) | null = null;
+  private focused = true;
+  private contextReadout: ReturnType<FutrynClient['context']> | null = null;
+  private contextDirty = true;
+  private contextUpdatedAt = 0;
+  private subscriptions: (() => void)[] = [];
+  public onUpdate(listener: () => void): () => void {
+    this.updateListener = listener;
+    return () => {
+      this.updateListener = null;
+    };
+  }
+  public invalidateContext(): void {
+    this.contextDirty = true;
+  }
+  public animationDelay(): number | null {
+    if (!this.focused) return null;
+    if (this.textSelection.frame) return this.textSelection.needsAnimation ? 80 : null;
+    if (this.gate.phase === 'checking' || this.chat.isStreaming) return 1000;
+    const config = this.themeEngine.getActiveAppearance().animations;
+    if (
+      this.overlay === 'none' &&
+      !this.chat.transcript.length &&
+      config.enabled &&
+      !config.reducedMotion &&
+      !this.themeEngine.wallpaperEngine.isPaused(config)
+    )
+      return 80;
+    return null;
+  }
   /** Reading the workspace is allowed by default for embedders; interactive and non-TTY runs withhold it until approved. */
   private workspaceAccess = true;
 
@@ -74,6 +104,7 @@ export class FutrynTuiApp {
     const app = this;
     return {
       client: this.client,
+      requestRender: () => this.updateListener?.(),
       themeEngine: this.themeEngine,
       get cols() {
         return app.cols;
@@ -100,14 +131,19 @@ export class FutrynTuiApp {
       openOverlay: target => this.openOverlay(target),
       closeOverlay: () => {
         this.overlay = 'none';
+        this.updateListener?.();
       },
       setBanner: message => {
         this.statusBanner = message;
+        this.updateListener?.();
       },
       requestExit: () => {
         this.exitRequested = true;
       },
-      syncTranscript: () => this.chat.syncFromSession(),
+      syncTranscript: () => {
+        this.chat.syncFromSession();
+        this.invalidateContext();
+      },
       clearTranscript: () => this.chat.clear(),
       clearSelection: () => this.textSelection.clear(),
       copyText: text => {
@@ -154,6 +190,18 @@ export class FutrynTuiApp {
   public async initialize(): Promise<void> {
     await this.themeEngine.initialize();
     this.chat.syncFromSession();
+    this.invalidateContext();
+    this.subscriptions.push(
+      this.client.onReactiveEvent(event => {
+        this.invalidateContext();
+        if (event.kind === 'permission' || event.detail?.startsWith('Permission ')) {
+          const item = this.chat.transcript.at(-1);
+          if (item) this.chat.layout.invalidate(item.id);
+        }
+        this.updateListener?.();
+      }),
+      this.themeEngine.subscribe(() => this.updateListener?.()),
+    );
     const warnings = this.themeEngine.getWarnings();
     if (warnings.length > 0) {
       this.statusBanner = warnings[0]!;
@@ -206,6 +254,7 @@ export class FutrynTuiApp {
   }
 
   public resize(cols: number, rows: number): void {
+    this.invalidateContext();
     this.textSelection.clear();
     this.cols = Math.max(20, cols);
     this.rows = Math.max(8, rows);
@@ -232,6 +281,7 @@ export class FutrynTuiApp {
     if (leaving && !leaving.overlays.includes(target)) leaving.close?.(target);
     this.overlay = target;
     this.features.get(target)?.open(target);
+    this.updateListener?.();
   }
 
   private connectionError(error: unknown, providerId?: string): string {
@@ -245,6 +295,7 @@ export class FutrynTuiApp {
   public async shutdown(): Promise<void> {
     this.textSelection.clear();
     this.clipboardSequence = '';
+    for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();
     await Promise.allSettled([
       this.gate.shutdown(),
       this.chat.shutdown(),
@@ -254,10 +305,12 @@ export class FutrynTuiApp {
 
   public async submitPrompt(content: string): Promise<void> {
     if (this.gate.active) return; // nothing is sent before consent and verification
+    this.invalidateContext();
     await this.chat.submit(content);
+    this.invalidateContext();
   }
 
-  public async handleKey(key: string): Promise<void> {
+  public async handleKey(key: string, waitForTurn = true): Promise<void> {
     if (this.gate.active && (await this.gate.handleKey(key))) return;
     if (['WheelUp', 'WheelDown', 'PageUp', 'PageDown'].includes(key) && this.textSelection.frame) {
       const amount = key.startsWith('Wheel') ? 2 : Math.max(1, this.rows - 8);
@@ -299,6 +352,7 @@ export class FutrynTuiApp {
               expanded.add(hit.key);
               collapsed.delete(hit.key);
             }
+            this.chat.layout.invalidate(item.id, false);
             item.expandedActivities = [...expanded];
             item.collapsedActivities = [...collapsed];
           }
@@ -321,10 +375,12 @@ export class FutrynTuiApp {
     if (key !== 'FocusIn' && key !== 'FocusOut') this.chat.companion.activity();
     if (key !== 'FocusIn' && key !== 'FocusOut') this.statusBanner = null;
     if (key === 'FocusIn') {
+      this.focused = true;
       this.themeEngine.wallpaperEngine.setFocused(true);
       return;
     }
     if (key === 'FocusOut') {
+      this.focused = false;
       this.themeEngine.wallpaperEngine.setFocused(false);
       return;
     }
@@ -371,12 +427,36 @@ export class FutrynTuiApp {
       return;
     }
 
-    await this.chat.handleKey(key);
+    await this.chat.handleKey(key, waitForTurn);
   }
 
   // ============================================================================
   // FRAME COMPOSITOR & SNAPSHOT ENGINE
   // ============================================================================
+
+  private composerContext(): ReturnType<FutrynClient['context']> {
+    if (
+      !this.contextReadout ||
+      (this.contextDirty && (!this.chat.isStreaming || Date.now() - this.contextUpdatedAt >= 1000))
+    ) {
+      this.contextReadout = this.client.context();
+      this.contextDirty = false;
+      this.contextUpdatedAt = Date.now();
+    }
+    const base = this.contextReadout;
+    const draft = this.chat.composer.value.trim();
+    const extra = draft && !/^[\/!]/.test(draft) ? Math.ceil(Buffer.byteLength(draft) / 4) + 16 : 0;
+    const estimateTokens = base.estimateTokens + extra;
+    return {
+      ...base,
+      estimateTokens,
+      measuredCurrentHistory: !this.contextDirty && !extra && base.measuredCurrentHistory,
+      estimatedPercent:
+        base.limitTokens && !base.runtimeHiddenContext
+          ? Math.round((estimateTokens / base.limitTokens) * 1000) / 10
+          : null,
+    };
+  }
 
   public computeFrameSnapshot(): FrameSnapshot {
     if (this.textSelection.frame) return this.textSelection.view(this.themeEngine.getActiveTokens());
@@ -395,8 +475,10 @@ export class FutrynTuiApp {
     );
 
     const canvas = new Canvas(cols, rows, tokens.foreground, tokens.background);
-    const metrics = screenMetrics(cols, rows, appearance.sidebar);
-    if (wallpaperId && appearance.animations.enabled) {
+    const diffPanelWidth =
+      this.overlay === 'diff' && cols >= 140 ? this.features.get('diff')!.layout('diff', cols, rows).width : 0;
+    const metrics = screenMetrics(cols - diffPanelWidth, rows, diffPanelWidth ? false : appearance.sidebar);
+    if (wallpaperId && appearance.animations.enabled && !this.chat.transcript.length) {
       paintWallpaper(canvas, {
         engine: this.themeEngine,
         wallpaperId,
@@ -421,6 +503,8 @@ export class FutrynTuiApp {
       wallpaperId,
       composer: this.chat.composer,
       transcript: this.chat.transcript,
+      transcriptLayout: this.chat.layout,
+      contextReadout: this.composerContext(),
       scrollOffset: this.chat.scrollOffset,
       isStreaming: this.chat.isStreaming,
       turnStartedAt: this.chat.turnStartedAt,
@@ -432,7 +516,11 @@ export class FutrynTuiApp {
     if (transcriptViewport) {
       this.chat.viewportOffset = transcriptViewport.offset;
       this.chat.viewportHeight = transcriptViewport.height;
-      this.chat.viewportMaxOffset = Math.max(0, transcriptViewport.lines.length - transcriptViewport.height);
+      this.chat.viewportMaxOffset = Math.max(
+        0,
+        (transcriptViewport.totalLines ?? transcriptViewport.lines.length) - transcriptViewport.height,
+      );
+      if (this.chat.scrollOffset >= 0) this.chat.scrollOffset = transcriptViewport.offset;
     }
 
     // 6. Draw Collapsible Sidebar if enabled & terminal is wide enough
@@ -465,8 +553,8 @@ export class FutrynTuiApp {
         ? feature.render(this.overlay, {width: overlayWidth, height: overlayHeight}, theme)
         : [];
 
-      const startCol = Math.max(0, Math.floor((cols - overlayWidth) / 2));
-      const startRow = Math.max(1, Math.floor((rows - overlayLines.length) / 2));
+      const startCol = diffPanelWidth ? cols - overlayWidth : Math.max(0, Math.floor((cols - overlayWidth) / 2));
+      const startRow = diffPanelWidth ? 0 : Math.max(1, Math.floor((rows - overlayLines.length) / 2));
       canvas.block(
         Math.max(0, Math.min(startRow, rows - 1 - overlayLines.length)),
         startCol,
@@ -493,7 +581,14 @@ export class FutrynTuiApp {
         : this.overlay === 'connect'
           ? ''
           : ` ${thinking}${shortWs}${this.themeEngine.isPreviewing() ? '  · xem thử theme' : ''}`;
-    const rightText = this.statusBanner || focusedDialog ? '' : cols >= 55 ? 'Ctrl+P commands' : 'Ctrl+P';
+    const rightText =
+      this.statusBanner || focusedDialog
+        ? ''
+        : transcriptViewport?.hasNewOutput
+          ? '↓ New output · End'
+          : cols >= 55
+            ? 'Ctrl+P commands'
+            : 'Ctrl+P';
     const pad = Math.max(0, cols - leftText.length - rightText.length);
     canvas.spans(
       rows - 1,

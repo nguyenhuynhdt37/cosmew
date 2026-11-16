@@ -1,3 +1,4 @@
+import {FrameScheduler} from './render/frame-scheduler';
 import {deliverClipboard, writeMacClipboard} from './clipboard';
 import {FutrynError} from '@futryn/contracts';
 import {FutrynTuiApp} from './app';
@@ -22,15 +23,17 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
     // Non-TTY deterministic single-frame output and clean exit
     const snap = app.computeFrameSnapshot();
     stdout.write(snap.plainText + '\n');
+    await app.shutdown();
     return;
   }
 
   let cleanedUp = false;
   let clipboardTask = Promise.resolve();
-  let timer: ReturnType<typeof setInterval> | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let systemTimer: ReturnType<typeof setInterval> | null = null;
+  let scheduler: FrameScheduler | null = null;
+  let stopLocalUpdates: (() => void) | null = null;
   let inputTimer: ReturnType<typeof setTimeout> | null = null;
-  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-  let lastSystemCheck = Date.now();
   let stopUpdates: (() => void) | null = null;
   const inputDecoder = new TerminalInputDecoder();
 
@@ -39,16 +42,15 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
     cleanedUp = true;
     stopUpdates?.();
     stopUpdates = null;
-    if (refreshTimer) {
-      clearTimeout(refreshTimer);
-      refreshTimer = null;
-    }
+    scheduler?.dispose();
+    stopLocalUpdates?.();
+    if (systemTimer) clearInterval(systemTimer);
     if (inputTimer) {
       clearTimeout(inputTimer);
       inputTimer = null;
     }
     if (timer) {
-      clearInterval(timer);
+      clearTimeout(timer);
       timer = null;
     }
     try {
@@ -91,15 +93,15 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
         ),
       );
     const ansi = app.renderAnsiFrame(force);
-    if (ansi) stdout.write(ansi);
+    if (ansi && !stdout.write(ansi)) scheduler?.setBlocked(true);
   };
 
-  renderNow(true);
-
   try {
+    renderNow(true);
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: unknown) => {
         stdout.off('resize', onResize);
+        stdout.off('drain', onDrain);
         stdin.off('data', onData);
         process.off('SIGINT', onSignal);
         process.off('SIGTERM', onSignal);
@@ -107,22 +109,41 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
         if (error) reject(error);
         else resolve();
       };
+      const armAnimation = () => {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        const delay = app.animationDelay();
+        if (delay !== null && !cleanedUp)
+          timer = setTimeout(() => {
+            timer = null;
+            try {
+              app.stepAnimation(delay / 1000);
+              scheduler?.request('animation');
+            } catch {
+              finish(new FutrynError('INVALID_INPUT'));
+            }
+          }, delay);
+      };
+      scheduler = new FrameScheduler(regions => {
+        try {
+          renderNow(regions.has('resize'));
+          armAnimation();
+        } catch {
+          finish(new FutrynError('INVALID_INPUT'));
+        }
+      });
+      if (stdout.writableNeedDrain) scheduler.setBlocked(true);
+      const onDrain = () => scheduler?.setBlocked(false);
+      stdout.on('drain', onDrain);
+      stopLocalUpdates = app.onUpdate(() => scheduler?.request('overlay'));
       stopUpdates = options.client.onReactiveEvent(() => {
-        if (cleanedUp || refreshTimer) return;
-        // Render after the TUI consumes the deltas, coalescing provider bursts.
-        refreshTimer = setTimeout(() => {
-          refreshTimer = null;
-          try {
-            renderNow(false);
-          } catch {
-            finish(new FutrynError('INVALID_INPUT'));
-          }
-        }, 16);
+        app.invalidateContext();
+        scheduler?.request('transcript');
       });
       const onSignal = () => finish(new FutrynError('CANCELLED'));
       const onResize = () => {
         app.resize(stdout.columns || 110, stdout.rows || 32);
-        renderNow(true);
+        scheduler?.request('resize', true);
       };
       const onData = async (chunk: Buffer) => {
         try {
@@ -135,19 +156,19 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
             inputTimer = setTimeout(() => {
               inputTimer = null;
               void (async () => {
-                for (const key of inputDecoder.flush()) await app.handleKey(key);
+                for (const key of inputDecoder.flush()) await app.handleKey(key, false);
                 if (app.isExitRequested()) finish();
-                else renderNow(false);
+                else scheduler?.request('composer', true);
               })().catch(error => finish(error instanceof FutrynError ? error : new FutrynError('INVALID_INPUT')));
             }, 30);
           for (const key of keys) {
-            await app.handleKey(key);
+            await app.handleKey(key, false);
             if (app.isExitRequested()) {
               finish();
               return;
             }
           }
-          renderNow(false);
+          scheduler?.request('composer', true);
         } catch (error) {
           finish(error instanceof FutrynError ? error : new FutrynError('INVALID_INPUT'));
         }
@@ -156,18 +177,18 @@ export async function runInteractiveTui(options: FutrynTuiOptions & {initialComm
       stdin.on('data', onData);
       process.on('SIGINT', onSignal);
       process.on('SIGTERM', onSignal);
-      timer = setInterval(() => {
+      armAnimation();
+      // Detect an actual system-theme change; this poll never paints an unchanged frame.
+      systemTimer = setInterval(() => {
         try {
-          if (app.themeEngine.getCommittedAppearance().mode === 'system' && Date.now() - lastSystemCheck >= 5000) {
-            lastSystemCheck = Date.now();
-            app.themeEngine.refreshSystemPreference();
-          }
-          app.stepAnimation(0.08);
-          renderNow(false);
+          if (app.themeEngine.getCommittedAppearance().mode !== 'system') return;
+          const before = app.themeEngine.getEffectiveMode();
+          app.themeEngine.refreshSystemPreference();
+          if (app.themeEngine.getEffectiveMode() !== before) scheduler?.request('header');
         } catch {
           finish(new FutrynError('INVALID_INPUT'));
         }
-      }, 80);
+      }, 5000);
     });
   } finally {
     cleanup();

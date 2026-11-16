@@ -174,6 +174,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
     try {
       return await task;
     } finally {
+      this.host.requestRender?.();
       if (this.switchTask === task) this.switchTask = null;
     }
   }
@@ -241,6 +242,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
       }
       return false;
     } finally {
+      this.host.requestRender?.();
       if (this.switchAbort === abort) this.switchAbort = null;
     }
   }
@@ -534,11 +536,13 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         }
         this.authAbort = null;
         this.state = {...st, step: 'oauth', authChallenge: challenge};
+        host.requestRender?.();
         if (challenge.autoComplete) await this.authenticate(this.state);
       } catch (error) {
         if (host.overlay === 'connect' && this.state === starting)
           this.state = {...st, step: 'method', statusMessage: this.describe(error, st.providerId)};
       } finally {
+        this.host.requestRender?.();
         if (this.authAbort === controller) this.authAbort = null;
       }
     })();
@@ -570,9 +574,23 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
           try {
             const progress = client.providerAuthProgress(st.authChallenge!.id);
             if (this.state === busyState && busyState.authChallenge) {
+              const before = [
+                busyState.authChallenge.authorizationURL,
+                busyState.authChallenge.userCode,
+                busyState.statusMessage,
+              ].join('\n');
               if (progress.authorizationURL) busyState.authChallenge.authorizationURL = progress.authorizationURL;
               busyState.authChallenge.userCode = progress.userCode;
               busyState.statusMessage = progress.message ?? 'Waiting for provider sign-in. Esc cancels.';
+              if (
+                before !==
+                [
+                  busyState.authChallenge.authorizationURL,
+                  busyState.authChallenge.userCode,
+                  busyState.statusMessage,
+                ].join('\n')
+              )
+                host.requestRender?.();
             }
           } catch {
             /* Completion may consume the challenge before the final UI update. */
@@ -617,6 +635,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
           statusMessage: this.describe(error, st.providerId),
         };
     } finally {
+      this.host.requestRender?.();
       if (progressTimer) clearInterval(progressTimer);
       this.authAbort = null;
     }

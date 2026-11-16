@@ -31,7 +31,7 @@ export function renderDiffViewerOverlay(options: {
   } else {
     const selected = clampIndex(state.selectedFileIndex, report.files.length),
       active = report.files[selected]!;
-    const listWidth = width >= 80 ? Math.min(32, Math.floor(modal.innerWidth * 0.3)) : 0;
+    const listWidth = width >= 60 ? Math.min(32, Math.floor(modal.innerWidth * 0.3)) : 0;
     const codeWidth = modal.innerWidth - (listWidth ? listWidth + 1 : 0);
     const codeRows = active.lines.flatMap(line => renderDiffCodeLine(line, codeWidth, tokens));
     if (!codeRows.length)

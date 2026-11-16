@@ -149,6 +149,7 @@ export class StartupGate {
     this.deadline = null;
     this.abort = null;
     this.task = null;
+    this.host.requestRender?.();
   }
 
   /** True (and moves to the chooser) when the request was cut off by the deadline. */

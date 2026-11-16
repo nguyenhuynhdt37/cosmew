@@ -1,3 +1,5 @@
+import {graphemes, textWidth} from '../../input/text';
+import {TranscriptLayout, type TranscriptViewportOptions, type TranscriptViewportResult} from './layout';
 import {
   isFileChangeTool,
   type BorderStyle,
@@ -20,6 +22,24 @@ import {
 import type {TranscriptItem, TranscriptPart} from './types';
 import {mixHex} from '../../theme/presets';
 import {parseUnifiedDiff, renderDiffCodeLine} from '../diff/code-lines';
+
+function wrapCodeLine(raw: string, width: number): string[] {
+  const rows: string[] = [];
+  let line = '',
+    columns = 0;
+  for (const {segment} of graphemes(raw)) {
+    const cells = textWidth(segment);
+    if (line && columns + cells > width) {
+      rows.push(line);
+      line = '';
+      columns = 0;
+    }
+    line += segment;
+    columns += cells;
+  }
+  rows.push(line);
+  return rows;
+}
 
 export function renderMarkdownBody(options: {
   content: string;
@@ -52,13 +72,8 @@ export function renderMarkdownBody(options: {
     if (inCodeBlock) {
       const codeWidth = Math.max(1, contentWidth - 2);
       // Preserve long source lines rather than silently dropping their suffix.
-      for (let start = 0; start < Math.max(1, raw.length); start += codeWidth) {
-        const codeSpans = highlightCodeLine(
-          raw.slice(start, start + codeWidth),
-          tokens,
-          tokens.backgroundElevated,
-          syntaxHighlighting,
-        );
+      for (const chunk of wrapCodeLine(raw, codeWidth)) {
+        const codeSpans = highlightCodeLine(chunk, tokens, tokens.backgroundElevated, syntaxHighlighting);
         rendered.push({
           spans: [
             {text: ' ', fg: tokens.foregroundSubtle, bg: tokens.backgroundElevated},
@@ -135,7 +150,7 @@ function inlineMarkdown(text: string, tokens: ThemeTokens, bg: string, heading =
   return spans;
 }
 
-export function renderTranscriptMessages(options: {
+function renderTranscriptItem(options: {
   items: TranscriptItem[];
   width: number;
   tokens: ThemeTokens;
@@ -170,6 +185,9 @@ export function renderTranscriptMessages(options: {
       continue;
     }
 
+    const callsById = new Map(item.toolCalls?.map(call => [call.id, call]));
+    const resultsById = new Map(item.toolResults?.map(result => [result.callId, result]));
+    const activitiesById = new Map(item.activities?.map(activity => [activity.id, activity]));
     // Adjacent tool-only rounds read as one run of calls; the recorded timeline is untouched.
     const parts: TranscriptPart[] = [];
     for (const part of transcriptParts(item)) {
@@ -205,10 +223,10 @@ export function renderTranscriptMessages(options: {
         if (open) lines.push(...renderReasoningPart(part.text, innerWidth, tokens, bg, syntaxHighlighting));
       } else if (part.kind === 'tools') {
         part.callIds.forEach((id, row) => {
-          const call = item.toolCalls?.find(entry => entry.id === id);
+          const call = callsById.get(id);
           if (!call) return;
           if (row) lines.push({spans: []});
-          const result = item.toolResults?.find(entry => entry.callId === id);
+          const result = resultsById.get(id);
           lines.push(
             ...renderToolCall({
               item,
@@ -222,7 +240,7 @@ export function renderTranscriptMessages(options: {
           );
         });
       } else if (part.kind === 'activity') {
-        const activity = item.activities?.find(entry => entry.id === part.id);
+        const activity = activitiesById.get(part.id);
         if (activity) lines.push(...renderActivity({item, activity, width: innerWidth, tokens, bg}));
       } else {
         const body = renderMarkdownBody({
@@ -292,6 +310,14 @@ export function renderTranscriptMessages(options: {
   return lines;
 }
 
+/** Canonical message spacing, shared by full exports and indexed viewport layouts. */
+export function renderTranscriptMessages(options: Parameters<typeof renderTranscriptItem>[0]): RenderedBoxLine[] {
+  return options.items.flatMap((item, index) => {
+    const lines = renderTranscriptItem({...options, items: [item]});
+    return index && lines.length ? [{spans: []}, ...lines] : lines;
+  });
+}
+
 /** Output rows under a `⎿`, Claude style: four lines, then `… +N lines`; a click expands them. */
 function outputRows(
   text: string,
@@ -306,7 +332,7 @@ function outputRows(
     .split('\n')
     .filter((line, index, list) => line.trim() || index < list.length - 1);
   const wrapped = all.flatMap(line => wrapTextToWidth(line.replace(/\t/g, '  '), Math.max(1, width - 5)));
-  const shown = wrapped.slice(0, expanded ? 1000 : 4);
+  const shown = expanded ? wrapped : wrapped.slice(0, 4);
   const rows: RenderedBoxLine[] = shown.map((line, index) => ({
     spans: [
       {text: index === 0 ? '  ⎿  ' : '     ', fg: tokens.foregroundSubtle, bg},
@@ -580,61 +606,15 @@ function renderActivity(options: {
   return lines;
 }
 
-export function renderTranscriptViewport(options: {
-  items: TranscriptItem[];
-  width: number;
-  height: number;
-  scrollOffset: number;
-  tokens: ThemeTokens;
-  borderStyle: BorderStyle;
-  syntaxHighlighting: boolean;
-  compactActivities?: boolean;
-  awaitingApproval?: (call: ToolCall) => boolean;
-}): {lines: RenderedBoxLine[]; allLines: RenderedBoxLine[]; totalLines: number; clampedOffset: number} {
-  const {items, width, height, scrollOffset, tokens, borderStyle, syntaxHighlighting} = options;
-  const contentWidth = Math.max(16, width - 2);
-  const allLines = renderTranscriptMessages({
-    items,
-    width: contentWidth,
-    tokens,
-    borderStyle,
-    syntaxHighlighting,
-    awaitingApproval: options.awaitingApproval,
-    compactActivities: options.compactActivities,
-  });
-
-  const totalLines = allLines.length;
-  const maxOffset = Math.max(0, totalLines - height);
-  const clampedOffset = scrollOffset < 0 ? maxOffset : Math.max(0, Math.min(maxOffset, scrollOffset));
-  const slice = allLines.slice(clampedOffset, clampedOffset + height);
-
-  const result: RenderedBoxLine[] = [];
-  for (let row = 0; row < height; row++) {
-    const line = slice[row] ?? {spans: []};
-    const used = line.spans.reduce((sum, span) => sum + span.text.length, 0);
-    let thumb = ' ';
-    if (totalLines > height) {
-      const thumbPos = Math.floor((clampedOffset / Math.max(1, maxOffset)) * (height - 1));
-      thumb = row === thumbPos ? '┃' : '│';
-    }
-    result.push({
-      spans: [
-        ...line.spans,
-        ...(totalLines > height
-          ? [
-              {
-                text: `${' '.repeat(Math.max(0, contentWidth - used))} ${thumb}`,
-                fg: tokens.scrollbar,
-                bg: tokens.background,
-              },
-            ]
-          : []),
-      ],
-    });
+export function renderTranscriptViewport(options: TranscriptViewportOptions): TranscriptViewportResult {
+  let layout = options.layout ?? viewportLayouts.get(options.items);
+  if (!layout) {
+    layout = new TranscriptLayout();
+    viewportLayouts.set(options.items, layout);
   }
-
-  return {lines: result, allLines, totalLines, clampedOffset};
+  return layout.viewport(options);
 }
+const viewportLayouts = new WeakMap<TranscriptItem[], TranscriptLayout>();
 
 /** Thinking body under `✻ Thought`, Claude style: indented, dim italic. */
 function renderReasoningPart(

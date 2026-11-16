@@ -21,6 +21,8 @@ export class DiffFeature implements OverlayFeature {
       await this.host.client.refreshWorkspaceDiff?.();
     } catch (error) {
       this.host.setBanner(this.host.describeError(error));
+    } finally {
+      this.host.requestRender?.();
     }
   }
 
@@ -38,7 +40,9 @@ export class DiffFeature implements OverlayFeature {
   }
 
   layout(_overlay: 'diff', cols: number, rows: number) {
-    return wideLayout(cols, rows);
+    return cols >= 140
+      ? {width: Math.floor(cols * 0.48), height: Math.max(1, rows - 2), backdrop: false}
+      : wideLayout(cols, rows, true);
   }
 
   render(_overlay: 'diff', size: {width: number; height: number}, theme: ThemeFrame) {

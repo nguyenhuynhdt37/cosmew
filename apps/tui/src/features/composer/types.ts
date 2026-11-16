@@ -1,6 +1,7 @@
 export interface ComposerState {
   value: string;
   cursor: number;
+  selectionAnchor?: number;
   history: string[];
   historyIndex: number;
   draftBeforeHistory: string;

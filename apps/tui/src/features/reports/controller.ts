@@ -40,6 +40,7 @@ export class ReportsFeature implements OverlayFeature {
       if (this.limitsAbort === abort) {
         this.limitsLoading = false;
         this.limitsAbort = null;
+        this.host.requestRender?.();
       }
     });
   }

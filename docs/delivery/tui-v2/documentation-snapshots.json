@@ -1,0 +1,38 @@
+{
+  "retrievedAt": "2026-11-16T18:23:41.055224+00:00",
+  "documents": [
+    {
+      "url": "https://code.claude.com/docs/en/interactive-mode.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/fullscreen.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/terminal-config.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/checkpointing.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/settings.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/common-workflows.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/keybindings.md",
+      "error": "HTTP Error 403: Forbidden"
+    },
+    {
+      "url": "https://code.claude.com/docs/en/sessions.md",
+      "error": "HTTP Error 403: Forbidden"
+    }
+  ],
+  "accessNote": "Official HTML pages inspected through web browsing on 2026-11-17 local time. Direct markdown requests below failed; these are not claimed as inspected source snapshots. Documentation has no immutable Git revision supplied by its host. Repository sources are pinned in references.md."
+}

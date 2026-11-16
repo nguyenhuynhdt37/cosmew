@@ -1,0 +1,92 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "platform": "darwin",
+    "release": "24.6.0",
+    "cpu": "Apple M1 Pro",
+    "dimensions": "120x40",
+    "iterations": 24
+  },
+  "scenarios": [
+    {
+      "count": 100,
+      "frameMs": {
+        "p50": 3.1372499999999945,
+        "p95": 8.390708999999987
+      },
+      "layoutMs": {
+        "p50": 0.1270409999999913,
+        "p95": 0.2271250000000009
+      },
+      "canvasMs": {
+        "p50": 2.4837920000000224,
+        "p95": 5.333750000000009
+      },
+      "ansiDiffMs": {
+        "p50": 0.3446659999999895,
+        "p95": 0.8728339999999832
+      },
+      "ansiBytes": 14410,
+      "cpuMicros": {
+        "user": 107910,
+        "system": 23544
+      },
+      "heapDelta": 4327103
+    },
+    {
+      "count": 1000,
+      "frameMs": {
+        "p50": 2.359542000000033,
+        "p95": 4.990749999999991
+      },
+      "layoutMs": {
+        "p50": 0.08783299999998917,
+        "p95": 1.1006250000000364
+      },
+      "canvasMs": {
+        "p50": 1.7786249999999768,
+        "p95": 3.1632079999999974
+      },
+      "ansiDiffMs": {
+        "p50": 0.25658300000003464,
+        "p95": 0.8595839999999839
+      },
+      "ansiBytes": 14410,
+      "cpuMicros": {
+        "user": 222835,
+        "system": 26975
+      },
+      "heapDelta": 6272876
+    },
+    {
+      "count": 5000,
+      "frameMs": {
+        "p50": 1.9971250000000964,
+        "p95": 5.885500000000093
+      },
+      "layoutMs": {
+        "p50": 0.05770800000004783,
+        "p95": 1.1007500000000618
+      },
+      "canvasMs": {
+        "p50": 1.5567909999999756,
+        "p95": 2.959083999999848
+      },
+      "ansiDiffMs": {
+        "p50": 0.26812500000005457,
+        "p95": 0.8628750000000309
+      },
+      "ansiBytes": 14410,
+      "cpuMicros": {
+        "user": 654811,
+        "system": 72453
+      },
+      "heapDelta": 13891803
+    }
+  ],
+  "provenance": {
+    "startingRevision": "03d3d27",
+    "kind": "TUI V2 working tree",
+    "note": "Renderer baseline recorded before optimization. Full-app baseline re-executed against isolated git archive of starting revision; same harness and fixture."
+  }
+}

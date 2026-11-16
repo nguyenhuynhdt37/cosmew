@@ -1,0 +1,170 @@
+{
+  "environment": {
+    "bun": "1.4.4",
+    "platform": "darwin",
+    "cpu": "Apple M1 Pro",
+    "dimensions": "120x40",
+    "measurement": "input handler through ANSI generation, excludes terminal emulator paint"
+  },
+  "results": [
+    {
+      "count": 100,
+      "restoreMs": 26.06929199999999,
+      "coldFrameMs": 21.426417000000015,
+      "typingMs": {
+        "p50": 12.532667000000004,
+        "p95": 19.810749999999985,
+        "max": 22.598832999999956
+      },
+      "typingLayouts": null,
+      "scrollMs": {
+        "p50": 11.627291000000014,
+        "p95": 15.104708000000073,
+        "max": 18.6635
+      },
+      "streamAndScrollMs": {
+        "p50": 10.971458999999982,
+        "p95": 17.597500000000082,
+        "max": 23.190249999999878
+      },
+      "resizeMs": {
+        "p50": 13.460667000000058,
+        "p95": 25.241833999999926,
+        "max": 25.241833999999926
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.1751250000000368,
+        "p95": 1.834292000000005,
+        "max": 1.9182500000000005
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 2175696,
+        "system": 273283
+      },
+      "heapBefore": 11336075,
+      "heapAfter": 46422938,
+      "heapAfterForcedGc": 12323681,
+      "forcedGcMs": 24.44870899999978,
+      "pasteMs": 61.90245899999991,
+      "typingAfterPasteMs": {
+        "p50": 52.401374999999916,
+        "p95": 79.40783299999975,
+        "max": 79.40783299999975
+      }
+    },
+    {
+      "count": 1000,
+      "restoreMs": 28.193874999999935,
+      "coldFrameMs": 79.07912499999975,
+      "typingMs": {
+        "p50": 77.3416670000006,
+        "p95": 87.57425000000012,
+        "max": 91.63325000000032
+      },
+      "typingLayouts": null,
+      "scrollMs": {
+        "p50": 79.26799999999912,
+        "p95": 94.33345800000006,
+        "max": 96.22500000000036
+      },
+      "streamAndScrollMs": {
+        "p50": 76.07487500000025,
+        "p95": 85.31987500000014,
+        "max": 94.38100000000031
+      },
+      "resizeMs": {
+        "p50": 79.60479200000009,
+        "p95": 86.72587500000009,
+        "max": 86.72587500000009
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.1894170000000486,
+        "p95": 2.5319579999995767,
+        "max": 3.9597499999999854
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 9238516,
+        "system": 722918
+      },
+      "heapBefore": 29665993,
+      "heapAfter": 41622061,
+      "heapAfterForcedGc": 15889175,
+      "forcedGcMs": 25.99041699999907,
+      "pasteMs": 115.21891700000015,
+      "typingAfterPasteMs": {
+        "p50": 112.08366700000079,
+        "p95": 123.01641600000039,
+        "max": 123.01641600000039
+      }
+    },
+    {
+      "count": 5000,
+      "restoreMs": 62.55987500000083,
+      "coldFrameMs": 376.1961659999997,
+      "typingMs": {
+        "p50": 376.0547910000005,
+        "p95": 498.0183340000003,
+        "max": 514.1334999999999
+      },
+      "typingLayouts": null,
+      "scrollMs": {
+        "p50": 374.5347920000022,
+        "p95": 453.4359999999979,
+        "max": 467.04008299999987
+      },
+      "streamAndScrollMs": {
+        "p50": 579.5663750000022,
+        "p95": 1043.2278329999972,
+        "max": 1374.4649580000041
+      },
+      "resizeMs": {
+        "p50": 489.58495799999946,
+        "p95": 784.0254580000037,
+        "max": 784.0254580000037
+      },
+      "eventQueueDelayMs": {
+        "p50": 1.9543329999996786,
+        "p95": 2.7812080000003334,
+        "max": 2.83916599999975
+      },
+      "ansiBytes": 8712,
+      "rowsPainted": 48,
+      "cpuMicros": {
+        "user": 41756306,
+        "system": 4153280
+      },
+      "heapBefore": 105345527,
+      "heapAfter": 179460613,
+      "heapAfterForcedGc": 29568032,
+      "forcedGcMs": 77.7021670000031,
+      "pasteMs": 404.2621670000008,
+      "typingAfterPasteMs": {
+        "p50": 416.89241599999514,
+        "p95": 659.7452090000006,
+        "max": 659.7452090000006
+      }
+    }
+  ],
+  "markdown": {
+    "markdownWithoutSyntaxMs": {
+      "p50": 0.079875000003085,
+      "p95": 0.15837500000634464,
+      "max": 0.30170799999905284
+    },
+    "markdownWithSyntaxMs": {
+      "p50": 0.09141700000327546,
+      "p95": 0.1562919999996666,
+      "max": 0.31104200000118
+    }
+  },
+  "provenance": {
+    "startingRevision": "03d3d27",
+    "kind": "baseline at starting source",
+    "note": "Renderer baseline recorded before optimization. Full-app baseline re-executed against isolated git archive of starting revision; same harness and fixture.",
+    "counterNote": "Baseline has no layout counter; null means unavailable, not zero. Source formats all messages per frame."
+  }
+}
