@@ -2,6 +2,7 @@
 
 ## Phạm vi đã cho phép
 
+- **Codex-parity Agent Loop (2026-11-16):** user cho phép port hành vi Agent Loop của OpenAI Codex (pinned `710bee73a89385aaf2afb41d885edf82473d941f`) theo [ADR 0033](docs/adr/0033-codex-parity-agent-loop.md): dispatch tool call hoàn chỉnh khi response còn stream, shared/exclusive execution theo khai báo `parallel` tường minh, steering vào turn đang chạy (durable, không mở rộng quyền), continuation/termination theo `needs_follow_up` và contract 1.14. Không mở thêm tool, backend, PTY, MCP, subagents hay viết lại compaction.
 - **Contained execution (2026-11-16):** user cho phép milestone terminal/execution theo [ADR 0032](docs/adr/0032-contained-command-sessions.md): verified opt-in Docker PID namespace, sealed read-only snapshots, finite leases, pipe `write_stdin`, streaming và platform/security acceptance. Không mở PTY, host writes/network, raw shell fallback hoặc native Codex tools. Native Seatbelt/host-native runtimes vẫn CLOSED; Docker chỉ được expose sau containment self-tests và current permission/revalidation.
 
 - **Futryn rename (2026-11-16):** user cho phép đổi tên dự án/repo thành Futryn (`nguyenhuynhdt37/futryn`), lệnh CLI `fyn` và alias `futryn`, cập nhật package/import/docs và Git remote theo [ADR 0031](docs/adr/0031-futryn-project-rename.md). Giữ dữ liệu/credentials và các định danh protocol cũ cần tương thích; không thay đổi quyền hoặc mở execution backends.

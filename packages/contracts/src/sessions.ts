@@ -47,6 +47,14 @@ export interface WorkspaceDiffReport {
   totalDeletions: number;
 }
 
+/**
+ * Answer to steering input (Codex `TurnInputSubmission` / `NotSubmittedReason`, ADR 0033). Accepted
+ * input is durable and is delivered to the model before the active turn's next request.
+ */
+export type SteerOutcome =
+  | { accepted: true; turnId: string; steerId: string }
+  | { accepted: false; reason: 'no_active_turn' | 'turn_mismatch' | 'not_steerable' | 'empty_input' };
+
 export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */

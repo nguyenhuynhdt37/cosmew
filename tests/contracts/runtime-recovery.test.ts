@@ -55,10 +55,13 @@ test('invalid tool results cannot become successful evidence or break call-ID pa
  const stored=app.conversations.get(c.id)!.recovery!;expect(stored.messages.some(m=>m.toolCallId==='wrong-call')).toBe(false);expect(stored.messages.find(m=>m.toolCallId==='expected-call')!.content).toContain('EXECUTION_UNKNOWN');
 });
 
-test('duplicate complete calls fail before invoking the handler and remain not-executed evidence',async()=>{
+test('a duplicate call id fails the response without a second execution; the first complete call keeps its real result',async()=>{
  const app=setup();let invoked=0;const call={id:'duplicate',name:'read',input:{path:'README.md'}};
  const c=new Conversation(selection,model(async function*(){yield{type:'toolCallComplete',call};yield{type:'toolCallComplete',call};yield{type:'completed',finishReason:'tool_calls',usage};}),app.conversations,undefined,{descriptors:tools.descriptors,invoke:async call=>{invoked++;return tools.invoke(call);}});
- await expect(send(c,'Read README.md')).rejects.toMatchObject({code:'PROTOCOL'});expect(invoked).toBe(0);expect(app.conversations.get(c.id)!.recovery!.messages.find(m=>m.toolCallId==='duplicate')!.content).toContain('not executed');
+ await expect(send(c,'Read README.md')).rejects.toMatchObject({code:'PROTOCOL'});
+ // ADR 0033 (Codex try_run_sampling_request): the first complete call was dispatched while streaming.
+ expect(invoked).toBe(1);const recovered=app.conversations.get(c.id)!.recovery!.messages.filter(m=>m.toolCallId==='duplicate');
+ expect(recovered).toHaveLength(1);expect(recovered[0]!.content).not.toContain('not executed');expect(recovered[0]!.content).not.toContain('unknown');
 });
 
 test('an explicit analysis mode never exposes a mutating handler for artifact recovery',async()=>{

@@ -31,6 +31,7 @@ export class ExecutionJournal {
   record(id:string,turnId:string,event:ExecutionEventData):number {
     try{return this.db.transaction(()=>{
       if(event.type==='user.accepted'||event.type==='turn.finished')throw new FutrynError('STORAGE');
+      if(event.type==='user.steered'&&(event.message.role!=='user'||event.message.toolCalls?.length||event.message.toolCallId))throw new FutrynError('STORAGE');
       const row=this.db.query('SELECT * FROM execution_turns WHERE conversation=? AND id=?').get(id,turnId) as Row|null;
       if(!row||row.owner!==owner||!['pending','running'].includes(row.state))throw new FutrynError('STORAGE');
       if(event.type==='model.requested')this.db.query("UPDATE execution_turns SET state='running' WHERE conversation=? AND id=?").run(id,turnId);
@@ -77,23 +78,29 @@ export class ExecutionJournal {
       for(const [index,row]of rows.entries()){
         while(cursor<legacy.length&&legacy[cursor]!.revision<row.user_revision){const {revision:_r,state:_s,...message}=legacy[cursor++]!;messages.push(message);}
         const turn=turns[index]!;if(turn.events[0]?.data.type!=='user.accepted'||row.user_revision<1||(row.end_revision!==null&&row.end_revision<row.user_revision))throw new FutrynError('STORAGE');
-        const calls=new Map<string,string>(),intents=new Set<string>(),results=new Set<string>();let finished=false;
+        const calls=new Map<string,string>(),intents=new Set<string>(),results=new Set<string>(),steers=new Set<string>();let finished=false;
         for(const [position,event]of turn.events.entries()){
           const e=event.data;if(finished||!Number.isFinite(Date.parse(event.at)))throw new FutrynError('STORAGE');
           if(e.type==='user.accepted'&&(position!==0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId))throw new FutrynError('STORAGE');
+          if(e.type==='user.steered'&&(position===0||e.message.role!=='user'||e.message.toolCalls?.length||e.message.toolCallId||steers.has(e.steerId)))throw new FutrynError('STORAGE');
+          if(e.type==='user.steered')steers.add(e.steerId);
           if(e.type==='tool.call'){if(calls.has(e.call.id))throw new FutrynError('STORAGE');calls.set(e.call.id,e.call.name);}
           if(e.type==='tool.intent'){if(!calls.has(e.callId)||intents.has(e.callId)||results.has(e.callId))throw new FutrynError('STORAGE');intents.add(e.callId);}
           if(e.type==='tool.result'){if(calls.get(e.result.callId)!==e.result.name||results.has(e.result.callId))throw new FutrynError('STORAGE');results.add(e.result.callId);}
           if(e.type==='turn.finished'){if(e.state!==turn.state||['pending','running'].includes(e.state))throw new FutrynError('STORAGE');finished=true;}
         }
         if(finished===['pending','running'].includes(turn.state))throw new FutrynError('STORAGE');
-        let text='';const flush=()=>{if(text){messages.push({role:'assistant',content:text});text='';}};
+        // Steering is durable when accepted but model-visible only where the loop delivers it (Codex
+        // turn.rs drains pending input before every request except the turn's first): before the next
+        // non-first model request, or after everything else when the turn ends before delivering it.
+        let text='',requests=0;const steered:Message[]=[];const flush=()=>{if(text){messages.push({role:'assistant',content:text});text='';}};
         for(const event of turn.events){const e=event.data;
           if(e.type==='assistant.text')text+=e.text;
           else if(e.type==='user.accepted'){flush();messages.push(e.message);}
+          else if(e.type==='user.steered')steered.push(e.message);
           else if(e.type==='tool.call'){flush();messages.push({role:'assistant',content:'',toolCalls:[e.call]});}
           else if(e.type==='tool.result'){flush();messages.push({role:'tool',content:e.result.status==='ok'?e.result.content||'(empty)':`[${e.result.status}${e.result.code?': '+e.result.code:''}] ${e.result.content}`,toolCallId:e.result.callId,toolName:e.result.name});}
-          else if(e.type==='model.requested')flush();
+          else if(e.type==='model.requested'){flush();if(requests++>0)messages.push(...steered.splice(0));}
         }flush();
         if(!['pending','running'].includes(turn.state)){
           const attempted=new Set(turn.events.flatMap(e=>e.data.type==='tool.intent'?[e.data.callId]:[]));
@@ -103,6 +110,7 @@ export class ExecutionJournal {
             messages.push({role:'tool',toolCallId:call.id,toolName:call.name,content:attempted.has(call.id)?'[unknown: interrupted execution] Intent was recorded but no result was confirmed. Inspect current filesystem state; do not replay or reuse an old approval.':'[not executed] The turn ended before Futryn dispatched this call. A new call requires current policy and fresh revalidation.'});
           }
         }
+        messages.push(...steered);
         const end=row.end_revision??((rows[index+1]?.user_revision??Infinity)-1);
         while(cursor<legacy.length&&legacy[cursor]!.revision<=end)cursor++;
       }

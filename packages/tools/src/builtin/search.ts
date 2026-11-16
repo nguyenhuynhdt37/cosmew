@@ -20,6 +20,7 @@ export const globDescriptor = {
     additionalProperties: false,
   },
   capability: 'fs.read' as const,
+  parallel: true,
 };
 
 export const grepInput = z.strictObject({
@@ -44,6 +45,7 @@ export const grepDescriptor = {
     additionalProperties: false,
   },
   capability: 'fs.read' as const,
+  parallel: true,
 };
 
 /** Files under `base` (a resolved directory) that match `pattern`, as workspace-relative paths. */

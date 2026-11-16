@@ -28,6 +28,8 @@ export class ChatController {
   readonly companion = new FynCompanion();
   private activeAbortController: AbortController | null = null;
   private turnTask: Promise<void> | null = null;
+  /** Prompts typed while a turn was finishing (steering arrived too late); sent in order afterwards. */
+  private queuedPrompts: string[] = [];
 
   constructor(private readonly host: TuiHost) {}
 
@@ -47,9 +49,33 @@ export class ChatController {
 
   async submit(content: string): Promise<void> {
     if (content.trim().startsWith('/')) { await this.runTurn(content); return; }
+    if (this.isStreaming) { this.steer(content); return; }
     const task = this.runTurn(content);
     this.turnTask = task;
     try { await task; } finally { if (this.turnTask === task) this.turnTask = null; }
+    // Codex TUI: input that missed the finishing turn becomes the next turn, in submission order.
+    const next = this.queuedPrompts.shift();
+    if (next !== undefined && !this.isStreaming) await this.submit(next);
+  }
+
+  /** Enter while a turn runs: steer it (ADR 0033). Shell and slash input are never steering. */
+  private steer(content: string): void {
+    const trimmed = content.trim();
+    if (!trimmed || trimmed.startsWith('!')) return;
+    let outcome: ReturnType<typeof this.host.client.steerMessage>;
+    // Acceptance requires a durable journal write; if that fails nothing was accepted and the draft stays.
+    try { outcome = this.host.client.steerMessage(trimmed); }
+    catch (error) { this.banner = `Steering not accepted [${error instanceof FutrynError ? error.code : 'ERROR'}]; your draft was kept.`; return; }
+    if (outcome.accepted) {
+      this.composer = recordComposerHistory(this.composer, trimmed);
+      this.banner = 'Steering queued: it reaches the model before its next request.';
+    } else if (outcome.reason === 'no_active_turn' || outcome.reason === 'turn_mismatch') {
+      this.composer = recordComposerHistory(this.composer, trimmed);
+      this.queuedPrompts.push(trimmed);
+      this.banner = 'The turn is finishing; your message will be sent as the next turn.';
+    } else if (outcome.reason === 'not_steerable') {
+      this.banner = 'This turn cannot be steered (review mode or a runtime-owned loop). Wait for it or press Ctrl+C.';
+    }
   }
 
   private async runTurn(content: string): Promise<void> {
@@ -74,7 +100,7 @@ export class ChatController {
       modelId: status.selection?.modelId,
       accountAlias: status.activeAccount?.alias,
     };
-    const assistantItem: TranscriptItem = {
+    let assistantItem: TranscriptItem = {
       id: `assistant-${Date.now()}`,
       role: 'assistant',
       content: '',
@@ -130,6 +156,13 @@ export class ChatController {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
           assistantItem.awaitingModel = Boolean(assistantItem.toolCalls?.length) && assistantItem.toolCalls!.every(call => assistantItem.toolResults!.some(result => result.callId === call.id));
           if(assistantItem.awaitingModel)this.companion.transition('thinking');
+        } else if (event.type === 'steered') {
+          // The steering message became model-visible here; later output answers it.
+          assistantItem.streaming = false; assistantItem.awaitingModel = false;
+          const steeredItem: TranscriptItem = { id: `user-steer-${event.steerId}`, role: 'user', content: event.content, modelId: status.selection?.modelId, accountAlias: status.activeAccount?.alias };
+          assistantItem = { id: `assistant-${event.steerId}`, role: 'assistant', content: '', modelId: status.selection?.modelId, accountAlias: status.activeAccount?.alias, streaming: true, awaitingModel: true, toolCalls: [] };
+          this.transcript = [...this.transcript, steeredItem, assistantItem];
+          this.scrollOffset = -1;
         } else if (event.type === 'completed') {
           completed = true;
           assistantItem.usage = event.usage;

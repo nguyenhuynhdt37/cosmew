@@ -40,6 +40,7 @@ import {
   type SessionRecord,
   type SessionSummary,
   type SettingsStore,
+  type SteerOutcome,
   type ThemeManifest,
   type Usage,
   type WorkspaceDiffReport,
@@ -129,6 +130,8 @@ export interface FutrynBackendPorts {
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
   ): AsyncIterable<ModelEvent>;
+  /** Steer the active turn of `sessionId` (ADR 0033). Absent when the backend cannot steer. */
+  steerTurn?(sessionId: string, content: string, expectedTurnId?: string): SteerOutcome;
   loadCustomThemes(): { themes: ThemeManifest[]; errors: { file: string; message: string }[] };
   saveCustomTheme(manifest: ThemeManifest): ThemeManifest;
   removeCustomTheme(id: string): boolean;
@@ -148,6 +151,8 @@ export class FutrynClient {
   private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
   private sending = false;
+  /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
+  private activeTurnId: string | undefined;
   private streamingText = '';
   private streamingSteps: Message[] = [];
   /** Live limit results by account id, from the last refreshLimits(). */
@@ -655,7 +660,7 @@ export class FutrynClient {
       this.currentSession = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
     }
     const session = this.currentSession;
-    this.sending = true; this.streamingText = ''; this.streamingSteps = []; this.lastUsage = null;
+    this.sending = true; this.streamingText = ''; this.streamingSteps = []; this.lastUsage = null; this.activeTurnId = undefined;
     this.emitReactiveEvent('thinking', 'Preparing request');
     let assistantText = '';
     try {
@@ -668,6 +673,7 @@ export class FutrynClient {
         this.status().reasoningEffort ?? undefined,
       )) {
         if (event.type === 'started') {
+          this.activeTurnId ??= event.requestId;
           this.emitReactiveEvent('waiting', 'Waiting for provider');
         } else if (event.type === 'textDelta') {
           assistantText += event.text; this.streamingText = assistantText;
@@ -692,6 +698,11 @@ export class FutrynClient {
         } else if (event.type === 'toolResult') {
           this.streamingSteps.push({role: 'tool', content: event.result.content, toolCallId: event.result.callId, toolName: event.result.name});
           this.notifyStateChange();
+        } else if (event.type === 'steered') {
+          if (assistantText) this.streamingSteps.push({role: 'assistant', content: assistantText});
+          this.streamingSteps.push({role: 'user', content: event.content});
+          assistantText = ''; this.streamingText = '';
+          this.notifyStateChange();
         } else if (event.type === 'completed') {
           this.lastUsage = event.usage; this.streamingText = ''; this.streamingSteps = [];
           const stored = this.ports.getSession(session.id);
@@ -705,14 +716,33 @@ export class FutrynClient {
       const stored=this.ports.getSession(session.id);if(stored?.recovery)session.messages=stored.recovery.messages;
       this.emitReactiveEvent('error', err instanceof FutrynError ? err.code : 'ERROR');
       throw err;
-    } finally { this.sending = false; this.streamingText = ''; this.streamingSteps = []; }
+    } finally { this.sending = false; this.activeTurnId = undefined; this.streamingText = ''; this.streamingSteps = []; }
+  }
+
+  /**
+   * Codex-style steering (ADR 0033): add an instruction to the turn that is running now instead of
+   * starting an unrelated one. Accepted input is journaled before this returns and reaches the model
+   * before its next request. It is plain user text: it never changes mode, grants or approvals.
+   * `no_active_turn` means the turn already finished (or is finishing); send it as a new message.
+   */
+  steerMessage(content: string): SteerOutcome {
+    const trimmed = content.trim();
+    if (!trimmed) return { accepted: false, reason: 'empty_input' };
+    if (!this.sending || !this.currentSession) return { accepted: false, reason: 'no_active_turn' };
+    // Codex steer_input refuses Review tasks; Futryn's review mode is the same non-steerable kind.
+    if (this.mode() === 'review' || !this.ports.steerTurn) return { accepted: false, reason: 'not_steerable' };
+    const outcome = this.ports.steerTurn(this.currentSession.id, trimmed, this.activeTurnId);
+    this.emitReactiveEvent('thinking', outcome.accepted ? 'Steering queued for the next model request' : `Steering not accepted: ${outcome.reason}`);
+    return outcome;
   }
 
   usage() {
     const record = this.currentSession ? this.ports.getSession(this.currentSession.id) : undefined;
     const turns = record?.turns ?? [];
     const completed = turns.filter(t => t.outcome === 'completed').length;
-    return summarizeUsage(turns, Math.max(0, (record?.messages.filter(m => m.role === 'user' && m.state === 'committed').length ?? 0) - completed));
+    // Steering delivered inside a turn is a user message of that turn, not another turn.
+    const steered = record?.recovery?.turns.reduce((n, turn) => n + turn.events.filter(e => e.data.type === 'user.steered').length, 0) ?? 0;
+    return summarizeUsage(turns, Math.max(0, (record?.messages.filter(m => m.role === 'user' && m.state === 'committed').length ?? 0) - completed - steered));
   }
 
   /**

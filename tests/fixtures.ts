@@ -41,7 +41,7 @@ export function scriptedView(protocol: 'chat' | 'anthropic', body: any): Scripte
 }
 export function fixtureServer() {
   const requests: { path: string; body: any; authorization: string | null; apiKey: string | null }[] = [];
-  let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let malformed = false; let dropped = false;
+  let cacheTokens: number | undefined; let reasoning = false; let status = 200; let delay = 0; let cutToolArgs = false; let malformed = false; let dropped = false;
   let tools = false; let includeUsage = true; let modelName = 'fixture-model'; let pages = false; let streamDelay = 0; let invalidTool = false;
   let rateLimitHeaders: Record<string, string> = {};
   /** Chat protocol: call this tool until a tool result comes back, then answer with that result. */
@@ -142,13 +142,14 @@ export function fixtureServer() {
       { ...base, choices: [{ index: 0, delta: tools ? { tool_calls: [{ index: 0, id: 'call_fixture', type: 'function', function: { name: 'lookup', arguments: '{"query":' } }] } : { role: 'assistant', content: 'Hello ' }, finish_reason: null }] },
       { ...base, choices: [{ index: 0, delta: tools ? { tool_calls: [{ index: 0, function: { arguments: invalidTool ? '7}' : '"hello"}' } }] } : { content: 'fixture' }, finish_reason: null }] },
       ...(!dropped ? [{ ...base, choices: [{ index: 0, delta: {}, finish_reason: tools ? 'tool_calls' : 'stop' }], usage }] : []),
-    ]);
+    ].slice(0, cutToolArgs ? 1 : undefined));
   } });
   return { server, requests, url: `http://127.0.0.1:${server.port}`,
     provider(protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat', overrides = {}) {
       return providerSchema.parse({ id: 'fixture', name: 'Fixture', protocol, baseURL: `http://127.0.0.1:${server.port}/${protocol === 'gemini' ? 'gemini' : 'v1'}`, auth: 'api-key', catalog: protocol === 'gemini' ? 'gemini' : protocol === 'anthropic' ? 'anthropic' : 'openai', metadataVersion: 1, timeoutMs: 1000, ...overrides });
     },
-    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string>; toolCall?: { name: string; args: string } | null; script?: ((view: ScriptedView) => ScriptedReply) | null }) {
+    set(options: { cacheTokens?: number; reasoning?: boolean; status?: number; delay?: number; malformed?: boolean; dropped?: boolean; tools?: boolean; includeUsage?: boolean; modelName?: string; pages?: boolean; streamDelay?: number; invalidTool?: boolean; rateLimitHeaders?: Record<string, string>; toolCall?: { name: string; args: string } | null; script?: ((view: ScriptedView) => ScriptedReply) | null; cutToolArgs?: boolean }) {
+      cutToolArgs = options.cutToolArgs ?? cutToolArgs;
       cacheTokens = options.cacheTokens ?? cacheTokens; reasoning = options.reasoning ?? reasoning; status = options.status ?? status; delay = options.delay ?? delay; malformed = options.malformed ?? malformed; dropped = options.dropped ?? dropped; tools = options.tools ?? tools; includeUsage = options.includeUsage ?? includeUsage; modelName = options.modelName ?? modelName; pages = options.pages ?? pages; streamDelay = options.streamDelay ?? streamDelay; invalidTool = options.invalidTool ?? invalidTool; rateLimitHeaders = options.rateLimitHeaders ?? rateLimitHeaders; toolCall = options.toolCall === null ? undefined : options.toolCall ?? toolCall; script = options.script === null ? undefined : options.script ?? script;
     },
   };

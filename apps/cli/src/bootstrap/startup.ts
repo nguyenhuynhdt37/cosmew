@@ -555,6 +555,8 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
         }
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort);
       },
+      // Steering reaches only the conversation that owns the running turn; there is nothing to steer otherwise.
+      steerTurn: (sessionId, content, expectedTurnId) => activeConvMap.get(sessionId)?.steer(content, expectedTurnId) ?? { accepted: false, reason: 'no_active_turn' },
       loadCustomThemes: () => customThemes.loadAll(),
       saveCustomTheme: manifest => customThemes.save(manifest),
       removeCustomTheme: id => customThemes.remove(id),

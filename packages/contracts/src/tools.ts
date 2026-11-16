@@ -15,6 +15,12 @@ export interface ToolDescriptor {
   /** JSON Schema for the arguments, offered to the model. */
   inputSchema: Record<string, unknown>;
   capability: ToolCapability;
+  /**
+   * Codex `supports_parallel_tool_calls` (tools/router.rs → tools/parallel.rs): only a tool that
+   * explicitly declares it may share execution with other parallel tools. Absent means exclusive;
+   * concurrency safety is never inferred from a name or capability.
+   */
+  parallel?: boolean;
 }
 
 /** Outcome of evaluating one target against policy. Deny wins over ask, ask over allow. */

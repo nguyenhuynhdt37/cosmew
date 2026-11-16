@@ -22,6 +22,7 @@ export const readDescriptor = {
     additionalProperties: false,
   },
   capability: 'fs.read' as const,
+  parallel: true,
 };
 
 export type ReadOutcome = { ok: true; content: string; truncated: boolean } | { ok: false; code: 'IS_DIRECTORY' | 'BINARY_FILE' | 'FILE_TOO_LARGE' };

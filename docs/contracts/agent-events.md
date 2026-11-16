@@ -46,3 +46,14 @@ The [ADR 0030](../adr/0030-durable-conversation-recovery.md) SQLite journal pers
 ## Execution streaming (contract 1.13)
 
 ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded redacted command progress. Provider streams cannot fabricate this domain event. ToolPort may receive an optional progress callback; final results and intents remain durable and exactly paired. Deltas are transient, not proof of successful completion. Closing the iterator cancels owned execution and journals the observed bounded result.
+
+## Codex-parity loop and steering (contract 1.14)
+
+[ADR 0033](../adr/0033-codex-parity-agent-loop.md) adds, all optional for older consumers:
+
+- `ToolDescriptor.parallel?: boolean` — Codex `supports_parallel_tool_calls`. Only declared tools share execution; absent means exclusive. It is ordering metadata, never permission.
+- Journal event `user.steered(steerId, message)` — user input accepted into the active turn, durable before acceptance is reported. Recovery shows it before the next non-first `model.requested` of that turn, or after everything else when the turn ended first. Legacy rows without it remain valid.
+- Model event `steered(steerId, content)` — the steering message became model-visible before the next request.
+- `SteerOutcome` (`accepted` + `turnId`/`steerId`, or `no_active_turn` / `turn_mismatch` / `not_steerable` / `empty_input`), returned by `Conversation.steer`, the optional `FutrynBackendPorts.steerTurn` and `FutrynClient.steerMessage`.
+
+`toolCallComplete` is now dispatched as soon as it arrives; results are still emitted and recorded in model-output order after the response. Adapters must emit it only for calls whose arguments are complete.

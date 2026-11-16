@@ -85,6 +85,10 @@ export class ProviderAdapter implements ModelPort {
   }
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
     const options = await this.options(request, signal); let bytes = 0; let complete = false; const calls = new Set<string>(); const pending = new Set<string>();
+    // A call whose arguments did not parse may be a stream cut mid-arguments (the AI SDK flushes unfinished
+    // calls as `invalid`). It is held until a clean finish proves the response complete (ADR 0033); parsed
+    // calls are emitted at once so the agent loop can dispatch them while the response still streams.
+    const held: ToolCall[] = [];
     try {
       yield { type: 'started', requestId: request.requestId };
       const result = streamText({ ...options, onError: () => {}, onChunk: () => {} });
@@ -102,12 +106,15 @@ export class ProviderAdapter implements ModelPort {
           yield { type: 'textDelta', text: part.text };
         } else if (part.type === 'tool-call') {
           if (calls.has(part.toolCallId) || calls.size >= 32 || (JSON.stringify(part.input) ?? '').length > 65536) throw new FutrynError('PROTOCOL');
-          calls.add(part.toolCallId); pending.delete(part.toolCallId); yield { type: 'toolCallComplete', call: { id: part.toolCallId, name: part.toolName, input: objectInput(part.input) } };
+          calls.add(part.toolCallId); pending.delete(part.toolCallId);
+          const call = { id: part.toolCallId, name: part.toolName, input: objectInput(part.input) };
+          if ('invalid' in part && part.invalid) held.push(call); else yield { type: 'toolCallComplete', call };
         } else if (part.type === 'finish') {
           const quota = options.responseHeaders.value ? parseRateLimitHeaders(options.responseHeaders.value) : [];
           const reported = usageSchema.parse({ ...usage(part.totalUsage, this.info), ...(quota.length ? { quota } : {}) });
           yield { type: 'usage', usage: reported };
           if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size) throw new FutrynError('PROTOCOL');
+          for (const call of held.splice(0)) yield { type: 'toolCallComplete', call };
           complete = true; yield { type: 'completed', finishReason: part.finishReason.replaceAll('-', '_'), usage: reported };
         }
       }

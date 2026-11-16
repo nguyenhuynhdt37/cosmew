@@ -6,6 +6,8 @@ export const turnStateSchema = z.enum(['pending','running','interrupted','comple
 export type TurnState = z.infer<typeof turnStateSchema>;
 export const executionEventDataSchema = z.discriminatedUnion('type',[
   z.object({type:z.literal('user.accepted'),message:messageSchema}),
+  /** User input accepted into the active turn (Codex steer_input). Model-visible at the next request boundary. */
+  z.object({type:z.literal('user.steered'),steerId:z.string().uuid(),message:messageSchema}),
   z.object({type:z.literal('model.requested'),stepId:z.string().uuid()}),
   z.object({type:z.literal('assistant.text'),text:z.string().max(262144)}),
   z.object({type:z.literal('tool.call'),call:toolCallSchema}),

@@ -91,12 +91,14 @@ test('compaction survives restart and keeps the HTML objective and every explici
  expect(finalRequest).toContain('context checkpoint');expect(c.app.conversations.get(c.client.activeSession()!.id)!.recovery!.messages.length).toBeGreaterThan(sourceCount);
 });
 
-test('repeated planning without artifact progress ends transparently rather than claiming creation',async()=>{
- const c=await environment('chat');let error:unknown;
- try{for await(const _ of c.client.sendMessage('Create helo.html, a beautiful standalone sales landing page.')){} }catch(e){error=e;}
- expect(error).toMatchObject({code:'STALLED'});expect(existsSync(join(c.root,'helo.html'))).toBe(false);
- expect(c.server.requests.filter(r=>r.body).length).toBeLessThanOrEqual(5);
- const record=c.app.conversations.get(c.client.activeSession()!.id)!;expect(record.recovery!.task!.state).toBe('unfinished');expect(record.turns!.at(-1)!.stopReason).toBe('stalled');
+test('repeated planning without artifact progress gets one corrective continuation, then ends with the task unfinished',async()=>{
+ // ADR 0033: Codex lets the model end its turn; the artifact check blocks once (like a Stop hook) and
+ // never converts the answer into a failure. The unverified artifact stays durable unfinished work.
+ const c=await environment('chat');let answer='';
+ for await(const e of c.client.sendMessage('Create helo.html, a beautiful standalone sales landing page.'))if(e.type==='textDelta')answer+=e.text;
+ expect(existsSync(join(c.root,'helo.html'))).toBe(false);expect(answer).not.toContain('VERIFIED');
+ const bodies=c.server.requests.filter(r=>r.body);expect(bodies).toHaveLength(3);expect(JSON.stringify(bodies.at(-1)!.body)).toContain('Artifact progress correction');
+ const record=c.app.conversations.get(c.client.activeSession()!.id)!;expect(record.recovery!.task!.state).toBe('unfinished');expect(record.turns!.at(-1)!).toMatchObject({outcome:'completed',stopReason:'completed'});
 });
 
 test('identical reads receive corrective guidance and bounded termination without an arbitrary write deadline',async()=>{
