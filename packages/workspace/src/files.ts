@@ -10,6 +10,26 @@ export interface FileListing {
 }
 
 /**
+ * Repository configuration is untrusted: `core.fsmonitor` names a program Git runs while listing
+ * files, so an opened repository could execute code outside the sandbox. Listing therefore turns
+ * off fsmonitor and hooks, refuses implicit bare repositories and ignores inherited GIT_* variables
+ * (the same policy as the /diff collector, ADR 0037).
+ */
+const SAFE_GIT_OPTIONS = [
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`,
+  '-c',
+  'safe.bareRepository=explicit',
+];
+const safeGitEnvironment = () => ({
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_'))),
+  GIT_OPTIONAL_LOCKS: '0',
+  GIT_TERMINAL_PROMPT: '0',
+});
+
+/**
  * Files a tool may search: tracked and untracked-but-not-ignored files from Git when the root is
  * a repository, otherwise a walk that skips `.git` and never follows symlinked directories.
  */
@@ -19,11 +39,15 @@ export function listWorkspaceFiles(
 ): FileListing {
   const maxEntries = options.maxEntries ?? 50000;
   const deadline = options.deadline ?? Date.now() + 30000;
-  const git = Bun.spawnSync(['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
-    cwd: workspace.root,
-    stdout: 'pipe',
-    stderr: 'ignore',
-  });
+  const git = Bun.spawnSync(
+    ['git', ...SAFE_GIT_OPTIONS, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+    {
+      cwd: workspace.root,
+      env: safeGitEnvironment(),
+      stdout: 'pipe',
+      stderr: 'ignore',
+    },
+  );
   if (git.exitCode === 0) {
     const all = Buffer.from(git.stdout).toString('utf8').split('\0').filter(Boolean);
     const files = [...new Set(all)].filter(path => !path.split('/').includes('.git')).sort();
