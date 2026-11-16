@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {FutrynTuiApp} from '@futryn/tui';
@@ -117,6 +117,21 @@ test('review withholds diff content of files the read policy would ask about', a
   expect(request).toContain('contentWithheld');
   expect(request).not.toContain('fixture-secret-never-sent');
   expect(request).not.toContain('old-value');
+});
+
+test('review evidence judges paths at their canonical, real location', async () => {
+  const c = await context();
+  writeFileSync(join(c.dir, '.env'), 'API_TOKEN=fixture-secret\n');
+  symlinkSync('.env', join(c.dir, 'innocent.txt'));
+  writeFileSync(join(c.dir, 'plain.ts'), 'export {};\n');
+  const file = (path: string) => ({path, status: 'untracked' as const, additions: 1, deletions: 0, lines: []});
+  const evidence = c.client.reviewEvidence([
+    file('state/provider-auth.sqlite'),
+    file('innocent.txt'),
+    file('deleted.ts'),
+    file('plain.ts'),
+  ]);
+  expect(evidence.map(entry => entry.contentWithheld === true)).toEqual([true, true, false, false]);
 });
 
 test('review never inspects an unapproved workspace and session aliases use canonical handlers', async () => {

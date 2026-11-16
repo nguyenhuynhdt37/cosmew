@@ -21,7 +21,7 @@ import {
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
-import {ProjectContextLoader, WorkspaceRoot} from '@futryn/workspace';
+import {ProjectContextLoader, WorkspaceDenied, WorkspaceRoot} from '@futryn/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -74,6 +74,24 @@ function committedMessages(record: SessionRecord): Message[] {
 }
 
 /** Project context budget: explicit options, else FUTRYN_PROJECT_CONTEXT_MAX_BYTES, else 32 KiB. */
+/**
+ * Whether a Git-reported workspace path may reach the model without approval. Mirrors the read tool:
+ * paths are judged under the canonical root, and an existing file is judged again at its real
+ * location so a symlink cannot launder Futryn state or secrets. A deleted file has no current
+ * target, so only its path is judged; any other resolution failure is not allowed.
+ */
+function readAllowedWithoutApproval(workspace: WorkspaceRoot, path: string, stateDirectory: string): boolean {
+  const allowed = (relativePath: string, absolutePath: string) =>
+    evaluateRead(relativePath, absolutePath, {stateDirectory}).effect === 'allow';
+  if (!allowed(path, join(workspace.root, path))) return false;
+  try {
+    const file = workspace.resolve(path);
+    return allowed(file.relative, file.absolute);
+  } catch (error) {
+    return error instanceof WorkspaceDenied && error.reason === 'not-found';
+  }
+}
+
 function projectContextOptions(options: ProjectContextOptions): ProjectContextOptions & {maxBytes: number} {
   const envBudget = process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ?? process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
   if (options.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) {
@@ -549,8 +567,7 @@ export function startup(
       },
       settings,
       listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
-      readAllowedWithoutApproval: path =>
-        evaluateRead(path, join(workspaceRoot, path), {stateDirectory}).effect === 'allow',
+      readAllowedWithoutApproval: path => readAllowedWithoutApproval(workspaceTree(), path, stateDirectory),
       getWorkspaceDiff: () => diffReport,
       refreshWorkspaceDiff: () => {
         if (!toolsEnabled())

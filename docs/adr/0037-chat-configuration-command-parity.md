@@ -22,7 +22,7 @@ CLI composition owns informational Git collection after folder consent. Always d
 
 Plan and Review use the existing independent loop with per-request instructions and read/search-only descriptors. The composed ToolPort rejects non-read execution even if a model invents a hidden call. SDK rejects changing modes during a running turn and analysis modes with delegated ownership. User shell mode shares the current dispatcher and is refused in analysis/delegated contexts. Switching to Chat is an explicit implementation transition; no new engine is added.
 
-Review evidence is model input, so it obeys the read policy: `FutrynClient.reviewEvidence` keeps diff content only for paths (and rename sources) whose `evaluateRead` decision is `allow`, through the CLI-wired `readAllowedWithoutApproval` port. Files the policy would deny or ask about (secret files, Git internals, Futryn state) are sent as path/status/counts with `contentWithheld`; the model must use the read tool and its approval flow to see them. Without the port, all content is withheld.
+Review evidence is model input, so it obeys the read policy: `FutrynClient.reviewEvidence` keeps diff content only for paths (and rename sources) whose `evaluateRead` decision is `allow`, through the CLI-wired `readAllowedWithoutApproval` port, judged like the read tool: under the canonical `WorkspaceRoot`, and again at the real target of an existing file (symlinks). A deleted file is judged by path only; any other resolution failure is not allowed. Files the policy would deny or ask about (secret files, Git internals, Futryn state) are sent as path/status/counts with `contentWithheld`; the model must use the read tool and its approval flow to see them. Without the port, all content is withheld.
 
 ## Limits
 
