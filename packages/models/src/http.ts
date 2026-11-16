@@ -55,7 +55,13 @@ export class ProviderTransport {
     if (this.provider.auth === 'api-key' && !key) throw new FutrynError('AUTH');
     return key;
   }
-  async request(url: string | URL | Request, init: RequestInit = {}, limit = 4 * 1024 * 1024): Promise<Response> {
+  /** `onActivity` runs when headers arrive and on every body chunk (idle-timeout bookkeeping). */
+  async request(
+    url: string | URL | Request,
+    init: RequestInit = {},
+    limit = 4 * 1024 * 1024,
+    onActivity?: () => void,
+  ): Promise<Response> {
     this.policy.authorize(this.provider, this.account);
     const target = new URL(url instanceof Request ? url.url : url.toString());
     const base = new URL(this.provider.baseURL);
@@ -77,6 +83,7 @@ export class ProviderTransport {
     } catch {
       throw init.signal?.aborted ? normalizeError(null, init.signal) : new FutrynError('TRANSPORT', true);
     }
+    onActivity?.();
     if (!response.ok) {
       await response.body?.cancel();
       throw statusError(response.status, response.headers.get('retry-after'));
@@ -90,6 +97,7 @@ export class ProviderTransport {
         try {
           const chunk = await reader.read();
           authorize();
+          onActivity?.();
           if (chunk.done) {
             controller.close();
             return;

@@ -17,7 +17,7 @@ export class SubscriptionRpc {
   private buffer = Buffer.alloc(0);
   private readonly pending = new Map<
     number,
-    {resolve(value: any): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout>}
+    {resolve(value: any): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout> | undefined}
   >();
   private dynamicToolHandler?: (params: any) => Promise<unknown>;
   private permissionHandler?: (method: string, params: any) => Promise<unknown | undefined>;
@@ -164,10 +164,13 @@ export class SubscriptionRpc {
   request(method: string, params: unknown = {}, timeoutMs = 60000): Promise<any> {
     return new Promise((resolve, reject) => {
       const id = ++this.seq;
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new FutrynError('TIMEOUT'));
-      }, timeoutMs);
+      // Infinity: the caller bounds the request itself (setTimeout would treat it as ~1 ms).
+      const timer = Number.isFinite(timeoutMs)
+        ? setTimeout(() => {
+            this.pending.delete(id);
+            reject(new FutrynError('TIMEOUT'));
+          }, timeoutMs)
+        : undefined;
       this.pending.set(id, {resolve, reject, timer});
       try {
         this.write({id, method, params});

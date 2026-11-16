@@ -291,3 +291,21 @@ test('core rejects tool execution and concurrent turns', async () => {
   await expect(turn.next()).rejects.toMatchObject({code: 'UNSUPPORTED'});
   expect(r.actions).toEqual(['pending', 'interrupted']);
 });
+test('provider timeout bounds silence, not the length of a streamed response (Codex stream idle timeout)', async () => {
+  const x = setup();
+  // Every chunk arrives well inside the timeout, but the whole response takes several timeouts.
+  x.f.set({streamDelay: 60});
+  const provider = x.f.provider('chat', {timeoutMs: 150});
+  const transport = new ProviderTransport(provider, x.account, x.vault, new ConfiguredNetworkPolicy());
+  const started = performance.now();
+  const events = await Array.fromAsync(new ProviderAdapter(transport, 'fixture-model').stream(request));
+  expect(performance.now() - started).toBeGreaterThan(150);
+  expect(events.at(-1)).toMatchObject({type: 'completed'});
+
+  // A provider that goes silent longer than the timeout still fails as TIMEOUT.
+  x.f.set({streamDelay: 0, delay: 400});
+  await expect(Array.fromAsync(new ProviderAdapter(transport, 'fixture-model').stream(request))).rejects.toMatchObject({
+    code: 'TIMEOUT',
+  });
+  x.db.close();
+});

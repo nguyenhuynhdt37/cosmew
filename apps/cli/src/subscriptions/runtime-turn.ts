@@ -105,6 +105,9 @@ export class RuntimeTurn {
   private offMessage: () => void = () => {};
   private offPermission: () => void = () => {};
   private deadline?: ReturnType<typeof setTimeout>;
+  /** Approvals and Futryn tools in progress; the runtime is legitimately silent meanwhile. */
+  private waitingOnFutryn = 0;
+  private detached = false;
   private readonly abortListener = () => {
     this.fail(new FutrynError('CANCELLED'));
     void this.options.connection.rpc.close();
@@ -127,7 +130,7 @@ export class RuntimeTurn {
   // Lifecycle
 
   attach(): void {
-    const {connection, signal, provider, request, executeTool} = this.options;
+    const {connection, signal, request, executeTool} = this.options;
     const {rpc} = connection;
     if (this.runtime === 'codex' && !connection.native && request.tools.length && executeTool) {
       this.offTool = rpc.onDynamicTool(params => this.onDynamicTool(params));
@@ -138,14 +141,37 @@ export class RuntimeTurn {
       this.offPermission = rpc.onPermissionRequest((method, params) => this.onPermissionRequest(method, params));
     }
     signal?.addEventListener('abort', this.abortListener, {once: true});
+    this.armDeadline();
+  }
+
+  /**
+   * Like Codex's stream idle timeout, the provider timeout bounds silence, not the whole turn: it
+   * restarts on every runtime message and is paused while Futryn itself (approval, tool) is working.
+   */
+  private armDeadline(): void {
+    clearTimeout(this.deadline);
+    if (this.terminal || this.detached || this.waitingOnFutryn) return;
     this.deadline = setTimeout(() => {
       this.fail(new FutrynError('TIMEOUT'));
-      void rpc.close();
-    }, provider.timeoutMs);
+      void this.options.connection.rpc.close();
+    }, this.options.provider.timeoutMs);
+  }
+
+  /** Runs `work` with the idle deadline paused. */
+  private async whileFutrynWorks<T>(work: () => Promise<T>): Promise<T> {
+    this.waitingOnFutryn++;
+    clearTimeout(this.deadline);
+    try {
+      return await work();
+    } finally {
+      this.waitingOnFutryn--;
+      this.armDeadline();
+    }
   }
 
   /** Stop tools and listeners. Messages are detached last, after queued bridge tools settled. */
   async detach(): Promise<void> {
+    this.detached = true;
     this.releaseTurn();
     this.toolAbort.abort();
     this.offTool();
@@ -239,6 +265,7 @@ export class RuntimeTurn {
   // Runtime messages
 
   private onMessage(message: RpcMessage): void {
+    this.armDeadline();
     try {
       this.options.assertAccount(this.options.account);
       if (message.method === '__closed' && !this.terminal) {
@@ -481,7 +508,7 @@ export class RuntimeTurn {
       const execute = this.toolQueue.then(async () => {
         if (this.terminal || signal?.aborted) throw new FutrynError('CANCELLED');
         this.push({type: 'toolCallComplete', call});
-        const result = await executeTool!(call, this.toolAbort.signal);
+        const result = await this.whileFutrynWorks(() => executeTool!(call, this.toolAbort.signal));
         assertAccount(account);
         if (this.terminal || signal?.aborted) throw new FutrynError('CANCELLED');
         this.push({type: 'toolResult', result});
@@ -514,7 +541,10 @@ export class RuntimeTurn {
     try {
       assertAccount(account);
       allow =
-        !!approve && !this.terminal && !signal?.aborted && (await approve({...request, runtime: this.runtime}, signal));
+        !!approve &&
+        !this.terminal &&
+        !signal?.aborted &&
+        (await this.whileFutrynWorks(() => approve({...request, runtime: this.runtime}, signal)));
     } catch {
       allow = false;
     }
@@ -634,7 +664,7 @@ export class RuntimeTurn {
   }
 
   private async startAcp(prompt: string): Promise<void> {
-    const {connection, request, provider} = this.options;
+    const {connection, request} = this.options;
     const {rpc} = connection;
     const session = await rpc.request('session/new', {cwd: connection.cwd, mcpServers: []});
     if (!this.options.acpModels(session).some(m => m.id === request.modelId)) throw new FutrynError('NOT_FOUND');
@@ -643,7 +673,7 @@ export class RuntimeTurn {
       .request(
         'session/prompt',
         {sessionId: session.sessionId, prompt: [{type: 'text', text: prompt}]},
-        provider.timeoutMs,
+        Infinity, // bounded by the turn's idle deadline instead
       )
       .then(
         result => this.onAcpPromptEnd(result?.stopReason),

@@ -85,6 +85,23 @@ const objectInput = (input: unknown): Record<string, unknown> =>
     ? (input as Record<string, unknown>)
     : {invalidArguments: String(JSON.stringify(input) ?? input).slice(0, 1000)};
 
+/** A streamed model response may be long; the transport's 4 MiB default would cut large files. */
+const MODEL_RESPONSE_LIMIT = 64 * 1024 * 1024;
+
+/** Aborts with a TimeoutError after `ms` without `touch()`; `stop()` disarms it. */
+function idleDeadline(ms: number): {signal: AbortSignal; touch: () => void; stop: () => void} {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = () => clearTimeout(timer);
+  const touch = () => {
+    stop();
+    if (controller.signal.aborted) return;
+    timer = setTimeout(() => controller.abort(new DOMException('Model stream idle', 'TimeoutError')), ms);
+  };
+  touch();
+  return {signal: controller.signal, touch, stop};
+}
+
 export class ProviderAdapter implements ModelPort {
   constructor(
     private readonly transport: ProviderTransport,
@@ -142,7 +159,7 @@ export class ProviderAdapter implements ModelPort {
         headers.delete('x-api-key');
         headers.delete('x-goog-api-key');
       }
-      return this.transport.request(url, {...init, headers}).then(response => {
+      return this.transport.request(url, {...init, headers}, MODEL_RESPONSE_LIMIT, idle.touch).then(response => {
         responseHeaders.value = response.headers;
         return response;
       });
@@ -185,12 +202,12 @@ export class ProviderAdapter implements ModelPort {
         }),
       };
     }
+    // Codex stream_idle_timeout_ms: the provider timeout bounds silence (waiting for headers or
+    // between chunks), not the whole response, so a long streamed answer or file is never cut.
+    const idle = idleDeadline(p.timeoutMs);
     const controller = new AbortController();
-    const abortSignal = AbortSignal.any([
-      controller.signal,
-      ...(signal ? [signal] : []),
-      AbortSignal.timeout(p.timeoutMs),
-    ]);
+    const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), idle.signal]);
+    controller.signal.addEventListener('abort', idle.stop, {once: true});
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
