@@ -76,14 +76,40 @@ export class ChatController {
     }
   }
 
+  /**
+   * `!command` (ADR 0034, Codex user shell command): runs through the same exec_command dispatcher,
+   * approval and sandbox as model calls and is shown as a Bash card. It is not sent to the model.
+   */
+  private async runShell(input: string): Promise<void> {
+    const command = input.slice(1).trim();
+    if (!command) { this.banner = 'Shell mode: type a command after !, for example !git status.'; return; }
+    if (!this.host.client.toolsEnabled()) { this.banner = 'Shell mode needs workspace tools: approve this folder first. Nothing was run.'; return; }
+    this.composer = recordComposerHistory(this.composer, input);
+    const call: ToolCall = { id: `shell-${Date.now()}`, name: 'exec_command', input: { cmd: command } };
+    const item: TranscriptItem = { id: `assistant-${call.id}`, role: 'assistant', content: '', streaming: true, toolCalls: [call] };
+    appendToolPart(item, call.id);
+    this.transcript = [...this.transcript, { id: `user-${call.id}`, role: 'user', content: input }, item];
+    this.scrollOffset = -1; this.isStreaming = true; this.banner = '';
+    const abortController = new AbortController(); this.activeAbortController = abortController;
+    try {
+      const result = await this.host.client.runShellCommand(command, { signal: abortController.signal, onOutput: chunk => {
+        item.toolOutput ??= {}; item.toolOutput[call.id] = ((item.toolOutput[call.id] ?? '') + (chunk.stream === 'stderr' ? '[stderr] ' : '') + chunk.text).slice(-16000);
+      } });
+      item.toolResults = [{ ...result, callId: call.id }];
+      this.banner = result.status === 'ok' ? `Shell command finished${result.exitCode === undefined || result.exitCode === null ? '' : ` (exit ${result.exitCode})`}.` : `Shell command ${result.status}${result.code ? ` [${result.code}]` : ''}.`;
+    } catch (error) {
+      item.errorText = `Error [${error instanceof FutrynError ? error.code : 'ERROR'}]: the shell command did not complete.`;
+    } finally {
+      item.streaming = false; this.isStreaming = false;
+      if (this.activeAbortController === abortController) this.activeAbortController = null;
+    }
+  }
+
   private async runTurn(content: string): Promise<void> {
     const trimmed = content.trim();
     if (!trimmed || (this.isStreaming && !trimmed.startsWith('/'))) return;
 
-    if (trimmed.startsWith('!')) {
-      this.banner = 'Shell mode: Not implemented in PA1/TUI1. No command was executed or sent to the provider.';
-      return;
-    }
+    if (trimmed.startsWith('!')) { await this.runShell(trimmed); return; }
     this.composer = recordComposerHistory(this.composer, trimmed);
     if (trimmed.startsWith('/')) {
       await this.host.runSlashCommand(trimmed);

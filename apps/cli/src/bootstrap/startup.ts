@@ -1,4 +1,4 @@
-import { readdirSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { defaultStateDirectory } from './paths';
 import { join, relative, resolve } from 'node:path';
 import {
@@ -17,7 +17,7 @@ import {
   type TurnBudget,
 } from '@futryn/contracts';
 import { Conversation } from '@futryn/core';
-import { ToolDispatcher, platformCommandRuntime, type CommandRuntime } from '@futryn/tools';
+import { ToolDispatcher, UnsupportedRuntime, commandBackendFromEnv, platformCommandRuntime, type CommandRuntime } from '@futryn/tools';
 import { WorkspaceRoot, ProjectContextLoader } from '@futryn/workspace';
 import {
   AccountManager,
@@ -220,8 +220,18 @@ function commandGrantLabel(target: string, workspace: WorkspaceRoot): string {
 
 const APPROVAL_REASONS: Record<string, string> = {
   'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
-  'process-execute': 'Runs a shell command in a read-only sandbox: no writes, no network, project files only.',
+  'process-execute': 'Runs a shell command in the Futryn sandbox: project files only, .git read-only, secrets hidden, no network.',
+  'network-escalation': 'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
+  'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',
+  'stdin-retained-escalation': 'Sends input to a running command that still has network access.',
+  'stdin-input': 'Sends input to a running command; for a shell or REPL this runs new commands. "Allow for session" covers this session only.',
 };
+
+/** Configured command sandbox (ADR 0034): FUTRYN_SANDBOX_MODE and FUTRYN_SANDBOX_ESCALATION. Invalid values fail closed. */
+export function sandboxSettingsFromEnv(env: Record<string, string | undefined> = process.env): { mode: 'read-only' | 'workspace-write'; escalation: 'on-request' | 'never' } {
+  const mode = env.FUTRYN_SANDBOX_MODE ?? 'workspace-write', escalation = env.FUTRYN_SANDBOX_ESCALATION ?? 'on-request';
+  return { mode: mode === 'workspace-write' ? 'workspace-write' : 'read-only', escalation: escalation === 'on-request' ? 'on-request' : 'never' };
+}
 
 export function startup(directory = defaultStateDirectory(), services: { vault?: CredentialVault; fetch?: typeof fetch; subscriptions?: SubscriptionHostOptions; commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime } = {}) {
   const commandRuntimes = new Set<CommandRuntime>();
@@ -381,11 +391,15 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
     const commands = () => {
       if (commandsClosed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
-        commandRuntime = (services.commands ?? ((root, state) => platformCommandRuntime({workspaceRoot:root,stateDirectory:state,container:process.env.FUTRYN_COMMAND_BACKEND==='docker',extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
+        // ADR 0034: the verified Docker backend is the default wherever a local engine exists. Selecting
+        // a backend grants nothing; availability still requires its real containment self-tests.
+        const backend = commandBackendFromEnv(process.env.FUTRYN_COMMAND_BACKEND, () => existsSync('/var/run/docker.sock'));
+        commandRuntime = (services.commands ?? ((root, state) => backend === 'none' ? new UnsupportedRuntime('Commands are disabled (FUTRYN_COMMAND_BACKEND).') : platformCommandRuntime({workspaceRoot:root,stateDirectory:state,container:backend==='docker',extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
         commandRuntimes.add(commandRuntime);
       }
       return commandRuntime;
     };
+    const sandboxSettings = sandboxSettingsFromEnv();
     const activeConvMap = new Map<string, Conversation>();
     // Read-only workspace tools (ADR 0017). Offered only while the client allows them, i.e. after
     // the TUI obtained folder consent; approvals go through the client's permission dialog.
@@ -400,6 +414,7 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
       stateDirectory: realpathSync.native(resolve(directory)),
       // Sandboxed exec_command (ADR 0022): Seatbelt on macOS; other platforms fail closed.
       commands: commands(),
+      sandbox: () => sandboxSettings,
       redact: (text,incomplete) => incomplete ? redactor.stream().push(text) : redactor.text(text),
       audit: record => toolAudit.append(record),
       approve: (request, signal) => client
@@ -407,7 +422,8 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
           ? {capability:'fs.write',action:'Apply verified workspace patch',target:request.target,reason:'Review the exact file changes before applying.',riskLevel:'high',scopeKey:request.scopeKey,diffPreview:request.diffPreview}
           : request.capability === 'process.execute'
           // The action names directory and sandbox, so a "session" answer is bound to all three.
-          ? { capability: request.capability, action: `Run in ${(request.workdir ?? '.').slice(0,80)} · ${request.sandbox ?? 'sandbox'}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'high', scopeKey: request.scopeKey }
+          // Network escalation is its own capability, so Bash allow rules and auto mode never approve it.
+          ? { capability: request.network ? 'network.connect' : request.capability, ...(request.network ? { kind: 'network' as const, ruleTarget: null } : {}), action: `Run in ${(request.workdir ?? '.').slice(0,80)} · ${request.sandbox ?? 'sandbox'}`, target: request.target, reason: (APPROVAL_REASONS[request.reason] ?? request.reason) + (request.justification ? ` Model's reason: ${request.justification}` : ''), riskLevel: 'high', scopeKey: request.scopeKey }
           : { capability: request.capability, action: `${request.tool} ${request.target}`, target: request.target, reason: APPROVAL_REASONS[request.reason] ?? request.reason, riskLevel: 'medium' }, signal)
         : Promise.resolve('deny'),
     });
@@ -439,6 +455,7 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
 
     client = new FutrynClient({
       availableTools: () => client?.toolsEnabled() ? tools().descriptors().map(d => d.name) : [],
+      runShellCommand: (command, signal, onOutput) => toolPort.invoke({ id: `shell-${crypto.randomUUID()}`, name: 'exec_command', input: { cmd: command } }, signal, onOutput),
       getProjectContext: () => client?.toolsEnabled() && projectReport ? structuredClone(projectReport) : null,
       toolGrants: { list: () => grants.list().map(grant => grant.capability === 'process.execute' ? commandGrantLabel(grant.target, workspaceTree()) : grant.capability === 'fs.write' ? 'Exact patch '+grant.target.slice(6,18) : workspaceTree().relativeOf(grant.target)), clear: () => grants.clear() },
       workspace: resolve(workspaceRoot),

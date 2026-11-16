@@ -169,7 +169,7 @@ test('canonical commands, aliases, autocomplete, keyboard draft preservation, un
   expect(tui.getComposerState().value).toBe('');
   for (const c of ['/mcp', '/plugin', '/compact']) { await tui.executeSlashCommand(c); expect(tui.getStatusBanner()).toContain('Not implemented'); }
   await tui.submitPrompt('! echo must-not-execute');
-  expect(tui.getStatusBanner()).toContain('Shell mode: Not implemented');
+  expect(tui.getStatusBanner()).toContain('Shell mode needs workspace tools');
   expect(server.requests).toHaveLength(0);
   tui.client.addProvider(server.provider('chat', { id: 'openrouter' }));
   expect(tui.client.listIntegrations().find(i => i.provider.id === 'openrouter')!.methods.some(m => m.id === 'openrouter-oauth')).toBe(false);

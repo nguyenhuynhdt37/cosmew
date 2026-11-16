@@ -66,3 +66,7 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 - `user.accepted.carried[]`: undelivered steering of earlier turns that this turn consumed, placed before its user message. Undelivered steering of finished turns is `RecoveredConversation.pendingInput`, never history. A stale or duplicate carry is refused.
 - Model events `completed.endTurn` (only `false` from a provider signal such as Anthropic `pause_turn`), `responseDiscarded(reason: retry|preempted, attempt?)`, `inputDeferred(steerIds, reason)`.
 - SDK: `submitWhileBusy` (steer or queue for the next turn), `takeQueuedMessage`, `queuedMessages`, `queuedInput`; port `queuedInput`.
+
+## Unified exec terminal (contract 1.16)
+
+ADR 0034 adds no new agent event. Command ports gain optional `CommandSandbox` (`read-only`/`workspace-write`, approved `network`), `tty`/`shell`/`login` on requests, `sandboxDenied` outcomes (tool result code `SANDBOX_DENIED`, output kept, never retried), runtime `capabilities()`/`resize()`, and session launch facts used by stdin review. Each command or stdin result carries only output produced since the previous call on that session. `toolOutputDelta` semantics are unchanged; a PTY session streams merged output as `stdout`.

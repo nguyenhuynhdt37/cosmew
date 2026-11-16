@@ -49,7 +49,8 @@ test('commands require their own explicit decision; denial and pre-cancellation 
 test('strict arguments and canonical cwd policy reject unsupported modes and workspace escapes',async()=>{
   const f=fixture();const c=mock(f,async()=> 'once');
   symlinkSync(f.dir,join(f.root,'escape'));
-  for(const input of [{cmd:'x',tty:true},{cmd:'x',yield_time_ms:1},{cmd:'x',session_id:'fake'},{cmd:'x',timeout_ms:1},{cmd:'x',max_output_tokens:999999},{cmd:'a'.repeat(1025)},{cmd:'x\0y'}]) expect((await invoke(c.dispatcher,input)).status).not.toBe('ok');
+  // yield_time_ms is clamped like Codex (250-30000 ms), so it is no longer an invalid argument.
+  for(const input of [{cmd:'x',tty:true},{cmd:'x',sandbox_permissions:'require_escalated'},{cmd:'x',additional_permissions:{network:{enabled:true}}},{cmd:'x',sandbox_permissions:'with_additional_permissions',additional_permissions:{network:{enabled:true}}},{cmd:'x',prefix_rule:['git']},{cmd:'x',shell:'/bin/zsh'},{cmd:'x',session_id:'fake'},{cmd:'x',timeout_ms:1},{cmd:'x',max_output_tokens:999999},{cmd:'a'.repeat(1025)},{cmd:'x\0y'}]) expect((await invoke(c.dispatcher,input)).status).not.toBe('ok');
   for(const workdir of ['missing','source.ts','../','escape','state']) expect((await invoke(c.dispatcher,{cmd:'x',workdir})).status).not.toBe('ok');
   expect(c.calls()).toBe(0);
   expect(evaluateExec('echo x','.',f.root).effect).toBe('ask');

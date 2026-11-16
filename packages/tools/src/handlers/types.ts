@@ -1,4 +1,4 @@
-import type {CommandRuntime, CommandOutputChunk, ToolDescriptor} from '@futryn/contracts';
+import type {CommandRuntime, CommandOutputChunk, CommandSandbox, ToolDescriptor} from '@futryn/contracts';
 import type {ResolvedPath} from '@futryn/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ToolOutput} from '../context';
@@ -10,7 +10,12 @@ export type PreparedTool = {
   | {kind:'patch'; plan:PatchPlan; runtime:ApplyPatchRuntime}
   | {kind: 'read'; file: ResolvedPath}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}
-  | {kind: 'command'; file: ResolvedPath; command: string; workdir: string; label: string; runtime: CommandRuntime; runtimeId: string;executionKey?:string;sessionId?:string;toolName?:string}
+  | {kind: 'command'; file: ResolvedPath; command: string; workdir: string; label: string; runtime: CommandRuntime; runtimeId: string;executionKey?:string;sessionId?:string;toolName?:string;
+      /** Effective sandbox of a launch; stdin carries its session's launch sandbox instead. */
+      sandbox?:CommandSandbox;justification?:string;
+      stdin?:{chars:string;interrupt:boolean;tty:boolean;launch:CommandSandbox};
+      /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
+      grantCommand?:string}
 );
 export interface ToolHandler {
   readonly descriptor: ToolDescriptor;

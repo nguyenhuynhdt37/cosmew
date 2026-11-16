@@ -1,5 +1,5 @@
-import type {ToolResult, CommandRuntime} from '@futryn/contracts';
-import type {SessionGrants} from '@futryn/security';
+import type {ToolResult, CommandRuntime, CommandSandbox} from '@futryn/contracts';
+import type {SessionGrants, SandboxEscalation} from '@futryn/security';
 import type {WorkspaceRoot} from '@futryn/workspace';
 
 export type ApprovalDecision = 'once' | 'session' | 'deny';
@@ -15,6 +15,10 @@ export interface ApprovalRequest {
   sandbox?: string;
   scopeKey?: string;
   diffPreview?: string;
+  /** The command asks for network access beyond the default sandbox (ADR 0034). */
+  network?: boolean;
+  /** Model-supplied, user-facing reason for additional permissions. */
+  justification?: string;
 }
 
 /** One line of the tool audit trail. `requested` is written before any prompt or execution. */
@@ -44,7 +48,14 @@ export interface ToolDispatcherOptions {
   searchDeadlineMs?: number;
   /** Sandboxed command runtime (ADR 0022). Without one, or while it is unavailable, exec_command is not offered. */
   commands?: CommandRuntime;
+  /**
+   * Configured command sandbox (ADR 0034). Read at prepare, authorization and revalidation, so a
+   * change before launch invalidates the pending request. Defaults to read-only, on-request.
+   */
+  sandbox?: () => {mode: CommandSandbox['mode']; escalation: SandboxEscalation};
 }
+
+export const sandboxConfig = (options: ToolDispatcherOptions) => options.sandbox?.() ?? {mode: 'read-only' as const, escalation: 'on-request' as const};
 
 /** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
 export function commandGrantTarget(command: string, workdirAbsolute: string, runtimeId: string,executionKey?:string): string {
@@ -53,3 +64,13 @@ export function commandGrantTarget(command: string, workdirAbsolute: string, run
 
 export type ToolOutput = Omit<ToolResult, 'callId' | 'name'>;
 export type Audit = (record: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) => void;
+
+/**
+ * The sandbox a command actually gets: the configured mode when the runtime can enforce it, otherwise
+ * read-only when that is enforceable (stricter, never looser). Undefined means nothing can run.
+ */
+export function effectiveSandboxMode(options: ToolDispatcherOptions, runtime: CommandRuntime): CommandSandbox['mode'] | undefined {
+  const modes = runtime.capabilities?.().modes ?? ['read-only'];
+  const configured = sandboxConfig(options).mode;
+  return modes.includes(configured) ? configured : modes.includes('read-only') ? 'read-only' : undefined;
+}

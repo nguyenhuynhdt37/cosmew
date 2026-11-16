@@ -79,11 +79,51 @@ export const MAX_COMMAND_CHARS = 1024;
  * denied or needs an explicit user decision bound to the command, the canonical working directory
  * and the sandbox policy. File-read grants never authorize execution.
  */
-export function evaluateExec(command: string, workdirRelative: string, workdirAbsolute: string, context: ReadPolicyContext = {}): PermissionDecision {
+export function evaluateExec(command: string, workdirRelative: string, workdirAbsolute: string, context: ExecPolicyContext = {}): PermissionDecision {
   if (!command.trim() || command.length > MAX_COMMAND_CHARS || /[\u0000]/.test(command)) return { effect: 'deny', reason: 'invalid-command' };
   const location = evaluateRead(workdirRelative === '.' ? '.' : workdirRelative + '/', workdirAbsolute, context);
   if (location.effect === 'deny') return location;
+  const sandbox = context.sandbox;
+  if (sandbox) {
+    // A request may not loosen the configured mode (Codex: per-command overrides go through
+    // additional permissions, and `never` forbids every escalation).
+    if (context.configuredMode === 'read-only' && sandbox.mode === 'workspace-write') return { effect: 'deny', reason: 'sandbox-mode' };
+    if (sandbox.network && context.escalation === 'never') return { effect: 'deny', reason: 'escalation-forbidden' };
+    if (sandbox.network) return { effect: 'ask', reason: 'network-escalation' };
+  }
   return { effect: 'ask', reason: 'process-execute' };
+}
+
+export type SandboxEscalation = 'on-request' | 'never';
+export interface ExecSandbox { mode: 'read-only' | 'workspace-write'; network: boolean }
+export interface ExecPolicyContext extends ReadPolicyContext {
+  /** Effective sandbox requested for this command. */
+  sandbox?: ExecSandbox;
+  /** Mode configured for the session; requests cannot exceed it. */
+  configuredMode?: ExecSandbox['mode'];
+  escalation?: SandboxEscalation;
+}
+
+/**
+ * Terminal input review, ported from Codex `unified_exec/stdin_approval.rs` (pinned 75fc67e8).
+ * Input never widens a session's authority: the process keeps its launch sandbox. Polls and an
+ * interrupt are transport, not new commands. Non-empty input always asks (stricter than Codex);
+ * drift is named in the reason; a session that can no longer satisfy a
+ * stricter current policy is refused ("start a new terminal"), because approval cannot retrofit
+ * restrictions onto a running process.
+ */
+export function evaluateStdin(input: { chars: string; interrupt: boolean; tty: boolean; launch: ExecSandbox; current: ExecSandbox; escalation?: SandboxEscalation }): PermissionDecision {
+  if (input.chars.includes('\u0000')) return { effect: 'deny', reason: 'invalid-input' };
+  if (!input.chars && !input.interrupt) return { effect: 'allow', reason: 'stdin-poll' };
+  if (input.interrupt || (!input.tty && input.chars === '\u0003')) return { effect: 'allow', reason: 'stdin-interrupt' };
+  // `current` is the configured session policy; network is never configured, only approved per command.
+  if (input.launch.mode === 'workspace-write' && input.current.mode === 'read-only') return { effect: 'deny', reason: 'stdin-policy-tightened' };
+  if (input.launch.network && input.escalation === 'never') return { effect: 'deny', reason: 'escalation-forbidden' };
+  if (input.launch.network) return { effect: 'ask', reason: 'stdin-retained-escalation' };
+  if (input.launch.mode !== input.current.mode) return { effect: 'ask', reason: 'stdin-policy-drift' };
+  // Futryn deviation from Codex (ADR 0034): input to a shell or REPL is a new command, so it is not
+  // covered by the launch approval. A "session" answer approves input to that one session only.
+  return { effect: 'ask', reason: 'stdin-input' };
 }
 
 /** Patch writes cannot modify credentials, Git internals or Futryn durable state. */

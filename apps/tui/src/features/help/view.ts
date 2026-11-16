@@ -21,7 +21,7 @@ export function renderHelpOverlay(options: {
   row('   Ctrl+B       Toggle Sidebar                 Shift+Tab    View mode only; tool modes unavailable');
   row('   /            Slash Command Autocomplete     @            Workspace File Autocomplete');
   row('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
-  row('   !            Shell mode: Not implemented     Alt+Enter    Newline (also Ctrl+J)');
+  row('   !            Sandboxed shell command         Alt+Enter    Newline (also Ctrl+J)');
   row('   Mouse drag   Select text · Ctrl+C/Ctrl+Y Copy · Esc Clear · Shift+drag native selection');
   row('   Ctrl+R       Toggle reasoning summary        /model: Ctrl+E cycles active model effort');
   row('');

@@ -244,4 +244,4 @@ Remaining PA1 release gates: authenticated live provider/model tests; available 
 
 ## Verified staged execution milestone — 2026-11-16
 
-[ADR0032](../adr/0032-contained-command-sessions.md) implements experimental opt-in local Docker command containment and pipe sessions; [acceptance](execution-runtime-acceptance.md) distinguishes live TUI/API, fixtures and actual platform tests. Native host shells, PTY and production readiness remain gated.
+[ADR0032](../adr/0032-contained-command-sessions.md) implements experimental opt-in local Docker command containment and pipe sessions; [acceptance](execution-runtime-acceptance.md) distinguishes live TUI/API, fixtures and actual platform tests. Native host shells, PTY and production readiness remain gated. Task 02 / [ADR0034](../adr/0034-unified-exec-terminal-parity.md) adds workspace-write, PTY sessions, Codex stdin review, network escalation and `!command` on the Docker backend ([acceptance](unified-exec-acceptance.md)); native Seatbelt/Linux/Windows sandboxes remain gated.

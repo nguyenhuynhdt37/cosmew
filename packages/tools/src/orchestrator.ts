@@ -1,8 +1,8 @@
 import {createHash} from 'node:crypto';
 import {FutrynError, toolResultSchema, type CommandOutputChunk, type PermissionDecision, type ToolCall, type ToolResult} from '@futryn/contracts';
-import {evaluateRead, evaluateExec, evaluateWrite} from '@futryn/security';
+import {evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
-import {commandGrantTarget, type ApprovalRequest, type Audit, type ToolDispatcherOptions, type ToolOutput} from './context';
+import {commandGrantTarget, effectiveSandboxMode, sandboxConfig, type ApprovalRequest, type Audit, type ToolDispatcherOptions, type ToolOutput} from './context';
 import type {PreparedTool} from './handlers/types';
 import {join} from 'node:path';
 import {clipBytes} from './limits';
@@ -132,22 +132,37 @@ export class ToolOrchestrator {
       'Patch writes are denied by policy. No changes were made.','The user denied this patch. No changes were made.',signal);
   }
 
+  /** Exec policy for a launch, or Codex stdin review for input to an owned session (ADR 0034). */
+  private commandDecision(prepared: Extract<PreparedTool,{kind:'command'}>, file: ResolvedPath): PermissionDecision {
+    const config=sandboxConfig(this.options);
+    if(prepared.stdin){
+      // Input is not a command: only its session's working directory is checked, never the text.
+      const location=evaluateRead(file.relative==='.'?'.':file.relative+'/',file.absolute,{stateDirectory:this.options.stateDirectory});
+      if(location.effect==='deny')return location;
+      return evaluateStdin({...prepared.stdin,current:{mode:config.mode,network:false},escalation:config.escalation});
+    }
+    return evaluateExec(prepared.command,file.relative,file.absolute,{stateDirectory:this.options.stateDirectory,sandbox:prepared.sandbox,configuredMode:config.mode,escalation:config.escalation});
+  }
+
   private async authorizeCommand(prepared: Extract<PreparedTool,{kind:'command'}>, audit: Audit, signal?: AbortSignal): Promise<Authorization> {
     const {command,file,runtime,runtimeId,label}=prepared;
-    const decision=evaluateExec(command,file.relative,file.absolute,{stateDirectory:this.options.stateDirectory});
-    const grant=commandGrantTarget(command,file.absolute,runtimeId,prepared.executionKey);
-    return this.permission(decision,{tool:prepared.toolName??'exec_command',capability:'process.execute',target:command,workdir:file.relative,sandbox:runtime.label,scopeKey:grant,reason:decision.reason},grant,label,audit,
-      `Command denied by policy (${decision.reason}). Nothing was run.`,'The user denied running this command. Nothing was run.',signal);
+    const decision=this.commandDecision(prepared,file);
+    const grant=commandGrantTarget(prepared.grantCommand??command,file.absolute,runtimeId,prepared.executionKey);
+    const sandbox=prepared.sandbox?`${runtime.label} · ${prepared.sandbox.mode}${prepared.sandbox.network?' + network':''}`:runtime.label;
+    return this.permission(decision,{tool:prepared.toolName??'exec_command',capability:'process.execute',target:command,workdir:file.relative,sandbox,scopeKey:grant,reason:decision.reason,...(prepared.sandbox?.network?{network:true}:{}),...(prepared.justification?{justification:this.options.redact(prepared.justification)}:{})},grant,label,audit,
+      decision.reason==='stdin-policy-tightened'?'This terminal was launched with broader permissions than the current sandbox allows; start a new command instead. Nothing was sent.':`Command denied by policy (${decision.reason}). Nothing was run.`,'The user denied running this command. Nothing was run.',signal);
   }
 
   private revalidateCommand(prepared: Extract<PreparedTool,{kind:'command'}>, viaSession: boolean, audit: Audit): ToolOutput | null {
     const {command,file,runtime,runtimeId,label}=prepared;
-    const grant=commandGrantTarget(command,file.absolute,runtimeId,prepared.executionKey);
+    const grant=commandGrantTarget(prepared.grantCommand??command,file.absolute,runtimeId,prepared.executionKey);
     const again=this.options.workspace.resolve(prepared.workdir);
-    const current=evaluateExec(command,again.relative,again.absolute,{stateDirectory:this.options.stateDirectory});
-    if (again.absolute!==file.absolute || again.kind!=='directory' || current.effect==='deny' || runtime.id!==runtimeId || viaSession && !this.options.grants.has('process.execute',grant)) {
-      audit({target:label,phase:'decided',decision:'deny',reason:'revalidation'});
-      return {status:'denied',code:'DENIED',content:'The command was not run: its approval or working directory changed before launch.',target:label};
+    const current=this.commandDecision(prepared,again);
+    // The configured sandbox is part of the approval: a change before launch voids it (no retrofit).
+    const sandboxChanged=!!prepared.sandbox&&effectiveSandboxMode(this.options,runtime)!==prepared.sandbox.mode;
+    if (again.absolute!==file.absolute || again.kind!=='directory' || current.effect==='deny' || sandboxChanged || runtime.id!==runtimeId || viaSession && !this.options.grants.has('process.execute',grant)) {
+      audit({target:label,phase:'decided',decision:'deny',reason:sandboxChanged?'sandbox-changed':'revalidation'});
+      return {status:'denied',code:'DENIED',content:sandboxChanged?'The command was not run: the sandbox policy changed after approval. Request it again under the current policy.':'The command was not run: its approval or working directory changed before launch.',target:label};
     }
     if(prepared.sessionId&&!runtime.session?.(prepared.sessionId))return {status:'denied',code:'SESSION_EXPIRED',content:'The session expired before input approval. Nothing was sent.',target:label};
     if (!runtime.availability().ok) return {status:'error',code:'SANDBOX_UNAVAILABLE',content:'The command sandbox is unavailable. Nothing was run.',target:label};

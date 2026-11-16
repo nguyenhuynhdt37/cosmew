@@ -11,6 +11,8 @@ export function commandOutcomeResult(outcome:CommandOutcome,timeoutMs:number,tar
  if(outcome.kind==='running')return{status:'ok',sessionId:outcome.sessionId,...common};
  if(outcome.kind==='cancelled')return{status:'error',code:'CANCELLED',...common};
  if(outcome.kind==='timeout')return{status:'error',code:'TIMEOUT',...common};
+ // Codex SandboxErr::Denied: reported as a denial, never retried here (Futryn has no unsandboxed retry).
+ if(outcome.sandboxDenied)return{status:'error',code:'SANDBOX_DENIED',exitCode:outcome.exitCode,...common};
  return{status:'ok',exitCode:outcome.exitCode,...common};
 }
 export async function runCommand(runtime:CommandRuntime,request:CommandRequest,target:string,signal?:AbortSignal):Promise<ToolOutput>{return commandOutcomeResult(await runtime.run(request,signal),request.timeoutMs,target);}

@@ -9,6 +9,8 @@ import {
   permissionPromptResolutionSchema,
   permissionPromptRequestSchema,
   type Account,
+  type CommandOutputChunk,
+  type ToolResult,
   type ProjectContextReport,
   type Integration,
   type ProviderAuthChallenge,
@@ -86,6 +88,8 @@ export interface FutrynBackendPorts {
   workspace: string;
   /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
+  /** `!command` shell mode (ADR 0034): the same exec_command dispatcher, approval and sandbox as model calls. */
+  runShellCommand?(command: string, signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): Promise<ToolResult>;
   getProjectContext?(): ProjectContextReport | null;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
@@ -293,6 +297,14 @@ export class FutrynClient {
   }
 
   /** Futryn tools offered right now; exec_command appears only when its OS containment is proven. */
+  /**
+   * Run a user-typed `!command` through the workspace exec_command tool. There is no second shell
+   * path: without folder consent, a backend or an available sandbox, nothing runs.
+   */
+  async runShellCommand(command: string, options: { signal?: AbortSignal; onOutput?: (chunk: CommandOutputChunk) => void } = {}): Promise<ToolResult> {
+    if (!this.toolsAllowed || !this.ports.runShellCommand) throw new FutrynError('UNSUPPORTED');
+    return this.ports.runShellCommand(command, options.signal, options.onOutput);
+  }
   availableTools(): string[] { try { return this.ports.availableTools?.() ?? []; } catch { return []; } }
 
   capabilities(): BackendCapabilitiesReport {

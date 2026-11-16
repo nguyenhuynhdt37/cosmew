@@ -89,3 +89,13 @@ test('CLI reuses its client runtime and shuts down owned runtimes once',async()=
  await Promise.all([c.app.shutdownCommands(),c.app.shutdownCommands()]);
  expect(c.shutdowns()).toBe(1);
 });
+
+test('!command shell mode uses the same dispatcher approval and sandbox; denial runs nothing and nothing reaches the model',async()=>{
+ const c=await make();const before=c.server.requests.length;
+ const denied=c.tui.submitPrompt('!rg -n marker source.ts');await pending(c);expect(c.client.listPendingPermissions()[0]!.target).toBe('rg -n marker source.ts');
+ await c.tui.handleKey('Escape');await denied;expect(c.runs()).toBe(0);
+ const ran=c.tui.submitPrompt('!rg -n marker source.ts');await pending(c);await c.tui.handleKey('1');await ran;expect(c.runs()).toBe(1);
+ const item=c.tui.getTranscript().at(-1)!;expect(item.toolResults?.[0]).toMatchObject({name:'exec_command',status:'ok',exitCode:0});
+ expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');expect(c.tui.getStatusBanner()).toContain('exit 0');
+ expect(c.server.requests.length).toBe(before);
+});

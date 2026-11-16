@@ -1,5 +1,5 @@
 import {test,expect,afterEach} from 'bun:test';
-import {mkdtempSync,writeFileSync,rmSync,existsSync,realpathSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';
+import {mkdtempSync,writeFileSync,rmSync,existsSync,realpathSync,readFileSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';
 import {DockerCommandRuntime} from '@futryn/tools';import {startup} from '../../apps/cli/src/bootstrap/startup';import {fixtureServer,memoryVault,type ScriptedReply,type ScriptedView} from '../fixtures';
 const containerTest=test.skipIf(process.env.FUTRYN_TEST_CONTAINER!=='1');const clean:(()=>void|Promise<void>)[]=[];afterEach(async()=>{for(const fn of clean.splice(0).reverse())await fn();});
 async function setup(protocol:'chat'|'anthropic',script:(v:ScriptedView)=>ScriptedReply){
@@ -19,6 +19,7 @@ for(const protocol of ['chat','anthropic'] as const)containerTest(`${protocol}: 
 },35000);
 containerTest('a model gets a real pipe session, separately approves input and receives the actual response',async()=>{
  const c=await setup('chat',v=>{const last=v.results.at(-1);if(!last)return{calls:[{name:'exec_command',input:{cmd:'echo READY; read value; echo "INPUT:$value"',timeout_ms:8000,yield_time_ms:100}}]};if(last.name==='exec_command'){const id=/Running session: ([a-f0-9-]{36})/.exec(last.content)?.[1];expect(id).toBeDefined();return{calls:[{name:'write_stdin',input:{session_id:id,chars:'hello\n',yield_time_ms:1500}}]};}expect(last.content).toContain('INPUT:hello');return{text:'INPUT_VERIFIED'};});
+ // ADR 0034: stricter than Codex, non-empty input is approved separately (polls are not).
  const {events,approvals}=await sendApproved(c);expect(approvals).toBe(2);expect(events.filter(e=>e.type==='toolResult').map(e=>e.result.name)).toEqual(['exec_command','write_stdin']);expect(events.filter(e=>e.type==='textDelta').map(e=>e.text).join('')).toBe('INPUT_VERIFIED');
 },35000);
 containerTest('closing a live command iterator cancels its namespace and persists the actual partial output/result',async()=>{
@@ -44,3 +45,19 @@ containerTest('ADR 0033 Q: a real failing test, an approved fix and a passing re
  expect(JSON.stringify(c.server.requests.filter(r=>r.body).at(-1)!.body)).toContain('Keep the export name answer.');
  const stored=c.app.conversations.recover(c.client.activeSession()!.id);expect(stored.turns.at(-1)!.state).toBe('completed');expect(stored.pendingInput).toBeUndefined();
 },90000);
+containerTest('Task 02 F 40-46: the model writes source with Bash, sees the real failing test, fixes it with Bash, reruns and reports verified results',async()=>{
+ // Fixture model only: this proves Futryn's loop/runtime wiring, not real-model capability.
+ const c=await setup('chat',v=>{const last=v.results.at(-1);
+  if(!last)return{calls:[{name:'exec_command',input:{cmd:"mkdir -p src && printf 'export const add = (a: number, b: number) => a - b;\\n' > src/math.ts && printf \"import {test,expect} from 'bun:test'; import {add} from './math'; test('add',()=>expect(add(2,3)).toBe(5));\\n\" > src/math.test.ts && git --version >/dev/null 2>&1; echo CREATED"}}]};
+  if(last.name==='exec_command'&&last.content.includes('CREATED'))return{calls:[{name:'exec_command',input:{cmd:'bun test src'}}]};
+  if(last.name==='exec_command'&&/Exit code: [1-9]/.test(last.content))return{calls:[{name:'exec_command',input:{cmd:"sed -i 's/a - b/a + b/' src/math.ts && cat src/math.ts"}}]};
+  if(last.name==='exec_command'&&last.content.includes('a + b'))return{calls:[{name:'exec_command',input:{cmd:'bun test src'}}]};
+  return{text:/Exit code: 0/.test(last.content)&&last.content.includes('1 pass')?'VERIFIED: bun test src passes (1 pass).':'NOT VERIFIED'};});
+ const {events,approvals}=await sendApproved(c);
+ const results=events.filter(e=>e.type==='toolResult').map(e=>e.result);
+ expect(results.map(r=>r.exitCode)).toEqual([0,1,0,0]);expect(results[1].content).toContain('fail');expect(approvals).toBe(4);
+ expect(events.filter(e=>e.type==='textDelta').map(e=>e.text).join('')).toBe('VERIFIED: bun test src passes (1 pass).');
+ // The fix is in the real project, visible to the host.
+ expect(readFileSync(join(c.root,'src/math.ts'),'utf8')).toContain('a + b');
+ const stored=c.app.conversations.recover(c.client.activeSession()!.id);expect(stored.turns.at(-1)!.state).toBe('completed');expect(stored.messages.filter(m=>m.toolName==='exec_command')).toHaveLength(4);
+},120000);

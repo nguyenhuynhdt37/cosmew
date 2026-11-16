@@ -142,12 +142,24 @@ export class SeatbeltRuntime implements CommandRuntime {
   async shutdown(): Promise<void> { await this.supervisor.shutdown(); }
 }
 
-/** The runtime for this host: Seatbelt on macOS; every other platform fails closed for now. */
+/**
+ * The runtime for this host (ADR 0034). `container` selects the verified Docker backend whenever a
+ * local engine socket exists; its availability still requires the real self-tests. Native Seatbelt
+ * stays closed (no descendant containment) and Linux/Windows native sandboxes are not implemented.
+ */
 export function platformCommandRuntime(options: SeatbeltOptions): CommandRuntime {
   const platform = options.platform ?? process.platform;
   if(options.container&&['darwin','linux'].includes(platform))return new DockerCommandRuntime(options);
   if (platform === 'darwin') return new SeatbeltRuntime(options);
   return new UnsupportedRuntime(platform === 'linux'
-    ? 'Linux command sandboxing (bubblewrap) is not implemented or verified in this slice.'
+    ? 'Native Linux command sandboxing (bubblewrap) is not implemented or verified; use the Docker backend.'
     : `No verified command sandbox for ${platform}.`);
+}
+
+/** FUTRYN_COMMAND_BACKEND: `auto` (default) uses Docker when a local engine socket exists; `docker` requires it; `none` disables commands. */
+export function commandBackendFromEnv(value: string | undefined, socketExists: () => boolean): 'docker' | 'native' | 'none' {
+  if (value === 'none') return 'none';
+  if (value === 'docker') return 'docker';
+  if (value !== undefined && value !== 'auto' && value !== '') return 'none';
+  return socketExists() ? 'docker' : 'native';
 }

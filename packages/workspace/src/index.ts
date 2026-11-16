@@ -3,3 +3,4 @@ export { listWorkspaceFiles, type FileListing } from './files';
 export { ProjectContextLoader } from './project-context';
 export {SecureFiles, WriteBoundaryError, writePath, contentHash, type FileSnapshot} from './secure-files';
 export {captureExecutionSnapshot} from './execution-snapshot';
+export {scanExecutionMasks, type ExecutionMasks, type MaskDecision} from './execution-masks';
