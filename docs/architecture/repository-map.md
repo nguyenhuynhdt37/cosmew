@@ -16,7 +16,7 @@ Task 03A foundation ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md
 
 Contracts public chỉ gồm domain records/ports, không third-party SDK/Bun types. sdk public là Hannes client protocol. Models/tools/workspace/mcp/extensions/security/persistence/agents chỉ xuất facades qua index; adapters xuất capability report và registration factory, không mở host internals. Apps không được import bởi packages. testkit chỉ test consumers, không production.
 
-ADR bắt buộc cho: public schema/semantics/version, dependency edge mới, shared ownership, package/process boundaries, plugin host privileges, storage migration strategy, runtime/language/framework swap, sandbox/trust model hoặc compatibility claim mới. Refactor private file không đổi contract không cần ADR mới nhưng cần docs/tests trong phase triển khai.
+Ghi ADR (làm lịch sử quyết định, không phải cổng xin phép) khi thay đổi: public schema/semantics/version, dependency edge mới, shared ownership, package/process boundaries, plugin host privileges, storage migration strategy, runtime/language/framework swap, sandbox/trust model hoặc compatibility claim mới. Refactor private file không đổi contract không cần ADR mới nhưng cần docs/tests trong phase triển khai.
 
 ## apps/cli
 
