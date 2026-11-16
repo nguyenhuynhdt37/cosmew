@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CommandOutputChunk } from './command-runtime';
 import type { ToolCall } from './models';
 
 /**
@@ -39,6 +40,7 @@ export const toolResultSchema = z.strictObject({
   /** exec_command (ADR 0022): exit code of the command; null when it was killed by a signal. */
   exitCode: z.number().int().nullable().optional(),
   /** exec_command: wall-clock run time of the process. */
+  sessionId:z.string().uuid().optional(),
   durationMs: z.number().int().min(0).optional(),
 });
 export type ToolResult = z.infer<typeof toolResultSchema>;
@@ -46,5 +48,5 @@ export type ToolResult = z.infer<typeof toolResultSchema>;
 /** What `core` sees: descriptors to offer and one call to run. */
 export interface ToolPort {
   descriptors(): ToolDescriptor[];
-  invoke(call: ToolCall, signal?: AbortSignal): Promise<ToolResult>;
+  invoke(call: ToolCall, signal?: AbortSignal, onOutput?:(chunk:CommandOutputChunk)=>void): Promise<ToolResult>;
 }

@@ -241,3 +241,7 @@ Remaining PA1 release gates: authenticated live provider/model tests; available 
 ## Implemented recovery slice — 2026-11-16
 
 [ADR 0030](../adr/0030-durable-conversation-recovery.md) implements durable turns/events, interruption reconstruction, task continuity, extractive compaction and bounded progress. [Fixture/process evidence and limits](conversation-recovery.md) do not constitute authenticated-provider or interactive Product MVP acceptance. Production exec_command containment gate remains closed.
+
+## Verified staged execution milestone — 2026-11-16
+
+[ADR0032](../adr/0032-contained-command-sessions.md) implements experimental opt-in local Docker command containment and pipe sessions; [acceptance](execution-runtime-acceptance.md) distinguishes live TUI/API, fixtures and actual platform tests. Native host shells, PTY and production readiness remain gated.

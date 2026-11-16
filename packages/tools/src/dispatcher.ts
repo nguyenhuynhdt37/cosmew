@@ -1,4 +1,4 @@
-import type {ToolCall, ToolPort} from '@futryn/contracts';
+import type {CommandOutputChunk, ToolCall, ToolPort} from '@futryn/contracts';
 import type {ToolDispatcherOptions} from './context';
 import {createHandlers} from './handlers';
 import {InstructionReader} from './handlers/instructions';
@@ -21,6 +21,6 @@ export class ToolDispatcher implements ToolPort {
   }
   descriptors() { return this.registry.descriptors(); }
   commandsReady(): boolean { return this.registry.get('exec_command')?.handler.available() === true; }
-  invoke(call: ToolCall, signal?: AbortSignal) { return this.orchestrator.invoke(call,signal); }
+  invoke(call: ToolCall, signal?: AbortSignal,onOutput?:(chunk:CommandOutputChunk)=>void) { return this.orchestrator.invoke(call,signal,onOutput); }
   readInstruction(path: string, maxBytes: number, signal?: AbortSignal) { return this.instructions.readInstruction(path,maxBytes,signal); }
 }

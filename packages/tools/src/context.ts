@@ -47,8 +47,8 @@ export interface ToolDispatcherOptions {
 }
 
 /** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
-export function commandGrantTarget(command: string, workdirAbsolute: string, runtimeId: string): string {
-  return JSON.stringify({ exec: command, cwd: workdirAbsolute, sandbox: runtimeId });
+export function commandGrantTarget(command: string, workdirAbsolute: string, runtimeId: string,executionKey?:string): string {
+  return JSON.stringify({ exec: command, cwd: workdirAbsolute, sandbox: runtimeId,...(executionKey?{executionKey}:{}) });
 }
 
 export type ToolOutput = Omit<ToolResult, 'callId' | 'name'>;

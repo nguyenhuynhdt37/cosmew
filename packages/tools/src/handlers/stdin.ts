@@ -1,0 +1,11 @@
+import {z} from 'zod';import type {ToolHandler} from './types';import type {ToolDispatcherOptions} from '../context';import {commandOutcomeResult} from '../runtimes/process';
+const input=z.strictObject({session_id:z.string().uuid(),chars:z.string().max(512).default(''),yield_time_ms:z.number().int().min(0).max(30000).default(1000),signal:z.enum(['SIGINT','SIGTERM']).optional()});
+export function stdinHandler(options:ToolDispatcherOptions):ToolHandler{return{
+ descriptor:{name:'write_stdin',capability:'process.execute',description:'Poll, send pipe input, or interrupt an owned command session. Every input is permission checked. No PTY; input bytes do not imply terminal key handling. Sessions expire with their original hard deadline and are never restored after restart.',inputSchema:{type:'object',properties:{session_id:{type:'string'},chars:{type:'string',maxLength:512},yield_time_ms:{type:'integer',minimum:0,maximum:30000},signal:{type:'string',enum:['SIGINT','SIGTERM']}},required:['session_id'],additionalProperties:false}},
+ available:()=>options.commands?.availability().ok===true&&!!options.commands.writeStdin,
+ unavailable:{status:'error',code:'UNSUPPORTED',content:'No verified pipe-session runtime on this host.'},
+ prepare(args){const parsed=input.safeParse(args);if(!parsed.success)return{status:'error',code:'INVALID_INPUT',content:'Expected owned session_id, at most 512 input characters, optional signal and yield_time_ms.'};const data=parsed.data,runtime=options.commands!,session=runtime.session?.(data.session_id);if(!session)return{status:'error',code:'SESSION_NOT_FOUND',content:'No owned session with this ID; nothing was replayed.'};if(data.signal&&data.chars)return{status:'error',code:'INVALID_INPUT',content:'Send input or a signal, not both.'};
+  const file=options.workspace.resolve(session.cwd),command=`stdin ${data.session_id}: ${data.signal??JSON.stringify(data.chars)}`;
+  return{kind:'command',file,command,workdir:file.relative,label:options.redact(command).slice(0,1024),runtime,runtimeId:runtime.id,toolName:'write_stdin',sessionId:data.session_id,executionKey:JSON.stringify(data),execute:async(signal,onOutput)=>{const result=await runtime.writeStdin!(data.session_id,data.chars,data.yield_time_ms,signal,data.signal,onOutput);return commandOutcomeResult(result,0,command);}};
+ }
+};}

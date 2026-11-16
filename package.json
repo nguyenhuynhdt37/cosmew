@@ -16,15 +16,15 @@
     "packages/workspace"
   ],
   "scripts": {
-    "hannes": "bun apps/cli/src/index.ts",
-    "futryn": "bun apps/cli/src/index.ts",
-    "tui": "bun apps/cli/src/index.ts tui",
+    "hannes": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
+    "futryn": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
+    "tui": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts tui",
     "test": "bun test tests",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && git diff --check",
     "test:integration": "bun test tests/contracts/provider-adapters.test.ts tests/security",
     "test:e2e": "bun test tests/end-to-end",
-    "fyn": "bun apps/cli/src/index.ts",
+    "fyn": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
     "link:cli": "bun link --cwd apps/cli"
   },
   "devDependencies": {

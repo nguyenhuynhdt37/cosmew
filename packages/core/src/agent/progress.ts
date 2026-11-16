@@ -5,10 +5,14 @@ const continuation=(text:string)=>/^(?:tiếp(?:\s+tục)?|làm\s+tiếp|continu
 export function taskForRequest(request:string,previous?:ActiveTaskCheckpoint):ActiveTaskCheckpoint {
   const requestedTargets=targets(request);
   const follows=previous?.state==='unfinished'&&continuation(request)&&(!requestedTargets.length||requestedTargets.every(path=>previous.artifactTargets.includes(path)));
-  return{objective:follows?previous!.objective:request,latestRequest:request,artifactTargets:follows?previous!.artifactTargets:requestedTargets,verifiedActions:follows?[...previous!.verifiedActions]:[],pending:['Fulfil the current user request and verify observable results.'],failures:follows?[...previous!.failures]:[],lastSafeSequence:previous?.lastSafeSequence??0,state:'unfinished'};
+  return{objective:follows?previous!.objective:request,latestRequest:request,artifactTargets:follows?previous!.artifactTargets:requestedTargets,verifiedActions:follows?[...previous!.verifiedActions]:[],pending:follows?[...previous!.pending]:['Fulfil the current user request and verify observable results.'],failures:follows?[...previous!.failures]:[],lastSafeSequence:previous?.lastSafeSequence??0,state:'unfinished'};
 }
 export function observeResult(task:ActiveTaskCheckpoint,call:ToolCall,result:ToolResult,sequence:number):void {
   task.lastSafeSequence=sequence;
+  const session=(call.input&&typeof call.input==='object'?(call.input as {session_id?:string}).session_id:undefined);
+  if(result.sessionId){task.pending=task.pending.filter(p=>!p.includes(result.sessionId!));task.verifiedActions=task.verifiedActions.filter(a=>a.status!=='running:'+result.sessionId).slice(-63);task.pending.push('Collect command session '+result.sessionId+' before reporting check completion.');task.verifiedActions.push({callId:call.id,tool:call.name,status:'running:'+result.sessionId});return;}
+  if(session){task.pending=task.pending.filter(p=>!p.includes(session));task.verifiedActions=task.verifiedActions.filter(a=>a.status!=='running:'+session);}
+  if(result.exitCode!==undefined&&result.exitCode!==null&&result.exitCode!==0)task.failures.push(`${call.name} exit ${result.exitCode}`);
   if(result.status==='ok'){
     if(!result.content.startsWith('[unchanged]'))task.verifiedActions.push({callId:call.id,tool:call.name,status:'ok',...(result.authorizationScopeHash?{scopeHash:result.authorizationScopeHash}:{})});
   }else task.failures.push(`${call.name} ${result.status}${result.code?': '+result.code:''}`);

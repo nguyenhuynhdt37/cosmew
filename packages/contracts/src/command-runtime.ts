@@ -1,21 +1,26 @@
+export interface CommandOutputChunk {stream:'stdout'|'stderr';text:string}
+
 /** One command to run in the sandbox. `cwd` is canonical and already inside the workspace. */
 export interface CommandRequest {
   command: string;
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
+  yieldTimeMs?:number;
+  onOutput?:(chunk:CommandOutputChunk)=>void;
 }
 
 export interface CommandLifecycle {
   leader: 'not-started' | 'exited' | 'unconfirmed';
   stopRequested: boolean;
   output: 'closed' | 'cut-off';
-  /** No current backend can certify all descendants dead. */
-  descendants: 'not-started' | 'unconfirmed';
+  /** terminated requires confirmed exit of a verified PID namespace. */
+  descendants: 'not-started' | 'unconfirmed' | 'terminated';
 }
 
 export interface CommandOutcome {
-  kind: 'exited' | 'timeout' | 'cancelled' | 'spawn-failed';
+  kind: 'exited' | 'timeout' | 'cancelled' | 'spawn-failed' | 'running' | 'unconfirmed';
+  sessionId?:string;
   exitCode: number | null;
   signal: string | null;
   output: string;
@@ -39,6 +44,8 @@ export interface CommandRuntime {
   readonly label: string;
   availability(): RuntimeAvailability;
   run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome>;
+  session?(id:string):{cwd:string;command:string}|undefined;
+  writeStdin?(id:string,chars:string,yieldTimeMs:number,signal?:AbortSignal,interrupt?:'SIGINT'|'SIGTERM',onOutput?:(chunk:CommandOutputChunk)=>void):Promise<CommandOutcome>;
   /** Close admission and settle owned runs; this does not certify descendant containment. */
   shutdown?(): Promise<void>;
 }

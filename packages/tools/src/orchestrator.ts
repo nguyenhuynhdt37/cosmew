@@ -1,11 +1,12 @@
 import {createHash} from 'node:crypto';
-import {FutrynError, toolResultSchema, type PermissionDecision, type ToolCall, type ToolResult} from '@futryn/contracts';
+import {FutrynError, toolResultSchema, type CommandOutputChunk, type PermissionDecision, type ToolCall, type ToolResult} from '@futryn/contracts';
 import {evaluateRead, evaluateExec, evaluateWrite} from '@futryn/security';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {commandGrantTarget, type ApprovalRequest, type Audit, type ToolDispatcherOptions, type ToolOutput} from './context';
 import type {PreparedTool} from './handlers/types';
 import {join} from 'node:path';
 import {clipBytes} from './limits';
+import {plainTerminalText} from './exec/output';
 import {ToolRouter} from './router';
 
 type Authorization = {gate: ToolOutput | null; viaSession: boolean;scopeHash?:string};
@@ -16,9 +17,9 @@ export class ToolOrchestrator {
   private readonly active = new Set<string>();
   constructor(private readonly options: ToolDispatcherOptions, private readonly router: ToolRouter) {}
 
-  async invoke(call: ToolCall, signal?: AbortSignal): Promise<ToolResult> {
+  async invoke(call: ToolCall, signal?: AbortSignal,onOutput?:(chunk:CommandOutputChunk)=>void): Promise<ToolResult> {
     signal?.throwIfAborted();
-    const audit: Audit = record => this.options.audit?.({at:new Date().toISOString(),callId:call.id,tool:call.name,...record});
+    const audit: Audit = record => this.options.audit?.({at:new Date().toISOString(),callId:call.id,tool:call.name,...record,target:record.target===null?null:this.options.redact(record.target)});
     let authorizationScopeHash:string|undefined;
     const finish = (result: ToolOutput): ToolResult => {
       const clipped=clipBytes(this.options.redact(result.content),60000);
@@ -55,7 +56,9 @@ export class ToolOrchestrator {
         if(authorization.viaSession&&!this.options.grants.has('fs.write',prepared.plan.scopeKey))return finish({status:'denied',code:'DENIED',content:'Patch approval was revoked. No changes were made.'});
         prepared.runtime.revalidate(prepared.plan);
       }
-      return finish(await prepared.execute(signal));
+      // Redact the cumulative prefix before emitting a delta: registered secrets split across chunks cannot leak.
+      const raw={stdout:'',stderr:''},sent={stdout:0,stderr:0};let streamed=0;
+      return finish(await prepared.execute(signal,onOutput?chunk=>{if(streamed>=56000)return;const text=chunk.text.slice(0,56000-streamed);streamed+=text.length;raw[chunk.stream]+=text;const safe=plainTerminalText(this.options.redact(raw[chunk.stream],true));const delta=safe.slice(sent[chunk.stream]);sent[chunk.stream]=safe.length;if(delta)onOutput({stream:chunk.stream,text:delta});}:undefined));
     } catch (error) {
       if (signal?.aborted || error instanceof FutrynError && error.code==='CANCELLED') {
         audit({target:null,phase:'completed',outcome:'error',code:'CANCELLED'});
@@ -132,20 +135,21 @@ export class ToolOrchestrator {
   private async authorizeCommand(prepared: Extract<PreparedTool,{kind:'command'}>, audit: Audit, signal?: AbortSignal): Promise<Authorization> {
     const {command,file,runtime,runtimeId,label}=prepared;
     const decision=evaluateExec(command,file.relative,file.absolute,{stateDirectory:this.options.stateDirectory});
-    const grant=commandGrantTarget(command,file.absolute,runtimeId);
-    return this.permission(decision,{tool:'exec_command',capability:'process.execute',target:command,workdir:file.relative,sandbox:runtime.label,scopeKey:grant,reason:decision.reason},grant,label,audit,
+    const grant=commandGrantTarget(command,file.absolute,runtimeId,prepared.executionKey);
+    return this.permission(decision,{tool:prepared.toolName??'exec_command',capability:'process.execute',target:command,workdir:file.relative,sandbox:runtime.label,scopeKey:grant,reason:decision.reason},grant,label,audit,
       `Command denied by policy (${decision.reason}). Nothing was run.`,'The user denied running this command. Nothing was run.',signal);
   }
 
   private revalidateCommand(prepared: Extract<PreparedTool,{kind:'command'}>, viaSession: boolean, audit: Audit): ToolOutput | null {
     const {command,file,runtime,runtimeId,label}=prepared;
-    const grant=commandGrantTarget(command,file.absolute,runtimeId);
+    const grant=commandGrantTarget(command,file.absolute,runtimeId,prepared.executionKey);
     const again=this.options.workspace.resolve(prepared.workdir);
     const current=evaluateExec(command,again.relative,again.absolute,{stateDirectory:this.options.stateDirectory});
     if (again.absolute!==file.absolute || again.kind!=='directory' || current.effect==='deny' || runtime.id!==runtimeId || viaSession && !this.options.grants.has('process.execute',grant)) {
       audit({target:label,phase:'decided',decision:'deny',reason:'revalidation'});
       return {status:'denied',code:'DENIED',content:'The command was not run: its approval or working directory changed before launch.',target:label};
     }
+    if(prepared.sessionId&&!runtime.session?.(prepared.sessionId))return {status:'denied',code:'SESSION_EXPIRED',content:'The session expired before input approval. Nothing was sent.',target:label};
     if (!runtime.availability().ok) return {status:'error',code:'SANDBOX_UNAVAILABLE',content:'The command sandbox is unavailable. Nothing was run.',target:label};
     return null;
   }

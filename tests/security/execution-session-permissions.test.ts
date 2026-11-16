@@ -1,0 +1,20 @@
+import {test,expect,afterEach} from 'bun:test';import {mkdtempSync,realpathSync,rmSync} from 'node:fs';import {join} from 'node:path';import {tmpdir} from 'node:os';
+import {ToolDispatcher,platformCommandRuntime} from '@futryn/tools';import {WorkspaceRoot} from '@futryn/workspace';import {Redactor,SessionGrants} from '@futryn/security';import type {CommandRuntime,CommandOutcome} from '@futryn/contracts';
+const cleanup:string[]=[];afterEach(()=>{for(const path of cleanup.splice(0))rmSync(path,{recursive:true,force:true});});
+const exited:CommandOutcome={kind:'exited',exitCode:0,signal:null,output:'done',omittedBytes:0,durationMs:1};
+function fixture(){const root=realpathSync(mkdtempSync(join(tmpdir(),'fyn-session-permission-')));cleanup.push(root);return root;}
+test('command session grants bind the hard deadline and revocation still requires a current decision',async()=>{
+ const root=fixture(),grants=new SessionGrants();let prompts=0,runs=0;const runtime:CommandRuntime={id:'fixture',label:'fixture only',availability:()=>({ok:true}),run:async()=>{runs++;return exited;}};
+ const dispatcher=new ToolDispatcher({workspace:new WorkspaceRoot(root),grants,commands:runtime,redact:s=>s,approve:async()=>{prompts++;return'session';}});
+ for(const timeout of [1000,1000,2000])expect((await dispatcher.invoke({id:crypto.randomUUID(),name:'exec_command',input:{cmd:'echo test',timeout_ms:timeout}})).status).toBe('ok');expect(prompts).toBe(2);grants.clear();await dispatcher.invoke({id:crypto.randomUUID(),name:'exec_command',input:{cmd:'echo test',timeout_ms:1000}});expect(prompts).toBe(3);expect(runs).toBe(4);
+});
+test('stdin requires a distinct current scope, and expiry while approving sends nothing',async()=>{
+ const root=fixture(),id=crypto.randomUUID();let expired=false,writes=0;const scopes:string[]=[];const runtime:CommandRuntime={id:'fixture',label:'fixture only',availability:()=>({ok:true}),run:async()=>exited,session:s=>s===id&&!expired?{cwd:root,command:'read value'}:undefined,writeStdin:async()=>{writes++;return exited;}};
+ const dispatcher=new ToolDispatcher({workspace:new WorkspaceRoot(root),grants:new SessionGrants(),commands:runtime,redact:s=>s,approve:async request=>{scopes.push(request.scopeKey!);expired=true;return'once';}});
+ const result=await dispatcher.invoke({id:crypto.randomUUID(),name:'write_stdin',input:{session_id:id,chars:'value\n'}});expect(result.code).toBe('SESSION_EXPIRED');expect(writes).toBe(0);expect(scopes[0]).toContain(id);expect(scopes[0]).toContain('value');const unknown=await dispatcher.invoke({id:crypto.randomUUID(),name:'write_stdin',input:{session_id:crypto.randomUUID(),chars:'guess'}});expect(unknown.code).toBe('SESSION_NOT_FOUND');expect(scopes).toHaveLength(1);
+});
+test('streaming output is control-stripped and a secret split across chunks never leaks',async()=>{
+ const root=fixture(),redactor=new Redactor();const secret='registered-secret-value';redactor.register(secret);const runtime:CommandRuntime={id:'fixture',label:'fixture only',availability:()=>({ok:true}),run:async request=>{request.onOutput?.({stream:'stdout',text:'safe registered-'});request.onOutput?.({stream:'stdout',text:'secret-value\x1b]52;c;attack\x07 tail'});return{...exited,output:'safe '+secret+' tail'};}};
+ const dispatcher=new ToolDispatcher({workspace:new WorkspaceRoot(root),grants:new SessionGrants(),commands:runtime,redact:(s,incomplete)=>incomplete?redactor.stream().push(s):redactor.text(s),approve:async()=>'once'});const streamed:string[]=[];const result=await dispatcher.invoke({id:crypto.randomUUID(),name:'exec_command',input:{cmd:'test'}},undefined,c=>streamed.push(c.text));expect(streamed.join('')).toBe('safe [REDACTED] tail');expect(result.content).not.toContain(secret);expect(streamed.join('')).not.toContain('\x1b');
+});
+test('unsupported Windows never falls back to an unrestricted container or shell',()=>{const runtime=platformCommandRuntime({workspaceRoot:fixture(),platform:'win32',container:true});expect(runtime.availability().ok).toBe(false);});

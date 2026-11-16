@@ -347,3 +347,7 @@ SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-sid
 ## Conversation recovery ownership (ADR 0030)
 
 Activated files: contracts/recovery.ts defines durable events/checkpoints; core/context/builder.ts normalizes model history and estimates/truncates context; core/context/compaction.ts implements extractive snapshots; core/agent/progress.ts tracks evidence and auxiliary continuity; persistence/event-store.ts owns ordered journal writes and legacy reconstruction. Paths are under packages/*/src. Core uses only contracts/ports; CLI composes model metadata/redaction/mode; SDK refreshes canonical history after all outcomes. No new package or dependency was added.
+
+## Contained execution ownership (ADR0032)
+
+Tools exec/container.ts owns local Docker lifecycle and opaque sessions; exec/container-supervisor.ts is trusted PID1 code; handlers/stdin.ts uses the existing orchestrator; runtimes/process.ts shares final result projection. Workspace execution-snapshot.ts uses descriptor-relative secure-files binary/directory reads. Core pumps domain progress and owns cancellation; CLI selects backend/forwards callbacks; TUI displays transient output. No provider SDK or foreign agent runtime owns native execution.

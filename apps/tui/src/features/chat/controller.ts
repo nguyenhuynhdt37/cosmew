@@ -124,6 +124,8 @@ export class ChatController {
         } else if (event.type === 'activity') {
           assistantItem.awaitingModel = false;
           applyActivity(assistantItem, event.activity);
+        } else if(event.type==='toolOutputDelta'){
+          assistantItem.toolOutput??={};assistantItem.toolOutput[event.callId]=((assistantItem.toolOutput[event.callId]??'')+(event.stream==='stderr'?'[stderr] ':'')+event.text).slice(-16000);
         } else if (event.type === 'toolResult') {
           assistantItem.toolResults = [...(assistantItem.toolResults ?? []), event.result];
           assistantItem.awaitingModel = Boolean(assistantItem.toolCalls?.length) && assistantItem.toolCalls!.every(call => assistantItem.toolResults!.some(result => result.callId === call.id));

@@ -290,7 +290,7 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
     const modelTools: ToolPort | undefined = tools && (!runtime || codexReads) ? {
       // A delegated runtime uses its own tools; Futryn tools are not offered alongside them (ADR 0029).
       descriptors: () => runtime && delegated() ? [] : catalog(account).cached().find(m => m.id === selection.modelId)?.capabilities.tools === 'unsupported' ? [] : tools.descriptors(),
-      invoke: (call, signal) => tools.invoke(call, signal),
+      invoke: (call, signal,onOutput) => tools.invoke(call, signal,onOutput),
     } : undefined;
     return new Conversation(
       selection,
@@ -381,7 +381,7 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
     const commands = () => {
       if (commandsClosed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
-        commandRuntime = (services.commands ?? ((root, state) => platformCommandRuntime({workspaceRoot:root,stateDirectory:state,extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
+        commandRuntime = (services.commands ?? ((root, state) => platformCommandRuntime({workspaceRoot:root,stateDirectory:state,container:process.env.FUTRYN_COMMAND_BACKEND==='docker',extraExecutables:['rg']})))(workspaceTree().root,realpathSync.native(resolve(directory)));
         commandRuntimes.add(commandRuntime);
       }
       return commandRuntime;
@@ -420,8 +420,8 @@ export function startup(directory = defaultStateDirectory(), services: { vault?:
     };
     const toolPort: ToolPort = {
       descriptors: () => (client?.toolsEnabled() ? tools().descriptors() : []),
-      invoke: async (call, signal): Promise<ToolResult> => client?.toolsEnabled()
-        ? tools().invoke(call, signal)
+      invoke: async (call, signal,onOutput): Promise<ToolResult> => client?.toolsEnabled()
+        ? tools().invoke(call, signal,onOutput)
         : { callId: call.id, name: call.name, status: 'denied', code: 'TOOLS_DISABLED', content: 'Workspace tools are not enabled for this session.' },
     };
 

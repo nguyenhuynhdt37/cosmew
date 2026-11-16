@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --config=/dev/null --no-env-file
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import {

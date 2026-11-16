@@ -231,7 +231,7 @@ function renderToolCall(options: { item: TranscriptItem; call: ToolCall; result:
     : call.name === 'apply_patch' ? toolTarget(call)
     : expanded && ['read', 'glob', 'grep'].includes(call.name) ? JSON.stringify(input ?? {})
     : call.name === 'read' ? String(toolTarget(call)) : call.name === 'glob' || call.name === 'grep' ? toolTarget(call) : String(toolTarget(call) || JSON.stringify(input ?? {}));
-  const state = !result ? (live ? 'running' : 'muted') : result.status === 'ok' ? 'ok' : 'error';
+  const state = result?.sessionId?'running':!result ? (live ? 'running' : 'muted') : result.status === 'ok' && (!['exec_command','write_stdin'].includes(call.name)||result.exitCode===0) ? 'ok' : 'error';
   const lines = callHeader(name, args, state, width, tokens, bg, { itemId: item.id, key }, expanded);
   if (call.name === 'apply_patch') {
     // The patch title (Patched / partially applied / failed / denied / pending / stopped) leads the `⎿`.
@@ -242,13 +242,14 @@ function renderToolCall(options: { item: TranscriptItem; call: ToolCall; result:
   }
   if (!result) {
     lines.push({ spans: [{ text: '  ⎿  ', fg: tokens.foregroundSubtle, bg }, { text: options.awaiting ? 'Waiting for permission…' : live ? 'Running…' : 'Stopped', fg: options.awaiting ? tokens.warning : tokens.foregroundMuted, bg, italic: true }] });
+    if(item.toolOutput?.[call.id])lines.push(...outputRows(item.toolOutput[call.id]!,width,expanded,tokens,bg));
     return lines;
   }
   if (result.status === 'denied') {
     lines.push({ spans: [{ text: '  ⎿  ', fg: tokens.foregroundSubtle, bg }, { text: `Permission denied${result.code && result.code !== 'DENIED' ? ` (${result.code.toLowerCase().replaceAll('_', ' ')})` : ''}`, fg: tokens.error, bg }] });
     return lines;
   }
-  if (call.name === 'exec_command') {
+  if (call.name === 'exec_command'||call.name==='write_stdin') {
     const summary = commandSummary(call, result, { live });
     const body = [...summary.preview, ...(summary.note ? [summary.note] : [])].join('\n');
     return [...lines, ...outputRows(expanded ? result.content : body || '(no output)', width, expanded, tokens, bg, result.status === 'ok' ? tokens.foregroundMuted : tokens.error), ...(!expanded && summary.hidden ? [{ spans: [{ text: `     … +${summary.hidden} lines (click to expand)`, fg: tokens.foregroundSubtle, bg }] }] : [])];

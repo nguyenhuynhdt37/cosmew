@@ -1,7 +1,7 @@
 import { permissionRuleSetSchema } from './permissions';
 import { z } from 'zod';
 
-export const CONTRACT_VERSION = '1.12' as const;
+export const CONTRACT_VERSION = '1.13' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/).transform(v => v.toLowerCase());
@@ -132,6 +132,7 @@ export type ModelEvent =
   | { type: 'usage'; usage: Usage }
   | { type: 'context'; context: import('./telemetry').ContextMeasurement }
   | { type: 'toolCallComplete'; call: ToolCall }
+  | {type:'toolOutputDelta';callId:string;name:string;stream:'stdout'|'stderr';text:string}
   | { type: 'toolResult'; result: import('./tools').ToolResult }
   /** A runtime's own tool (ADR 0027): display only, never a Futryn tool call or result. Same `id` updates in place. */
   | { type: 'activity'; activity: RuntimeActivity }

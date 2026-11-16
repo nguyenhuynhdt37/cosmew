@@ -1,5 +1,7 @@
 # Điều hướng đặc tả Futryn
 
+Latest execution milestone: [ADR 0032](adr/0032-contained-command-sessions.md), [actual-container/live acceptance](delivery/execution-runtime-acceptance.md). Verified Docker pipe sessions are opt-in; native host execution remains closed. Historical gate descriptions below do not enable other backends.
+
 Project/repository rename: [ADR 0031](adr/0031-futryn-project-rename.md). Futryn is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.
 
 Current conversation recovery: [ADR 0030](adr/0030-durable-conversation-recovery.md), [acceptance matrix](delivery/conversation-recovery.md). Contract 1.12 / SQLite 4 preserve interrupted evidence without replaying tools.

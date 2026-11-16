@@ -1,5 +1,5 @@
 import {afterEach,expect,test} from 'bun:test';
-import {mkdtempSync,rmSync,symlinkSync,readFileSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,rmSync,symlinkSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 const root=resolve(import.meta.dir,'../..');
@@ -38,4 +38,8 @@ test('the legacy error alias keeps instanceof compatible and both state director
  const {FutrynError,HannesError}=await import('@futryn/contracts');const {evaluateWrite}=await import('@futryn/security');
  expect(HannesError).toBe(FutrynError);expect(new FutrynError('POLICY')).toBeInstanceOf(HannesError);
  for(const path of ['.futryn/state','nested/.FUTRYN/state','.hannes/state','.futryn-patch-temporary'])expect(evaluateWrite(path,'/project/'+path).effect).toBe('deny');
+});
+
+test('installed CLI entry ignores project Bun preloads before workspace consent',()=>{
+ const project=mkdtempSync(join(tmpdir(),'futryn-untrusted-start-'));cleanup.push(project);writeFileSync(join(project,'bunfig.toml'),'preload = ["./preload.ts"]\n');writeFileSync(join(project,'preload.ts'),'console.log("PROJECT_CODE_BEFORE_CONSENT");process.exit(77);\n');const binary=join(project,'fyn');symlinkSync(resolve(root,'apps/cli',manifest('apps/cli/package.json').bin.fyn),binary);const child=Bun.spawnSync([binary,'--help'],{cwd:project,stdout:'pipe',stderr:'pipe'});expect(child.exitCode).toBe(0);expect(child.stdout.toString()).not.toContain('PROJECT_CODE_BEFORE_CONSENT');expect(child.stdout.toString()).toContain('Futryn');
 });

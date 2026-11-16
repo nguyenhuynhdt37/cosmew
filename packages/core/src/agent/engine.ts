@@ -103,6 +103,7 @@ export class Conversation {
     if (this.running) throw new FutrynError('POLICY');
     let user: Message;
     try { user = messageSchema.parse({ role: 'user', content }); } catch { throw new FutrynError('INVALID_INPUT'); }
+    const turnAbort=new AbortController();signal=signal?AbortSignal.any([signal,turnAbort.signal]):turnAbort.signal;
     const budget: TurnBudget = this.options.budget?.() ?? {};
     const sleep = this.options.sleep ?? defaultSleep;
     const startedAt = Date.now();
@@ -113,6 +114,8 @@ export class Conversation {
     let recoveryNeeded=false;
     const record=(event:ExecutionEventData)=>this.store.recordExecution?.(this.id,receipt.requestId,event)??0;
     const journalCalls=new Set<string>();
+    const progress:ModelEvent[]=[];let wakeProgress:(()=>void)|undefined;let queuedBytes=0;
+    const publishOutput=(call:ToolCall,chunk:import('@futryn/contracts').CommandOutputChunk)=>{if(queuedBytes+Buffer.byteLength(chunk.text)>64000||progress.length>=128)return;progress.push({type:'toolOutputDelta',callId:call.id,name:call.name,...chunk});queuedBytes+=Buffer.byteLength(chunk.text);wakeProgress?.();};
     const recordCall=(call:ToolCall)=>{if(!journalCalls.has(call.id)){record({type:'tool.call',call});journalCalls.add(call.id);}};
     /** Tool rounds of this turn: assistant tool-call messages and their tool results. */
     const steps: Message[] = [];
@@ -145,7 +148,7 @@ export class Conversation {
       recordCall(call);
       record({type:'tool.intent',callId:call.id,executionId:crypto.randomUUID(),capability:kind??'unknown'});
       let result:ToolResult;
-      try { result=toolResultSchema.parse(await this.tools!.invoke(call, toolSignal));if(result.callId!==call.id||result.name!==call.name)throw new FutrynError('PROTOCOL'); }
+      try { result=toolResultSchema.parse(await this.tools!.invoke(call, toolSignal,chunk=>publishOutput(call,chunk)));if(result.callId!==call.id||result.name!==call.name)throw new FutrynError('PROTOCOL'); }
       catch(error){
         const unknown:ToolResult={callId:call.id,name:call.name,status:'error',code:'EXECUTION_UNKNOWN',content:'Execution was interrupted without a confirmed outcome. Inspect current state before another mutation; do not replay this call or restore its approval.'};
         const sequence=record({type:'tool.result',result:unknown});
@@ -250,6 +253,7 @@ export class Conversation {
               return result;
             } : undefined)) {
               if (signal?.aborted) throw new FutrynError('CANCELLED');
+              if(event.type==='toolOutputDelta')throw new FutrynError('PROTOCOL');
               if (terminal) throw new FutrynError('PROTOCOL');
               if (['textDelta', 'reasoningDelta', 'toolCallComplete', 'toolResult', 'activity'].includes(event.type)) produced = true;
               if (event.type === 'textDelta' || event.type === 'toolCallComplete') rejectionCandidate = false;
@@ -285,7 +289,9 @@ export class Conversation {
           steps.push({ role: 'assistant', content: text, toolCalls: calls });
           // Codex parallel.rs: read-only calls of one response run concurrently; writes and commands
           // run alone and in order. Results are yielded and stored in call order either way.
-          const results = await this.executeBatch(calls, capability, run, signal);
+          let results:ToolResult[]=[];let done=false;let failure:unknown;
+          const executing=this.executeBatch(calls,capability,run,signal).then(value=>{results=value;},error=>{failure=error;}).finally(()=>{done=true;wakeProgress?.();});
+          try{while(!done||progress.length){if(progress.length){const next=progress.shift()!;if(next.type==='toolOutputDelta')queuedBytes-=Buffer.byteLength(next.text);yield next;}else await new Promise<void>(resolve=>{wakeProgress=resolve;if(done)resolve();});}await executing;if(failure)throw failure;}finally{wakeProgress=undefined;if(!done)turnAbort.abort();await executing;}
           for (const [index, call] of calls.entries()) {
             yield { type: 'toolResult', result: results[index]! };
             steps.push(toolMessage(call, results[index]!));
@@ -305,7 +311,7 @@ export class Conversation {
           if(this.task!.failures.some(f=>f.includes('denied'))){stop='stalled';throw new FutrynError('STALLED');}
           continue;
         }
-        if(this.task){this.task.state=needsArtifact?(verified?'verified':'unfinished'):(this.task.failures.length?'unfinished':'verified');this.task.pending=this.task.state==='verified'?[]:this.task.pending;this.store.saveTask?.(this.id,this.task);}
+        if(this.task){this.task.state=needsArtifact?(verified?'verified':'unfinished'):(this.task.failures.length||this.task.pending.some(p=>p.startsWith('Collect command session '))?'unfinished':'verified');this.task.pending=this.task.state==='verified'?[]:this.task.pending;this.store.saveTask?.(this.id,this.task);}
         receipt.outcome = 'completed'; receipt.stopReason = stop ?? 'completed'; receipt.finishedAt = new Date().toISOString();
         const answer: Message = { role: 'assistant', content: text };
         this.store.complete(this.id, revision, answer, receipt, steps);
@@ -333,6 +339,7 @@ export class Conversation {
       if (e instanceof FutrynError) throw e;
       throw new FutrynError('PROTOCOL');
     } finally {
+      if(!completed)turnAbort.abort();
       try{
         if(revision!==undefined&&!completed&&!settled){receipt.outcome='cancelled';receipt.stopReason='cancelled';receipt.finishedAt=new Date().toISOString();this.store.interrupt(this.id,revision,receipt,appliedSteps);}
         if(revision!==undefined){const recovery=this.store.recover?.(this.id);if(recovery)this.messages=normalizeHistory(recovery.messages);}

@@ -32,3 +32,7 @@ Output vượt giới hạn chuyển artifact reference sau redaction; binary kh
 Acceptance: symlink swap, traversal, duplicate invocation, revoke giữa approve/execute, two writers, shell escape, forged MCP result, output flooding. Contract changes cần major/ADR khi đổi scope hoặc decision semantics. [Security](../subsystems/security.md) xác định enforcement chi tiết.
 
 Task 01 automatic instructions ([ADR 0019](../adr/0019-project-context-loader.md)) use a fixed-filename, bounded raw reader behind the existing dispatcher policy/audit/redaction. It is not a new model tool. Missing candidates only require metadata probes; successful/denied/unreadable content attempts are audited. Ask-required targets are skipped unless an existing session grant permits them; automatic discovery cannot create a grant or prompt silently. State-directory deny and grant revocation still win. Workspace directory/symlink containment is checked before constructing the root-to-cwd chain.
+
+## Contained exec/stdin (contract 1.13)
+
+[ADR0032](../adr/0032-contained-command-sessions.md) adds an opt-in fixed-image local Docker runtime, optional exec_command yield_time_ms and owned-session write_stdin. Both use the existing registry/orchestrator process.execute lifecycle. Exact input/command, canonical cwd, lease/session and policy bind approval; expiry/revocation/resume cannot restore authority. Snapshot filesystem, PID namespace, no-new-privileges, zero-capability nonroot child and immutable lease are separate OS gates. No PTY, host writes/network or unsandboxed fallback.

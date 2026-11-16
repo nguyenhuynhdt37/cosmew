@@ -1,3 +1,4 @@
+import {DockerCommandRuntime} from './container';
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -40,6 +41,7 @@ export interface SeatbeltOptions {
   /** Override for tests; production always uses the system binary, never PATH. */
   sandboxExec?: string;
   platform?: NodeJS.Platform;
+  container?:boolean;
   hostPath?: string;
 }
 
@@ -143,6 +145,7 @@ export class SeatbeltRuntime implements CommandRuntime {
 /** The runtime for this host: Seatbelt on macOS; every other platform fails closed for now. */
 export function platformCommandRuntime(options: SeatbeltOptions): CommandRuntime {
   const platform = options.platform ?? process.platform;
+  if(options.container&&['darwin','linux'].includes(platform))return new DockerCommandRuntime(options);
   if (platform === 'darwin') return new SeatbeltRuntime(options);
   return new UnsupportedRuntime(platform === 'linux'
     ? 'Linux command sandboxing (bubblewrap) is not implemented or verified in this slice.'

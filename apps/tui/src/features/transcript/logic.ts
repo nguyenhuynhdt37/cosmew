@@ -285,7 +285,7 @@ const PREVIEW_LINES = 3;
 export function commandSummary(call: ToolCall, result: ToolResult | undefined, context: { live: boolean; awaiting?: boolean }): CommandSummary {
   const input = (call.input && typeof call.input === 'object' ? call.input : {}) as Record<string, unknown>;
   const workdir = typeof input.workdir === 'string' && input.workdir !== '.' ? `(in ${printable(input.workdir)}) ` : '';
-  const command = workdir + printable(typeof input.cmd === 'string' ? input.cmd.replace(/\s*\n\s*/g, ' ') : '');
+  const command = call.name==='write_stdin'?`stdin ${printable(String(input.session_id??''))}: ${printable(String(input.signal??JSON.stringify(input.chars??'')))}`:workdir + printable(typeof input.cmd === 'string' ? input.cmd.replace(/\s*\n\s*/g, ' ') : '');
   if (!result) return { state: context.awaiting ? 'awaiting' : context.live ? 'pending' : 'stopped', command, preview: [], hidden: 0, note: context.live ? undefined : 'no result' };
   if (result.status === 'denied') return { state: 'failed', command, preview: [], hidden: 0, note: result.code === 'DENIED' ? 'denied — not run' : (result.code ?? 'denied').toLowerCase() };
   // Output follows the "Output…:" header line; take its tail for the preview.
@@ -295,7 +295,8 @@ export function commandSummary(call: ToolCall, result: ToolResult | undefined, c
   const shown = output.filter(line => line !== '(no output)');
   const preview = shown.slice(-PREVIEW_LINES);
   const hidden = Math.max(0, shown.length - preview.length);
-  if (result.status === 'error') return { state: 'failed', command, preview, hidden, note: result.code === 'TIMEOUT' ? 'timed out — descendant termination unconfirmed' : result.code === 'SANDBOX_UNAVAILABLE' || result.code === 'SANDBOX_FAILED' ? 'sandbox unavailable — not run' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' ') };
+  if(result.sessionId)return {state:'pending',command,preview,hidden,note:'Session retained at last poll; hard deadline unchanged.'};
+  if (result.status === 'error') return { state: 'failed', command, preview, hidden, note: result.code === 'TIMEOUT' ? result.content.includes('Descendant termination: terminated.')?'timed out — namespace terminated':'timed out — descendant termination unconfirmed' : result.code === 'SANDBOX_UNAVAILABLE' || result.code === 'SANDBOX_FAILED' ? 'sandbox unavailable — not run' : (result.code ?? 'error').toLowerCase().replaceAll('_', ' ') };
   const exit = result.exitCode;
   if (exit === 0) return { state: 'ran', command, preview, hidden };
   return { state: 'failed', command, preview, hidden, note: exit === null || exit === undefined ? 'exit status unavailable' : `exit ${exit}` };

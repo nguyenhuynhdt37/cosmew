@@ -1,4 +1,4 @@
-import {dlopen,read} from 'bun:ffi';
+import {dlopen,read,CString} from 'bun:ffi';
 import {constants,existsSync,closeSync,fstatSync,readSync,writeSync,fsyncSync,fchmodSync,openSync} from 'node:fs';
 import {createHash,randomUUID} from 'node:crypto';
 import type {WorkspaceRoot} from './paths';
@@ -9,6 +9,7 @@ const load=()=>{
  const library=process.platform==='darwin'?'/usr/lib/libSystem.B.dylib':[`/lib/${process.arch==='arm64'?'aarch64':'x86_64'}-linux-gnu/libc.so.6`,'/lib64/libc.so.6'].find(path=>existsSync(path));
  if(!library)return null;
  try{return dlopen(library,{
+  fdopendir:{args:['i32'],returns:'ptr'},readdir:{args:['ptr'],returns:'ptr'},closedir:{args:['ptr'],returns:'i32'},
   openat:{args:['i32','buffer','i32','u32'],returns:'i32'},mkdirat:{args:['i32','buffer','u32'],returns:'i32'},
   unlinkat:{args:['i32','buffer','i32'],returns:'i32'},renameat:{args:['i32','buffer','i32','buffer'],returns:'i32'},
   linkat:{args:['i32','buffer','i32','buffer','i32'],returns:'i32'},
@@ -56,6 +57,18 @@ export class SecureFiles {
    }
    return{fd,name,parents,missing:false};
   }catch(error){closeSync(fd);throw error;}
+ }
+ /** Binary, descriptor-relative read for a sealed command snapshot. No symlinks or hardlinks. */
+ executionBytes(path:string,maxBytes:number):{bytes:Buffer;mode:number}{
+  const parent=this.parent(path);try{
+   if(parent.missing)fail();const fd=native!.symbols.openat(parent.fd,parent.name,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK|closeOnExec,0);if(fd<0)fail();
+   try{const st=fstatSync(fd);if(!st.isFile()||st.nlink!==1||st.size>maxBytes)fail('UNSAFE_SNAPSHOT');const bytes=Buffer.alloc(st.size);let offset=0;while(offset<bytes.length){const n=readSync(fd,bytes,offset,bytes.length-offset,offset);if(!n)fail('STALE_CONTENT');offset+=n;}const after=fstatSync(fd);if(after.size!==st.size||after.mtimeMs!==st.mtimeMs||after.ctimeMs!==st.ctimeMs)fail('STALE_CONTENT');return{bytes,mode:st.mode&0o111?0o755:0o644};}finally{closeSync(fd);}
+  }finally{closeSync(parent.fd);}
+ }
+ executionDirectory(path:string):{names:string[];identity:string}{
+  const parent=path==='.'?{fd:openSync(this.workspace.root,directoryFlags)}:this.parent(path+'/.snapshot-entry');
+  let directory:ReturnType<NonNullable<typeof native>['symbols']['fdopendir']>=null;
+  try{const st=fstatSync(parent.fd);if(!st.isDirectory())fail();directory=native!.symbols.fdopendir(parent.fd);if(!directory)fail();const names:string[]=[];for(;;){const entry=native!.symbols.readdir(directory);if(!entry)break;const name=new CString(Number(entry)+(process.platform==='darwin'?21:19)).toString();if(name!=='.'&&name!=='..')names.push(name);if(names.length>30000)fail('SNAPSHOT_LIMIT');}const after=fstatSync(parent.fd);if(st.ino!==after.ino||st.dev!==after.dev||st.mtimeMs!==after.mtimeMs)fail('STALE_CONTENT');return{names:names.sort(),identity:`${st.dev}:${st.ino}`};}finally{if(directory)native!.symbols.closedir(directory);else closeSync(parent.fd);}
  }
  snapshot(path:string):FileSnapshot{
   const parent=this.parent(path);try{

@@ -81,3 +81,8 @@ test('partial HTML verification gives a concrete complete-read correction instea
  const c=new Conversation(selection,port,app.conversations,undefined,{descriptors:()=>[...tools.descriptors(),{name:'apply_patch',description:'Write',inputSchema:{type:'object'},capability:'fs.write'}],invoke:async call=>({callId:call.id,name:call.name,status:'ok',content:call.id==='partial-html'?'1\t<!doctype html>':full,truncated:call.id==='partial-html'})});
  await send(c,'Create helo.html');expect(app.conversations.recover(c.id).task!.state).toBe('verified');expect(round).toBe(4);
 });
+
+test('a retained running command is pending work, never proof that checks passed',async()=>{
+ const app=setup();let round=0;const sessionId=crypto.randomUUID();const c=new Conversation(selection,model(async function*(){if(round++===0){yield{type:'toolCallComplete',call:{id:'background-check',name:'exec_command',input:{cmd:'test',yield_time_ms:0}}};yield{type:'completed',finishReason:'tool_calls',usage};return;}yield{type:'textDelta',text:'The check is running.'};yield{type:'completed',finishReason:'stop',usage};}),app.conversations,undefined,{descriptors:()=>[{name:'exec_command',description:'Fixture command',inputSchema:{type:'object'},capability:'process.execute'}],invoke:async call=>({callId:call.id,name:call.name,status:'ok',sessionId,content:'Running session: '+sessionId})});
+ await send(c,'Start a long-running check.');const task=app.conversations.recover(c.id).task!;expect(task.state).toBe('unfinished');expect(task.pending.join(' ')).toContain(sessionId);expect(task.verifiedActions.some(a=>a.status==='ok')).toBe(false);
+});

@@ -53,7 +53,7 @@ bun run fyn models select <model-id-from-list>
 printf 'Explain dependency injection.\n' | bun run fyn run --json
 ```
 
-Never put key values in command arguments or repository settings. New installations store state in `~/.futryn/provider-auth.sqlite`; existing `~/.hannes` state is reused in place. `FUTRYN_HOME` overrides the directory (`HANNES_HOME` remains supported). Credentials keep their legacy keyring identity; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic provider fallback. Workspace reads and approved apply_patch writes are mediated by Futryn; production shell execution remains disabled.
+Never put key values in command arguments or repository settings. New installations store state in `~/.futryn/provider-auth.sqlite`; existing `~/.hannes` state is reused in place. `FUTRYN_HOME` overrides the directory (`HANNES_HOME` remains supported). Credentials keep their legacy keyring identity; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic provider fallback. Workspace reads and approved apply_patch writes are mediated by Futryn; native host shell execution remains disabled; the verified Docker pipe backend is opt-in (see below).
 
 ```sh
 bun run typecheck
@@ -68,7 +68,7 @@ HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts
 
 See [CLI/auth setup and troubleshooting](docs/subsystems/providers-and-auth.md), [provider/auth matrix](docs/compatibility/providers-auth-matrix.md), [architecture audit and plan](docs/delivery/provider-auth-plan.md), [upstream comparison](docs/delivery/provider-auth-research.md), [ADR 0005](docs/adr/0005-provider-auth-product.md), [security review](docs/delivery/provider-auth-security-review.md), and [acceptance evidence](docs/delivery/provider-auth-acceptance.md).
 
-The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, MCP/plugins, remote server, general process execution and GUI compatibility remain **Not implemented**. Empty source placeholders are not feature evidence.
+The [original architecture](docs/architecture/system-overview.md), [dependency rules](docs/architecture/dependency-rules.md), [repository map](docs/architecture/repository-map.md) and [roadmap](docs/delivery/implementation-roadmap.md) remain the baseline for future phases. Unrelated packages, MCP/plugins, remote server, unconfined/general process execution and GUI compatibility remain **Not implemented**. Empty source placeholders are not feature evidence.
 
 
 Current login UX and official subscription transports: [subscription sign-in and verification](docs/delivery/subscription-auth.md). Vendors are grouped once; subscription opens browser/device sign-in, API key asks only for the hidden key, and account names are automatic.
@@ -80,3 +80,16 @@ In a writable scratch project, choose a direct model backend (`fyn`), then ask: 
 Durable history is retained separately from token-budgeted model context. Extractive checkpoints preserve user constraints, mutation receipts and recent turns; if critical context cannot fit safely, the turn reports a limit. No approval is restored by history, resume or fork. See [recovery architecture](docs/adr/0030-durable-conversation-recovery.md) and [fixture/process acceptance](docs/delivery/conversation-recovery.md).
 
 Rename compatibility: private workspace imports now use `@futryn/*`; `FutrynError` is the canonical exported error, with `HannesError` retained as the same constructor. Persisted backend IDs (including `hannes`), database schema and authorization rules are unchanged. Historical ADRs retain the old product name. See [ADR 0031](docs/adr/0031-futryn-project-rename.md).
+
+## Contained command execution (experimental)
+
+A native Futryn backend can own commands in a fixed local Linux container. Install the approved image explicitly, then opt in per launch:
+
+```sh
+docker pull oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
+FUTRYN_COMMAND_BACKEND=docker fyn
+```
+
+Self-tests must pass before exec_command/write_stdin are exposed. Each launch/input passes current permissions and revalidation. The command sees a filtered read-only project snapshot, no host home/socket/secrets or external network, and a bounded writable /tmp. Build into /tmp, or explicitly copy the snapshot there before running builds that modify their working tree; no command output is copied back automatically. Sessions are pipes, not PTYs, and have a nonrenewable hard deadline (at most 120s). Resume restores neither sessions nor approvals. Missing Docker/image/capabilities fails closed; there is no unrestricted fallback.
+
+Actual host/container and live TUI/API evidence, supported scope and remaining limits: [execution acceptance](docs/delivery/execution-runtime-acceptance.md), [ADR0032 and Codex comparison](docs/adr/0032-contained-command-sessions.md). Run `FUTRYN_TEST_CONTAINER=1 bun test tests` to include actual container tests. This is not a production-readiness or full Codex-terminal-parity claim.

@@ -42,3 +42,7 @@ Acceptance: duplicate Submit không tạo run thứ hai; concurrent terminal CAS
 ## Implemented execution evidence (contract 1.12)
 
 The [ADR 0030](../adr/0030-durable-conversation-recovery.md) SQLite journal persists user.accepted, model.requested, assistant.text, tool.call, tool.intent, tool.result and turn.finished with stable turn IDs and per-conversation sequences. This is a private recovery projection of public domain events, not an implementation of every proposed envelope above. Provider reasoning is transient. Lifecycle states are pending/running → completed/failed/cancelled/interrupted; terminal events cannot reopen execution. Unknown tool outcomes are explicit protocol outputs, never successful audit receipts. STALLED is a public error/stop reason for bounded no-progress termination.
+
+## Execution streaming (contract 1.13)
+
+ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded redacted command progress. Provider streams cannot fabricate this domain event. ToolPort may receive an optional progress callback; final results and intents remain durable and exactly paired. Deltas are transient, not proof of successful completion. Closing the iterator cancels owned execution and journals the observed bounded result.

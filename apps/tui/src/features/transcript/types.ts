@@ -10,6 +10,7 @@ export interface TranscriptItem {
   toolCalls?: ToolCall[];
   /** Results matched to `toolCalls` by call id; a call without a result is still running. */
   toolResults?: ToolResult[];
+  toolOutput?:Record<string,string>;
   streaming?: boolean;
   /** Live wait indicator, not provider reasoning or a claim that a tool has started. */
   awaitingModel?: boolean;
