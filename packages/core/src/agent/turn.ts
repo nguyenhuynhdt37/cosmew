@@ -79,6 +79,8 @@ interface SampleResult {
   textBytes: number;
   reasoned: boolean;
   reasoningBytes: number;
+  /** The streamed reasoning, kept so a provider that requires it can be sent it back (ADR 0048). */
+  reasoningText: string;
   terminal?: Extract<ModelEvent, {type: 'completed'}>;
   calls: ToolCall[];
   /** Codex InstantInterrupt: accepted steering stopped this response; its unfinished items are void. */
@@ -409,6 +411,7 @@ export class TurnRun {
       textBytes: 0,
       reasoned: false,
       reasoningBytes: 0,
+      reasoningText: '',
       calls: [],
       preempted: false,
       acted: false,
@@ -459,7 +462,12 @@ export class TurnRun {
         // that never reached OutputItemDone); its completed calls and their results are.
         const committed = result.terminal && result.terminal.finishReason !== 'length';
         this.steps.push(
-          {role: 'assistant', content: committed ? result.text : '', toolCalls: result.calls},
+          {
+            role: 'assistant',
+            content: committed ? result.text : '',
+            toolCalls: result.calls,
+            ...(result.reasoningText ? {reasoning: result.reasoningText} : {}),
+          },
           ...result.calls.map((call, index) => toolMessage(call, results[index]!)),
         );
         if (failure && !result.streamError) result.streamError = failure;
@@ -601,6 +609,7 @@ export class TurnRun {
     if (event.type === 'reasoningDelta') {
       result.reasoned = true;
       result.reasoningBytes += Buffer.byteLength(event.text);
+      result.reasoningText += event.text;
     }
     if (event.type === 'usage' || event.type === 'completed') {
       receipt.usage = combine(usageBefore, event.usage);

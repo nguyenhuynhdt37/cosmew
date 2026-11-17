@@ -21,6 +21,8 @@ import {
 } from '@futryn/contracts';
 
 export interface MediaOptions {
+  /** Send assistant reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
+  replayReasoning?: boolean;
   /** Wire protocol of the provider; decides where tool media goes (ADR 0041). */
   protocol?: 'chat' | 'anthropic' | 'responses' | 'gemini';
   /** The model's vision capability; `unsupported` never receives media. */
@@ -99,6 +101,7 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
       out.push({
         role: 'assistant',
         content: [
+          ...(media.replayReasoning && m.reasoning ? [{type: 'reasoning' as const, text: m.reasoning}] : []),
           ...(m.content ? [{type: 'text' as const, text: m.content}] : []),
           ...m.toolCalls.map(c => ({type: 'tool-call' as const, toolCallId: c.id, toolName: c.name, input: c.input})),
         ],
@@ -111,6 +114,29 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
   return out;
 }
 import {normalizeError, ProviderTransport, wait} from './http';
+
+type ChatUsageConverter = NonNullable<Parameters<typeof createOpenAICompatible>[0]['convertUsage']>;
+/**
+ * OpenAI-compatible usage with DeepSeek's cache counters: `prompt_cache_hit_tokens` counts as cache
+ * reads when the standard `prompt_tokens_details.cached_tokens` is absent (ADR 0048).
+ */
+const chatUsage: ChatUsageConverter = usage => {
+  if (usage == null)
+    return {
+      inputTokens: {total: undefined, noCache: undefined, cacheRead: undefined, cacheWrite: undefined},
+      outputTokens: {total: undefined, text: undefined, reasoning: undefined},
+    };
+  const raw = usage as Record<string, any>;
+  const prompt = raw.prompt_tokens ?? 0;
+  const completion = raw.completion_tokens ?? 0;
+  const cached = raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? 0;
+  const reasoning = raw.completion_tokens_details?.reasoning_tokens ?? 0;
+  return {
+    inputTokens: {total: prompt, noCache: prompt - cached, cacheRead: cached, cacheWrite: undefined},
+    outputTokens: {total: completion, text: Math.max(0, completion - reasoning), reasoning},
+    raw: usage,
+  } as ReturnType<ChatUsageConverter>;
+};
 
 const usage = (
   u: {
@@ -231,9 +257,12 @@ export class ProviderAdapter implements ModelPort {
     else if (p.protocol === 'gemini') model = createGoogle(settings)(this.modelId);
     else if (p.protocol === 'responses') model = createOpenAI(settings).responses(this.modelId);
     else
-      model = createOpenAICompatible({...settings, name: p.id, includeUsage: p.streamUsage ?? false}).chatModel(
-        this.modelId,
-      );
+      model = createOpenAICompatible({
+        ...settings,
+        name: p.id,
+        includeUsage: p.streamUsage ?? false,
+        convertUsage: chatUsage,
+      }).chatModel(this.modelId);
     // Adapters convert, never decide (ADR 0029): a call with wrong arguments or an unknown name is
     // passed to the Futryn ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
     // Codex responds-to-model. Only genuine wire faults (duplicate ids, >32 calls, oversize) fail here.
@@ -272,7 +301,11 @@ export class ProviderAdapter implements ModelPort {
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
-      messages: toModelMessages(request.messages, {protocol: p.protocol, vision: this.info?.capabilities.vision}),
+      messages: toModelMessages(request.messages, {
+        protocol: p.protocol,
+        vision: this.info?.capabilities.vision,
+        replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
+      }),
       ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
       ...(request.reasoningEffort
         ? {

@@ -55,6 +55,20 @@ export const providerPresets: readonly Provider[] = [
     family: 'xai',
   },
   {
+    // ADR 0048: reasoning_content is replayed, chunks may stay silent for minutes (DeepSeek asks for 15).
+    streamUsage: true,
+    id: 'deepseek',
+    name: 'DeepSeek',
+    protocol: 'chat',
+    baseURL: 'https://api.deepseek.com',
+    auth: 'api-key',
+    catalog: 'openai',
+    metadataVersion: 1,
+    timeoutMs: 60000,
+    streamIdleTimeoutMs: 900000,
+    replayReasoning: true,
+  },
+  {
     streamUsage: true,
     id: 'ollama',
     name: 'Ollama local',

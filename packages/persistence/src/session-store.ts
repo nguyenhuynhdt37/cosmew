@@ -34,7 +34,12 @@ type StoredRow = {
 
 /** Tool fields live in the `parts` JSON column; plain text messages store NULL. */
 function encodeParts(message: Message): string | null {
-  const parts = {toolCalls: message.toolCalls, toolCallId: message.toolCallId, toolName: message.toolName};
+  const parts = {
+    toolCalls: message.toolCalls,
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    reasoning: message.reasoning,
+  };
   return message.toolCalls || message.toolCallId ? JSON.stringify(parts) : null;
 }
 
@@ -45,8 +50,10 @@ function decodeRow(row: StoredRow): StoredMessage {
     !['pending', 'committed', 'interrupted'].includes(row.state)
   )
     throw new FutrynError('STORAGE');
-  const parts = row.parts ? (JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName'>) : {};
-  if (Object.keys(parts).some(key => !['toolCalls', 'toolCallId', 'toolName'].includes(key)))
+  const parts = row.parts
+    ? (JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName' | 'reasoning'>)
+    : {};
+  if (Object.keys(parts).some(key => !['toolCalls', 'toolCallId', 'toolName', 'reasoning'].includes(key)))
     throw new FutrynError('STORAGE');
   const message = messageSchema.parse({role: row.role, content: row.content, ...parts});
   return {...message, revision: row.revision, state: row.state};

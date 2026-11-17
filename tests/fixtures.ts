@@ -142,6 +142,10 @@ export function fixtureServer() {
   }[] = [];
   let cacheTokens: number | undefined;
   let reasoning = false;
+  /** Chat protocol: stream this as `reasoning_content` before each scripted reply (DeepSeek style). */
+  let chatReasoning: string | undefined;
+  /** Chat protocol: report DeepSeek cache counters in usage. */
+  let deepseekCache: {hit: number; miss: number} | undefined;
   let status = 200;
   let delay = 0;
   let cutToolArgs = false;
@@ -542,7 +546,16 @@ export function fixtureServer() {
           ...(!dropped ? [{type: 'response.completed', response}] : []),
         ]);
       }
-      const usage = includeUsage ? {prompt_tokens: 4, completion_tokens: 2, total_tokens: 6} : undefined;
+      const usage = includeUsage
+        ? {
+            prompt_tokens: 4,
+            completion_tokens: 2,
+            total_tokens: 6,
+            ...(deepseekCache
+              ? {prompt_cache_hit_tokens: deepseekCache.hit, prompt_cache_miss_tokens: deepseekCache.miss}
+              : {}),
+          }
+        : undefined;
       if (!body.stream)
         return Response.json({
           id: 'fixture',
@@ -556,6 +569,7 @@ export function fixtureServer() {
       if (script) {
         const reply = script(scriptedView('chat', body));
         const delta = {
+          ...(chatReasoning ? {role: 'assistant', reasoning_content: chatReasoning} : {}),
           ...(reply.text ? {role: 'assistant', content: reply.text} : {}),
           ...(reply.calls?.length
             ? {
@@ -685,9 +699,13 @@ export function fixtureServer() {
       rateLimitHeaders?: Record<string, string>;
       toolCall?: {name: string; args: string} | null;
       script?: ((view: ScriptedView) => ScriptedReply) | null;
+      chatReasoning?: string | null;
+      deepseekCache?: {hit: number; miss: number} | null;
       cutToolArgs?: boolean;
     }) {
       cutToolArgs = options.cutToolArgs ?? cutToolArgs;
+      chatReasoning = options.chatReasoning === null ? undefined : (options.chatReasoning ?? chatReasoning);
+      deepseekCache = options.deepseekCache === null ? undefined : (options.deepseekCache ?? deepseekCache);
       cacheTokens = options.cacheTokens ?? cacheTokens;
       reasoning = options.reasoning ?? reasoning;
       status = options.status ?? status;

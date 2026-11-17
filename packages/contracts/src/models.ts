@@ -177,12 +177,15 @@ export const messageSchema = z
     toolCalls: z.array(toolCallSchema).min(1).optional(),
     toolCallId: z.string().min(1).max(200).optional(),
     toolName: idSchema.optional(),
+    /** Assistant messages with tool calls: the model's reasoning, sent back only to providers that require it (ADR 0048). */
+    reasoning: z.string().optional(),
     /** Tool messages only: media the tool returned (ADR 0041). Never persisted in the message row. */
     attachments: z.array(attachmentSchema).max(8).optional(),
   })
   .superRefine((m, ctx) => {
     const issue = (message: string) => ctx.addIssue({code: 'custom', message});
     if (m.attachments && m.role !== 'tool') issue('only tool messages carry attachments');
+    if (m.reasoning !== undefined && m.role !== 'assistant') issue('only assistant messages carry reasoning');
     if (m.role === 'tool') {
       if (!m.toolCallId || !m.toolName || m.toolCalls) issue('tool message needs toolCallId and toolName only');
     } else {
