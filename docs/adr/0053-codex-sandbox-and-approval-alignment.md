@@ -47,3 +47,10 @@ The following are Codex behavior now; the stricter Futryn controls they replace 
 ## Evidence
 
 `tests/security/codex-sandbox-alignment.test.ts` (profile text and real Seatbelt: `.git` own/parent readable and not writable, 0.0.0.0 listen + localhost connect, external refused instantly versus granted, FSEvents watcher, caches in scratch, escalation asks/runs once/never refuses/hint), `tests/security/approval-policy.test.ts` (matrix, escalation chain, deny rules over escalation, stdin, unparsed scripts under real sandbox), `tests/security/native-exec.test.ts`.
+
+## Rủi ro user đã chấp nhận (2026-11-17)
+
+Sau review bảo mật tự động, user chọn ưu tiên "chạy được trước":
+- Lệnh trong sandbox kết nối được mọi dịch vụ đang nghe trên localhost (DB local, Docker TCP, Ollama…) mà không cần duyệt mạng.
+- Session đã được duyệt chạy ngoài sandbox (`require_escalated`) nhận `write_stdin` không hỏi lại (như Codex); duyệt một shell tương tác là cấp toàn quyền.
+- Đọc `.git`: chỉ repo gần nhất bao quanh workspace, không bao giờ `.git` ở thư mục home (832d4ca) — không mất chức năng build/git.
