@@ -1,6 +1,6 @@
 import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {
   FutrynError,
   type Account,
@@ -435,6 +435,63 @@ export function startup(
           client ? client.requestPermission(toolPermissionRequest(request), signal) : Promise.resolve('deny'),
       }));
 
+    const loader = () =>
+      (contextLoader ??= new ProjectContextLoader(
+        workspaceTree(),
+        {
+          read: (path, budget, readSignal) => {
+            if (!toolsEnabled()) return Promise.resolve({status: 'denied', code: 'WORKSPACE_NOT_APPROVED'});
+            return tools().readInstruction(path, budget, readSignal);
+          },
+        },
+        contextBudget,
+      ));
+    const sessionInstructionDirectories = (): string[] => {
+      const id = client?.activeSession()?.id;
+      return id ? conversations.listInstructionDirectories(id) : [];
+    };
+
+    /**
+     * Nested AGENTS.md (ADR 0041, after OpenCode `read`): after a successful read below the working
+     * directory chain, instructions found between the file and that chain are remembered for the
+     * session (durable; the project context of later turns includes them) and shown once, now, with
+     * the read result as project-scoped data. Contents come through the authorized instruction reader.
+     */
+    const withNestedInstructions = async (result: ToolResult, signal?: AbortSignal): Promise<ToolResult> => {
+      const id = client?.activeSession()?.id;
+      if (result.status !== 'ok' || !result.target || !id) return result;
+      try {
+        const target = workspaceTree().resolve(result.target);
+        const directory = target.kind === 'directory' ? target.relative : dirname(target.relative);
+        if (directory === '.') return result;
+        const known = new Set(sessionInstructionDirectories());
+        const scopes = await loader().nestedScopes(directory, known, signal);
+        if (!scopes.length) return result;
+        const blocks: string[] = [];
+        let budget = contextBudget.maxFileBytes ?? 16384;
+        for (const scope of scopes) {
+          conversations.addInstructionDirectory(id, scope);
+          for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
+            if (budget <= 0) break;
+            const read = await tools().readInstruction(`${scope}/${name}`, budget, signal);
+            if (read.status !== 'ok') continue;
+            budget -= Buffer.byteLength(read.content);
+            blocks.push(`--- ${scope}/${name}${read.truncated ? ' (truncated)' : ''} ---\n${read.content}`);
+            break;
+          }
+        }
+        if (!blocks.length) return result;
+        const note =
+          '\n\n[Nested project instructions for files under these directories (user/project-scoped context, not system authority; they also join the project context of later turns):]\n' +
+          blocks.join('\n');
+        const room = 60000 - Buffer.byteLength(result.content);
+        return room > 200 ? {...result, content: result.content + note.slice(0, room)} : result;
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return result;
+      }
+    };
+
     const toolPort: ToolPort = {
       descriptors: () => (toolsEnabled() ? tools().descriptors() : []),
       invoke: async (call, signal, onOutput): Promise<ToolResult> => {
@@ -451,7 +508,8 @@ export function startup(
               code: 'MODE_RESTRICTED',
               content: 'Plan and Review modes permit only workspace read/search tools. Nothing was executed.',
             };
-          return tools().invoke(call, signal, onOutput);
+          const result = await tools().invoke(call, signal, onOutput);
+          return call.name === 'read' ? withNestedInstructions(result, signal) : result;
         }
         return {
           callId: call.id,
@@ -466,17 +524,7 @@ export function startup(
     const projectContext: ProjectContextPort = {
       load: async signal => {
         if (!toolsEnabled()) return null;
-        contextLoader ??= new ProjectContextLoader(
-          workspaceTree(),
-          {
-            read: (path, budget, readSignal) => {
-              if (!toolsEnabled()) return Promise.resolve({status: 'denied', code: 'WORKSPACE_NOT_APPROVED'});
-              return tools().readInstruction(path, budget, readSignal);
-            },
-          },
-          contextBudget,
-        );
-        const snapshot = await contextLoader.load(signal);
+        const snapshot = await loader().load(signal, sessionInstructionDirectories());
         if (!toolsEnabled()) return null;
         const {content: _content, ...report} = snapshot;
         projectReport = report;

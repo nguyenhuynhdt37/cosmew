@@ -1,4 +1,5 @@
 import {
+  type Attachment,
   FutrynError,
   toolResultSchema,
   type ExecutionEventData,
@@ -43,7 +44,20 @@ export function toolMessage(call: ToolCall, result: ToolResult): Message {
     result.status === 'ok'
       ? result.content || '(empty)'
       : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`;
-  return {role: 'tool', content, toolCallId: call.id, toolName: call.name};
+  return {
+    role: 'tool',
+    content,
+    toolCallId: call.id,
+    toolName: call.name,
+    ...(result.status === 'ok' && result.attachments?.length ? {attachments: result.attachments} : {}),
+  };
+}
+
+/** A result without its media: what the journal and the UI receive (ADR 0041). */
+export function withoutAttachments(result: ToolResult): ToolResult {
+  if (!result.attachments) return result;
+  const {attachments: _attachments, ...rest} = result;
+  return rest;
 }
 
 export interface TurnToolsOptions {
@@ -57,6 +71,8 @@ export interface TurnToolsOptions {
   record(event: ExecutionEventData): number;
   /** A time, token or cost budget that is used up, if any. */
   workExhausted(): TurnStopReason | undefined;
+  /** Persist a result's media apart from the journal (ADR 0041). */
+  saveAttachments?(callId: string, attachments: Attachment[]): void;
   /** Called after each result is journaled (task progress tracking). */
   onSettled(call: ToolCall, result: ToolResult, sequence: number): void;
 }
@@ -205,7 +221,7 @@ export class TurnTools {
       }
       results.push(outcome.result);
       failure ??= outcome.error;
-      yield {type: 'toolResult', result: outcome.result};
+      yield {type: 'toolResult', result: withoutAttachments(outcome.result)};
     }
     return {results, failure};
   }
@@ -240,14 +256,21 @@ export class TurnTools {
   /** An identical reread returns a short notice instead of the same content again. */
   private markUnchanged(call: ToolCall, result: ToolResult): ToolResult {
     const key = call.name + '\0' + stable(call.input);
-    if (this.seen.get(key) === result.content) return {...result, content: UNCHANGED};
-    this.seen.set(key, result.content);
+    // Attachments are part of what was read: a changed image with the same summary is not unchanged.
+    const seen = result.content + (result.attachments ? '\0' + stable(result.attachments) : '');
+    if (this.seen.get(key) === seen) {
+      const {attachments: _attachments, ...rest} = result;
+      return {...rest, content: UNCHANGED};
+    }
+    this.seen.set(key, seen);
     return result;
   }
 
   private settle(call: ToolCall, result: ToolResult): void {
     this.outcomes.set(call.id, result);
-    const sequence = this.options.record({type: 'tool.result', result});
+    // Media is stored apart from the journal, bounded by the store (ADR 0041).
+    if (result.attachments?.length) this.options.saveAttachments?.(call.id, result.attachments);
+    const sequence = this.options.record({type: 'tool.result', result: withoutAttachments(result)});
     this.options.onSettled(call, result, sequence);
   }
 

@@ -30,3 +30,19 @@ Nguồn tham chiếu (chỉ đọc, không chạy code):
 | `bun test tests` | 0 | 673 | 33 | 0 |
 
 Ghi chú: các bộ test fixture viết cho hộp thoại duyệt chạy ở `untrusted` (`tests/preload.ts`); mặc định `on-request` được kiểm riêng.
+
+### W1 — các lần review bảo mật (2026-11-17)
+
+- `ca58b3f`, `5b99f6f`: stdin luôn cần duyệt (`never` từ chối); bộ phân tích lệnh trung gian được thay.
+- `983b913`: port nguyên thiết kế Codex (allowlist `try_parse_word_only_commands_sequence`, lệnh không parse được là một lệnh mờ, heuristic `is_dangerous_command.rs` chỉ là chốt phụ, ranh giới là sandbox).
+- `86449f2`: chỉ mở `-c` cho shell trần hoặc shell hệ thống (chặn `./bash` cài trong repo).
+- `bun test tests/security/approval-policy.test.ts`: 29 pass, 0 fail.
+
+## W1.5 — read đầy đủ (ADR 0041)
+
+| Lệnh | Exit | Pass | Skip | Fail |
+|---|---:|---:|---:|---:|
+| `bun run typecheck && bun run lint` | 0 | — | — | — |
+| `bun test tests/security/read-extended.test.ts` | 0 | 6 | 0 | 0 |
+| `bun test tests/end-to-end/read-media.test.ts` | 0 | 3 | 0 | 0 |
+| `bun test tests` | 0 | 693 | 33 | 0 |

@@ -189,7 +189,14 @@ function committedSessionMessages(stored: SessionRecord): Message[] {
   if (stored.recovery?.messages) return stored.recovery.messages;
   return stored.messages
     .filter(m => m.state === 'committed')
-    .map(({role, content, toolCalls, toolCallId, toolName}) => ({role, content, toolCalls, toolCallId, toolName}));
+    .map(({role, content, toolCalls, toolCallId, toolName, attachments}) => ({
+      role,
+      content,
+      toolCalls,
+      toolCallId,
+      toolName,
+      ...(attachments ? {attachments} : {}),
+    }));
 }
 
 export class FutrynClient {

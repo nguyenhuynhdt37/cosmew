@@ -20,31 +20,95 @@ import {
   codexBackoffMs,
 } from '@futryn/contracts';
 
-/** Futryn messages → AI SDK messages, including assistant tool calls and tool results. */
-export function toModelMessages(messages: Message[]): ModelMessage[] {
-  return messages.map((m): ModelMessage => {
-    if (m.role === 'tool')
-      return {
+export interface MediaOptions {
+  /** Wire protocol of the provider; decides where tool media goes (ADR 0041). */
+  protocol?: 'chat' | 'anthropic' | 'responses' | 'gemini';
+  /** The model's vision capability; `unsupported` never receives media. */
+  vision?: 'supported' | 'unsupported' | 'unknown';
+}
+
+type UserPart = Exclude<Extract<ModelMessage, {role: 'user'}>['content'], string>[number];
+
+const mediaNote = (count: number) =>
+  `[${count} attachment(s) from this result were not sent: the current model cannot view images or PDFs.]`;
+
+/**
+ * Futryn messages → AI SDK messages, including assistant tool calls and tool results. Tool media
+ * (ADR 0041): Anthropic carries images and PDFs inside the tool result; other protocols cannot, so
+ * the media follows the run of tool results as one user message (OpenAI chat: images only). A model
+ * known to lack vision gets a note instead of the media.
+ */
+export function toModelMessages(messages: Message[], media: MediaOptions = {}): ModelMessage[] {
+  const out: ModelMessage[] = [];
+  let pending: UserPart[] = [];
+  const flush = () => {
+    if (!pending.length) return;
+    out.push({
+      role: 'user',
+      content: [{type: 'text', text: 'Attachments returned by the tool results above:'}, ...pending],
+    });
+    pending = [];
+  };
+  for (const m of messages) {
+    if (m.role !== 'tool') flush();
+    if (m.role === 'tool') {
+      const attachments = m.attachments ?? [];
+      const blocked = attachments.length > 0 && media.vision === 'unsupported';
+      if (attachments.length && !blocked && media.protocol === 'anthropic') {
+        out.push({
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: m.toolCallId!,
+              toolName: m.toolName!,
+              output: {
+                type: 'content',
+                value: [
+                  {type: 'text', text: m.content},
+                  ...attachments.map(a => ({
+                    type: 'file' as const,
+                    data: {type: 'data' as const, data: a.data},
+                    mediaType: a.mime,
+                    filename: a.name,
+                  })),
+                ],
+              },
+            },
+          ],
+        });
+        continue;
+      }
+      let text = m.content;
+      if (blocked) text += '\n' + mediaNote(attachments.length);
+      else if (attachments.length) {
+        const sendable = attachments.filter(a => a.mime !== 'application/pdf' || media.protocol !== 'chat');
+        if (sendable.length < attachments.length)
+          text += `\n[${attachments.length - sendable.length} PDF attachment(s) not sent: this provider protocol cannot carry PDFs.]`;
+        for (const a of sendable) pending.push({type: 'file', data: a.data, mediaType: a.mime, filename: a.name});
+      }
+      out.push({
         role: 'tool',
         content: [
-          {
-            type: 'tool-result',
-            toolCallId: m.toolCallId!,
-            toolName: m.toolName!,
-            output: {type: 'text', value: m.content},
-          },
+          {type: 'tool-result', toolCallId: m.toolCallId!, toolName: m.toolName!, output: {type: 'text', value: text}},
         ],
-      };
-    if (m.role === 'assistant' && m.toolCalls)
-      return {
+      });
+      continue;
+    }
+    if (m.role === 'assistant' && m.toolCalls) {
+      out.push({
         role: 'assistant',
         content: [
           ...(m.content ? [{type: 'text' as const, text: m.content}] : []),
           ...m.toolCalls.map(c => ({type: 'tool-call' as const, toolCallId: c.id, toolName: c.name, input: c.input})),
         ],
-      };
-    return {role: m.role, content: m.content} as ModelMessage;
-  });
+      });
+      continue;
+    }
+    out.push({role: m.role, content: m.content} as ModelMessage);
+  }
+  flush();
+  return out;
 }
 import {normalizeError, ProviderTransport, wait} from './http';
 
@@ -208,7 +272,7 @@ export class ProviderAdapter implements ModelPort {
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
-      messages: toModelMessages(request.messages),
+      messages: toModelMessages(request.messages, {protocol: p.protocol, vision: this.info?.capabilities.vision}),
       ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
       ...(request.reasoningEffort
         ? {

@@ -38,7 +38,27 @@ export interface PermissionDecision {
   reason: string;
 }
 
+/**
+ * Media a tool hands to the model (ADR 0041): images and PDFs read from the workspace. `data` is
+ * base64. Attachments travel next to the text `content`, never inside it; the journal and the
+ * transcript keep only the text, and persistence stores the bytes separately with a bound.
+ */
+export const ATTACHMENT_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'] as const;
+/** Largest single attachment (OpenCode `MAX_MEDIA_INGEST_BYTES`, 20 MiB). */
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const attachmentSchema = z.strictObject({
+  mime: z.enum(ATTACHMENT_MIMES),
+  data: z
+    .string()
+    .max(Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4)
+    .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+  name: z.string().min(1).max(256),
+});
+export type Attachment = z.infer<typeof attachmentSchema>;
+
 export const toolResultSchema = z.strictObject({
+  /** Media for the model (ADR 0041); at most 8 per result. */
+  attachments: z.array(attachmentSchema).max(8).optional(),
   /** Historical authorization binding, never a reusable grant. */
   authorizationScopeHash: z
     .string()

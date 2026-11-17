@@ -22,7 +22,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 5) {
+    if (version > 6) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -55,7 +55,16 @@ export function openPrivateDatabase(directory: string): Database {
         position INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL UNIQUE, content TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS next_turn_input_session ON next_turn_input(conversation,position);`);
-      db.exec('PRAGMA user_version=5;');
+      // v6 (wave 1, ADR 0041/0042): tool media apart from messages and the journal (bounded per
+      // conversation by the store), and nested AGENTS.md directories discovered by reads.
+      db.exec(`CREATE TABLE IF NOT EXISTS tool_attachments (
+        position INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation TEXT NOT NULL REFERENCES conversations(id), call_id TEXT NOT NULL,
+        bytes INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(conversation, call_id));
+        CREATE TABLE IF NOT EXISTS session_instructions (
+        conversation TEXT NOT NULL REFERENCES conversations(id), directory TEXT NOT NULL,
+        PRIMARY KEY(conversation, directory));`);
+      db.exec('PRAGMA user_version=6;');
     })();
     return db;
   } catch {

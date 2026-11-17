@@ -162,6 +162,7 @@ export class TurnRun {
       record: event => this.record(event),
       workExhausted: () => this.workExhausted(),
       onSettled: (call, result, sequence) => this.observeTaskResult(call, result, sequence),
+      saveAttachments: (callId, attachments) => host.store.saveAttachments?.(host.id, callId, attachments),
     });
   }
 

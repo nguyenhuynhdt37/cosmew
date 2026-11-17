@@ -132,7 +132,8 @@ test('glob lists files, hides git internals; grep skips secret files and reports
 test('invalid input, unknown tools, binary and directories fail safely', async () => {
   const s = setup();
   writeFileSync(join(s.root, 'blob.bin'), new Uint8Array([1, 0, 2, 3]));
-  expect((await s.call('read', {path: 'src'})).code).toBe('IS_DIRECTORY');
+  // ADR 0041: a directory read lists its entries instead of failing.
+  expect((await s.call('read', {path: 'src'})).content).toContain('app.ts');
   expect((await s.call('read', {path: 'blob.bin'})).code).toBe('BINARY_FILE');
   expect((await s.call('read', {nope: 1})).code).toBe('INVALID_INPUT');
   expect((await s.call('grep', {pattern: '('})).code).toBe('INVALID_PATTERN');

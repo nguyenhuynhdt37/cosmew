@@ -81,6 +81,11 @@ export interface ConversationStore {
   recover?(id: string): import('./recovery').RecoveredConversation;
   saveTask?(id: string, task: import('./recovery').ActiveTaskCheckpoint): void;
   saveContextSnapshot?(id: string, snapshot: import('./recovery').ContextSnapshot): void;
+  /** Media of one tool result (ADR 0041), stored apart from messages and the journal, bounded per session. */
+  saveAttachments?(id: string, callId: string, attachments: import('./tools').Attachment[]): void;
+  /** Workspace-relative directories whose nested AGENTS.md this session loaded (ADR 0041); durable. */
+  addInstructionDirectory?(id: string, directory: string): void;
+  listInstructionDirectories?(id: string): string[];
   append(
     id: string,
     message: Message,

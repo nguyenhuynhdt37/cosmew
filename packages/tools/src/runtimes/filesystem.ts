@@ -20,8 +20,8 @@ export class FileSystemRuntime {
     >,
   ) {}
   read(file: ResolvedPath, input: z.infer<typeof readInput>) {
-    const outcome = runRead(this.options.workspace, file, input);
-    if (outcome.ok) this.ledger.recordBytes(file.relative, outcome.bytes);
+    const outcome = runRead(this.options.workspace, file, input, this.options.stateDirectory);
+    if (outcome.ok && outcome.bytes) this.ledger.recordBytes(file.relative, outcome.bytes);
     return outcome;
   }
   glob(file: ResolvedPath, input: z.infer<typeof globInput>) {

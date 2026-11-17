@@ -1,6 +1,8 @@
 import type {Database} from 'bun:sqlite';
 import {
   FutrynError,
+  attachmentSchema,
+  type Attachment,
   turnReceiptSchema,
   type TurnReceipt,
   messageSchema,
@@ -14,6 +16,11 @@ import {
 } from '@futryn/contracts';
 
 import {ExecutionJournal} from './event-store';
+
+/** Media kept per conversation (ADR 0041); older results lose their media first. */
+export const MAX_SESSION_ATTACHMENT_BYTES = 64 * 1024 * 1024;
+/** Nested AGENTS.md directories remembered per session (matches the workspace loader bound). */
+export const MAX_SESSION_INSTRUCTION_DIRECTORIES = 64;
 
 type StoredRow = {
   revision: number;
@@ -136,7 +143,77 @@ export class SqliteConversations implements ConversationStore {
         .query('SELECT revision,role,content,state,parts FROM messages WHERE conversation=? ORDER BY revision')
         .all(id) as StoredRow[]
     ).map(decodeRow);
-    return this.journal.recover(id, messages);
+    const recovered = this.journal.recover(id, messages);
+    return recovered.messages ? {...recovered, messages: this.withAttachments(id, recovered.messages)} : recovered;
+  }
+  /**
+   * Media of one tool result (ADR 0041). Bounded per conversation: when the total passes
+   * `MAX_SESSION_ATTACHMENT_BYTES` the oldest results lose their media (their text stays).
+   */
+  saveAttachments(id: string, callId: string, attachments: Attachment[]): void {
+    try {
+      const data = JSON.stringify(attachmentSchema.array().max(8).parse(attachments));
+      const bytes = attachments.reduce((sum, a) => sum + Math.floor((a.data.length * 3) / 4), 0);
+      this.db
+        .transaction(() => {
+          this.db
+            .query('INSERT OR REPLACE INTO tool_attachments(conversation,call_id,bytes,data) VALUES(?,?,?,?)')
+            .run(id, callId, bytes, data);
+          const rows = this.db
+            .query('SELECT position, bytes FROM tool_attachments WHERE conversation=? ORDER BY position DESC')
+            .all(id) as {position: number; bytes: number}[];
+          let total = 0;
+          for (const row of rows) {
+            total += row.bytes;
+            if (total > MAX_SESSION_ATTACHMENT_BYTES)
+              this.db.query('DELETE FROM tool_attachments WHERE position=?').run(row.position);
+          }
+        })
+        .immediate();
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  /** Remember a nested AGENTS.md directory for this session (ADR 0041); at most 64 per session. */
+  addInstructionDirectory(id: string, directory: string): void {
+    try {
+      this.db
+        .transaction(() => {
+          const count = (
+            this.db.query('SELECT COUNT(*) AS n FROM session_instructions WHERE conversation=?').get(id) as {n: number}
+          ).n;
+          if (count >= MAX_SESSION_INSTRUCTION_DIRECTORIES) return;
+          this.db
+            .query('INSERT OR IGNORE INTO session_instructions(conversation,directory) VALUES(?,?)')
+            .run(id, directory);
+        })
+        .immediate();
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  listInstructionDirectories(id: string): string[] {
+    try {
+      return (
+        this.db.query('SELECT directory FROM session_instructions WHERE conversation=? ORDER BY directory').all(id) as {
+          directory: string;
+        }[]
+      ).map(row => row.directory);
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  /** Tool messages regain their stored media by call id; nothing else changes. */
+  private withAttachments<T extends Message>(id: string, messages: T[]): T[] {
+    const rows = this.db.query('SELECT call_id, data FROM tool_attachments WHERE conversation=?').all(id) as {
+      call_id: string;
+      data: string;
+    }[];
+    if (!rows.length) return messages;
+    const byCall = new Map(rows.map(row => [row.call_id, attachmentSchema.array().parse(JSON.parse(row.data))]));
+    return messages.map(m =>
+      m.role === 'tool' && m.toolCallId && byCall.has(m.toolCallId) ? {...m, attachments: byCall.get(m.toolCallId)} : m,
+    );
   }
   saveTask(id: string, task: import('@futryn/contracts').ActiveTaskCheckpoint): void {
     this.journal.task(id, task);
@@ -161,8 +238,11 @@ export class SqliteConversations implements ConversationStore {
         const source = this.get(id);
         if (!source) throw new FutrynError('NOT_FOUND');
         const next = this.create(selection);
-        for (const message of source.recovery?.messages ?? source.messages.map(toMessage))
+        for (const message of source.recovery?.messages ?? source.messages.map(toMessage)) {
           this.append(next, message, 'committed');
+          if (message.attachments?.length && message.toolCallId)
+            this.saveAttachments(next, message.toolCallId, message.attachments);
+        }
         if (source.recovery?.task)
           this.saveTask(next, {
             ...source.recovery.task,
@@ -314,6 +394,7 @@ export class SqliteConversations implements ConversationStore {
           )
           .all(row.id) as StoredRow[]
       ).map(decodeRow);
+      const withMedia = this.withAttachments(id, messages);
       const firstUser = messages.find(m => m.role === 'user')?.content ?? '';
       const lastMsg = messages.at(-1);
       return {
@@ -324,7 +405,7 @@ export class SqliteConversations implements ConversationStore {
         messageCount: messages.filter(m => m.state === 'committed').length,
         lastState: lastMsg?.state ?? 'idle',
         preview: lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet',
-        messages,
+        messages: withMedia,
         recovery,
         turns: (
           this.db.query('SELECT data FROM turn_receipts WHERE conversation=? ORDER BY revision').all(id) as {
@@ -349,6 +430,8 @@ export class SqliteConversations implements ConversationStore {
           )
             throw new FutrynError('POLICY');
           this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(id);
+          this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(id);
+          this.db.query('DELETE FROM session_instructions WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
           this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);

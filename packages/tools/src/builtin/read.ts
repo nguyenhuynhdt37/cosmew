@@ -1,23 +1,42 @@
+import {readdirSync, statSync} from 'node:fs';
+import {basename, dirname, extname, join} from 'node:path';
 import {z} from 'zod';
-import {looksBinary, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
+import type {Attachment} from '@futryn/contracts';
+import {evaluateRead} from '@futryn/security';
+import {WorkspaceDenied, looksBinary, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
 import {LIMITS, clipBytes} from '../limits';
+import {MAX_ATTACHMENT_BYTES, MEDIA_SNIFF_BYTES, mediaSummary, sniffMedia} from './read-media';
+import {renderNotebook} from './read-notebook';
 
 export const readInput = z.strictObject({
   path: z.string().min(1).max(1024),
-  offset: z.number().int().min(1).optional(),
+  /** 1-based first line/entry; negative reads the last N lines (OpenCode). */
+  offset: z
+    .number()
+    .int()
+    .refine(n => n !== 0)
+    .optional(),
   limit: z.number().int().min(1).max(LIMITS.readLines).optional(),
 });
 
 export const readDescriptor = {
   name: 'read',
   description:
-    'Read a UTF-8 text file in the workspace. Returns numbered lines. Use offset/limit to page through long files (at most 2000 lines or 50 KiB per call).',
+    'Read a file or directory in the workspace. Text files return numbered lines (at most 2000 lines or 50 KiB per call; use offset/limit to page, a negative offset reads the last N lines). A directory returns its entries one per line, directories ending in "/", paged with offset/limit. Images (PNG, JPEG, GIF, WebP) and PDFs up to 20 MiB are attached for the model to view. Jupyter notebooks (.ipynb) return every cell with its outputs. Prefer one larger read over many small slices; use grep to find specific content first.',
   inputSchema: {
     type: 'object',
     properties: {
-      path: {type: 'string', description: 'File path relative to the workspace root.'},
-      offset: {type: 'integer', minimum: 1, description: 'First line to return (1-based).'},
-      limit: {type: 'integer', minimum: 1, maximum: LIMITS.readLines, description: 'Maximum number of lines.'},
+      path: {type: 'string', description: 'File or directory path relative to the workspace root.'},
+      offset: {
+        type: 'integer',
+        description: 'First line or entry to return (1-based). A negative value returns the last N lines.',
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: LIMITS.readLines,
+        description: 'Maximum number of lines or entries.',
+      },
     },
     required: ['path'],
     additionalProperties: false,
@@ -27,33 +46,185 @@ export const readDescriptor = {
 };
 
 export type ReadOutcome =
-  | {ok: true; content: string; truncated: boolean; bytes: Uint8Array}
-  | {ok: false; code: 'IS_DIRECTORY' | 'BINARY_FILE' | 'FILE_TOO_LARGE'};
+  | {ok: true; content: string; truncated: boolean; bytes?: Uint8Array; attachments?: Attachment[]}
+  | {ok: false; code: 'BINARY_FILE' | 'FILE_TOO_LARGE' | 'INVALID_INPUT'; message?: string};
 
-export function runRead(workspace: WorkspaceRoot, file: ResolvedPath, input: z.infer<typeof readInput>): ReadOutcome {
-  if (file.kind === 'directory') return {ok: false, code: 'IS_DIRECTORY'};
+export function runRead(
+  workspace: WorkspaceRoot,
+  file: ResolvedPath,
+  input: z.infer<typeof readInput>,
+  stateDirectory?: string,
+): ReadOutcome {
+  if (file.kind === 'directory') return listDirectory(file, input, stateDirectory);
+  const head = workspace.readBytes(file, MEDIA_SNIFF_BYTES);
+  const media = sniffMedia(head.bytes);
+  if (media) {
+    if (head.size > MAX_ATTACHMENT_BYTES)
+      return {ok: false, code: 'FILE_TOO_LARGE', message: `${file.relative} is larger than 20 MiB and was not read.`};
+    const {bytes} = workspace.readBytes(file, MAX_ATTACHMENT_BYTES);
+    // The file may have changed between the two reads; the attachment is what was actually read.
+    if (sniffMedia(bytes) !== media) return {ok: false, code: 'BINARY_FILE'};
+    return {
+      ok: true,
+      content: mediaSummary(file.relative, media, bytes.byteLength),
+      truncated: false,
+      attachments: [{mime: media, data: Buffer.from(bytes).toString('base64'), name: basename(file.relative)}],
+    };
+  }
   const {bytes, size} = workspace.readBytes(file, LIMITS.readFileBytes);
   if (size > LIMITS.readFileBytes) return {ok: false, code: 'FILE_TOO_LARGE'};
   if (looksBinary(bytes)) return {ok: false, code: 'BINARY_FILE'};
-  const lines = new TextDecoder().decode(bytes).split(/\r?\n/);
+  const decoded = new TextDecoder().decode(bytes);
+  if (extname(file.relative).toLowerCase() === '.ipynb') {
+    const notebook = renderNotebook(decoded, file.relative);
+    if (notebook.ok) {
+      const page = pageLines(notebook.text, input);
+      return {...page, bytes, ...(notebook.attachments.length ? {attachments: notebook.attachments} : {})};
+    }
+  }
+  return {...pageLines(decoded, input), bytes};
+}
+
+function pageLines(text: string, input: z.infer<typeof readInput>): {ok: true; content: string; truncated: boolean} {
+  const lines = text.split(/\r?\n/);
   if (lines.at(-1) === '') lines.pop();
-  const start = (input.offset ?? 1) - 1;
   const limit = input.limit ?? LIMITS.readLines;
-  const width = String(Math.min(lines.length, start + limit)).length;
-  const shown = lines.slice(start, start + limit).map((line, i) => {
-    const text = line.length > LIMITS.lineChars ? line.slice(0, LIMITS.lineChars) + '… [line truncated]' : line;
-    return `${String(start + i + 1).padStart(width)}\t${text}`;
-  });
-  const clipped = clipBytes(shown.join('\n'), LIMITS.readOutputBytes);
-  const nextLine = start + clipped.text.split('\n').length + 1;
-  const more = clipped.clipped || start + limit < lines.length;
-  const footer = more ? `\n\n[${lines.length} lines total; continue with offset ${nextLine}]` : '';
+  // Negative offset: the last N lines (OpenCode); N also caps the page.
+  const start =
+    input.offset !== undefined && input.offset < 0 ? Math.max(0, lines.length + input.offset) : (input.offset ?? 1) - 1;
+  const count = input.offset !== undefined && input.offset < 0 ? Math.min(limit, -input.offset) : limit;
   if (start >= lines.length)
     return {
       ok: true,
       content: `[file has ${lines.length} lines; offset ${start + 1} is past the end]`,
       truncated: false,
-      bytes,
     };
-  return {ok: true, content: clipped.text + footer, truncated: more, bytes};
+  const width = String(Math.min(lines.length, start + count)).length;
+  const shown = lines.slice(start, start + count).map((line, i) => {
+    const text = line.length > LIMITS.lineChars ? line.slice(0, LIMITS.lineChars) + '… [line truncated]' : line;
+    return `${String(start + i + 1).padStart(width)}\t${text}`;
+  });
+  const clipped = clipBytes(shown.join('\n'), LIMITS.readOutputBytes);
+  const nextLine = start + clipped.text.split('\n').length + 1;
+  const more = clipped.clipped || start + count < lines.length;
+  const footer = more ? `\n\n[${lines.length} lines total; continue with offset ${nextLine}]` : '';
+  return {ok: true, content: clipped.text + footer, truncated: more};
+}
+
+/**
+ * Directory listing (OpenCode `read` list page): directories first, then files, each sorted; `/`
+ * marks directories. Entries policy denies (`.git`, Futryn state) are omitted.
+ */
+function listDirectory(file: ResolvedPath, input: z.infer<typeof readInput>, stateDirectory?: string): ReadOutcome {
+  if (input.offset !== undefined && input.offset < 0)
+    return {ok: false, code: 'INVALID_INPUT', message: 'A negative offset only works for files.'};
+  let entries: {name: string; directory: boolean}[];
+  try {
+    entries = readdirSync(file.absolute, {withFileTypes: true}).flatMap(entry => {
+      const relative = file.relative === '.' ? entry.name : `${file.relative}/${entry.name}`;
+      let directory = entry.isDirectory();
+      if (entry.isSymbolicLink()) {
+        try {
+          directory = statSync(join(file.absolute, entry.name)).isDirectory();
+        } catch {
+          return [];
+        }
+      } else if (!directory && !entry.isFile()) return [];
+      const decision = evaluateRead(directory ? relative + '/' : relative, join(file.absolute, entry.name), {
+        stateDirectory,
+      });
+      return decision.effect === 'deny' ? [] : [{name: entry.name, directory}];
+    });
+  } catch {
+    throw new WorkspaceDenied('inaccessible');
+  }
+  entries.sort((a, b) => (a.directory === b.directory ? a.name.localeCompare(b.name) : a.directory ? -1 : 1));
+  const offset = input.offset ?? 1;
+  const limit = input.limit ?? LIMITS.readLines;
+  const selected = entries.slice(offset - 1, offset - 1 + limit).map(e => e.name + (e.directory ? '/' : ''));
+  const header = selected.length
+    ? `Directory ${file.relative}: entries ${offset}-${offset + selected.length - 1} of ${entries.length}`
+    : `Directory ${file.relative}: ${entries.length} entries`;
+  const clipped = clipBytes([header, ...selected].join('\n'), LIMITS.readOutputBytes);
+  const shown = clipped.text.split('\n').length - 1;
+  const more = clipped.clipped || offset - 1 + selected.length < entries.length;
+  return {
+    ok: true,
+    content: clipped.text + (more ? `\n\n[continue with offset ${offset + shown}]` : ''),
+    truncated: more,
+  };
+}
+
+const stem = (name: string) => name.slice(0, name.length - extname(name).length) || name;
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({length: b.length + 1}, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++)
+      current[j] = Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+/**
+ * One readable path the model probably meant (OpenCode `read` did-you-mean): the same name in
+ * another case or extension, a small typo, or an absolute path written from the wrong root whose
+ * tail exists in the workspace. Only a path whose read policy is plain allow is suggested, so a
+ * suggestion never names Git internals, Futryn state or a secret file.
+ */
+export function suggestReadPath(workspace: WorkspaceRoot, input: string, stateDirectory?: string): string | null {
+  const allowed = (relative: string): string | null => {
+    try {
+      const resolved = workspace.resolve(relative);
+      if (resolved.kind !== 'file') return null;
+      return evaluateRead(resolved.relative, resolved.absolute, {stateDirectory}).effect === 'allow'
+        ? resolved.relative
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const normalized = input.replace(/\\/g, '/');
+  if (normalized.startsWith('/') && !(normalized + '/').startsWith(workspace.root + '/')) {
+    const parts = normalized.split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i++) {
+      const found = allowed(parts.slice(i).join('/'));
+      if (found) return found;
+    }
+    return null;
+  }
+  let parent: ResolvedPath;
+  try {
+    parent = workspace.resolve(dirname(normalized) || '.');
+  } catch {
+    return null;
+  }
+  if (parent.kind !== 'directory') return null;
+  const wanted = basename(normalized).normalize('NFC').toLowerCase();
+  let names: string[];
+  try {
+    names = readdirSync(parent.absolute);
+  } catch {
+    return null;
+  }
+  const tier = (candidate: string): number | undefined => {
+    const name = candidate.normalize('NFC').toLowerCase();
+    if (name === wanted) return 1;
+    if (stem(name) === stem(wanted)) return 2;
+    const typos = stem(wanted).length < 5 ? 1 : 2;
+    if (stem(wanted).length >= 3 && editDistance(stem(name), stem(wanted)) <= typos) return 3;
+    return undefined;
+  };
+  const ranked = names
+    .filter(name => name !== basename(normalized))
+    .flatMap(name => {
+      const rank = tier(name);
+      return rank === undefined ? [] : [{name, rank}];
+    })
+    .sort((a, b) => a.rank - b.rank);
+  const best = ranked[0];
+  // Exactly one candidate at the best rank, or no suggestion at all.
+  if (!best || ranked.filter(r => r.rank === best.rank).length !== 1) return null;
+  return allowed(parent.relative === '.' ? best.name : `${parent.relative}/${best.name}`);
 }

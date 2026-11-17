@@ -2,7 +2,23 @@ import {createHash} from 'node:crypto';
 import {FutrynError, isFileChangeTool, type Message} from '@futryn/contracts';
 export const contextHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** Conservative UTF-8 estimate; provider metadata supplies the actual window and measured usage. */
-export const estimateContextTokens = (value: unknown) => Math.ceil(Buffer.byteLength(JSON.stringify(value) ?? '') / 3);
+/**
+ * Conservative token estimate (about 3 bytes per token). Attachments (ADR 0041) are not counted by
+ * their base64 size: an image is about 1 600 tokens (Anthropic's documented cap for a resized
+ * image); a PDF about one token per 30 bytes, at least 1 600.
+ */
+export const estimateContextTokens = (value: unknown) => {
+  let media = 0;
+  const text = JSON.stringify(value, (_key, item: unknown) => {
+    if (item && typeof item === 'object' && 'mime' in item && 'data' in item && typeof item.data === 'string') {
+      const bytes = Math.floor((item.data.length * 3) / 4);
+      media += item.mime === 'application/pdf' ? Math.max(1600, Math.ceil(bytes / 30)) : 1600;
+      return {mime: item.mime};
+    }
+    return item;
+  });
+  return Math.ceil(Buffer.byteLength(text ?? '') / 3) + media;
+};
 
 /** Repair only the protocol envelope, never execution. Missing results explicitly mean unknown. */
 export function normalizeHistory(messages: readonly Message[]): Message[] {
