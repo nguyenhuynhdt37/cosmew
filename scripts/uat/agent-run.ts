@@ -120,7 +120,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
         sandbox: s.terminalRuntime,
         workspaceReadStatus: s.workspaceReadStatus,
         tools: client.availableTools(),
-        toolsEnabled: client.toolsEnabled(),
+        toolsEnabled: s.toolsEnabled,
         sessionId: s.activeSessionId,
       };
     };

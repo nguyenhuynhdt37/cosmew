@@ -477,11 +477,25 @@ export class FutrynClient {
       this.notifyStateChange();
     }
   }
+  /**
+   * Futryn tools the selected backend really offers the model: none unless folder consent holds, the
+   * backend runs Futryn tools (Futryn agent or Codex bridge) and the model supports tools.
+   */
   availableTools(): string[] {
+    if (!this.toolsReachModel()) return [];
     try {
       return this.ports.availableTools?.() ?? [];
     } catch {
       return [];
+    }
+  }
+
+  /** Same condition the status reports: consent + a backend that runs Futryn tools + a tools-capable model. */
+  private toolsReachModel(): boolean {
+    try {
+      return this.status().toolsEnabled;
+    } catch {
+      return false;
     }
   }
 
@@ -737,24 +751,30 @@ export class FutrynClient {
       }
     }
     const usage = (this.statusUsage ??= this.usage());
+    const executionBackend = activeProvider
+      ? executionBackendFor(activeProvider, {toolsEnabled: this.toolsAllowed})
+      : null;
+    const workspaceReadStatus = !this.toolsAllowed
+      ? 'disabled'
+      : !activeModel ||
+          (executionBackend?.kind !== 'hannes' && executionBackend?.kind !== 'codex-bridge') ||
+          activeModel.capabilities.tools === 'unsupported'
+        ? 'unavailable'
+        : 'read-only';
     return {
       workspace: this.ports.workspace,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
-      executionBackend: activeProvider ? executionBackendFor(activeProvider, {toolsEnabled: this.toolsAllowed}) : null,
+      executionBackend,
+      /** Futryn tools reach the model: folder consent AND a backend that runs them AND a capable model. */
+      toolsEnabled: workspaceReadStatus === 'read-only',
       providers: state.providers,
       accounts: state.accounts,
       activeAccount,
       activeProvider,
       selection,
       activeModel,
-      workspaceReadStatus: !this.toolsAllowed
-        ? 'disabled'
-        : !activeModel ||
-            (activeProvider?.runtime && activeProvider.runtime !== 'codex') ||
-            activeModel.capabilities.tools === 'unsupported'
-          ? 'unavailable'
-          : 'read-only',
+      workspaceReadStatus,
       activeSessionId: this.currentSession?.id ?? null,
       messageCount: this.currentSession?.messages.length ?? 0,
       lastUsage: usage.last?.usage ?? this.lastUsage,
