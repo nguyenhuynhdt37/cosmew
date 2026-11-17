@@ -2,6 +2,7 @@ import {Database} from 'bun:sqlite';
 import {chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {FutrynError} from '@futryn/contracts';
+import {migrateRemovedRuntimes} from './runtime-removal';
 
 export function openPrivateDatabase(directory: string): Database {
   try {
@@ -22,7 +23,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 6) {
+    if (version > 7) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -66,7 +67,9 @@ export function openPrivateDatabase(directory: string): Database {
         PRIMARY KEY(conversation, directory));
         CREATE TABLE IF NOT EXISTS session_plan (
         conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);`);
-      db.exec('PRAGMA user_version=6;');
+      // v7 (ADR 0045): chat-only subscription runtimes are removed; their accounts are logged out.
+      if (version < 7) migrateRemovedRuntimes(db);
+      db.exec('PRAGMA user_version=7;');
     })();
     return db;
   } catch {

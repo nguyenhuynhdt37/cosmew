@@ -23,13 +23,7 @@ const nativeMode = (() => {
   }
 })();
 if (!profile || process.cwd().startsWith(profile) === nativeMode) process.exit(11);
-if (
-  process.env.OPENAI_API_KEY ||
-  process.env.GITHUB_TOKEN ||
-  process.env.NODE_OPTIONS ||
-  (!nativeMode && process.env.COPILOT_ALLOW_ALL !== 'false')
-)
-  process.exit(12);
+if (process.env.OPENAI_API_KEY || process.env.GITHUB_TOKEN || process.env.NODE_OPTIONS) process.exit(12);
 const grok = runtime === 'grok-build';
 if (
   grok &&

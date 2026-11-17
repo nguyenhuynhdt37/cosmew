@@ -56,8 +56,8 @@ Canonical TUI commands: /login (/connect), /logout, /model, /status,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start Futryn in any project: fyn (or futryn). From source: bun run fyn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
-are automatic. Official subscription runtimes: Codex, Copilot CLI, Gemini CLI and
-Qwen Code (installed-version and account access required). Claude subscription
+are automatic. Official subscription runtime: Codex (installed CLI and ChatGPT plan required).
+Claude subscription
 sign-in requires Anthropic approval. OpenRouter OAuth uses OpenRouter API credits.
 Local logout deletes FUTRYN credentials; remote revocation is provider-managed.
 `;
@@ -674,6 +674,9 @@ async function main() {
     return;
   }
   const app = startup();
+  // One-time migration notices (ADR 0045) go to stderr so --json output stays clean.
+  for (const notice of app.takeStartupNotices()) process.stderr.write(`Notice: ${notice}\n`);
+  await app.migrationCleanup;
   const controller = new AbortController();
   const interrupt = () => {
     controller.abort();

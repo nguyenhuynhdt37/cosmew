@@ -272,7 +272,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.close();
   const db = openPrivateDatabase(dir);
   cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(6);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(7);
   expect(
     (db.query('PRAGMA table_info(messages)').all() as {name: string}[]).some(column => column.name === 'parts'),
   ).toBe(true); // v3 tool parts
@@ -310,7 +310,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   }
   const future = directory();
   const invalid = new Database(join(future, 'provider-auth.sqlite'));
-  invalid.exec('PRAGMA user_version=7');
+  invalid.exec('PRAGMA user_version=8');
   invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });

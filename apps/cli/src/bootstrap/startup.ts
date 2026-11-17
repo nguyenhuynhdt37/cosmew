@@ -41,6 +41,7 @@ import {
 } from '@futryn/models';
 import {
   FileCustomThemeStore,
+  MigrationOutbox,
   RuntimeLeases,
   SqliteConversations,
   SqliteSettings,
@@ -151,6 +152,19 @@ export function startup(
   const customThemes = new FileCustomThemeStore(directory);
   const vault = services.vault ?? new SecureVault(redactor);
   const oauth = new OpenRouterPKCE(redactor, services.fetch);
+  // Credentials of accounts removed by a migration (ADR 0045) are deleted here, where the vault lives.
+  // A failed deletion stays queued and is retried on the next start.
+  const outbox = new MigrationOutbox(db);
+  const migrationCleanup = (async () => {
+    for (const row of outbox.pendingCredentials()) {
+      try {
+        await vault.delete(row.credential);
+        outbox.done(row.id);
+      } catch {
+        /* retried on the next start */
+      }
+    }
+  })();
   const registry = new ProviderRegistry(settings);
   const integrations = new IntegrationRegistry(registry);
   const accounts = new AccountManager(settings, vault);
@@ -208,7 +222,7 @@ export function startup(
     };
   };
 
-  /** The model port: a direct provider adapter, or a subscription runtime (Codex, Copilot, …). */
+  /** The model port: a direct provider adapter, or the Codex subscription runtime. */
   const modelPort = (account: Account, selection: Selection, info: ModelInfo, wiring: ConversationWiring) => {
     const provider = registry.get(account.providerId);
     if (!provider.runtime) return new ProviderAdapter(transport(account), selection.modelId, info);
@@ -879,6 +893,9 @@ export function startup(
     validateAccount,
     discoverModels,
     subscriptions,
+    /** Resolves when credentials of migrated-away accounts are deleted. */
+    migrationCleanup,
+    takeStartupNotices: () => outbox.takeNotices(),
     shutdownCommands: async () => {
       await Promise.allSettled([...languageServerManagers].map(manager => manager.shutdown()));
       languageServerManagers.clear();

@@ -77,52 +77,6 @@ export const providerPresets: readonly Provider[] = [
     runtime: 'codex',
     family: 'openai',
   },
-  {
-    id: 'github-copilot',
-    name: 'GitHub Copilot',
-    protocol: 'chat',
-    baseURL: 'https://api.githubcopilot.com',
-    auth: 'api-key',
-    catalog: 'manual',
-    metadataVersion: 1,
-    timeoutMs: 300000,
-    runtime: 'copilot',
-  },
-  {
-    id: 'google-subscription',
-    name: 'Google AI subscription · Gemini CLI',
-    protocol: 'gemini',
-    baseURL: 'https://cloudcode-pa.googleapis.com',
-    auth: 'api-key',
-    catalog: 'manual',
-    metadataVersion: 1,
-    timeoutMs: 300000,
-    runtime: 'gemini-cli',
-    family: 'gemini',
-  },
-  {
-    id: 'qwen-subscription',
-    name: 'Qwen',
-    protocol: 'chat',
-    baseURL: 'https://api.qwen.ai',
-    auth: 'api-key',
-    catalog: 'manual',
-    metadataVersion: 1,
-    timeoutMs: 300000,
-    runtime: 'qwen-code',
-  },
-  {
-    id: 'grok-subscription',
-    name: 'SuperGrok subscription · Grok Build',
-    protocol: 'chat',
-    baseURL: 'https://api.x.ai',
-    auth: 'api-key',
-    catalog: 'manual',
-    metadataVersion: 1,
-    timeoutMs: 300000,
-    runtime: 'grok-build',
-    family: 'xai',
-  },
 ];
 export class ProviderRegistry {
   constructor(private readonly store: SettingsStore) {}
@@ -165,27 +119,17 @@ export class AuthMethodRegistry {
       return [
         {
           id: 'subscription-browser',
-          name: {
-            codex: 'Sign in with ChatGPT',
-            copilot: 'Sign in with GitHub',
-            'gemini-cli': 'Sign in with Google',
-            'qwen-code': 'Sign in with Qwen',
-            'grok-build': 'Sign in with Grok',
-          }[provider.runtime],
+          name: 'Sign in with ChatGPT',
           description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.',
           autoComplete: true,
         },
-        ...(provider.runtime === 'codex'
-          ? [
-              {
-                id: 'subscription-device' as const,
-                name: 'Sign in with device code',
-                description: 'Official Codex device-code flow.',
-                autoComplete: true,
-                advanced: true,
-              },
-            ]
-          : []),
+        {
+          id: 'subscription-device' as const,
+          name: 'Sign in with device code',
+          description: 'Official Codex device-code flow.',
+          autoComplete: true,
+          advanced: true,
+        },
       ];
     const methods: import('@futryn/contracts').AuthMethod[] =
       provider.auth === 'none'

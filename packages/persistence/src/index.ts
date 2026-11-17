@@ -27,6 +27,7 @@ import {
   type ThemeManifest,
 } from '@futryn/contracts';
 export {openPrivateDatabase} from './database';
+export {MigrationOutbox, REMOVED_RUNTIMES, REMOVED_RUNTIME_PROVIDER_IDS} from './runtime-removal';
 export {SqliteConversations} from './session-store';
 export {ToolAuditStore, type ToolAuditEntry} from './tool-audit';
 

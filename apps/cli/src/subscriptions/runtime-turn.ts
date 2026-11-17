@@ -7,10 +7,8 @@ import {
   type Account,
   type InlineToolExecutor,
   type ModelEvent,
-  type ModelInfo,
   type ModelRequest,
   type Provider,
-  type SubscriptionRuntime,
   type Usage,
   GENERATION_LIMITS,
 } from '@futryn/contracts';
@@ -40,7 +38,6 @@ export interface RuntimeTurnOptions {
   workspaceRoot?: string;
   /** Throws when the account was logged out or changed since the turn started. */
   assertAccount(account: Account): void;
-  acpModels(session: unknown): ModelInfo[];
 }
 
 const MAX_PENDING_CODEX_USAGE = 256;
@@ -64,9 +61,6 @@ export class RuntimeTurn {
   private wake?: () => void;
   private readonly toolAbort = new AbortController();
   private inFlightTools = 0;
-  // Copilot usage events
-  private readonly usageIds = new Set<string>();
-  private usageCalls = 0;
   // Codex thread/turn identity and usage that arrived before the turn id was known
   private threadId?: string;
   private turnId?: string;
@@ -92,10 +86,6 @@ export class RuntimeTurn {
 
   constructor(private readonly options: RuntimeTurnOptions) {}
 
-  private get runtime(): SubscriptionRuntime {
-    return this.options.connection.recipe.runtime;
-  }
-
   /** Resolves when an event is queued or the turn ends. */
   next(): Promise<void> {
     return new Promise<void>(resolve => {
@@ -109,7 +99,7 @@ export class RuntimeTurn {
   attach(): void {
     const {connection, signal, request, executeTool} = this.options;
     const {rpc} = connection;
-    if (this.runtime === 'codex' && request.tools.length && executeTool) {
+    if (request.tools.length && executeTool) {
       this.offTool = rpc.onDynamicTool(params => this.onDynamicTool(params));
     }
     this.offMessage = rpc.onMessage(message => this.onMessage(message));
@@ -157,9 +147,7 @@ export class RuntimeTurn {
   /** Start the turn on the runtime with its own protocol. */
   async start(): Promise<void> {
     const prompt = this.prompt();
-    if (this.runtime === 'codex') await this.startCodex(prompt);
-    else if (this.runtime === 'copilot') await this.startCopilot(prompt);
-    else await this.startAcp(prompt);
+    await this.startCodex(prompt);
   }
 
   // -------------------------------------------------------------------------------------------
@@ -219,10 +207,7 @@ export class RuntimeTurn {
         this.fail(new FutrynError('TRANSPORT'));
         return;
       }
-      if (this.runtime === 'codex') this.onCodexMessage(message);
-      else if (this.runtime === 'copilot' && message.method === 'session.event')
-        this.onCopilotEvent(message.params?.event);
-      else if (message.method === 'session/update') this.onAcpUpdate(message.params?.update);
+      this.onCodexMessage(message);
     } catch (cause) {
       this.fail(cause);
     }
@@ -301,76 +286,6 @@ export class RuntimeTurn {
     if (!snapshot) return;
     this.publishUsage(snapshot.usage);
     this.publishContext(snapshot.usedTokens, snapshot.limitTokens);
-  }
-
-  /** Copilot CLI session events. */
-  private onCopilotEvent(event: any): void {
-    switch (event?.type) {
-      case 'assistant.reasoning_delta':
-        this.pushText(event.data?.deltaContent, 'reasoningDelta');
-        break;
-      case 'session.usage_info':
-        this.publishContext(event.data?.currentTokens, event.data?.tokenLimit);
-        break;
-      case 'assistant.usage':
-        this.onCopilotUsage(event);
-        break;
-      case 'assistant.message_delta':
-        this.pushText(event.data?.deltaContent);
-        break;
-      case 'session.idle':
-        this.finished();
-        break;
-      case 'session.error':
-        this.fail(new FutrynError('AUTH'));
-        break;
-      case 'tool.execution_start':
-        this.fail(new FutrynError('POLICY'));
-        break;
-    }
-  }
-
-  /** Copilot reports usage per API call; each call is counted once and totals add up. */
-  private onCopilotUsage(event: any): void {
-    const key = event.data?.apiCallId ?? event.id;
-    if (key && this.usageIds.has(key)) return;
-    if (key) this.usageIds.add(key);
-    const data = event.data ?? {};
-    // A count the runtime stopped reporting makes the total unknown rather than wrong.
-    const sum = (previous: number | null | undefined, value: unknown) => {
-      const count = measured(value);
-      return count === null || (this.usageCalls && previous == null) ? null : (previous ?? 0) + count;
-    };
-    const usage = this.usage;
-    this.publishUsage({
-      inputTokens: sum(usage.inputTokens, data.inputTokens),
-      outputTokens: sum(usage.outputTokens, data.outputTokens),
-      costUSD: null,
-      cacheReadTokens: sum(usage.cacheReadTokens, data.cacheReadTokens),
-      cacheWriteTokens: sum(usage.cacheWriteTokens, data.cacheWriteTokens),
-      reasoningTokens: sum(usage.reasoningTokens, data.reasoningTokens),
-      premiumRequests: sum(usage.premiumRequests, data.cost),
-    });
-    if (data.quotaSnapshots && typeof data.quotaSnapshots === 'object') {
-      this.publishUsage({...this.usage, quota: copilotQuota(data.quotaSnapshots)});
-    }
-    this.usageCalls++;
-  }
-
-  /** ACP (Agent Client Protocol) session updates: Gemini CLI, Qwen Code, Grok Build. */
-  private onAcpUpdate(update: any): void {
-    const isText = update?.content?.type === 'text';
-    switch (update?.sessionUpdate) {
-      case 'agent_thought_chunk':
-        if (isText) this.pushText(update.content.text, 'reasoningDelta');
-        break;
-      case 'agent_message_chunk':
-        if (isText) this.pushText(update.content.text);
-        break;
-      case 'tool_call':
-        this.fail(new FutrynError('POLICY'));
-        break;
-    }
   }
 
   // -------------------------------------------------------------------------------------------
@@ -483,75 +398,4 @@ export class RuntimeTurn {
     for (const message of this.pendingCodexUsage.splice(0)) this.applyCodexUsage(message);
     if (request.tools.length && !this.turnId) throw new FutrynError('PROTOCOL');
   }
-
-  private async startCopilot(prompt: string): Promise<void> {
-    const {connection, request} = this.options;
-    const effort = request.reasoningEffort ? {reasoningEffort: request.reasoningEffort} : {};
-    const session = {
-      model: request.modelId,
-      sessionId: crypto.randomUUID(),
-      streaming: true,
-      workingDirectory: connection.profile.workspace,
-      ...effort,
-      // Chat only: no built-in, MCP or custom tools, skills, agents, plugins or hooks.
-      availableTools: [],
-      excludedTools: ['builtin:*', 'mcp:*', 'custom:*'],
-      tools: [],
-      mcpServers: {},
-      installedPlugins: [],
-      includedBuiltinSkills: [],
-      includedBuiltinAgents: [],
-      enableSkills: false,
-      enableConfigDiscovery: false,
-      requestPermission: true,
-      hooks: false,
-      clientName: 'FUTRYN',
-    };
-    const result = await connection.rpc.request('session.create', session);
-    await connection.rpc.request('session.send', {sessionId: result.sessionId, prompt, attachments: []});
-  }
-
-  private async startAcp(prompt: string): Promise<void> {
-    const {connection, request} = this.options;
-    const {rpc} = connection;
-    const session = await rpc.request('session/new', {cwd: connection.cwd, mcpServers: []});
-    if (!this.options.acpModels(session).some(m => m.id === request.modelId)) throw new FutrynError('NOT_FOUND');
-    await rpc.request('session/set_model', {sessionId: session.sessionId, modelId: request.modelId});
-    void rpc
-      .request(
-        'session/prompt',
-        {sessionId: session.sessionId, prompt: [{type: 'text', text: prompt}]},
-        Infinity, // bounded by the turn's idle deadline instead
-      )
-      .then(
-        result => this.onAcpPromptEnd(result?.stopReason),
-        cause => this.fail(cause),
-      );
-  }
-
-  private onAcpPromptEnd(stop: unknown): void {
-    if (stop === 'end_turn' || stop === 'max_tokens') this.finished();
-    else this.fail(new FutrynError('PROTOCOL'));
-  }
-}
-
-/** Copilot quota snapshots (at most 20, validated names) as usage quota entries. */
-function copilotQuota(snapshots: object) {
-  return Object.entries(snapshots)
-    .slice(0, 20)
-    .flatMap(([name, raw]) => {
-      const snapshot = raw as any;
-      if (!/^[a-zA-Z0-9_ .:/-]{1,80}$/.test(name)) return [];
-      const remaining = measured(snapshot?.remainingPercentage);
-      const date = typeof snapshot?.resetDate === 'string' ? Date.parse(snapshot.resetDate) : NaN;
-      return [
-        {
-          name,
-          usedPercent: remaining !== null && remaining <= 100 ? 100 - remaining : null,
-          resetAt: Number.isFinite(date) ? new Date(date).toISOString() : null,
-          observedAt: new Date().toISOString(),
-          unlimited: snapshot?.entitlementRequests === -1,
-        },
-      ];
-    });
 }

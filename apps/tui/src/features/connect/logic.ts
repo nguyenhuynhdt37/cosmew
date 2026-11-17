@@ -111,8 +111,7 @@ const SUBSCRIPTION_HINTS = (name: string): Record<string, string> => ({
 });
 
 const PROVIDER_HINTS: Record<string, string> = {
-  RUNTIME_UNAVAILABLE:
-    'Install the official Codex, Copilot CLI, Gemini CLI or Qwen Code runtime on PATH for this subscription.',
+  RUNTIME_UNAVAILABLE: 'Install the official Codex CLI on PATH for this subscription.',
   AUTH: 'Credential rejected or missing. Reconnect with a valid API key or environment variable.',
   FORBIDDEN: 'Access denied. Check API entitlement, billing and endpoint permissions.',
   STORAGE:
@@ -133,8 +132,7 @@ export function describeProviderError(client: FutrynClient, error: unknown, prov
     client.listProviders().find(p => p.id === providerId) ??
     client.listIntegrations().find(i => i.provider.id === providerId)?.provider;
   if (provider?.runtime) {
-    const name = provider.runtime === 'copilot' ? 'GitHub' : provider.name;
-    const hint = SUBSCRIPTION_HINTS(name)[code];
+    const hint = SUBSCRIPTION_HINTS(provider.name)[code];
     if (hint) return `${code}: ${hint}`;
   }
   return `${code}: ${PROVIDER_HINTS[code] ?? 'Provider response was invalid. Check API protocol and model discovery settings.'}`;

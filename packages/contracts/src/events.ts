@@ -31,7 +31,7 @@ const safeMessages: Record<ErrorCode, string> = {
   UNSUPPORTED:
     'Authentication or runtime protocol is unsupported. Check the provider method and supported runtime version.',
   RUNTIME_UNAVAILABLE:
-    'The official provider runtime is not installed or is not on PATH. Install Codex, Copilot CLI, Gemini CLI or Qwen Code for the selected subscription, then retry.',
+    'The official provider runtime is not installed or is not on PATH. Install the Codex CLI for the selected subscription, then retry.',
   STALLED: 'No safe progress after bounded recovery. Review the unfinished task and tool evidence before continuing.',
   CONTEXT_LIMIT:
     'The conversation plus the output reserve no longer fits the model context window. Critical user constraints and recent execution evidence cannot be safely compacted further. Reduce output reserve, explicitly narrow the task, or choose a larger context window.',

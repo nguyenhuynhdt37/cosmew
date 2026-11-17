@@ -8,23 +8,14 @@ const MAX_TOOL_CALLS = 32,
   MAX_INLINE_TOOL_ATTEMPTS = MAX_TOOL_CALLS + SAFETY_LIMITS.bridgeRefusalGrace;
 import {FutrynError, executionBackendFor, type SubscriptionRuntime, type ModelEvent} from '@futryn/contracts';
 import {FutrynTuiApp, renderContextIndicator, deriveTokensFromTriplet, reportRows} from '@futryn/tui';
-import {RuntimeProfile} from '@futryn/persistence';
-import {SUBSCRIPTION_RECIPES, subscriptionEnvironment} from '@futryn/security';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {SubscriptionRpc} from '../../apps/cli/src/subscriptions/rpc';
 import {providerPresets} from '@futryn/models';
 import {memoryVault} from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
-const ids = {
-  codex: 'chatgpt',
-  copilot: 'github-copilot',
-  'gemini-cli': 'google-subscription',
-  'qwen-code': 'qwen-subscription',
-  'grok-build': 'grok-subscription',
-};
+const ids = {codex: 'chatgpt'};
 async function context(scenario = 'normal') {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-subscriptions-'));
   const vault = memoryVault();
@@ -202,7 +193,7 @@ test('login UX groups subscriptions under the vendor and asks only for the selec
   expect(c.app.accounts.list()).toHaveLength(0);
 });
 
-for (const vendor of ['OpenAI', 'GitHub Copilot'])
+for (const vendor of ['OpenAI'])
   test.skipIf(process.platform === 'win32')(
     `actual PTY: ${vendor} → subscription → model → chat → logout, without alias or token prompts`,
     async () => {
@@ -230,7 +221,6 @@ for (const vendor of ['OpenAI', 'GitHub Copilot'])
         await wait('Sign in to another account');
         terminal.write('\r');
         await wait('Choose your provider');
-        if (vendor === 'GitHub Copilot') terminal.write('copilot');
         terminal.write('\r');
         await wait(`Sign in to ${vendor}`);
         terminal.write('\r');
@@ -258,49 +248,6 @@ for (const vendor of ['OpenAI', 'GitHub Copilot'])
     15000,
   );
 
-test.skipIf(process.env.HANNES_TEST_COPILOT !== '1')(
-  'installed Copilot: native managed state survives capture and a fresh runtime restore (no login or model request)',
-  async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'futryn-native-copilot-'));
-    const recipe = SUBSCRIPTION_RECIPES.copilot;
-    const command = Bun.which(recipe.command);
-    expect(command).not.toBeNull();
-    const profile = new RuntimeProfile(dir, recipe.credentialFiles, recipe.settingsFiles);
-    let restored: RuntimeProfile | undefined;
-    let rpc: SubscriptionRpc | undefined;
-    try {
-      rpc = new SubscriptionRpc(
-        command!,
-        recipe.args,
-        subscriptionEnvironment(recipe, profile.directory),
-        profile.workspace,
-        recipe.framing,
-      );
-      await rpc.request('ping', {}, 10000);
-      await rpc.request('globalState.writeKey', {key: 'appTipShown', value: true}, 5000);
-      await rpc.close();
-      const snapshot = profile.snapshot();
-      restored = new RuntimeProfile(dir, recipe.credentialFiles, recipe.settingsFiles, snapshot);
-      profile.close();
-      rpc = new SubscriptionRpc(
-        command!,
-        recipe.args,
-        subscriptionEnvironment(recipe, restored.directory),
-        restored.workspace,
-        recipe.framing,
-      );
-      await rpc.request('ping', {}, 10000);
-      expect((await rpc.request('globalState.load', {}, 5000)).appTipShown).toBe(true);
-    } finally {
-      await rpc?.close();
-      restored?.close();
-      profile.close();
-      rmSync(dir, {recursive: true, force: true});
-    }
-  },
-  30000,
-);
-
 test('two clients cannot race rotating credentials for the same account', async () => {
   const c = await context('long-stream');
   const account = await connect(c, 'codex');
@@ -327,29 +274,7 @@ test('two clients cannot race rotating credentials for the same account', async 
   expect(c.vault.values.size).toBe(0);
 });
 
-test('GitHub subscription errors stay in the sign-in context and never ask for an API key', async () => {
-  const c = await context('reject');
-  const tui = new FutrynTuiApp({client: c.client, cols: 80, rows: 24});
-  await tui.initialize();
-  cleanup.push(() => tui.shutdown());
-  await tui.executeSlashCommand('/login');
-  for (const key of 'copilot') await tui.handleKey(key);
-  await tui.handleKey('Enter');
-  await tui.handleKey('Enter');
-  const deadline = Date.now() + 4000;
-  while (!tui.computeFrameSnapshot().plainText.includes('AUTH:') && Date.now() < deadline) await Bun.sleep(10);
-  const text = tui
-    .computeFrameSnapshot()
-    .plainLines.map(line => line.trim())
-    .join(' ');
-  expect(text).toContain('GitHub sign-in could not be verified.');
-  expect(text).toContain('Try signing in again.');
-  expect(text).not.toContain('API key');
-  expect(text).not.toContain('environment variable');
-  expect(c.app.accounts.list()).toHaveLength(0);
-});
-
-for (const runtime of ['codex', 'copilot'] as const)
+for (const runtime of ['codex'] as const)
   test(`${runtime}: official usage/context/summary events and advertised effort reach a durable session`, async () => {
     const c = await context('telemetry');
     await connect(c, runtime);
@@ -364,7 +289,7 @@ for (const runtime of ['codex', 'copilot'] as const)
     expect(c.client.usage().last?.usage?.cacheReadTokens).toBe(30);
     expect(c.client.usage().costUSD).toBeNull();
     expect(c.client.usage().last?.usage?.quota?.[0]?.usedPercent).toBe(25);
-    expect(c.client.usage().premiumRequests).toBe(runtime === 'copilot' ? 1.5 : null);
+    expect(c.client.usage().premiumRequests).toBeNull();
     expect(c.client.context().lastMeasured?.usedTokens).toBe(120);
     expect(c.client.context().measuredCurrentHistory).toBe(true);
     expect(c.client.context('new draft').measuredCurrentHistory).toBe(false);
@@ -387,28 +312,6 @@ for (const runtime of ['codex', 'copilot'] as const)
     const limits = c.client.limits().find(entry => entry.accountId === accountId)!;
     expect(limits.source).toBe('last-turn');
     expect(limits.items[0]?.usedPercent).toBe(25);
-  });
-
-for (const runtime of ['gemini-cli', 'qwen-code', 'grok-build'] as const)
-  test(`${runtime}: ACP thought chunks stream separately before the answer`, async () => {
-    const c = await context('thought-stream');
-    await connect(c, runtime);
-    let reasoning = '';
-    let answer = '';
-    let thoughtBeforeAnswer = false;
-    for await (const event of c.client.sendMessage('Show available provider thinking')) {
-      if (event.type === 'reasoningDelta') {
-        reasoning += event.text;
-        if (!answer) thoughtBeforeAnswer = true;
-      }
-      if (event.type === 'textDelta') answer += event.text;
-    }
-    expect(thoughtBeforeAnswer).toBe(true);
-    expect(reasoning).toBe('Provider thought continued');
-    expect(answer).toBe('Subscription fixture response');
-    expect(c.client.activeSession()!.messages.some(message => message.content.includes('Provider thought'))).toBe(
-      false,
-    );
   });
 
 test('Codex catalog selects the runnable model slug and excludes hidden entries on first login', async () => {
@@ -818,7 +721,7 @@ test('Codex receives actual project context and source metadata on new and resum
   expect(c.tui.getTranscript().at(-1)!.content).not.toContain('runtime-tmp/');
 });
 
-for (const runtime of ['codex', 'copilot'] as const)
+for (const runtime of ['codex'] as const)
   test(`${runtime}: typing keeps local context separate from the last runtime measurement`, async () => {
     const c = await context('telemetry');
     await connect(c, runtime);

@@ -1,4 +1,4 @@
-import {spawn, type ChildProcessWithoutNullStreams} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {
   FutrynError,
   type InlineToolExecutor,
@@ -45,7 +45,6 @@ interface Login {
   provider: Provider;
   profile: RuntimeProfile;
   rpc?: SubscriptionRpc;
-  child?: ChildProcessWithoutNullStreams;
   openedURL?: string;
   progress: ProviderAuthProgress;
   expires: number;
@@ -109,16 +108,6 @@ export class SubscriptionHost {
       });
       if (!init || typeof init !== 'object') throw new FutrynError('PROTOCOL');
       rpc.notify('initialized');
-    } else if (recipe.runtime === 'copilot') {
-      const result = await rpc.request('ping', {message: 'FUTRYN'});
-      if (!Number.isInteger(result?.protocolVersion)) throw new FutrynError('UNSUPPORTED');
-    } else {
-      const init = await rpc.request('initialize', {
-        protocolVersion: 1,
-        clientInfo: {name: 'futryn', version: '0.1.0'},
-        clientCapabilities: {},
-      });
-      if (init?.protocolVersion !== 1) throw new FutrynError('UNSUPPORTED');
     }
   }
   private authDiagnostic(login: Login, line: string): void {
@@ -128,16 +117,7 @@ export class SubscriptionHost {
       try {
         const url = new URL(link);
         if (
-          [
-            'github.com',
-            'accounts.google.com',
-            'auth.openai.com',
-            'chatgpt.com',
-            'auth.qwen.ai',
-            'chat.qwen.ai',
-            'auth.x.ai',
-            'accounts.x.ai',
-          ].includes(url.hostname) &&
+          ['auth.openai.com', 'chatgpt.com'].includes(url.hostname) &&
           !url.searchParams.has('access_token') &&
           !url.searchParams.has('id_token')
         ) {
@@ -211,55 +191,26 @@ export class SubscriptionHost {
     };
     try {
       const env = subscriptionEnvironment(recipe, profile.directory);
-      if (recipe.runtime === 'copilot') {
-        const child = spawn(executable.command, [...executable.prefix, 'login', '--device-code'], {
-          cwd: profile.workspace,
-          env,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          shell: false,
-        });
-        login.child = child;
-        let remaining = '';
-        const output = (chunk: Buffer) => {
-          remaining = (remaining + chunk.toString('utf8')).slice(-16384);
-          const lines = remaining.split(/[\r\n]/);
-          remaining = lines.pop() ?? '';
-          for (const line of lines) this.authDiagnostic(login, line);
-        };
-        child.stdout.on('data', output);
-        child.stderr.on('data', output);
-        child.on('error', () => fail(new FutrynError('NOT_FOUND')));
-        child.on('exit', code => (code === 0 ? succeed() : fail(new FutrynError('AUTH'))));
-      } else {
-        const rpc = new SubscriptionRpc(
-          executable.command,
-          [...executable.prefix, ...recipe.args],
-          env,
-          profile.workspace,
-          recipe.framing,
-          line => this.authDiagnostic(login, line),
-        );
-        login.rpc = rpc;
-        rpc.onMessage(message => {
-          if (message.method === 'account/login/completed')
-            message.params?.success ? succeed() : fail(new FutrynError('AUTH'));
-          if (message.method?.endsWith('authenticate/update')) {
-            const url = message.params?._meta?.authUri;
-            if (typeof url === 'string') this.authDiagnostic(login, url);
-          }
-          if (message.method === '__closed' && login.progress.state === 'pending') fail(new FutrynError('TRANSPORT'));
-        });
-        await this.initialize(rpc, recipe);
-        if (recipe.runtime === 'codex') {
-          const started = await rpc.request('account/login/start', {type: device ? 'chatgptDeviceCode' : 'chatgpt'});
-          this.authDiagnostic(login, String(started?.authUrl ?? started?.verificationUrl ?? ''));
-          if (typeof started?.userCode === 'string' && /^[A-Z0-9-]{4,32}$/.test(started.userCode))
-            login.progress.userCode = started.userCode;
-          if (typeof started?.loginId !== 'string') throw new FutrynError('PROTOCOL');
-        } else {
-          void rpc.request('authenticate', {methodId: recipe.authMethod}, 600000).then(succeed, fail);
-        }
-      }
+      const rpc = new SubscriptionRpc(
+        executable.command,
+        [...executable.prefix, ...recipe.args],
+        env,
+        profile.workspace,
+        recipe.framing,
+        line => this.authDiagnostic(login, line),
+      );
+      login.rpc = rpc;
+      rpc.onMessage(message => {
+        if (message.method === 'account/login/completed')
+          message.params?.success ? succeed() : fail(new FutrynError('AUTH'));
+        if (message.method === '__closed' && login.progress.state === 'pending') fail(new FutrynError('TRANSPORT'));
+      });
+      await this.initialize(rpc, recipe);
+      const started = await rpc.request('account/login/start', {type: device ? 'chatgptDeviceCode' : 'chatgpt'});
+      this.authDiagnostic(login, String(started?.authUrl ?? started?.verificationUrl ?? ''));
+      if (typeof started?.userCode === 'string' && /^[A-Z0-9-]{4,32}$/.test(started.userCode))
+        login.progress.userCode = started.userCode;
+      if (typeof started?.loginId !== 'string') throw new FutrynError('PROTOCOL');
       if (signal?.aborted) throw new FutrynError('CANCELLED');
       return {
         id,
@@ -319,16 +270,6 @@ export class SubscriptionHost {
     login.reject(new FutrynError('CANCELLED'));
     login.closing = (async () => {
       await login.rpc?.close();
-      if (login.child && login.child.exitCode === null && login.child.signalCode === null) {
-        await new Promise<void>(resolve => {
-          const timer = setTimeout(() => login.child!.kill('SIGKILL'), 500);
-          login.child!.once('exit', () => {
-            clearTimeout(timer);
-            resolve();
-          });
-          login.child!.kill();
-        });
-      }
       login.profile.close();
       this.logins.delete(id);
     })();
@@ -361,14 +302,8 @@ export class SubscriptionHost {
       active.add(rpc);
       this.active.set(account.id, active);
       await this.initialize(rpc, recipe);
-      if (recipe.runtime === 'codex') {
-        const state = await rpc.request('account/read', {refreshToken: true});
-        if (state?.account?.type !== 'chatgpt') throw new FutrynError('AUTH');
-      } else if (recipe.runtime === 'copilot') {
-        const state = await rpc.request('auth.getStatus');
-        if (state?.isAuthenticated !== true) throw new FutrynError('AUTH');
-      } else if (recipe.runtime === 'gemini-cli' || recipe.runtime === 'grok-build')
-        await rpc.request('authenticate', {methodId: recipe.authMethod});
+      const state = await rpc.request('account/read', {refreshToken: true});
+      if (state?.account?.type !== 'chatgpt') throw new FutrynError('AUTH');
       this.assertAccount(account);
       return {profile, rpc, recipe, lease, cwd: profile.workspace};
     } catch (error) {
@@ -399,36 +334,19 @@ export class SubscriptionHost {
       this.leases.release(account.id, connection.lease);
     }
   }
-  private acpModels(result: any): ModelInfo[] {
-    const models =
-      result?.models?.availableModels ??
-      result?._meta?.models?.availableModels ??
-      result?._meta?.modelState?.availableModels;
-    if (Array.isArray(models) && models.length <= 10000) return models.map(m => normalizeModel(m.modelId, m.name));
-    const option = result?.configOptions?.find((o: any) => o.category === 'model' || o.id === 'model');
-    if (Array.isArray(option?.options)) return option.options.map((m: any) => normalizeModel(m.value, m.name));
-    throw new FutrynError('PROTOCOL');
-  }
-  private runtimeModel(raw: any, runtime: 'codex' | 'copilot'): ModelInfo {
+  private runtimeModel(raw: any): ModelInfo {
     // Codex exposes a catalog entry id separately from the model slug accepted by turns.
-    const model = normalizeModel(runtime === 'codex' ? (raw.model ?? raw.id) : raw.id, raw.displayName ?? raw.name);
+    const model = normalizeModel(raw.model ?? raw.id, raw.displayName ?? raw.name);
     const efforts = raw.supportedReasoningEfforts;
     if (Array.isArray(efforts) && efforts.length <= 20) {
-      const values = efforts.map((entry: any) => (runtime === 'codex' ? entry.reasoningEffort : entry));
+      const values = efforts.map((entry: any) => entry.reasoningEffort);
       if (values.every((value: unknown) => typeof value === 'string' && value.length > 0 && value.length <= 40))
         model.reasoningEfforts = values;
       if (model.reasoningEfforts?.length) model.capabilities.reasoning = 'supported';
     }
     if (typeof raw.defaultReasoningEffort === 'string' && model.reasoningEfforts?.includes(raw.defaultReasoningEffort))
       model.defaultReasoningEffort = raw.defaultReasoningEffort;
-    const limits = raw.capabilities?.limits;
-    if (runtime === 'copilot' && limits) {
-      if (Number.isInteger(limits.max_context_window_tokens) && limits.max_context_window_tokens > 0)
-        model.contextLimit = limits.max_context_window_tokens;
-      if (Number.isInteger(limits.max_output_tokens) && limits.max_output_tokens > 0)
-        model.outputLimit = limits.max_output_tokens;
-    }
-    model.metadataSource = runtime + ':model/list';
+    model.metadataSource = 'codex:model/list';
     model.metadataFetchedAt = model.fetchedAt;
     return model;
   }
@@ -440,21 +358,11 @@ export class SubscriptionHost {
     signal?.addEventListener('abort', abort, {once: true});
     try {
       if (signal?.aborted) throw new FutrynError('CANCELLED');
-      let models: ModelInfo[];
-      if (connection.recipe.runtime === 'codex') {
-        const result = await connection.rpc.request('model/list', {limit: 100});
-        if (!Array.isArray(result?.data) || result.nextCursor) throw new FutrynError('PROTOCOL');
-        models = result.data.filter((m: any) => m.hidden !== true).map((m: any) => this.runtimeModel(m, 'codex'));
-      } else if (connection.recipe.runtime === 'copilot') {
-        const result = await connection.rpc.request('models.list');
-        const list = result?.models ?? result;
-        if (!Array.isArray(list)) throw new FutrynError('PROTOCOL');
-        models = list.map(m => this.runtimeModel(m, 'copilot'));
-      } else {
-        models = this.acpModels(
-          await connection.rpc.request('session/new', {cwd: connection.profile.workspace, mcpServers: []}),
-        );
-      }
+      const result = await connection.rpc.request('model/list', {limit: 100});
+      if (!Array.isArray(result?.data) || result.nextCursor) throw new FutrynError('PROTOCOL');
+      const models: ModelInfo[] = result.data
+        .filter((m: any) => m.hidden !== true)
+        .map((m: any) => this.runtimeModel(m));
       this.assertAccount(account);
       if (!models.length) throw new FutrynError('NOT_FOUND');
       return models;
@@ -493,7 +401,6 @@ export class SubscriptionHost {
       executeTool,
       workspaceRoot,
       assertAccount: a => this.assertAccount(a),
-      acpModels: session => this.acpModels(session),
     });
     turn.attach();
     try {

@@ -15,7 +15,7 @@ export const modelIdSchema = z
   .min(1)
   .max(200)
   .regex(/^[\w~./:@+-]+$/);
-export const subscriptionRuntimeSchema = z.enum(['codex', 'copilot', 'gemini-cli', 'qwen-code', 'grok-build']);
+export const subscriptionRuntimeSchema = z.enum(['codex']);
 export type SubscriptionRuntime = z.infer<typeof subscriptionRuntimeSchema>;
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
 export const providerSchema = z.strictObject({
