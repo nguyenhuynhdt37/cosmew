@@ -17,6 +17,8 @@ const text = (value: unknown): string =>
 export function renderNotebook(
   raw: string,
   path: string,
+  /** Structural and secret check of an output image before it is attached (W1.5 security review). */
+  acceptImage: (data: string, mime: 'image/png' | 'image/jpeg') => boolean = () => true,
 ): {ok: true; text: string; attachments: Attachment[]} | {ok: false} {
   let notebook: {cells?: unknown};
   try {
@@ -58,12 +60,13 @@ export function renderNotebook(
           if (
             attachments.length < MAX_IMAGES &&
             attachedBytes + bytes <= MAX_ATTACHMENT_BYTES &&
-            /^[A-Za-z0-9+/]*={0,2}$/.test(data)
+            /^[A-Za-z0-9+/]*={0,2}$/.test(data) &&
+            acceptImage(data, image)
           ) {
             attachedBytes += bytes;
             attachments.push({mime: image, data, name: `${path}#cell-${index + 1}-output-${attachments.length + 1}`});
             lines.push(`  [output image ${image} attached]`);
-          } else lines.push(`  [output image ${image} omitted: attachment limit]`);
+          } else lines.push(`  [output image ${image} omitted: attachment limit, invalid image or secret]`);
         } else if (out.data['text/plain'] !== undefined) lines.push(...prefixed(text(out.data['text/plain'])));
       }
     }

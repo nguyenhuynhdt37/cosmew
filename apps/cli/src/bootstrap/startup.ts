@@ -21,7 +21,7 @@ import {
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
-import {ProjectContextLoader, WorkspaceDenied, WorkspaceRoot} from '@futryn/workspace';
+import {ProjectContextLoader, WorkspaceDenied, WorkspaceRoot, nestedLabel} from '@futryn/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -476,7 +476,9 @@ export function startup(
             const read = await tools().readInstruction(`${scope}/${name}`, budget, signal);
             if (read.status !== 'ok') continue;
             budget -= Buffer.byteLength(read.content);
-            blocks.push(`--- ${scope}/${name}${read.truncated ? ' (truncated)' : ''} ---\n${read.content}`);
+            blocks.push(
+              `--- ${nestedLabel(`${scope}/${name}`)}${read.truncated ? ' (truncated)' : ''} ---\n${read.content}`,
+            );
             break;
           }
         }

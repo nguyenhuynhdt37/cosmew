@@ -5,7 +5,14 @@ import type {Attachment} from '@futryn/contracts';
 import {evaluateRead} from '@futryn/security';
 import {WorkspaceDenied, looksBinary, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
 import {LIMITS, clipBytes} from '../limits';
-import {MAX_ATTACHMENT_BYTES, MEDIA_SNIFF_BYTES, mediaSummary, sniffMedia} from './read-media';
+import {
+  MAX_ATTACHMENT_BYTES,
+  MEDIA_SNIFF_BYTES,
+  containsRegisteredSecret,
+  mediaSummary,
+  sniffMedia,
+  validMedia,
+} from './read-media';
 import {renderNotebook} from './read-notebook';
 
 export const readInput = z.strictObject({
@@ -47,13 +54,14 @@ export const readDescriptor = {
 
 export type ReadOutcome =
   | {ok: true; content: string; truncated: boolean; bytes?: Uint8Array; attachments?: Attachment[]}
-  | {ok: false; code: 'BINARY_FILE' | 'FILE_TOO_LARGE' | 'INVALID_INPUT'; message?: string};
+  | {ok: false; code: 'BINARY_FILE' | 'FILE_TOO_LARGE' | 'INVALID_INPUT' | 'SECRET_IN_MEDIA'; message?: string};
 
 export function runRead(
   workspace: WorkspaceRoot,
   file: ResolvedPath,
   input: z.infer<typeof readInput>,
   stateDirectory?: string,
+  redact: (text: string) => string = text => text,
 ): ReadOutcome {
   if (file.kind === 'directory') return listDirectory(file, input, stateDirectory);
   const head = workspace.readBytes(file, MEDIA_SNIFF_BYTES);
@@ -63,12 +71,21 @@ export function runRead(
       return {ok: false, code: 'FILE_TOO_LARGE', message: `${file.relative} is larger than 20 MiB and was not read.`};
     const {bytes} = workspace.readBytes(file, MAX_ATTACHMENT_BYTES);
     // The file may have changed between the two reads; the attachment is what was actually read.
-    if (sniffMedia(bytes) !== media) return {ok: false, code: 'BINARY_FILE'};
+    // A file that only starts like media is binary; media holding a registered secret is refused.
+    if (sniffMedia(bytes) !== media || !validMedia(bytes, media)) return {ok: false, code: 'BINARY_FILE'};
+    if (containsRegisteredSecret(bytes, redact))
+      return {
+        ok: false,
+        code: 'SECRET_IN_MEDIA',
+        message: `${file.relative} contains a registered secret and was not attached.`,
+      };
     return {
       ok: true,
       content: mediaSummary(file.relative, media, bytes.byteLength),
       truncated: false,
-      attachments: [{mime: media, data: Buffer.from(bytes).toString('base64'), name: basename(file.relative)}],
+      attachments: [
+        {mime: media, data: Buffer.from(bytes).toString('base64'), name: redact(basename(file.relative)).slice(0, 256)},
+      ],
     };
   }
   const {bytes, size} = workspace.readBytes(file, LIMITS.readFileBytes);
@@ -76,7 +93,10 @@ export function runRead(
   if (looksBinary(bytes)) return {ok: false, code: 'BINARY_FILE'};
   const decoded = new TextDecoder().decode(bytes);
   if (extname(file.relative).toLowerCase() === '.ipynb') {
-    const notebook = renderNotebook(decoded, file.relative);
+    const notebook = renderNotebook(decoded, file.relative, (data, mime) => {
+      const raw = Buffer.from(data, 'base64');
+      return validMedia(raw, mime) && !containsRegisteredSecret(raw, redact);
+    });
     if (notebook.ok) {
       const page = pageLines(notebook.text, input);
       return {...page, bytes, ...(notebook.attachments.length ? {attachments: notebook.attachments} : {})};

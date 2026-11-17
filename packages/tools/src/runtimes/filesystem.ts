@@ -16,11 +16,13 @@ export class FileSystemRuntime {
   constructor(
     private readonly options: Pick<
       ToolDispatcherOptions,
-      'workspace' | 'stateDirectory' | 'searchDeadlineMs' | 'ripgrep'
+      'workspace' | 'stateDirectory' | 'searchDeadlineMs' | 'ripgrep' | 'redact'
     >,
   ) {}
   read(file: ResolvedPath, input: z.infer<typeof readInput>) {
-    const outcome = runRead(this.options.workspace, file, input, this.options.stateDirectory);
+    const outcome = runRead(this.options.workspace, file, input, this.options.stateDirectory, text =>
+      this.options.redact(text),
+    );
     if (outcome.ok && outcome.bytes) this.ledger.recordBytes(file.relative, outcome.bytes);
     return outcome;
   }

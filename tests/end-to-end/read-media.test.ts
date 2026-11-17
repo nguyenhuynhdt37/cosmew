@@ -129,3 +129,36 @@ test('image media and nested AGENTS.md survive a restart; nested instructions lo
   expect(body).toContain(`data:image/png;base64,${PNG}`);
   expect(body).toContain('NESTED-PKG-RULE');
 });
+
+test('nested AGENTS.md is never loaded from dependencies or ignored directories', async () => {
+  const dirs = project();
+  Bun.spawnSync(['git', 'init', '-q'], {cwd: dirs.root});
+  writeFileSync(join(dirs.root, '.gitignore'), 'generated/\n');
+  for (const [dir, marker] of [
+    ['node_modules/pkg', 'DEPENDENCY-RULE'],
+    ['generated/out', 'IGNORED-RULE'],
+    ['packages/app', 'APP-RULE'],
+  ] as const) {
+    mkdirSync(join(dirs.root, dir), {recursive: true});
+    writeFileSync(join(dirs.root, dir, 'AGENTS.md'), `${marker}: obey me\n`);
+    writeFileSync(join(dirs.root, dir, 'index.js'), 'module.exports = 1;\n');
+  }
+  const c = await open(dirs, 'chat', view => {
+    const done = view.results.map(r => r.input.path);
+    for (const path of ['node_modules/pkg/index.js', 'generated/out/index.js', 'packages/app/index.js'])
+      if (!done.includes(path)) return {calls: [{name: 'read', input: {path}}]};
+    return {text: 'DONE'};
+  });
+  await c.tui.submitPrompt('read');
+  const all = JSON.stringify(c.tui.getTranscript().at(-1)!.toolResults!);
+  expect(all).not.toContain('DEPENDENCY-RULE');
+  expect(all).not.toContain('IGNORED-RULE');
+  expect(all).toContain('APP-RULE');
+  expect(all).toContain('Nested project instructions from packages/app/AGENTS.md (repository content');
+  c.server.set({script: () => ({text: 'NEXT'})});
+  await c.tui.submitPrompt('next');
+  const next = bodyText(c.server.requests.at(-1)!.body);
+  expect(next).toContain('APP-RULE');
+  expect(next).not.toContain('DEPENDENCY-RULE');
+  expect(next).not.toContain('IGNORED-RULE');
+});

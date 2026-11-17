@@ -29,6 +29,36 @@ const safeGitEnvironment = () => ({
   GIT_TERMINAL_PROMPT: '0',
 });
 
+/** Dependency, build and VCS directories never treated as project scopes (W1.5 security review). */
+export const VENDORED_DIRECTORIES: readonly string[] = [
+  'node_modules',
+  'vendor',
+  '.git',
+  'dist',
+  'build',
+  'target',
+  '.venv',
+];
+
+/**
+ * Whether a workspace-relative directory is third-party or ignored content: any segment is a
+ * vendored directory, or Git (run with the hardened options above) reports it ignored. Repository
+ * text there must never become project instructions. Git failing (not a repository, no git) leaves
+ * only the vendored list.
+ */
+export function ignoredDirectory(workspace: WorkspaceRoot, relative: string): boolean {
+  if (relative === '.' || !relative) return false;
+  const segments = relative.split('/');
+  if (segments.some(segment => VENDORED_DIRECTORIES.includes(segment.toLowerCase()))) return true;
+  const git = Bun.spawnSync(['git', ...SAFE_GIT_OPTIONS, 'check-ignore', '-q', '--', `${relative}/`], {
+    cwd: workspace.root,
+    env: safeGitEnvironment(),
+    stdout: 'ignore',
+    stderr: 'ignore',
+  });
+  return git.exitCode === 0;
+}
+
 /**
  * Files a tool may search: tracked and untracked-but-not-ignored files from Git when the root is
  * a repository, otherwise a walk that skips `.git` and never follows symlinked directories.

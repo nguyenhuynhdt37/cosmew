@@ -20,6 +20,7 @@ import {toModelMessages} from '../../packages/models/src/adapter';
 /** ADR 0041: read of directories, tails, media, notebooks and did-you-mean, under the read policy. */
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+const REGISTERED_SECRET = 'sk-registered-secret-0001';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const fn of cleanup.splice(0)) fn();
@@ -45,7 +46,7 @@ function setup() {
       asked.push(request);
       return 'deny';
     },
-    redact: text => text,
+    redact: text => text.replaceAll(REGISTERED_SECRET, '[REDACTED]'),
   });
   const read = (input: unknown) => dispatcher.invoke({id: crypto.randomUUID(), name: 'read', input});
   return {base, root, asked, read};
@@ -101,7 +102,7 @@ test('images and PDFs are detected by bytes and returned as attachments; 20 MiB 
   expect(image.attachments).toEqual([{mime: 'image/png', data: PNG, name: 'logo.bin'}]);
   expect(image.content).toContain('image/png');
   expect(image.content).not.toContain(PNG);
-  writeFileSync(join(s.root, 'doc.pdf'), '%PDF-1.4\n%fixture\n');
+  writeFileSync(join(s.root, 'doc.pdf'), '%PDF-1.4\n%fixture\n%%EOF\n');
   expect((await s.read({path: 'doc.pdf'})).attachments?.[0]?.mime).toBe('application/pdf');
   // A PNG name with text content is text, not media.
   writeFileSync(join(s.root, 'fake.png'), 'not an image\n');
@@ -172,4 +173,55 @@ test('a model known to lack vision gets a note, never the media; OpenAI chat dro
   expect(JSON.stringify(chat[2])).toContain('PDF attachment(s) not sent');
   expect(JSON.stringify(chat[3])).toContain(PNG);
   expect(JSON.stringify(chat[3])).not.toContain('JVBERi0=');
+});
+
+test('media is validated and scanned: malformed media is binary, a registered secret is refused, names are redacted', async () => {
+  const s = setup();
+  const png = Buffer.from(PNG, 'base64');
+  // Signature only: not an image.
+  writeFileSync(
+    join(s.root, 'fake.bin'),
+    Buffer.concat([png.subarray(0, 8), Buffer.from('junk junk junk junk junk junk')]),
+  );
+  const fake = await s.read({path: 'fake.bin'});
+  expect(fake.code).toBe('BINARY_FILE');
+  expect(fake.attachments).toBeUndefined();
+  // A real PNG carrying a registered secret after IEND is refused, nothing attached.
+  writeFileSync(join(s.root, 'leak.png'), Buffer.concat([png, Buffer.from(REGISTERED_SECRET)]));
+  const leak = await s.read({path: 'leak.png'});
+  expect(leak.code).toBe('SECRET_IN_MEDIA');
+  expect(leak.attachments).toBeUndefined();
+  expect(JSON.stringify(leak)).not.toContain(REGISTERED_SECRET);
+  // A PDF without a trailer is binary.
+  writeFileSync(join(s.root, 'cut.pdf'), '%PDF-1.4\nno trailer');
+  expect((await s.read({path: 'cut.pdf'})).code).toBe('BINARY_FILE');
+  // The attachment name passes through redaction.
+  writeFileSync(join(s.root, `${REGISTERED_SECRET}.png`), png);
+  const named = await s.read({path: `${REGISTERED_SECRET}.png`});
+  expect(named.attachments?.[0]?.name).toBe('[REDACTED].png');
+  // A normal image still attaches.
+  writeFileSync(join(s.root, 'ok.png'), png);
+  expect((await s.read({path: 'ok.png'})).attachments?.[0]?.data).toBe(PNG);
+  // Notebook output images get the same checks.
+  writeFileSync(
+    join(s.root, 'leak.ipynb'),
+    JSON.stringify({
+      cells: [
+        {
+          cell_type: 'code',
+          source: 'x',
+          outputs: [
+            {
+              output_type: 'display_data',
+              data: {'image/png': Buffer.concat([png, Buffer.from(REGISTERED_SECRET)]).toString('base64')},
+            },
+            {output_type: 'display_data', data: {'image/png': Buffer.from('not an image at all').toString('base64')}},
+          ],
+        },
+      ],
+    }),
+  );
+  const notebook = await s.read({path: 'leak.ipynb'});
+  expect(notebook.attachments).toBeUndefined();
+  expect(notebook.content).toContain('omitted');
 });
