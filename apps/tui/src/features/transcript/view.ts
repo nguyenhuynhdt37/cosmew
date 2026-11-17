@@ -402,6 +402,8 @@ const TOOL_NAMES: Record<string, string> = {
   write: 'Write',
   update_plan: 'Plan',
   request_user_input: 'Ask',
+  lsp: 'LSP',
+  lsp_rename: 'Rename',
   request_permissions: 'Permissions',
 };
 
@@ -412,6 +414,10 @@ function stateToolArgs(call: ToolCall): string | undefined {
     const plan = Array.isArray(input?.plan) ? (input.plan as {status?: unknown}[]) : [];
     const done = plan.filter(item => item.status === 'completed').length;
     return `${done}/${plan.length} completed`;
+  }
+  if (call.name === 'lsp') {
+    const where = input?.line ? `${String(input.path ?? '')}:${String(input.line)}` : String(input?.path ?? '');
+    return `${String(input?.operation ?? '')} ${input?.query ? JSON.stringify(input.query) : where}`.trim();
   }
   if (call.name === 'request_user_input') {
     const questions = Array.isArray(input?.questions) ? (input.questions as {header?: unknown}[]) : [];
@@ -803,6 +809,7 @@ function renderPatchCell(options: {
         remaining?: unknown[];
         createdDirectories?: unknown[];
         failureCode?: unknown;
+        diagnostics?: unknown[];
       }
     | undefined;
   try {
@@ -885,6 +892,13 @@ function renderPatchCell(options: {
       }),
     ),
   );
+  if (result?.status === 'ok' && Array.isArray(receipt?.diagnostics)) {
+    for (const diagnostic of receipt.diagnostics.slice(0, 100)) {
+      if (typeof diagnostic !== 'string') continue;
+      for (const text of wrapTextToWidth(clean(diagnostic), Math.max(8, width - 4)))
+        lines.push({spans: [{text: '    ' + text, fg: tokens.error, bg}]});
+    }
+  }
   if (options.showDiff && effectsAllowed) {
     for (const change of changes) {
       if (typeof change.diff !== 'string') continue;

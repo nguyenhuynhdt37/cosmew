@@ -51,7 +51,7 @@ function explorer(view: ScriptedView): ScriptedReply {
 }
 
 /** exec_command is offered only where its OS sandbox is verified (ADR 0022). */
-const OFFERED = ['read', 'glob', 'grep', 'apply_patch', 'edit', 'write', 'update_plan'];
+const OFFERED = ['read', 'glob', 'grep', 'apply_patch', 'edit', 'write', 'update_plan', 'web_search', 'web_fetch'];
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -145,7 +145,8 @@ for (const protocol of ['chat', 'anthropic'] as const)
     // Host guidance sits in the system channel of every round and holds no repository text.
     for (const view of views) {
       expect(view.system).toContain('Investigate progressively');
-      expect(view.system).not.toContain('at most');
+      expect(view.system).not.toContain('The user set a work budget for this turn');
+      expect(view.system).not.toMatch(/at most \d+ (?:tool calls|request rounds)/);
       expect(view.system).toContain('Keep working with tools');
       expect(view.system).not.toContain('verifyToken');
     }
@@ -356,7 +357,17 @@ for (const protocol of ['chat', 'anthropic'] as const)
     expect(results.map(r => r.name)).toEqual(calls.map(c => c.name));
     expect(results.every(r => r.status === 'ok')).toBe(true);
     for (const view of c.views()) {
-      expect(view.tools).toEqual(['read', 'glob', 'grep', 'apply_patch', 'edit', 'write', 'update_plan']);
+      expect(view.tools).toEqual([
+        'read',
+        'glob',
+        'grep',
+        'apply_patch',
+        'edit',
+        'write',
+        'update_plan',
+        'web_search',
+        'web_fetch',
+      ]);
       expect(view.orphanResults).toBe(0);
       expect(view.unansweredCalls).toBe(0);
     }

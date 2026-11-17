@@ -477,3 +477,28 @@ test('resumed stdin completion retains its real exit and historical running sess
   expect(summary.state).toBe('stopped');
   expect(summary.note).toContain('not restored');
 });
+
+test('successful file edits show only returned language-server diagnostics below the edit', () => {
+  const item: TranscriptItem = {
+    id: 'diagnostic',
+    role: 'assistant',
+    content: '',
+    toolCalls: [call('edit-diag', 'edit', {path: 'a.ts', old_string: 'one', new_string: 'two'})],
+    toolResults: [
+      ok(
+        'edit-diag',
+        'edit',
+        JSON.stringify({
+          changes: [{path: 'a.ts', action: 'update', diff: ''}],
+          diagnostics: ['a.ts:1:1: error: new type error'],
+        }),
+      ),
+    ],
+  };
+  const rows = plain(item).join('\n');
+  expect(rows).toContain('new type error');
+  const rendered = renderTranscriptMessages({items: [item], width: 80, tokens, borderStyle: 'rounded'});
+  expect(
+    rendered.some(line => line.spans.some(span => span.text.includes('new type error') && span.fg === tokens.error)),
+  ).toBe(true);
+});

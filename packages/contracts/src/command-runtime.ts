@@ -82,6 +82,19 @@ export interface CommandSessionInfo {
  * launches an already-approved command under its OS sandbox. `id` changes whenever the runtime's
  * fixed policy changes, so approvals bound to it cannot carry over to a different sandbox.
  */
+/**
+ * A long-lived helper process (a language server, ADR 0043) started by the command runtime inside
+ * its OS sandbox: read-only workspace, no network, private HOME/TMPDIR. Raw stdio, no PTY.
+ */
+export interface ServiceProcess {
+  readonly pid: number | undefined;
+  write(data: Uint8Array): void;
+  onData(listener: (chunk: Uint8Array) => void): void;
+  onExit(listener: (code: number | null) => void): void;
+  /** Stop the process group (SIGTERM, then SIGKILL). */
+  kill(): void;
+}
+
 export interface CommandRuntime {
   readonly id: string;
   /** Human description shown in the approval prompt. */
@@ -100,6 +113,11 @@ export interface CommandRuntime {
   ): Promise<CommandOutcome>;
   /** Resize an owned PTY session; refused for pipe sessions. */
   resize?(id: string, cols: number, rows: number): void;
+  /**
+   * Start a sandboxed helper process (ADR 0043): always read-only and without network; `cwd` must
+   * be a workspace directory. Undefined on runtimes without a native sandbox.
+   */
+  spawnService?(argv: string[], cwd: string): ServiceProcess;
   /** Close admission and settle owned runs; this does not certify descendant containment. */
   shutdown?(): Promise<void>;
 }

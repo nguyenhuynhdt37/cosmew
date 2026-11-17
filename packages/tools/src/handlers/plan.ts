@@ -71,8 +71,12 @@ export function planHandler(options: ToolDispatcherOptions): ToolHandler {
       if (parsed.data.plan.filter(item => item.status === 'in_progress').length > 1)
         return refuse('At most one step can be in_progress at a time. The plan was not changed.');
       const plan: PlanState = {
-        ...(parsed.data.explanation ? {explanation: parsed.data.explanation} : {}),
-        items: parsed.data.plan,
+        ...(parsed.data.explanation ? {explanation: options.redact(parsed.data.explanation)} : {}),
+        items: parsed.data.plan.map(item => ({
+          ...item,
+          step: options.redact(item.step),
+          ...(item.activeForm ? {activeForm: options.redact(item.activeForm)} : {}),
+        })),
         updatedAt: new Date().toISOString(),
       };
       return {

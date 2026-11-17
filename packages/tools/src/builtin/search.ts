@@ -1,7 +1,7 @@
 import {lstatSync} from 'node:fs';
 import {join} from 'node:path';
 import {z} from 'zod';
-import {evaluateRead} from '@futryn/security';
+import {readDecision, type ToolDispatcherOptions} from '../context';
 import {listWorkspaceFiles, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
 import {LIMITS, clipBytes} from '../limits';
 import type {FileHits, GrepQuery} from './ripgrep';
@@ -173,11 +173,14 @@ export function runGlob(
   base: ResolvedPath,
   input: z.infer<typeof globInput>,
   stateDirectory?: string,
+  readPolicy?: ToolDispatcherOptions['readPolicy'],
 ): {content: string; truncated: boolean} {
   const {files, incomplete} = candidateFiles(workspace, base, input.pattern ?? '**/*', Date.now() + LIMITS.deadlineMs);
   const visible = newestFirst(
     workspace.root,
-    files.filter(path => evaluateRead(path, `${workspace.root}/${path}`, {stateDirectory}).effect !== 'deny'),
+    files.filter(
+      path => readDecision({stateDirectory, readPolicy}, path, `${workspace.root}/${path}`).effect !== 'deny',
+    ),
   );
   const shown = visible.slice(0, LIMITS.results);
   const truncated = visible.length > shown.length || incomplete;

@@ -1,5 +1,5 @@
 import {isAbsolute, relative} from 'node:path';
-import {evaluateRead} from '@futryn/security';
+import {readDecision, type ToolDispatcherOptions} from '../context';
 import type {ResolvedPath, WorkspaceRoot} from '@futryn/workspace';
 import {FutrynError} from '@futryn/contracts';
 import {LIMITS} from '../limits';
@@ -154,6 +154,7 @@ export function visibleHits(
   hits: FileHits[],
   stateDirectory: string | undefined,
   filter?: {glob: string; base: string},
+  readPolicy?: ToolDispatcherOptions['readPolicy'],
 ): {files: FileHits[]; skippedSecret: number} {
   const files: FileHits[] = [];
   const glob = filter ? new Bun.Glob(filter.glob) : null;
@@ -169,7 +170,7 @@ export function visibleHits(
       continue;
     }
     if (file.kind !== 'file') continue;
-    const decision = evaluateRead(file.relative, file.absolute, {stateDirectory});
+    const decision = readDecision({stateDirectory, readPolicy}, file.relative, file.absolute);
     if (decision.effect === 'ask') skippedSecret++;
     if (decision.effect !== 'allow') continue;
     files.push({...hit, path: file.relative});
@@ -183,6 +184,7 @@ export async function ripgrepSearch(options: {
   base: ResolvedPath;
   query: GrepQuery;
   stateDirectory?: string;
+  readPolicy?: ToolDispatcherOptions['readPolicy'];
   deadline: number;
   signal?: AbortSignal;
 }): Promise<{files: FileHits[]; skippedSecret: number; cut: boolean} | {error: string}> {
@@ -201,6 +203,7 @@ export async function ripgrepSearch(options: {
     parseHits(stdout, options.query.mode),
     options.stateDirectory,
     options.query.glob ? {glob: options.query.glob, base: options.base.relative} : undefined,
+    options.readPolicy,
   );
   return {files, skippedSecret, cut};
 }

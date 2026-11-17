@@ -9,9 +9,11 @@ import {
 } from '@futryn/contracts';
 import {classifyCommand, commandText, evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
 import {ensureShellParser, shellParsers} from './exec/shell-parse';
+import {toCodePointColumn, type LspDiagnostic} from '@futryn/code-intel';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {
   commandGrantTarget,
+  readDecision,
   effectiveSandboxMode,
   networkGranted,
   PERMISSION_GRANT,
@@ -58,6 +60,10 @@ export class ToolOrchestrator {
       const clipped = clipBytes(this.options.redact(result.content), 60000);
       const final = toolResultSchema.parse({
         ...result,
+        ...(result.target ? {target: this.options.redact(result.target)} : {}),
+        ...(result.attachments
+          ? {attachments: result.attachments.map(a => ({...a, ...(a.name ? {name: this.options.redact(a.name)} : {})}))}
+          : {}),
         content: clipped.text,
         truncated: result.truncated || clipped.clipped || undefined,
         callId: call.id,
@@ -78,13 +84,38 @@ export class ToolOrchestrator {
     try {
       const resolved = this.router.resolve(call.name);
       if (!('handler' in resolved)) return finish(resolved);
-      const prepared = resolved.handler.prepare(call.input);
-      if (!('kind' in prepared)) {
-        if (prepared.status === 'denied')
+      let prepared = resolved.handler.prepare(call.input);
+      // A tool that must ask a helper (language server) before it knows its effect resolves first;
+      // what it resolves to then goes through the same validation, policy and approval (ADR 0043).
+      if ('kind' in prepared && prepared.kind === 'deferred') {
+        const read = await this.authorizeRead(call.name, prepared.file, audit, signal);
+        if (read.gate) return finish(read.gate);
+        signal?.throwIfAborted();
+        const denied = this.revalidateRead(prepared.file, read.viaSession, audit);
+        if (denied) return finish(denied);
+        const current = this.router.resolve(call.name);
+        if (!('handler' in current) || current.handler !== resolved.handler)
+          return finish({status: 'denied', code: 'DENIED', content: 'The tool registration changed before execution.'});
+        prepared = await prepared.resolve(signal);
+      }
+      signal?.throwIfAborted();
+      if (!('kind' in prepared) || prepared.kind === 'deferred') {
+        if (!('kind' in prepared) && prepared.status === 'denied')
           audit({target: null, phase: 'decided', decision: 'deny', reason: 'write-boundary'});
+        if ('kind' in prepared)
+          return finish({status: 'error', code: 'INVALID_STATE', content: 'The tool did not resolve.'});
         return finish(prepared);
       }
       if (prepared.kind === 'permissions') return finish(await this.grantPermissions(prepared, audit, signal));
+      if (prepared.kind === 'web-fetch') {
+        prepared.authorize = async (url, fetchSignal) => {
+          const gate = await this.authorizeWeb(call.name, url, false, audit, fetchSignal);
+          if (gate.gate) return false;
+          fetchSignal?.throwIfAborted();
+          const route = this.router.resolve(call.name);
+          return 'handler' in route && route.handler === resolved.handler;
+        };
+      }
       const authorization =
         prepared.kind === 'patch'
           ? await this.authorizePatch(call.name, prepared, audit, signal)
@@ -92,9 +123,13 @@ export class ToolOrchestrator {
             ? await this.authorizeCommand(prepared, audit, signal)
             : prepared.kind === 'read'
               ? await this.authorizeRead(call.name, prepared.file, audit, signal)
-              : prepared.kind === 'state' || prepared.kind === 'question'
-                ? this.authorizeState(audit, prepared.kind)
-                : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
+              : prepared.kind === 'web-search'
+                ? await this.authorizeWeb(call.name, prepared.target, true, audit, signal)
+                : prepared.kind === 'web-fetch'
+                  ? {gate: null, viaSession: false}
+                  : prepared.kind === 'state' || prepared.kind === 'question'
+                    ? this.authorizeState(audit, prepared.kind)
+                    : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
@@ -123,23 +158,25 @@ export class ToolOrchestrator {
       const raw = {stdout: '', stderr: ''},
         sent = {stdout: 0, stderr: 0};
       let streamed = 0;
-      return finish(
-        await prepared.execute(
-          signal,
-          onOutput
-            ? chunk => {
-                if (streamed >= 56000) return;
-                const text = chunk.text.slice(0, 56000 - streamed);
-                streamed += text.length;
-                raw[chunk.stream] += text;
-                const safe = plainTerminalText(this.options.redact(raw[chunk.stream], true));
-                const delta = safe.slice(sent[chunk.stream]);
-                sent[chunk.stream] = safe.length;
-                if (delta) onOutput({stream: chunk.stream, text: delta});
-              }
-            : undefined,
-        ),
+      // Errors the language server already knew before a write (ADR 0043): only new ones are reported.
+      const before = prepared.kind === 'patch' ? this.knownErrors(prepared.plan) : undefined;
+      const output = await prepared.execute(
+        signal,
+        onOutput
+          ? chunk => {
+              if (streamed >= 56000) return;
+              const text = chunk.text.slice(0, 56000 - streamed);
+              streamed += text.length;
+              raw[chunk.stream] += text;
+              const safe = plainTerminalText(this.options.redact(raw[chunk.stream], true));
+              const delta = safe.slice(sent[chunk.stream]);
+              sent[chunk.stream] = safe.length;
+              if (delta) onOutput({stream: chunk.stream, text: delta});
+            }
+          : undefined,
       );
+      if (prepared.kind === 'patch' && before) return finish(await this.withDiagnostics(output, before, signal));
+      return finish(output);
     } catch (error) {
       if (signal?.aborted || (error instanceof FutrynError && error.code === 'CANCELLED')) {
         audit({target: null, phase: 'completed', outcome: 'error', code: 'CANCELLED'});
@@ -225,7 +262,7 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
     allowPrompt = true,
   ): Promise<Authorization> {
-    const decision = evaluateRead(file.relative, file.absolute, {stateDirectory: this.options.stateDirectory});
+    const decision = readDecision(this.options, file.relative, file.absolute);
     return this.permission(
       decision,
       {tool, capability: 'fs.read', target: file.relative, reason: decision.reason},
@@ -241,7 +278,7 @@ export class ToolOrchestrator {
 
   revalidateRead(file: ResolvedPath, viaSession: boolean, audit: Audit, allowPrompt = true): ToolOutput | null {
     const again = this.options.workspace.resolve(file.relative);
-    const current = evaluateRead(again.relative, again.absolute, {stateDirectory: this.options.stateDirectory});
+    const current = readDecision(this.options, again.relative, again.absolute);
     if (
       again.absolute !== file.absolute ||
       again.kind !== file.kind ||
@@ -259,16 +296,109 @@ export class ToolOrchestrator {
     return null;
   }
 
+  private knownErrors(plan: Extract<PreparedTool, {kind: 'patch'}>['plan']) {
+    const lsp = this.options.codeIntel;
+    if (!lsp?.available()) return undefined;
+    const known = new Map<string, LspDiagnostic[] | undefined>();
+    for (const change of plan.changes) {
+      if (change.after === null) continue;
+      try {
+        const file = this.options.workspace.resolve(change.snapshot.path);
+        if (readDecision(this.options, file.relative, file.absolute).effect !== 'allow') continue;
+        known.set(change.snapshot.path, lsp.knownErrors(file));
+      } catch {
+        known.set(change.snapshot.path, undefined);
+      }
+    }
+    return known;
+  }
+
+  /**
+   * After an applied write, the language server's new errors (ERROR only, at most 20 per file) are
+   * added to the receipt as `diagnostics` (OpenCode v1 `edit.ts`). No server: nothing is added.
+   */
+  private async withDiagnostics(
+    output: ToolOutput,
+    before: Map<string, LspDiagnostic[] | undefined>,
+    signal?: AbortSignal,
+  ): Promise<ToolOutput> {
+    if (output.status !== 'ok') return output;
+    let receipt: Record<string, unknown>;
+    try {
+      receipt = JSON.parse(output.content) as Record<string, unknown>;
+    } catch {
+      return output;
+    }
+    const lines: string[] = [];
+    for (const [path, baseline] of before) {
+      let file;
+      try {
+        file = this.options.workspace.resolve(path);
+        if (readDecision(this.options, file.relative, file.absolute).effect !== 'allow') continue;
+      } catch {
+        continue;
+      }
+      const result = await this.options.codeIntel!.newErrors(file, baseline, signal).catch(() => undefined);
+      if (!result) continue;
+      const sourceLines = result.text.split('\n');
+      for (const error of result.errors)
+        lines.push(
+          `${path}:${error.range.start.line + 1}:${toCodePointColumn(sourceLines[error.range.start.line] ?? '', error.range.start.character)}: error: ${error.message.split('\n')[0]!.slice(0, 300)}`,
+        );
+      if (result.more) lines.push(`${path}: ${result.more} more new error(s) not shown`);
+    }
+    if (!lines.length) return output;
+    return {...output, content: JSON.stringify({...receipt, diagnostics: lines})};
+  }
+
   /** Agent state touches no workspace, process or network: allowed, but audited like any call. */
+  private async authorizeWeb(
+    tool: string,
+    url: string,
+    search: boolean,
+    audit: Audit,
+    signal?: AbortSignal,
+  ): Promise<Authorization> {
+    let origin: string;
+    try {
+      const target = new URL(url);
+      if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) throw new Error();
+      origin = target.origin;
+    } catch {
+      return {
+        gate: {
+          status: 'denied',
+          code: 'DENIED',
+          content: 'Only public HTTP(S) URLs without credentials are supported.',
+        },
+        viaSession: false,
+      };
+    }
+    return this.permission(
+      {effect: 'ask', reason: search ? 'web-search' : 'web-fetch'},
+      {
+        tool,
+        capability: search ? 'network.search' : 'network.connect',
+        target: origin,
+        reason: search ? 'web-search' : 'web-fetch',
+        scopeKey: origin,
+      },
+      origin,
+      origin,
+      audit,
+      'Web access was denied by policy.',
+      'The user denied web access.',
+      signal,
+    );
+  }
+
   private authorizeState(audit: Audit, kind: 'state' | 'question'): Authorization {
     audit({target: null, phase: 'decided', decision: 'allow', reason: kind === 'state' ? 'agent-state' : 'user-input'});
     return {gate: null, viaSession: false};
   }
 
   private authorizeSearch(prepared: Extract<PreparedTool, {kind: 'search'}>, audit: Audit): ToolOutput | null {
-    const decision = evaluateRead(prepared.file.relative, prepared.file.absolute, {
-      stateDirectory: this.options.stateDirectory,
-    });
+    const decision = readDecision(this.options, prepared.file.relative, prepared.file.absolute);
     if (decision.effect === 'deny') {
       audit({target: prepared.file.relative, phase: 'decided', decision: 'deny', reason: decision.reason});
       return {

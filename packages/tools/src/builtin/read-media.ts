@@ -79,5 +79,6 @@ export function validMedia(bytes: Uint8Array, mime: MediaMime): boolean {
  */
 export function containsRegisteredSecret(bytes: Uint8Array, redact: (text: string) => string): boolean {
   const text = Buffer.from(bytes).toString('latin1');
-  return redact(text) !== text;
+  const utf8 = Buffer.from(bytes).toString('utf8');
+  return redact(text) !== text || redact(utf8) !== utf8;
 }

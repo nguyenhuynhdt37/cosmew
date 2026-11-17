@@ -8,6 +8,9 @@ import {EditHandler, WriteHandler} from './file-edit';
 import {requestPermissionsHandler} from './request-permissions';
 import {planHandler} from './plan';
 import {questionHandler} from './question';
+import {webFetchHandler} from './web-fetch';
+import {webSearchHandler} from './web-search';
+import {lspHandler, lspRenameHandler} from './lsp';
 export function createHandlers(options: ToolDispatcherOptions, filesystem = new FileSystemRuntime(options)) {
   return [
     ...fileHandlers(options, filesystem),
@@ -19,5 +22,9 @@ export function createHandlers(options: ToolDispatcherOptions, filesystem = new 
     requestPermissionsHandler(options),
     planHandler(options),
     questionHandler(options),
+    webSearchHandler(options),
+    webFetchHandler(options),
+    lspHandler(options),
+    lspRenameHandler(options),
   ];
 }

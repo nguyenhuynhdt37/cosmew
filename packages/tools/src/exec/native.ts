@@ -13,6 +13,7 @@ import {
   type CommandSandbox,
   type CommandSessionInfo,
   type RuntimeAvailability,
+  type ServiceProcess,
 } from '@futryn/contracts';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {BubblewrapSandbox} from './bubblewrap';
@@ -124,6 +125,8 @@ export class NativeCommandRuntime implements CommandRuntime {
   private proven?: RuntimeAvailability;
   private closed = false;
 
+  private readonly serviceSandbox?: NativeSandbox;
+
   constructor(private readonly options: NativeRuntimeOptions) {
     const os = options.platform ?? process.platform;
     const home = realPath(options.home ?? homedir());
@@ -149,6 +152,14 @@ export class NativeCommandRuntime implements CommandRuntime {
         toolchains,
         secrets: options.hideSecrets ? secretPatterns() : undefined,
       });
+      this.serviceSandbox = new SeatbeltSandbox({
+        workspace: options.workspaceRoot,
+        state: options.stateDirectory,
+        scratch: this.scratch,
+        home,
+        toolchains,
+        secrets: secretPatterns(),
+      });
     } else if (os === 'linux' && findExecutable('bwrap', this.path)) {
       this.sandbox = new BubblewrapSandbox({
         bwrap: findExecutable('bwrap', this.path)!,
@@ -157,6 +168,14 @@ export class NativeCommandRuntime implements CommandRuntime {
         scratch: this.scratch,
         home,
         hideSecrets: options.hideSecrets === true,
+      });
+      this.serviceSandbox = new BubblewrapSandbox({
+        bwrap: findExecutable('bwrap', this.path)!,
+        workspace: options.workspaceRoot,
+        state: options.stateDirectory,
+        scratch: this.scratch,
+        home,
+        hideSecrets: true,
       });
     } else {
       this.unavailableReason = unavailableReason(os);
@@ -484,8 +503,75 @@ export class NativeCommandRuntime implements CommandRuntime {
     }
   }
 
+  /** Helper processes started by `spawnService`, stopped on shutdown. */
+  private readonly services = new Set<ChildProcess>();
+
+  /**
+   * A language server or similar helper (ADR 0043) inside the same OS sandbox as commands, fixed to
+   * read-only and no network; the repository's own binaries may be launched only this way. Refused
+   * when the sandbox is unavailable — there is no unsandboxed fallback.
+   */
+  spawnService(argv: string[], cwd: string): ServiceProcess {
+    if (!this.availability().ok || !argv.length) throw new FutrynError('UNSUPPORTED');
+    const workspace = new WorkspaceRoot(this.options.workspaceRoot);
+    const directory = workspace.resolve(cwd);
+    if (directory.kind !== 'directory') throw new FutrynError('POLICY');
+    // Keep a trusted leader until its group is killed; its PID cannot be reused before cleanup.
+    // Descendants that create a new session remain unconfirmed on macOS.
+    const supervised = ['/bin/sh', '-c', `trap 'kill -KILL 0' EXIT; "$@"; exit "$?"`, 'futryn-service', ...argv];
+    const wrapped = this.serviceSandbox!.wrap(supervised, READ_ONLY, directory.absolute);
+    const child = spawn(wrapped[0]!, wrapped.slice(1), {
+      cwd: directory.absolute,
+      env: this.env(false),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: true,
+    });
+    this.services.add(child);
+    child.stdin!.on('error', () => {});
+    child.stderr!.on('data', () => {});
+    child.once('exit', () => this.services.delete(child));
+    child.once('error', () => this.services.delete(child));
+    const kill = () => {
+      if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        /* already gone */
+      }
+      setTimeout(() => {
+        try {
+          if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid!, 'SIGKILL');
+        } catch {
+          /* already gone */
+        }
+      }, 2000).unref?.();
+    };
+    return {
+      pid: child.pid,
+      write: data => {
+        if (child.stdin!.writable) child.stdin!.write(data);
+      },
+      onData: listener => {
+        child.stdout!.on('data', (chunk: Buffer) => listener(new Uint8Array(chunk)));
+      },
+      onExit: listener => {
+        child.once('exit', code => listener(code));
+        child.once('error', () => listener(null));
+      },
+      kill,
+    };
+  }
+
   async shutdown(): Promise<void> {
     this.closed = true;
+    for (const child of this.services) {
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+      } catch {
+        /* already gone */
+      }
+    }
+    this.services.clear();
     await Promise.all([...this.sessions.values()].map(session => this.stop(session, 'cancelled')));
     this.sessions.clear();
     rmSync(this.scratch, {recursive: true, force: true});

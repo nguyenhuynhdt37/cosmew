@@ -6,6 +6,7 @@
   "workspaces": [
     "apps/cli",
     "apps/tui",
+    "packages/code-intel",
     "packages/contracts",
     "packages/core",
     "packages/models",
@@ -13,7 +14,8 @@
     "packages/persistence",
     "packages/sdk",
     "packages/tools",
-    "packages/workspace"
+    "packages/workspace",
+    "packages/mcp"
   ],
   "scripts": {
     "hannes": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
@@ -33,6 +35,7 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js}\""
   },
   "devDependencies": {
+    "@futryn/code-intel": "workspace:*",
     "@futryn/contracts": "workspace:*",
     "@futryn/core": "workspace:*",
     "@futryn/models": "workspace:*",
@@ -44,7 +47,8 @@
     "@futryn/workspace": "workspace:*",
     "@types/bun": "1.4.4",
     "prettier": "3.9.10",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "@futryn/mcp": "workspace:*"
   },
   "repository": {
     "type": "git",

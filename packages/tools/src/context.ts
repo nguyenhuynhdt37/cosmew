@@ -5,8 +5,10 @@ import type {
   PlanState,
   UserInputOutcome,
   UserQuestion,
+  PermissionDecision,
 } from '@futryn/contracts';
-import type {SessionGrants, SandboxEscalation} from '@futryn/security';
+import {evaluateRead, type SessionGrants, type SandboxEscalation} from '@futryn/security';
+import type {LspManager} from '@futryn/code-intel';
 import type {WorkspaceRoot} from '@futryn/workspace';
 
 export type ApprovalDecision = 'once' | 'session' | 'deny';
@@ -14,7 +16,7 @@ export type ApprovalDecision = 'once' | 'session' | 'deny';
 export interface ApprovalRequest {
   tool: string;
   /** `network.connect` is a `request_permissions` grant (ADR 0040). */
-  capability: 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect';
+  capability: 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect' | 'network.search';
   /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
@@ -54,6 +56,8 @@ export interface ToolDispatcherOptions {
   redact(text: string, incomplete?: boolean): string;
   audit?(record: ToolAuditRecord): void;
   stateDirectory?: string;
+  /** Pure current project read-rule decision; hard builtin deny/secret gates always remain. */
+  readPolicy?(relative: string, absolute: string): 'allow' | 'ask' | 'deny' | undefined;
   /** Search deadline; defaults to 30 s. */
   searchDeadlineMs?: number;
   /**
@@ -73,6 +77,10 @@ export interface ToolDispatcherOptions {
    * (Codex); without it such grants cover only the request itself.
    */
   turnId?: () => string | undefined;
+  /** Language servers (ADR 0043); `lsp`/`lsp_rename` are offered only while they are available. */
+  codeIntel?: LspManager;
+  /** Public web operations, wired only by the composition root. */
+  web?: {search?(query: string, numResults: number, signal?: AbortSignal): Promise<string>; searchEndpoint?: string};
   /**
    * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it
    * are offered only when it is wired.
@@ -156,4 +164,17 @@ export function effectiveSandboxMode(
   const modes = runtime.capabilities?.().modes ?? ['read-only'];
   const configured = sandboxConfig(options).mode;
   return modes.includes(configured) ? configured : modes.includes('read-only') ? 'read-only' : undefined;
+}
+
+export function readDecision(
+  options: Pick<ToolDispatcherOptions, 'stateDirectory' | 'readPolicy'>,
+  relative: string,
+  absolute: string,
+): PermissionDecision {
+  const builtin = evaluateRead(relative, absolute, {stateDirectory: options.stateDirectory});
+  if (builtin.effect === 'deny') return builtin;
+  const project = options.readPolicy?.(relative, absolute);
+  if (project === 'deny') return {effect: 'deny', reason: 'project-read-rule'};
+  if (project === 'ask' && builtin.effect === 'allow') return {effect: 'ask', reason: 'project-read-rule'};
+  return builtin;
 }

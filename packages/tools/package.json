@@ -7,11 +7,16 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@futryn/code-intel": "workspace:*",
     "@futryn/contracts": "workspace:*",
     "@futryn/security": "workspace:*",
     "@futryn/workspace": "workspace:*",
     "tree-sitter-bash": "0.25.1",
     "web-tree-sitter": "0.27.1",
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "turndown": "7.2.5"
+  },
+  "devDependencies": {
+    "@types/turndown": "5.0.6"
   }
 }

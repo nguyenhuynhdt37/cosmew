@@ -99,7 +99,7 @@ test('provider keys choose deterministic source and search formats Exa results a
   const client = new WebSearchClient({
     keys: {},
     redact: t => t.replaceAll('sk-secret-fixture', '[REDACTED]'),
-    fetch: ((input, init) => fetch(new URL('/mcp', f.url), init)) as typeof fetch,
+    fetch: ((_input, init) => fetch(new URL('/mcp', f.url), init)) as typeof fetch,
   });
   cleanups.push(() => client.close());
   const text = await client.search('typescript', 2);
@@ -196,4 +196,52 @@ test('Firecrawl and Parallel use their MCP schemas; Tavily uses the verified RES
   expect(await tavily.search('check', 3)).toContain('Tavily');
   expect(observed?.body).toEqual({query: 'check', search_depth: 'basic', chunks_per_source: 3, max_results: 3});
   expect(observed?.authorization).toBe('Bearer fixture-key');
+});
+
+test('a transient initialize failure is retried by a fresh SDK connection on the next call', async () => {
+  const f = fixture();
+  let initializeCount = 0;
+  const client = new McpClient({
+    endpoint: f.url,
+    redact: t => t,
+    fetch: (async (input, init) => {
+      const body = init?.body ? (JSON.parse(String(init.body)) as {method?: string}) : null;
+      if (body?.method === 'initialize' && ++initializeCount === 1)
+        return new Response('temporary upstream outage', {status: 500});
+      return fetch(input, init);
+    }) as typeof fetch,
+  });
+  cleanups.push(() => client.close());
+  await expect(client.call('web_search_exa', {query: 'first'})).rejects.toThrow();
+  const recovered = await client.call('web_search_exa', {query: 'second'});
+  expect(recovered.text).toContain('Fixture');
+  expect(initializeCount).toBe(2);
+});
+
+test('closing during initialization aborts the network attempt and never sends initialized or tool calls', async () => {
+  const f = fixture();
+  let began = false;
+  let stopped = false;
+  const client = new McpClient({
+    endpoint: f.url,
+    redact: t => t,
+    fetch: (async (_input, init) => {
+      began = true;
+      return await new Promise<Response>((_resolve, reject) => {
+        const abort = () => {
+          stopped = true;
+          reject(new Error('aborted'));
+        };
+        if (init?.signal?.aborted) abort();
+        else init?.signal?.addEventListener('abort', abort, {once: true});
+      });
+    }) as typeof fetch,
+  });
+  const call = client.call('web_search_exa', {query: 'first'});
+  const outcome = call.catch(error => error);
+  while (!began) await Bun.sleep(1);
+  await client.close();
+  expect((await outcome).code).toBe('CANCELLED');
+  expect(stopped).toBe(true);
+  expect(f.calls).toEqual([]);
 });

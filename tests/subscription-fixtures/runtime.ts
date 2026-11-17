@@ -470,6 +470,10 @@ if (copilot && process.argv.includes('login')) {
                 'request_permissions',
                 'update_plan',
                 'request_user_input',
+                'lsp',
+                'lsp_rename',
+                'web_search',
+                'web_fetch',
               ].includes(t.name),
           )
         )

@@ -19,10 +19,13 @@ import {
   type ToolResult,
   type TurnBudget,
   analysisCapability,
+  permissionRuleDecision,
   type PlanState,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
+import {WebSearchClient, type SearchKeys} from '@futryn/mcp';
+import {LspManager} from '@futryn/code-intel';
 import {ProjectContextLoader, WorkspaceDenied, WorkspaceRoot, nestedLabel} from '@futryn/workspace';
 import {
   AccountManager,
@@ -139,6 +142,12 @@ export function startup(
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
   const redactor = new Redactor();
+  const webKeys: SearchKeys = Object.fromEntries(
+    ['EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY'].map(name => [name, process.env[name]]),
+  );
+  for (const value of Object.values(webKeys)) if (value) redactor.register(value);
+  const webSearch = new WebSearchClient({keys: webKeys, redact: text => redactor.text(text), fetch: services.fetch});
+  const languageServerManagers = new Set<LspManager>();
   const conversations = new SqliteConversations(db, value => redactor.text(value));
   const toolAudit = new ToolAuditStore(db);
   const customThemes = new FileCustomThemeStore(directory);
@@ -424,14 +433,48 @@ export function startup(
 
     // Workspace tools (ADR 0017+): offered only while the client allows them, i.e. after the TUI
     // obtained folder consent; approvals go through the client's permission dialog.
+    // Language servers run only inside the command sandbox (ADR 0043); no sandbox → unavailable.
+    let codeIntel: LspManager | undefined;
+    const languageServers = () => {
+      if (codeIntel) return codeIntel;
+      codeIntel = new LspManager({
+        workspace: workspaceTree(),
+        canRead: file =>
+          evaluateRead(file.relative, file.absolute, {stateDirectory}).effect === 'allow' &&
+          !['deny', 'ask'].includes(
+            permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: file.relative}) ?? '',
+          ) &&
+          !['deny', 'ask'].includes(
+            permissionRuleDecision(client?.permissionRules(), {tool: 'Tool', target: 'lsp'}) ?? '',
+          ),
+        launch: (argv, cwd) => {
+          const runtime = commands();
+          if (!runtime.spawnService) throw new FutrynError('UNSUPPORTED');
+          return runtime.spawnService(argv, cwd);
+        },
+        available: () => {
+          if (commandRuntimes.closed) return false;
+          const runtime = commands();
+          return !!runtime.spawnService && runtime.availability().ok;
+        },
+      });
+      languageServerManagers.add(codeIntel);
+      return codeIntel;
+    };
     const tools = () =>
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
         grants,
         stateDirectory,
+        readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
         commands: commands(),
         sandbox: () => sandboxSettings,
         turnId: () => client?.currentTurnId(),
+        codeIntel: languageServers(),
+        web: {
+          search: (query, count, signal) => webSearch.search(query, count, signal),
+          searchEndpoint: webSearch.endpoint,
+        },
         agentState: {
           // The plan belongs to the active session and survives restart (ADR 0042).
           updatePlan: plan => {
@@ -849,7 +892,12 @@ export function startup(
     validateAccount,
     discoverModels,
     subscriptions,
-    shutdownCommands: () => commandRuntimes.shutdown(),
+    shutdownCommands: async () => {
+      await Promise.allSettled([...languageServerManagers].map(manager => manager.shutdown()));
+      languageServerManagers.clear();
+      await webSearch.close();
+      await commandRuntimes.shutdown();
+    },
   };
 }
 

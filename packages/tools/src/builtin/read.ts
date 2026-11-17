@@ -2,7 +2,7 @@ import {readdirSync, statSync} from 'node:fs';
 import {basename, dirname, extname, join} from 'node:path';
 import {z} from 'zod';
 import type {Attachment} from '@futryn/contracts';
-import {evaluateRead} from '@futryn/security';
+import {readDecision, type ToolDispatcherOptions} from '../context';
 import {WorkspaceDenied, looksBinary, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
 import {LIMITS, clipBytes} from '../limits';
 import {
@@ -62,8 +62,9 @@ export function runRead(
   input: z.infer<typeof readInput>,
   stateDirectory?: string,
   redact: (text: string) => string = text => text,
+  readPolicy?: ToolDispatcherOptions['readPolicy'],
 ): ReadOutcome {
-  if (file.kind === 'directory') return listDirectory(file, input, stateDirectory);
+  if (file.kind === 'directory') return listDirectory(file, input, stateDirectory, readPolicy);
   const head = workspace.readBytes(file, MEDIA_SNIFF_BYTES);
   const media = sniffMedia(head.bytes);
   if (media) {
@@ -135,7 +136,12 @@ function pageLines(text: string, input: z.infer<typeof readInput>): {ok: true; c
  * Directory listing (OpenCode `read` list page): directories first, then files, each sorted; `/`
  * marks directories. Entries policy denies (`.git`, Futryn state) are omitted.
  */
-function listDirectory(file: ResolvedPath, input: z.infer<typeof readInput>, stateDirectory?: string): ReadOutcome {
+function listDirectory(
+  file: ResolvedPath,
+  input: z.infer<typeof readInput>,
+  stateDirectory?: string,
+  readPolicy?: ToolDispatcherOptions['readPolicy'],
+): ReadOutcome {
   if (input.offset !== undefined && input.offset < 0)
     return {ok: false, code: 'INVALID_INPUT', message: 'A negative offset only works for files.'};
   let entries: {name: string; directory: boolean}[];
@@ -150,9 +156,11 @@ function listDirectory(file: ResolvedPath, input: z.infer<typeof readInput>, sta
           return [];
         }
       } else if (!directory && !entry.isFile()) return [];
-      const decision = evaluateRead(directory ? relative + '/' : relative, join(file.absolute, entry.name), {
-        stateDirectory,
-      });
+      const decision = readDecision(
+        {stateDirectory, readPolicy},
+        directory ? relative + '/' : relative,
+        join(file.absolute, entry.name),
+      );
       return decision.effect === 'deny' ? [] : [{name: entry.name, directory}];
     });
   } catch {
@@ -193,12 +201,17 @@ function editDistance(a: string, b: string): number {
  * tail exists in the workspace. Only a path whose read policy is plain allow is suggested, so a
  * suggestion never names Git internals, Futryn state or a secret file.
  */
-export function suggestReadPath(workspace: WorkspaceRoot, input: string, stateDirectory?: string): string | null {
+export function suggestReadPath(
+  workspace: WorkspaceRoot,
+  input: string,
+  stateDirectory?: string,
+  readPolicy?: ToolDispatcherOptions['readPolicy'],
+): string | null {
   const allowed = (relative: string): string | null => {
     try {
       const resolved = workspace.resolve(relative);
       if (resolved.kind !== 'file') return null;
-      return evaluateRead(resolved.relative, resolved.absolute, {stateDirectory}).effect === 'allow'
+      return readDecision({stateDirectory, readPolicy}, resolved.relative, resolved.absolute).effect === 'allow'
         ? resolved.relative
         : null;
     } catch {

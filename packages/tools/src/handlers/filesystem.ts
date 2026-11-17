@@ -27,7 +27,12 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
             error instanceof WorkspaceDenied &&
             (error.reason === 'not-found' || error.reason === 'outside-workspace')
           ) {
-            const suggestion = suggestReadPath(options.workspace, parsed.data.path, options.stateDirectory);
+            const suggestion = suggestReadPath(
+              options.workspace,
+              parsed.data.path,
+              options.stateDirectory,
+              options.readPolicy,
+            );
             if (suggestion)
               return error.reason === 'not-found'
                 ? {

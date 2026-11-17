@@ -299,6 +299,11 @@ export class FutrynClient {
     this.delegatedAgentValue = false;
     this.sessionGrants.clear();
     this.ports.toolGrants?.clear();
+    this.denyPendingPermissions();
+  }
+
+  /** A policy change makes every unresolved authorization prompt stale, never an approval. */
+  private denyPendingPermissions(): void {
     for (const request of this.permissions.values()) {
       if (request.status === 'pending') {
         request.status = 'denied';
@@ -427,7 +432,10 @@ export class FutrynClient {
       if (set[effect].length >= 200) throw new FutrynError('POLICY');
       set[effect].push(parsed.data);
     });
-    this.notifyStateChange();
+    // Tightening policy invalidates old prompts. Adding Allow is a relaxation and is also
+    // the normal 'don't ask again' flow, so its selected prompt remains resolvable.
+    if (effect !== 'allow') this.denyPendingPermissions();
+    this.revokeToolGrants();
     return this.permissionRules();
   }
   removePermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
@@ -435,7 +443,8 @@ export class FutrynClient {
       const set = settings.projectPermissionRules?.[this.ports.workspace];
       if (set) set[effect] = set[effect].filter(entry => entry !== rule);
     });
-    this.notifyStateChange();
+    if (effect === 'allow') this.denyPendingPermissions();
+    this.revokeToolGrants();
     return this.permissionRules();
   }
 
@@ -599,7 +608,19 @@ export class FutrynClient {
       };
       signal?.addEventListener('abort', onAbort, {once: true});
       this.questions.set(questionId, {
-        request: {questionId, questions: structuredClone(questions), createdAt: new Date().toISOString()},
+        request: {
+          questionId,
+          questions: questions.map(question => ({
+            ...question,
+            header: this.ports.sanitizeText(question.header),
+            question: this.ports.sanitizeText(question.question),
+            options: question.options.map(option => ({
+              label: this.ports.sanitizeText(option.label),
+              description: this.ports.sanitizeText(option.description),
+            })),
+          })),
+          createdAt: new Date().toISOString(),
+        },
         settle: outcome => {
           signal?.removeEventListener('abort', onAbort);
           resolve(outcome);

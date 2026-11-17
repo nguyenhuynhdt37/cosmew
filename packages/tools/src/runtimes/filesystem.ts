@@ -3,10 +3,10 @@ import type {ResolvedPath} from '@futryn/workspace';
 import type {z} from 'zod';
 import {runRead, readInput} from '../builtin/read';
 import {candidateFiles, compilePattern, formatGrep, grepQuery, runGlob, globInput, grepInput} from '../builtin/search';
-import {locateRipgrep, ripgrepSearch, type FileHits} from '../builtin/ripgrep';
+import {locateRipgrep, ripgrepSearch, visibleHits, type FileHits} from '../builtin/ripgrep';
 import type {GrepWorkerRequest} from '../builtin/grep-worker';
 import {LIMITS} from '../limits';
-import type {ToolDispatcherOptions, ToolOutput} from '../context';
+import {readDecision, type ToolDispatcherOptions, type ToolOutput} from '../context';
 import {ReadLedger} from './read-ledger';
 
 /** Filesystem operations on workspace-checked targets; invoked after orchestration. */
@@ -16,18 +16,23 @@ export class FileSystemRuntime {
   constructor(
     private readonly options: Pick<
       ToolDispatcherOptions,
-      'workspace' | 'stateDirectory' | 'searchDeadlineMs' | 'ripgrep' | 'redact'
+      'workspace' | 'stateDirectory' | 'searchDeadlineMs' | 'ripgrep' | 'redact' | 'readPolicy'
     >,
   ) {}
   read(file: ResolvedPath, input: z.infer<typeof readInput>) {
-    const outcome = runRead(this.options.workspace, file, input, this.options.stateDirectory, text =>
-      this.options.redact(text),
+    const outcome = runRead(
+      this.options.workspace,
+      file,
+      input,
+      this.options.stateDirectory,
+      text => this.options.redact(text),
+      this.options.readPolicy,
     );
     if (outcome.ok && outcome.bytes) this.ledger.recordBytes(file.relative, outcome.bytes);
     return outcome;
   }
   glob(file: ResolvedPath, input: z.infer<typeof globInput>) {
-    return runGlob(this.options.workspace, file, input, this.options.stateDirectory);
+    return runGlob(this.options.workspace, file, input, this.options.stateDirectory, this.options.readPolicy);
   }
   instruction(file: ResolvedPath, maxBytes: number) {
     return this.options.workspace.readBytes(file, maxBytes);
@@ -63,6 +68,7 @@ export class FileSystemRuntime {
       base,
       query: grepQuery(input),
       stateDirectory: this.options.stateDirectory,
+      readPolicy: this.options.readPolicy,
       deadline,
       signal,
     });
@@ -93,6 +99,7 @@ export class FileSystemRuntime {
         content: 'The pattern is not a valid regular expression.',
       });
     const {files, incomplete} = candidateFiles(this.options.workspace, base, input.glob, deadline);
+    let skippedSecret = 0;
     return new Promise((resolve, reject) => {
       const worker = new Worker(new URL('../builtin/grep-worker.ts', import.meta.url).href);
       const stop = () => {
@@ -115,12 +122,23 @@ export class FileSystemRuntime {
       worker.onmessage = (event: MessageEvent<{hits: FileHits[]; skippedSecret: number}>) => {
         stop();
         resolve(
-          formatGrep(event.data.hits, input, base.relative, [
-            ...(incomplete ? ['file list was cut short'] : []),
-            ...(input.type ? ['type filter needs ripgrep and was ignored; use glob'] : []),
-            ...(query.before || query.after ? ['context lines need ripgrep and were not included'] : []),
-            ...skippedNote(event.data.skippedSecret),
-          ]),
+          formatGrep(
+            visibleHits(
+              this.options.workspace,
+              event.data.hits,
+              this.options.stateDirectory,
+              undefined,
+              this.options.readPolicy,
+            ).files,
+            input,
+            base.relative,
+            [
+              ...(incomplete ? ['file list was cut short'] : []),
+              ...(input.type ? ['type filter needs ripgrep and was ignored; use glob'] : []),
+              ...(query.before || query.after ? ['context lines need ripgrep and were not included'] : []),
+              ...skippedNote(event.data.skippedSecret + skippedSecret),
+            ],
+          ),
         );
       };
       worker.onerror = () => {
@@ -134,7 +152,16 @@ export class FileSystemRuntime {
       try {
         const request: GrepWorkerRequest = {
           root: this.options.workspace.root,
-          files,
+          files: files.filter(path => {
+            try {
+              const file = this.options.workspace.resolve(path);
+              const decision = readDecision(this.options, file.relative, file.absolute);
+              if (decision.effect === 'ask' && decision.reason === 'secret-file') skippedSecret++;
+              return decision.effect === 'allow';
+            } catch {
+              return false;
+            }
+          }),
           pattern: input.pattern,
           ignoreCase: input.ignoreCase,
           multiline: input.multiline,

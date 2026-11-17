@@ -26,7 +26,10 @@ export interface McpTextResult {
  * the capability through ToolDispatcher before calling it (ADR 0044).
  */
 export class McpClient {
-  private readonly client = new Client({name: 'futryn', version: '0.1.0'}, {capabilities: {}});
+  private client?: Client;
+  private pendingClient?: Client;
+  private attempt?: AbortController;
+  private activeCalls = 0;
   private transport?: StreamableHTTPClientTransport;
   private connecting?: Promise<void>;
   private closed = false;
@@ -39,7 +42,12 @@ export class McpClient {
 
   private connect(): Promise<void> {
     if (this.closed) return Promise.reject(new FutrynError('RUNTIME_UNAVAILABLE'));
+    if (this.client) return Promise.resolve();
     return (this.connecting ??= (async () => {
+      const attempt = new AbortController();
+      this.attempt = attempt;
+      const client = new Client({name: 'futryn', version: '0.1.0'}, {capabilities: {}});
+      this.pendingClient = client;
       const fetchImpl = this.options.fetch ?? fetch;
       const boundedFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
         // The SDK must never follow redirects, leak credentials cross-origin or use ambient cookies.
@@ -49,6 +57,7 @@ export class McpClient {
           credentials: 'omit',
           signal: AbortSignal.any([
             this.lifetime.signal,
+            attempt.signal,
             ...(init?.signal ? [init.signal] : []),
             AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS),
           ]),
@@ -87,7 +96,25 @@ export class McpClient {
         requestInit: {headers: this.options.headers},
         fetch: boundedFetch,
       });
-      await this.client.connect(this.transport, {timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS});
+      try {
+        await client.connect(this.transport, {
+          timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
+          signal: AbortSignal.any([this.lifetime.signal, attempt.signal]),
+        });
+        if (this.closed || attempt.signal.aborted) throw new FutrynError('CANCELLED');
+        this.client = client;
+        client.onclose = () => {
+          if (this.client === client) this.client = undefined;
+        };
+      } catch (error) {
+        attempt.abort();
+        await client.close().catch(() => undefined);
+        throw error;
+      } finally {
+        if (this.pendingClient === client) this.pendingClient = undefined;
+        if (this.attempt === attempt) this.attempt = undefined;
+        this.connecting = undefined;
+      }
     })());
   }
 
@@ -95,8 +122,10 @@ export class McpClient {
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
     const combined = AbortSignal.any([this.lifetime.signal, deadline, ...(signal ? [signal] : [])]);
+    this.activeCalls++;
     try {
       await abortable(this.connect(), combined);
+      if (combined.aborted || !this.client) throw new FutrynError('CANCELLED');
       const result = await this.client.callTool({name, arguments: args}, undefined, {
         signal: combined,
         timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
@@ -121,13 +150,17 @@ export class McpClient {
       if (error instanceof FutrynError) throw error;
       // SDK errors may embed endpoint query credentials or remote response bodies. Never return them.
       throw new FutrynError('TRANSPORT');
+    } finally {
+      this.activeCalls--;
+      if (!this.activeCalls && this.connecting) this.attempt?.abort();
     }
   }
 
   async close(): Promise<void> {
     this.closed = true;
     this.lifetime.abort();
-    await this.client.close().catch(() => undefined);
+    this.attempt?.abort();
+    await Promise.allSettled([this.client?.close(), this.pendingClient?.close()]);
   }
 }
 

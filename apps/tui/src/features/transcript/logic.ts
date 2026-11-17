@@ -129,6 +129,7 @@ function rawToolTarget(call: ToolCall): string {
   const input = (call.input && typeof call.input === 'object' ? call.input : {}) as Record<string, unknown>;
   const str = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : undefined);
   if (call.name === 'read' || call.name === 'edit' || call.name === 'write') return str('path') ?? '';
+  if (call.name === 'lsp_rename') return `${str('path') ?? ''} → ${str('newName') ?? ''}`;
   if (call.name === 'glob') return `${str('pattern') ?? '**/*'}${str('path') ? ` in ${str('path')}` : ''}`;
   if (call.name === 'apply_patch')
     return [

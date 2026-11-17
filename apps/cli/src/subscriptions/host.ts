@@ -41,6 +41,10 @@ const HANNES_BRIDGE_TOOLS = [
   'request_permissions',
   'update_plan',
   'request_user_input',
+  'lsp',
+  'lsp_rename',
+  'web_search',
+  'web_fetch',
 ];
 
 type RuntimeRef = Extract<CredentialRef, {kind: 'runtime'}>;

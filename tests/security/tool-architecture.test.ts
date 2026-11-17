@@ -67,6 +67,7 @@ test('registry rejects duplicate identities, owns descriptor snapshots and route
     'edit',
     'write',
     'request_permissions',
+    'web_fetch',
   ]);
   const descriptor = registry.descriptors()[0]!;
   descriptor.name = 'shell';

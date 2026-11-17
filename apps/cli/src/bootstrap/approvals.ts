@@ -38,6 +38,17 @@ const reasonText = (reason: string) => APPROVAL_REASONS[reason] ?? reason;
 export function toolPermissionRequest(request: ApprovalRequest): PermissionInput {
   // One approval table for every tool (ADR 0040): the policy reason names the permission kind.
   const kind = APPROVAL_KIND_FOR_REASON[request.reason];
+  if (request.capability === 'network.search')
+    return {
+      capability: 'network.search',
+      kind: 'read',
+      ruleTarget: 'web_search',
+      action: 'Search the public web',
+      target: request.target,
+      reason: 'Sends the query to the configured search provider.',
+      scopeKey: request.scopeKey,
+      riskLevel: 'low',
+    };
   if (request.tool === 'request_permissions') {
     const justification = request.justification ? ` Model's reason: ${request.justification}` : '';
     return {

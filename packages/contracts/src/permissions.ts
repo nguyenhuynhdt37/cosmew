@@ -5,7 +5,15 @@ export type PermissionResolutionScope = z.infer<typeof permissionScopeSchema>;
 
 export const permissionPromptRequestSchema = z.strictObject({
   approvalId: z.string().uuid(),
-  capability: z.enum(['fs.read', 'fs.write', 'process.execute', 'network.connect', 'mcp.call', 'extension.service']),
+  capability: z.enum([
+    'fs.read',
+    'fs.write',
+    'process.execute',
+    'network.connect',
+    'network.search',
+    'mcp.call',
+    'extension.service',
+  ]),
   action: z.string().min(1).max(200),
   target: z.string().min(1).max(1024),
   riskLevel: z.enum(['low', 'medium', 'high']),

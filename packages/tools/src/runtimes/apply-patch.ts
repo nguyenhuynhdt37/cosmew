@@ -85,6 +85,24 @@ export class ApplyPatchRuntime {
     ]);
   }
 
+  /**
+   * Plan replacing several files' whole content at once (LSP rename, ADR 0043): one approval with
+   * the complete diff, the same path policy, snapshots and revalidation as apply_patch.
+   */
+  verifyFiles(paths: string[], next: (path: string, before: string) => string): PatchPlan {
+    this.checkPaths(paths);
+    const files = new SecureFiles(this.options.workspace);
+    return this.plan(
+      files,
+      paths.map(path => {
+        const snapshot = files.snapshot(path);
+        if (snapshot.content === null) throw new PatchError('PATCH_MISMATCH', `${path} does not exist.`);
+        const after = next(path, snapshot.content);
+        return {snapshot, after, diff: unifiedDiff(path, snapshot.content, after), action: 'update' as const};
+      }),
+    );
+  }
+
   /** Syntax, size, collision and protected-path checks shared by every write plan. */
   private checkPaths(paths: string[]): void {
     const touched = new Set<string>();

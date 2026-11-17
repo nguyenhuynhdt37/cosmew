@@ -9,6 +9,7 @@
     "hannes": "./src/index.ts"
   },
   "dependencies": {
+    "@futryn/code-intel": "workspace:*",
     "@futryn/contracts": "workspace:*",
     "@futryn/core": "workspace:*",
     "@futryn/models": "workspace:*",
@@ -17,6 +18,7 @@
     "@futryn/sdk": "workspace:*",
     "@futryn/tui": "workspace:*",
     "@futryn/tools": "workspace:*",
-    "@futryn/workspace": "workspace:*"
+    "@futryn/workspace": "workspace:*",
+    "@futryn/mcp": "workspace:*"
   }
 }

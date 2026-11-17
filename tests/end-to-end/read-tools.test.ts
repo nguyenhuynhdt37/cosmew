@@ -63,7 +63,18 @@ test('model reads a workspace file through the tool loop; result returns to the 
     toolRequests(c.server)
       .map(r => r.body.tools.map((t: any) => t.function.name))
       .at(0),
-  ).toEqual(['read', 'glob', 'grep', 'apply_patch', 'edit', 'write', 'update_plan', 'request_user_input']);
+  ).toEqual([
+    'read',
+    'glob',
+    'grep',
+    'apply_patch',
+    'edit',
+    'write',
+    'update_plan',
+    'request_user_input',
+    'web_search',
+    'web_fetch',
+  ]);
   // Resume: the stored turn keeps the tool call and result, and the transcript folds them into one card.
   const resumed = c.app.createFutrynClient(c.ws);
   resumed.resumeSession(c.client.activeSession()!.id);

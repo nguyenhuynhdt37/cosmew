@@ -14,6 +14,7 @@
     "noUncheckedIndexedAccess": true
   },
   "include": [
+    "packages/code-intel/src/**/*.ts",
     "packages/contracts/src/**/*.ts",
     "packages/core/src/**/*.ts",
     "packages/models/src/**/*.ts",
