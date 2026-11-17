@@ -145,7 +145,7 @@ export function renderPermissionDialogOverlay(options: {
 const TAB_LABELS = {allow: 'Allow', ask: 'Ask', deny: 'Deny', mode: 'Mode'} as const;
 const TAB_HELP = {
   allow: 'Futryn will not ask before using these.',
-  ask: 'Futryn always asks first, even in auto or bypass mode.',
+  ask: 'Futryn asks first, even in auto mode; bypass (never) refuses instead.',
   deny: 'Futryn refuses these without asking.',
   mode: 'How requests without a rule are answered. Shift+Tab cycles.',
 } as const;

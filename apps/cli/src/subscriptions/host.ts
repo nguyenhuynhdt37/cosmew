@@ -29,7 +29,17 @@ import {RuntimeTurn, type Connection, type RuntimeApprover} from './runtime-turn
 export type {RuntimeApprover} from './runtime-turn';
 
 /** Futryn-owned tools the Codex bridge may expose; each call still runs through the Futryn dispatcher (ADR 0018, 0022). */
-const HANNES_BRIDGE_TOOLS = ['read', 'glob', 'grep', 'exec_command', 'write_stdin', 'apply_patch', 'edit', 'write'];
+const HANNES_BRIDGE_TOOLS = [
+  'read',
+  'glob',
+  'grep',
+  'exec_command',
+  'write_stdin',
+  'apply_patch',
+  'edit',
+  'write',
+  'request_permissions',
+];
 
 type RuntimeRef = Extract<CredentialRef, {kind: 'runtime'}>;
 interface Login {

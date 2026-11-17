@@ -148,3 +148,14 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
 - **Bun/OS compatibility:** pure JavaScript; runs under Bun 1.4.4 on macOS/Linux/Windows. Verified on Darwin arm64.
 - **Threat surface:** runs locally on source files when a developer or `bun run lint` invokes it; no network access. Layout-only changes; behavior is verified by the full test suites after formatting.
 - **Purpose:** consistent, readable formatting of all TypeScript/JavaScript (`bun run format`); `bun run lint` checks it so unformatted code cannot return.
+
+## Wave 1 (plan D1, user-approved 2026-11-17)
+
+### Shell parsing: web-tree-sitter + tree-sitter-bash (ADR 0040, added 2026-11-17)
+
+- **Name/version:** `web-tree-sitter` **0.27.1** (published 2026-10-08; 0.27.2 of 2026-11-07 was under two weeks old and is not used), `tree-sitter-bash` **0.25.1** (published 2025), both pinned exactly in `packages/tools/package.json`.
+- **License:** MIT (both). **Provenance:** npm; sources https://github.com/tree-sitter/tree-sitter (lib/binding_web) and https://github.com/tree-sitter/tree-sitter-bash. Integrity: `web-tree-sitter` `sha512-qtx0VyUyNRHtL3ze7+v0hCKB/sLcAmY7ZAVp/ZK/bCj0yED8ptvNrr7Vd7DwDyKDWN9baqcUx4uaD2r2ql+6IA==`, `tree-sitter-bash` `sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==`.
+- **Dependencies / install scripts:** `web-tree-sitter` none. `tree-sitter-bash` depends on `node-addon-api` 8.9.2 (MIT) and `node-gyp-build` 4.8.4 (MIT) for its optional native binding and declares an install script; Futryn installs with `--ignore-scripts`, never builds or loads the native binding, and uses only the prebuilt `tree-sitter-bash.wasm` shipped in the package. The optional peer `tree-sitter` (native) is not installed.
+- **Bun/OS compatibility:** WASM, loaded with `Parser.init()` + `Language.load()`; verified under Bun 1.4.4 on Darwin arm64 (parser load ≈ 25 ms once per process). Linux/Windows: Needs verification (pure WASM, no native code).
+- **Threat surface:** parses command text the model proposed; no I/O beyond reading the two WASM files from this package's `node_modules`. A load failure makes every command "unverified" (asks), never "safe".
+- **Purpose:** split compound shell commands and find dangerous sub-commands, as Codex does with tree-sitter-bash.

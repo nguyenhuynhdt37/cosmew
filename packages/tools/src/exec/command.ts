@@ -64,7 +64,7 @@ export const shellOf = (value: string | undefined) => (value === undefined ? ('b
 export const execDescriptor = {
   name: 'exec_command',
   description:
-    'Runs a command in the Futryn sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: in workspace-write mode file changes are real and visible to other tools and git; .git is read-only, secret files appear empty, Futryn state is hidden, and nothing outside the project is visible. Network is off unless you set sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification; the user approves it. Unsandboxed execution does not exist. Every command is approved by the user or their permission rules.',
+    'Runs a command in the Futryn sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: in workspace-write mode file changes are real and visible to other tools and git; .git is read-only, secret files appear empty, Futryn state is hidden, and nothing outside the project is visible. Network is off unless you set sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification; the user approves it. Unsandboxed execution does not exist. The session approval policy decides prompts: by default (on-request) ordinary commands run in the sandbox without asking, while dangerous commands (e.g. forced rm), commands Futryn cannot verify (substitutions, eval) and network access ask the user.',
   inputSchema: {
     type: 'object',
     properties: {

@@ -5,6 +5,7 @@ import {ApplyPatchHandler} from './apply-patch';
 import {stdinHandler} from './stdin';
 import {commandHandler} from './command';
 import {EditHandler, WriteHandler} from './file-edit';
+import {requestPermissionsHandler} from './request-permissions';
 export function createHandlers(options: ToolDispatcherOptions, filesystem = new FileSystemRuntime(options)) {
   return [
     ...fileHandlers(options, filesystem),
@@ -13,5 +14,6 @@ export function createHandlers(options: ToolDispatcherOptions, filesystem = new 
     new ApplyPatchHandler(options, filesystem.ledger),
     new EditHandler(options, filesystem.ledger),
     new WriteHandler(options, filesystem.ledger),
+    requestPermissionsHandler(options),
   ];
 }

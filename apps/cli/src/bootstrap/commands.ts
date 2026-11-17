@@ -1,5 +1,23 @@
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError, MODE_FOR_APPROVAL_POLICY, type ApprovalPolicy, type PermissionMode} from '@futryn/contracts';
 import {UnsupportedRuntime, commandBackendFromEnv, platformCommandRuntime, type CommandRuntime} from '@futryn/tools';
+
+/**
+ * Codex approval policy (ADR 0040): FUTRYN_APPROVAL_POLICY = untrusted | on-request (default) | never.
+ * The legacy FUTRYN_SANDBOX_ESCALATION=never means `never`. An invalid value fails closed to `untrusted`.
+ */
+export function approvalPolicyFromEnv(env: Record<string, string | undefined> = process.env): ApprovalPolicy {
+  const value = env.FUTRYN_APPROVAL_POLICY;
+  if (value === undefined || value === '')
+    return env.FUTRYN_SANDBOX_ESCALATION !== undefined && env.FUTRYN_SANDBOX_ESCALATION !== 'on-request'
+      ? 'never'
+      : 'on-request';
+  return value === 'on-request' || value === 'never' ? value : 'untrusted';
+}
+
+/** The permission mode a session starts in for the configured approval policy. */
+export function permissionModeFromEnv(env: Record<string, string | undefined> = process.env): PermissionMode {
+  return MODE_FOR_APPROVAL_POLICY[approvalPolicyFromEnv(env)];
+}
 
 /** Configured command sandbox (ADR 0034): FUTRYN_SANDBOX_MODE and FUTRYN_SANDBOX_ESCALATION. Invalid values fail closed. */
 export function sandboxSettingsFromEnv(env: Record<string, string | undefined> = process.env): {
@@ -10,7 +28,7 @@ export function sandboxSettingsFromEnv(env: Record<string, string | undefined> =
   const escalation = env.FUTRYN_SANDBOX_ESCALATION ?? 'on-request';
   return {
     mode: mode === 'workspace-write' ? 'workspace-write' : 'read-only',
-    escalation: escalation === 'on-request' ? 'on-request' : 'never',
+    escalation: escalation === 'on-request' && approvalPolicyFromEnv(env) !== 'never' ? 'on-request' : 'never',
   };
 }
 

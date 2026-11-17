@@ -19,3 +19,14 @@ Nguồn tham chiếu (chỉ đọc, không chạy code):
 
 - Codex `openai/codex` @ `090be4df0724cdef5758e6a0934ba557af8b6bbe` (đã checkout sẵn, xác nhận `git rev-parse HEAD`).
 - OpenCode `sst/opencode` main @ `0ac0d7ee7260c3e711a481ceb4580bb60f4d9dd4` và tag `v1.19.5`.
+
+## W1 — Quyền chuẩn Codex (ADR 0040)
+
+| Lệnh | Exit | Pass | Skip | Fail |
+|---|---:|---:|---:|---:|
+| `bun run typecheck && bun run lint` | 0 | — | — | — |
+| `bun test tests/security/approval-policy.test.ts` | 0 | 18 | 0 | 0 |
+| `bun test tests/end-to-end/approval-policy.test.ts` (Seatbelt thật trên macOS) | 0 | 2 | 0 | 0 |
+| `bun test tests` | 0 | 673 | 33 | 0 |
+
+Ghi chú: các bộ test fixture viết cho hộp thoại duyệt chạy ở `untrusted` (`tests/preload.ts`); mặc định `on-request` được kiểm riêng.

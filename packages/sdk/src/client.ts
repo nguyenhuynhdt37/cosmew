@@ -27,6 +27,8 @@ import {
   type PermissionMode,
   type PermissionKind,
   PERMISSION_MODES,
+  DEFAULT_PERMISSION_MODE,
+  APPROVAL_POLICY_FOR_MODE,
   turnBudgetSchema,
   type TurnBudget,
   executionBackendFor,
@@ -108,6 +110,11 @@ export interface FutrynBackendPorts {
     context?: {sessionId: string; callId: string},
   ): Promise<ToolResult>;
   getProjectContext?(): ProjectContextReport | null;
+  /**
+   * Mode every session starts in (ADR 0040; `FUTRYN_APPROVAL_POLICY`). Defaults to `auto`
+   * (Codex `on-request` in the workspace-write sandbox).
+   */
+  permissionMode?: PermissionMode;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -188,8 +195,8 @@ function committedSessionMessages(stored: SessionRecord): Message[] {
 export class FutrynClient {
   private currentSession: {id: string; selection: Selection; messages: Message[]} | null = null;
   private currentMode: AgentMode = 'chat';
-  /** Session permission mode (ADR 0027); never persisted, every session starts in `default`. */
-  private permissionModeValue: PermissionMode = 'default';
+  /** Session permission mode (ADR 0027/0040); never persisted, every session starts in the configured mode. */
+  private permissionModeValue: PermissionMode;
   /** Explicit opt-in to a delegated agent runtime (ADR 0029); never implied by folder consent. */
   private delegatedAgentValue = false;
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
@@ -219,6 +226,18 @@ export class FutrynClient {
 
   constructor(private readonly ports: FutrynBackendPorts) {
     this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
+    this.permissionModeValue = this.initialPermissionMode();
+  }
+
+  /** The configured starting mode (ADR 0040); `auto` = Codex on-request unless configured otherwise. */
+  initialPermissionMode(): PermissionMode {
+    const mode = this.ports.permissionMode;
+    return mode && PERMISSION_MODES.includes(mode) ? mode : DEFAULT_PERMISSION_MODE;
+  }
+
+  /** Identity of the running turn, if any; turn-scoped grants (request_permissions "once") bind to it. */
+  currentTurnId(): string | undefined {
+    return this.sending ? this.activeTurnId : undefined;
   }
 
   /** User preferences constrain work, never authorize tools or restore session grants. */
@@ -250,7 +269,7 @@ export class FutrynClient {
   }
 
   private clearSessionAuthorization(): void {
-    this.permissionModeValue = 'default';
+    this.permissionModeValue = this.initialPermissionMode();
     this.delegatedAgentValue = false;
     this.sessionGrants.clear();
     this.ports.toolGrants?.clear();
@@ -509,7 +528,7 @@ export class FutrynClient {
     if (this.guarding) return;
     const account = this.currentAccountId();
     const elevated =
-      this.permissionModeValue !== 'default' ||
+      this.permissionModeValue !== this.initialPermissionMode() ||
       this.delegatedAgentValue ||
       this.listToolGrants().length > 0 ||
       this.sessionGrants.size > 0;
@@ -524,7 +543,7 @@ export class FutrynClient {
     if (this.elevatedFor === account) return;
     this.guarding = true;
     try {
-      this.permissionModeValue = 'default';
+      this.permissionModeValue = this.initialPermissionMode();
       this.delegatedAgentValue = false;
       this.ports.toolGrants?.clear();
       this.sessionGrants.clear();
@@ -1645,7 +1664,9 @@ export class FutrynClient {
         permissionRuleDecision({allow: [], ask: rules.ask, deny: rules.deny}, {tool, target: relative(input.target)}) ??
         ([...rules.deny, ...rules.ask].some(rule => rule === tool || rule.startsWith(tool + '(')) ? 'ask' : undefined);
     }
-    const decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
+    let decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
+    // Codex `prompt_is_rejected_by_policy`: under `never` an ask rule (or any prompt) is refused, never shown.
+    if (decision === 'ask' && APPROVAL_POLICY_FOR_MODE[this.permissionModeValue] === 'never') decision = 'deny';
     if (decision !== 'ask') {
       this.emitReactiveEvent(
         decision === 'allow' ? 'done' : 'error',

@@ -1,3 +1,4 @@
+import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
 import type {ApprovalRequest} from '@futryn/tools';
 import type {WorkspaceRoot} from '@futryn/workspace';
 import type {FutrynClient} from '@futryn/sdk';
@@ -17,6 +18,14 @@ const APPROVAL_REASONS: Record<string, string> = {
     'Runs a shell command in the Futryn sandbox: workspace policy enforced, .git read-only, configured secret-file policy, no network.',
   'network-escalation':
     'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
+  'dangerous-command':
+    'This command is on the dangerous list (forced rm, also through sudo/env/sh -c). It runs in the Futryn sandbox if approved.',
+  'unverified-command':
+    'Futryn could not verify every sub-command (parse error, $(...) substitution, eval or a dynamic program name). It runs in the Futryn sandbox if approved.',
+  'outside-writable-roots':
+    'The session sandbox is read-only here: approving lets Futryn write this file anyway (workspace policy still applies).',
+  'request-permissions':
+    'The model asks for more than the sandbox allows. "Allow once" grants it for the rest of this turn, "for session" until the session ends.',
   'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',
   'stdin-retained-escalation': 'Sends input to a running command that still has network access.',
   'stdin-input':
@@ -27,12 +36,32 @@ const reasonText = (reason: string) => APPROVAL_REASONS[reason] ?? reason;
 
 /** The dialog request for a Futryn tool call (read of a secret, patch, command or terminal input). */
 export function toolPermissionRequest(request: ApprovalRequest): PermissionInput {
+  // One approval table for every tool (ADR 0040): the policy reason names the permission kind.
+  const kind = APPROVAL_KIND_FOR_REASON[request.reason];
+  if (request.tool === 'request_permissions') {
+    const justification = request.justification ? ` Model's reason: ${request.justification}` : '';
+    return {
+      capability: request.capability === 'network.connect' ? 'network.connect' : 'fs.write',
+      kind: 'escalation',
+      // Display-only: no Allow rule can pre-approve a sandbox escalation.
+      ruleTarget: null,
+      action: 'Grant additional permissions',
+      target: request.target,
+      reason: reasonText(request.reason) + justification,
+      riskLevel: 'high',
+      scopeKey: request.scopeKey,
+    };
+  }
   if (request.capability === 'fs.write') {
     return {
       capability: 'fs.write',
+      ...(kind ? {kind} : {}),
       action: 'Apply verified workspace patch',
       target: request.target,
-      reason: 'Review the exact file changes before applying.',
+      reason:
+        request.reason === 'outside-writable-roots'
+          ? reasonText(request.reason)
+          : 'Review the exact file changes before applying.',
       riskLevel: 'high',
       scopeKey: request.scopeKey,
       diffPreview: request.diffPreview,
@@ -44,7 +73,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
     const justification = request.justification ? ` Model's reason: ${request.justification}` : '';
     return {
       capability: request.network ? 'network.connect' : request.capability,
-      ...(request.network ? {kind: 'network' as const, ruleTarget: null} : {}),
+      ...(request.network ? {kind: 'network' as const, ruleTarget: null} : kind ? {kind} : {}),
       action: `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
       reason: reasonText(request.reason) + justification,
@@ -104,6 +133,15 @@ export function runtimeApprover(client: () => FutrynClient | undefined): Runtime
 export function grantLabel(grant: {capability: string; target: string}, workspace: WorkspaceRoot): string {
   if (grant.capability === 'process.execute') return commandGrantLabel(grant.target, workspace);
   if (grant.capability === 'fs.write') return 'Exact patch ' + grant.target.slice(6, 18);
+  if (grant.capability === 'sandbox.grant') {
+    try {
+      const parsed = JSON.parse(grant.target) as {grant: string; scope: string; path?: string};
+      const scope = parsed.scope === 'session' ? 'session' : 'this turn';
+      return parsed.grant === 'network' ? `Network for commands (${scope})` : `Write ${parsed.path} (${scope})`;
+    } catch {
+      return 'Sandbox grant';
+    }
+  }
   return workspace.relativeOf(grant.target);
 }
 

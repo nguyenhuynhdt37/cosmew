@@ -1,6 +1,8 @@
 # ADR 0027 — Chế độ quyền và tool native của runtime subscription
 
 > **Thay thế một phần bởi [ADR 0029](0029-hannes-owned-agent-and-delegated-backends.md) (2026-11-16):** tool native của runtime không còn tự bật khi người dùng đồng ý cho dùng folder; đó là backend `delegated`, chỉ bật bằng opt-in tường minh (`/backend delegated`). Chế độ quyền và cách định tuyến yêu cầu duyệt bên dưới vẫn còn hiệu lực.
+>
+> **Thay thế một phần bởi [ADR 0040](0040-codex-approval-policy.md) (2026-11-17):** mỗi chế độ giờ là một approval policy của Codex (`default`→`untrusted`, `auto`→`on-request`, `bypassPermissions`→`never`, vẫn trong sandbox); mặc định là `auto`; `bypassPermissions` không còn duyệt mọi thứ mà từ chối lệnh nguy hiểm, vượt sandbox và đọc secret.
 
 Accepted 2026-11-15 theo yêu cầu của người dùng: subscription runtime phải thực thi được trong dự án ("ko thể thực thi"), cái cần chặn thì chặn nhưng hiện thông báo để cho phép, với nhiều chế độ như Claude Code (bypass, auto, …). Thay thế một phần ADR 0008 (chặn mọi tool của runtime), ADR 0018 (Codex chỉ qua cầu nối read/glob/grep) và phần chat-only của ADR 0026.
 

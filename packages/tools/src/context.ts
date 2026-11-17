@@ -6,7 +6,8 @@ export type ApprovalDecision = 'once' | 'session' | 'deny';
 
 export interface ApprovalRequest {
   tool: string;
-  capability: 'fs.read' | 'fs.write' | 'process.execute';
+  /** `network.connect` is a `request_permissions` grant (ADR 0040). */
+  capability: 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect';
   /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
@@ -58,6 +59,49 @@ export interface ToolDispatcherOptions {
    * change before launch invalidates the pending request. Defaults to read-only, on-request.
    */
   sandbox?: () => {mode: CommandSandbox['mode']; escalation: SandboxEscalation};
+  /**
+   * Identity of the running turn. `request_permissions` answered "once" grants for this turn only
+   * (Codex); without it such grants cover only the request itself.
+   */
+  turnId?: () => string | undefined;
+}
+
+/** Grant keys for `request_permissions` (ADR 0040), stored in the session grants. */
+export const PERMISSION_GRANT = {
+  capability: 'sandbox.grant',
+  network: (scope: string) => JSON.stringify({grant: 'network', scope}),
+  write: (scope: string, path: string) => JSON.stringify({grant: 'write', scope, path}),
+} as const;
+
+/** Scopes a `request_permissions` grant may live in right now: the session, and the running turn. */
+export function grantScopes(options: ToolDispatcherOptions): string[] {
+  const turn = options.turnId?.();
+  return turn ? ['session', `turn:${turn}`] : ['session'];
+}
+
+export function networkGranted(options: ToolDispatcherOptions): boolean {
+  return grantScopes(options).some(scope =>
+    options.grants.has(PERMISSION_GRANT.capability, PERMISSION_GRANT.network(scope)),
+  );
+}
+
+/** A workspace-relative path lies in a writable root granted by `request_permissions`. */
+export function writeGranted(options: ToolDispatcherOptions, path: string): boolean {
+  const grants = options.grants.list().filter(g => g.capability === PERMISSION_GRANT.capability);
+  const scopes = new Set(grantScopes(options));
+  return grants.some(g => {
+    try {
+      const parsed = JSON.parse(g.target) as {grant: string; scope: string; path?: string};
+      return (
+        parsed.grant === 'write' &&
+        scopes.has(parsed.scope) &&
+        !!parsed.path &&
+        (path === parsed.path || path.startsWith(parsed.path + '/'))
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 export const sandboxConfig = (options: ToolDispatcherOptions) =>

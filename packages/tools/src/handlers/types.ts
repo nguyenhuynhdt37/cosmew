@@ -9,6 +9,8 @@ export type PreparedTool = {
 } & (
   | {kind: 'patch'; plan: PatchPlan; runtime: ApplyPatchRuntime}
   | {kind: 'read'; file: ResolvedPath}
+  /** `request_permissions` (ADR 0040): a grant for later calls, never an action by itself. */
+  | {kind: 'permissions'; network: boolean; writable: string[]; justification?: string}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}
   | {
       kind: 'command';
@@ -27,6 +29,8 @@ export type PreparedTool = {
       stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox};
       /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
       grantCommand?: string;
+      /** Tree-sitter classification (ADR 0040), computed once at authorization. */
+      classification?: {dangerous: string | null; uncertain: boolean};
     }
 );
 export interface ToolHandler {

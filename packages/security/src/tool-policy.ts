@@ -131,8 +131,12 @@ export function evaluateExec(
     if (context.configuredMode === 'read-only' && sandbox.mode === 'workspace-write')
       return {effect: 'deny', reason: 'sandbox-mode'};
     if (sandbox.network && context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
-    if (sandbox.network) return {effect: 'ask', reason: 'network-escalation'};
+    if (sandbox.network && !context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
   }
+  // ADR 0040: the session's approval policy answers these asks (Codex exec_policy.rs).
+  const classification = context.classification ?? {dangerous: null, uncertain: true};
+  if (classification.dangerous) return {effect: 'ask', reason: 'dangerous-command'};
+  if (classification.uncertain) return {effect: 'ask', reason: 'unverified-command'};
   return {effect: 'ask', reason: 'process-execute'};
 }
 
@@ -147,6 +151,10 @@ export interface ExecPolicyContext extends ReadPolicyContext {
   /** Mode configured for the session; requests cannot exceed it. */
   configuredMode?: ExecSandbox['mode'];
   escalation?: SandboxEscalation;
+  /** Tree-sitter classification (ADR 0040). Missing means unverified: fail closed. */
+  classification?: {dangerous: string | null; uncertain: boolean};
+  /** The user granted network for this turn or session through `request_permissions`. */
+  networkGranted?: boolean;
 }
 
 /**
@@ -174,16 +182,26 @@ export function evaluateStdin(input: {
   if (input.launch.network && input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
   if (input.launch.network) return {effect: 'ask', reason: 'stdin-retained-escalation'};
   if (input.launch.mode !== input.current.mode) return {effect: 'ask', reason: 'stdin-policy-drift'};
-  // Futryn deviation from Codex (ADR 0034): input to a shell or REPL is a new command, so it is not
-  // covered by the launch approval. A "session" answer approves input to that one session only.
+  // Plain input inside the launch sandbox: the approval policy answers (ADR 0040). Codex
+  // (`stdin_approval.rs`, pinned 090be4df) reviews only retained agent grants and policy drift;
+  // `untrusted` still asks, because input to a shell or REPL is a new command.
   return {effect: 'ask', reason: 'stdin-input'};
+}
+
+export interface WritePolicyContext extends ReadPolicyContext {
+  /**
+   * The path lies in a writable root of the session sandbox (workspace-write, or a path granted by
+   * `request_permissions`). Codex `assess_patch_safety`: writes there are approved by `on-request`;
+   * elsewhere they are an escalation. Defaults to true (workspace-write).
+   */
+  writable?: boolean;
 }
 
 /** Patch writes cannot modify credentials, Git internals or Futryn durable state. */
 export function evaluateWrite(
   relativePath: string,
   absolutePath: string,
-  context: ReadPolicyContext = {},
+  context: WritePolicyContext = {},
 ): PermissionDecision {
   const read = evaluateRead(relativePath, absolutePath, context);
   if (read.effect !== 'allow') return {effect: 'deny', reason: read.reason};
@@ -194,5 +212,6 @@ export function evaluateWrite(
       .some(p => p === '.hannes' || p === '.futryn' || p.startsWith('.hannes-patch-') || p.startsWith('.futryn-patch-'))
   )
     return {effect: 'deny', reason: 'protected-path'};
+  if (context.writable === false) return {effect: 'ask', reason: 'outside-writable-roots'};
   return {effect: 'ask', reason: 'workspace-patch'};
 }

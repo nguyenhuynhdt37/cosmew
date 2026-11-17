@@ -27,37 +27,96 @@ export const permissionPromptResolutionSchema = z.strictObject({
 export type PermissionPromptResolution = z.infer<typeof permissionPromptResolutionSchema>;
 
 /**
- * Session permission mode (ADR 0027), modelled on Claude Code's modes. It only changes how an
- * `ask` decision is answered; deny rules (outside workspace, `.git`, Futryn state) never change.
- * - default: prompt for edits, commands, secret reads and anything else sensitive.
- * - acceptEdits: file edits are approved; commands and secrets still prompt.
- * - auto: edits and commands are approved; secret reads, network and other tools still prompt.
- * - bypassPermissions: every ask is approved without a prompt.
+ * Session permission mode (ADR 0027), shown with Claude Code's names. Since ADR 0040 every mode is
+ * a Codex approval policy (`AskForApproval`, pinned 090be4df `core/src/exec_policy.rs`):
+ * - default → `untrusted`: edits, commands and secret reads prompt (unless a project rule allows).
+ * - acceptEdits → `untrusted` with workspace edits approved.
+ * - auto → `on-request` (Futryn's default, as Codex): commands run in the sandbox and workspace
+ *   edits apply without a prompt; dangerous or unverifiable commands, network and other sandbox
+ *   escalations, and secret reads prompt.
+ * - bypassPermissions → `never`: nothing prompts; what would prompt runs in the sandbox when that
+ *   is safe (unverifiable commands) or is refused (dangerous commands, escalations, secrets).
  * - plan: read-only; edits and commands are refused, secret reads still prompt.
+ * The mode answers only what policy left as `ask`; deny rules (outside workspace, `.git`, Futryn
+ * state) never change.
  */
 export const permissionModeSchema = z.enum(['default', 'acceptEdits', 'auto', 'bypassPermissions', 'plan']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export const PERMISSION_MODES: readonly PermissionMode[] = permissionModeSchema.options;
-/** What a permission request is about, as far as the mode is concerned. */
-export type PermissionKind = 'read' | 'secret' | 'edit' | 'execute' | 'network' | 'other';
-export function permissionModeDecision(mode: PermissionMode, kind: PermissionKind): 'allow' | 'ask' | 'deny' {
-  if (mode === 'bypassPermissions') return 'allow';
-  if (kind === 'read') return 'allow';
-  if (kind === 'secret') return 'ask';
-  if (mode === 'plan') return kind === 'edit' || kind === 'execute' ? 'deny' : 'ask';
-  if (kind === 'edit') return mode === 'default' ? 'ask' : 'allow';
-  if (kind === 'execute') return mode === 'auto' ? 'allow' : 'ask';
-  return 'ask';
+/** Codex approval policies (ADR 0040). `FUTRYN_APPROVAL_POLICY` selects the session's starting mode. */
+export const approvalPolicySchema = z.enum(['untrusted', 'on-request', 'never']);
+export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
+export const APPROVAL_POLICY_FOR_MODE: Record<PermissionMode, ApprovalPolicy> = {
+  default: 'untrusted',
+  acceptEdits: 'untrusted',
+  auto: 'on-request',
+  plan: 'untrusted',
+  bypassPermissions: 'never',
+};
+/** The mode a configured approval policy starts a session in. */
+export const MODE_FOR_APPROVAL_POLICY: Record<ApprovalPolicy, PermissionMode> = {
+  untrusted: 'default',
+  'on-request': 'auto',
+  never: 'bypassPermissions',
+};
+/** Futryn's default, as Codex: workspace-write sandbox, `on-request` approvals (plan D3). */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
+/**
+ * What a permission request is about, as far as the approval policy is concerned:
+ * - `execute`: an ordinary command inside the configured sandbox;
+ * - `uncertain`: a command whose sub-commands cannot be verified (parse error, substitution, dynamic name);
+ * - `dangerous`: a command on Codex's dangerous list (`rm` with force, also through sudo/env/trap/`sh -c`);
+ * - `stdin`: input to a running command, inside its launch sandbox;
+ * - `network` / `escalation`: anything beyond the sandbox (network, writes outside writable roots,
+ *   `request_permissions`).
+ */
+export type PermissionKind =
+  'read' | 'secret' | 'edit' | 'execute' | 'uncertain' | 'dangerous' | 'stdin' | 'network' | 'escalation' | 'other';
+
+/**
+ * The approval table (ADR 0040), after Codex `render_decision_for_unmatched_command` and
+ * `assess_patch_safety`: dangerous commands prompt (`never` → forbidden); `on-request`/`never` run
+ * sandboxed commands and approve writes inside writable roots; `untrusted` prompts for every
+ * command and write; escalations prompt (`never` → refused). Secret reads prompt (OpenCode's `.env`
+ * ask) and are refused under `never`. Project rules are applied before this table.
+ */
+export function decideApproval(
+  policy: ApprovalPolicy,
+  kind: PermissionKind,
+  options: {autoApproveEdits?: boolean} = {},
+): 'allow' | 'ask' | 'deny' {
+  switch (kind) {
+    case 'read':
+      return 'allow';
+    case 'edit':
+      return policy === 'untrusted' && !options.autoApproveEdits ? 'ask' : 'allow';
+    case 'execute':
+    case 'stdin':
+      return policy === 'untrusted' ? 'ask' : 'allow';
+    case 'uncertain':
+      // Codex runs anything that is not dangerous under `never`, relying on the sandbox.
+      return policy === 'never' ? 'allow' : 'ask';
+    default:
+      return policy === 'never' ? 'deny' : 'ask';
+  }
 }
 
-/** One-line explanation shown when Shift+Tab or /permissions changes the mode (ADR 0027). */
+export function permissionModeDecision(mode: PermissionMode, kind: PermissionKind): 'allow' | 'ask' | 'deny' {
+  if (mode === 'plan') {
+    if (kind === 'read') return 'allow';
+    return ['edit', 'execute', 'uncertain', 'dangerous', 'stdin'].includes(kind) ? 'deny' : 'ask';
+  }
+  return decideApproval(APPROVAL_POLICY_FOR_MODE[mode], kind, {autoApproveEdits: mode === 'acceptEdits'});
+}
+
+/** One-line explanation shown when Shift+Tab or /permissions changes the mode (ADR 0027/0040). */
 export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
-  default: 'Edits, commands and secret files ask first.',
-  acceptEdits: 'File edits are approved; commands and secret files ask.',
-  auto: 'Edits and commands are approved; secret files, network and other tools ask.',
+  default: 'untrusted: edits, commands and secret files ask first.',
+  acceptEdits: 'untrusted + edits: file edits are approved; commands and secret files ask.',
+  auto: 'on-request: sandboxed commands and workspace edits run; dangerous commands, network and secrets ask.',
   plan: 'Read-only: edits and commands are refused.',
   bypassPermissions:
-    'Every request is approved without asking. Hard blocks (outside workspace, .git, Futryn state) still apply.',
+    'never: nothing asks. Sandboxed work runs; dangerous commands, escalations and secret files are refused.',
 };
 
 /**

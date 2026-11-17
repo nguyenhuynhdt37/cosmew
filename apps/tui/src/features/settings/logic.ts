@@ -1,4 +1,4 @@
-import type {AppearanceConfig} from '@futryn/contracts';
+import {APPROVAL_POLICY_FOR_MODE, type AppearanceConfig} from '@futryn/contracts';
 
 export interface SettingRow {
   label: string;
@@ -180,7 +180,12 @@ export function configurationRows(
           : 'exec_command unavailable for this session',
         action: 'status',
       },
-      {label: 'Approval policy', value: client.permissionMode(), action: 'permissions', source: 'session only'},
+      {
+        label: 'Approval policy',
+        value: `${client.permissionMode()} (${APPROVAL_POLICY_FOR_MODE[client.permissionMode()]})`,
+        action: 'permissions',
+        source: 'session only',
+      },
       {
         label: 'Workspace rules',
         value: 'Inspect effective allow / ask / deny rules',

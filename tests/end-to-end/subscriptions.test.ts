@@ -1155,7 +1155,10 @@ test('permission modes only answer ask decisions and Shift+Tab cycles them like 
   expect(permissionModeDecision('plan', 'edit')).toBe('deny');
   expect(permissionModeDecision('plan', 'execute')).toBe('deny');
   expect(permissionModeDecision('plan', 'secret')).toBe('ask');
-  expect(permissionModeDecision('bypassPermissions', 'secret')).toBe('allow');
+  // ADR 0040: bypassPermissions is Codex `never`: nothing prompts; secret reads and escalations are refused.
+  expect(permissionModeDecision('bypassPermissions', 'secret')).toBe('deny');
+  expect(permissionModeDecision('bypassPermissions', 'execute')).toBe('allow');
+  expect(permissionModeDecision('bypassPermissions', 'dangerous')).toBe('deny');
   const c = await context();
   const tui = new FutrynTuiApp({client: c.client, cols: 100, rows: 30});
   await tui.initialize();
@@ -1208,7 +1211,7 @@ test('project permission rules match Claude-style patterns with deny > ask > all
   expect(d(rules, {tool: 'Edit', target: 'src/a.ts'})).toBe('allow');
 });
 
-test('grok-build: project rules answer native requests before the mode; ask rules still prompt in bypass', async () => {
+test('grok-build: project rules answer native requests before the mode; ask rules prompt, or are refused in bypass (never)', async () => {
   const c = await context('native-tool', true);
   await connect(c, 'grok-build');
   const ws = mkdtempSync(join(tmpdir(), 'futryn-rules-ws-'));
@@ -1232,9 +1235,14 @@ test('grok-build: project rules answer native requests before the mode; ask rule
   expect(client.permissionRules()).toEqual({allow: [], ask: [], deny: ['Bash(touch:*)']}); // moved, not duplicated
   expect(await run()).toBe('native:denied');
   expect(existsSync(join(ws, 'native-proof.txt'))).toBe(false);
-  // ask rule prompts even in bypass mode (once the deny rule is gone; deny would still win).
+  // ADR 0040: bypass is Codex `never`, which never prompts: an ask rule is refused, not shown.
   client.removePermissionRule('deny', 'Bash(touch:*)');
   client.addPermissionRule('ask', 'Bash(touch native-proof.txt)');
+  expect(await run()).toBe('native:denied');
+  expect(client.listPendingPermissions()).toHaveLength(0);
+  expect(existsSync(join(ws, 'native-proof.txt'))).toBe(false);
+  // In a prompting mode the ask rule prompts, even though on-request would allow the command.
+  client.setPermissionMode('auto');
   const turn = run();
   const end = Date.now() + 4000;
   while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
@@ -1406,7 +1414,19 @@ test('requests without a structured target fail closed against deny/ask rules, e
     }),
   ).toBe('once');
   // A deny rule for the tool exists but cannot be checked against real paths: ask, never allow.
+  // Under bypass (Codex `never`) that ask is refused without a prompt (ADR 0040).
   c.client.addPermissionRule('deny', 'Edit(secrets/**)');
+  expect(
+    await c.client.requestPermission({
+      capability: 'fs.write',
+      action: 'codex: apply file changes',
+      target: 'apply file changes',
+      reason: 'r',
+      ruleTarget: null,
+    }),
+  ).toBe('deny');
+  expect(c.client.listPendingPermissions()).toHaveLength(0);
+  c.client.setPermissionMode('auto');
   const pending = c.client.requestPermission({
     capability: 'fs.write',
     action: 'codex: apply file changes',

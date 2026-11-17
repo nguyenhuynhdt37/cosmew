@@ -458,7 +458,10 @@ if (copilot && process.argv.includes('login')) {
         projectInstructions = p.developerInstructions ?? '';
         if (
           dynamicTools.some(
-            (t: any) => !['read', 'glob', 'grep', 'exec_command', 'apply_patch', 'edit', 'write'].includes(t.name),
+            (t: any) =>
+              !['read', 'glob', 'grep', 'exec_command', 'apply_patch', 'edit', 'write', 'request_permissions'].includes(
+                t.name,
+              ),
           )
         )
           process.exit(47);

@@ -7,12 +7,16 @@ import {
   type ToolCall,
   type ToolResult,
 } from '@futryn/contracts';
-import {evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
+import {classifyCommand, evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
+import {analyzeShell, ensureShellParser} from './exec/shell-parse';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {
   commandGrantTarget,
   effectiveSandboxMode,
+  networkGranted,
+  PERMISSION_GRANT,
   sandboxConfig,
+  writeGranted,
   type ApprovalRequest,
   type Audit,
   type ToolDispatcherOptions,
@@ -80,6 +84,7 @@ export class ToolOrchestrator {
           audit({target: null, phase: 'decided', decision: 'deny', reason: 'write-boundary'});
         return finish(prepared);
       }
+      if (prepared.kind === 'permissions') return finish(await this.grantPermissions(prepared, audit, signal));
       const authorization =
         prepared.kind === 'patch'
           ? await this.authorizePatch(call.name, prepared, audit, signal)
@@ -270,6 +275,77 @@ export class ToolOrchestrator {
     return null;
   }
 
+  /**
+   * `request_permissions` (ADR 0040): always asks (or is refused under `never`). "once" grants for
+   * the rest of the running turn, "session" for the session; nothing runs here.
+   */
+  private async grantPermissions(
+    prepared: Extract<PreparedTool, {kind: 'permissions'}>,
+    audit: Audit,
+    signal?: AbortSignal,
+  ): Promise<ToolOutput> {
+    const parts = [
+      ...(prepared.network ? ['network access for commands'] : []),
+      ...prepared.writable.map(path => `write ${path}`),
+    ];
+    const target = parts.join(', ').slice(0, 1024);
+    if (prepared.network && sandboxConfig(this.options).escalation === 'never') {
+      audit({target, phase: 'decided', decision: 'deny', reason: 'escalation-forbidden'});
+      return {
+        status: 'denied',
+        code: 'DENIED',
+        content: 'Sandbox escalation is disabled (approval policy never). Nothing was granted.',
+      };
+    }
+    const decision = {effect: 'ask' as const, reason: 'request-permissions'};
+    const key = JSON.stringify({network: prepared.network, writable: prepared.writable});
+    const request: ApprovalRequest = {
+      tool: 'request_permissions',
+      capability: prepared.network ? 'network.connect' : 'fs.write',
+      target,
+      reason: decision.reason,
+      scopeKey: key,
+      ...(prepared.network ? {network: true} : {}),
+      ...(prepared.justification ? {justification: this.options.redact(prepared.justification)} : {}),
+    };
+    // Never reuse an earlier answer silently: each request is a new escalation decision.
+    const scopeHash = createHash('sha256')
+      .update(JSON.stringify(['request_permissions', key]))
+      .digest('hex');
+    audit({target, phase: 'decided', decision: 'ask', reason: decision.reason, scopeHash});
+    const answer = await this.options.approve(request, signal);
+    signal?.throwIfAborted();
+    audit({target, phase: 'decided', decision: answer, reason: 'user', scopeHash});
+    if (answer !== 'once' && answer !== 'session')
+      return {
+        status: 'denied',
+        code: 'DENIED',
+        content: 'The user denied the permission request. Nothing was granted.',
+      };
+    const turn = this.options.turnId?.();
+    const scope = answer === 'session' || !turn ? 'session' : `turn:${turn}`;
+    if (answer === 'once' && !turn)
+      return {
+        status: 'denied',
+        code: 'DENIED',
+        content:
+          'A one-time grant needs a running turn; ask again and approve it for the session. Nothing was granted.',
+      };
+    if (prepared.network) this.options.grants.grant(PERMISSION_GRANT.capability, PERMISSION_GRANT.network(scope));
+    for (const path of prepared.writable)
+      this.options.grants.grant(PERMISSION_GRANT.capability, PERMISSION_GRANT.write(scope, path));
+    return {
+      status: 'ok',
+      content:
+        `Granted ${scope === 'session' ? 'for this session' : 'for the rest of this turn'}: ${parts.join('; ')}. ${
+          prepared.network
+            ? 'Commands still need sandbox_permissions "with_additional_permissions" with network enabled to use it.'
+            : ''
+        }`.trim(),
+      target,
+    };
+  }
+
   private async authorizePatch(
     tool: string,
     prepared: Extract<PreparedTool, {kind: 'patch'}>,
@@ -277,14 +353,17 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
   ): Promise<Authorization> {
     const {plan} = prepared;
-    const denied = plan.changes
-      .map(c =>
-        evaluateWrite(c.snapshot.path, join(this.options.workspace.root, c.snapshot.path), {
-          stateDirectory: this.options.stateDirectory,
-        }),
-      )
-      .find(d => d.effect === 'deny');
-    const decision = denied ?? {effect: 'ask' as const, reason: 'workspace-patch'};
+    // Codex assess_patch_safety: writes inside writable roots follow the approval policy; others escalate.
+    const workspaceWritable = sandboxConfig(this.options).mode === 'workspace-write';
+    const decisions = plan.changes.map(c =>
+      evaluateWrite(c.snapshot.path, join(this.options.workspace.root, c.snapshot.path), {
+        stateDirectory: this.options.stateDirectory,
+        writable: workspaceWritable || writeGranted(this.options, c.snapshot.path),
+      }),
+    );
+    const denied = decisions.find(d => d.effect === 'deny');
+    const decision = denied ??
+      decisions.find(d => d.reason === 'outside-writable-roots') ?? {effect: 'ask' as const, reason: 'workspace-patch'};
     const target = plan.changes
       .map(c => c.snapshot.path)
       .join(', ')
@@ -333,6 +412,8 @@ export class ToolOrchestrator {
       sandbox: prepared.sandbox,
       configuredMode: config.mode,
       escalation: config.escalation,
+      classification: prepared.classification,
+      networkGranted: networkGranted(this.options),
     });
   }
 
@@ -342,6 +423,12 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
   ): Promise<Authorization> {
     const {command, file, runtime, runtimeId, label} = prepared;
+    if (!prepared.stdin) {
+      // Tree-sitter classification (ADR 0040); a parser that cannot load leaves it unverified.
+      await ensureShellParser();
+      signal?.throwIfAborted();
+      prepared.classification = classifyCommand(analyzeShell(command), analyzeShell);
+    }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);
     const sandbox = prepared.sandbox
@@ -357,7 +444,8 @@ export class ToolOrchestrator {
         sandbox,
         scopeKey: grant,
         reason: decision.reason,
-        ...(prepared.sandbox?.network ? {network: true} : {}),
+        // A request_permissions network grant turns the launch into an ordinary command decision.
+        ...(prepared.sandbox?.network && decision.reason === 'network-escalation' ? {network: true} : {}),
         ...(prepared.justification ? {justification: this.options.redact(prepared.justification)} : {}),
       },
       grant,

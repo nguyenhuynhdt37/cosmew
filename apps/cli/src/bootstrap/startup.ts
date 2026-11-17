@@ -56,12 +56,12 @@ import {
 } from '@futryn/security';
 import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} from '../subscriptions/host';
 import {grantLabel, runtimeApprover, toolPermissionRequest} from './approvals';
-import {CommandRuntimes, createCommandRuntime, sandboxSettingsFromEnv} from './commands';
+import {CommandRuntimes, createCommandRuntime, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
 import {defaultStateDirectory} from './paths';
 import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 
 export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
-export {sandboxSettingsFromEnv} from './commands';
+export {approvalPolicyFromEnv, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 
@@ -428,6 +428,7 @@ export function startup(
         stateDirectory,
         commands: commands(),
         sandbox: () => sandboxSettings,
+        turnId: () => client?.currentTurnId(),
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),
         approve: (request, signal) =>
@@ -540,6 +541,7 @@ export function startup(
         }
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
+      permissionMode: permissionModeFromEnv(),
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
