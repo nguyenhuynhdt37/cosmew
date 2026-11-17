@@ -401,6 +401,7 @@ const TOOL_NAMES: Record<string, string> = {
   edit: 'Update',
   write: 'Write',
   update_plan: 'Plan',
+  request_user_input: 'Ask',
   request_permissions: 'Permissions',
 };
 
@@ -411,6 +412,10 @@ function stateToolArgs(call: ToolCall): string | undefined {
     const plan = Array.isArray(input?.plan) ? (input.plan as {status?: unknown}[]) : [];
     const done = plan.filter(item => item.status === 'completed').length;
     return `${done}/${plan.length} completed`;
+  }
+  if (call.name === 'request_user_input') {
+    const questions = Array.isArray(input?.questions) ? (input.questions as {header?: unknown}[]) : [];
+    return questions.map(q => String(q.header ?? '')).join(', ');
   }
   return undefined;
 }

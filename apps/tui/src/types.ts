@@ -10,6 +10,7 @@ export type ActiveOverlay =
   | 'connect'
   | 'sessions'
   | 'permissions'
+  | 'question'
   | 'diff'
   | 'palette'
   | 'settings'

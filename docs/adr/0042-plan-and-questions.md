@@ -15,6 +15,14 @@ The model had no structured way to show its plan or to ask the user a question. 
 - Plan and Review modes now offer `fs.read`, `code.intel`, `agent.state`, `user.input`, `network.search` and `network.fetch` tools (`ANALYSIS_CAPABILITIES`), never writes or commands.
 - TUI (`features/plan`): a checklist pinned above the composer (`✓` completed, `▸` running, `○` pending, `✗` cancelled; at most 8 rows keeping the running step visible; one summary line once everything is settled); the running step's `activeForm` replaces the spinner label; transcript `⏺ Plan(1/4 completed)`.
 
+## Decision — `request_user_input` (W3)
+
+- Schema (Codex): `{questions: [{id (snake_case), header (≤ 12 chars), question, options: [{label, description}]}]}`, 1–3 questions, non-empty options, the client adds a free-form "Other" (an "Other" option from the model is refused); plus `multiple` (OpenCode). Recommended options first with "(Recommended)" (Codex/OpenCode wording in the description).
+- Capability `user.input`, `parallel: false`; through the dispatcher (audit `user-input` allow), no approval. Offered in Chat and Plan mode (Codex enables it in Plan mode by default and in Default mode behind a flag; the plan asks for both). It is offered only while an interactive UI is attached (`client.setUserInputAvailable`, set by the TUI); a non-interactive run never offers it, and a call without a UI returns `UNAVAILABLE`. There are no subagents in wave 1; when they arrive (W9) they will not get this tool.
+- Result: Codex `{"answers": {id: {"answers": [...]}}}` (labels or the user's text). Esc dismisses (OpenCode): the model gets "The user dismissed this question…" and continues. Answers are text only and never grant a permission. Aborting the turn removes the question and cancels the call. The answer is the tool result in the durable journal, so a resumed session never asks an answered question again.
+- SDK: `listPendingQuestions`, `answerQuestion`, `dismissQuestion`, notifications `question.asked` / `question.answered`.
+- TUI (`features/question`, `Modal`): one tab per header (←/→), options with descriptions, number keys or ↑/↓ + Space, `[x]` toggles for multiple choice, an "Other" row that takes typed text, Enter submits once every question is answered, Esc dismisses; transcript `⏺ Ask(Database, Checks)`.
+
 ## Evidence
 
-`tests/end-to-end/plan.test.ts` (schema and invariants through the dispatcher, Plan mode offers the tool and no writes, durable plan after restart, rendered checklist, windowing and collapse).
+`tests/end-to-end/plan.test.ts` (schema and invariants through the dispatcher, Plan mode offers the tool and no writes, durable plan after restart, rendered checklist, windowing and collapse); `tests/end-to-end/question.test.ts` (single/multiple/Other answers as Codex JSON, dismissal, cancellation, non-interactive, invalid input, restart).

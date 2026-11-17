@@ -1,4 +1,11 @@
-import type {ToolResult, CommandRuntime, CommandSandbox, PlanState} from '@futryn/contracts';
+import type {
+  ToolResult,
+  CommandRuntime,
+  CommandSandbox,
+  PlanState,
+  UserInputOutcome,
+  UserQuestion,
+} from '@futryn/contracts';
 import type {SessionGrants, SandboxEscalation} from '@futryn/security';
 import type {WorkspaceRoot} from '@futryn/workspace';
 
@@ -72,6 +79,10 @@ export interface ToolDispatcherOptions {
    */
   agentState?: {
     updatePlan?(plan: PlanState): void;
+    /** Ask the user (ADR 0042); resolves `unavailable` without a UI, and on abort the call is cancelled. */
+    askUser?(questions: UserQuestion[], signal?: AbortSignal): Promise<UserInputOutcome>;
+    /** Whether a user can answer now; the tool is offered only then (never in non-interactive runs). */
+    canAskUser?(): boolean;
   };
 }
 

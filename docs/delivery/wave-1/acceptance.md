@@ -58,3 +58,12 @@ AGENTS.md lồng nhau không nạp từ thư mục vendored/bị git ignore; med
 | `bun run typecheck && bun run lint` | 0 | — | — | — |
 | `bun test tests/end-to-end/plan.test.ts` | 0 | 3 | 0 | 0 |
 | `bun test tests` | 0 | 698 | 33 | 0 |
+
+## W3 — `request_user_input` (ADR 0042)
+
+| Lệnh | Exit | Pass | Skip | Fail |
+|---|---:|---:|---:|---:|
+| `bun run typecheck && bun run lint` | 0 | — | — | — |
+| `bun test tests/end-to-end/question.test.ts` | 0 | 5 | 0 | 0 |
+| `bun test tests` (trước khi sửa danh sách tool trong `read-tools.test.ts`: 702 pass, 1 fail) | 1 | 702 | 33 | 1 |
+| `bun test tests/end-to-end/read-tools.test.ts` (sau khi sửa) | 0 | 6 | 0 | 0 |

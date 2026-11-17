@@ -10,6 +10,7 @@ import {HelpFeature} from './features/help';
 import {ModelsFeature} from './features/models';
 import {PaletteFeature} from './features/palette';
 import {PermissionsFeature} from './features/permissions';
+import {QuestionFeature} from './features/question';
 import {ReportsFeature} from './features/reports';
 import {renderSidebarPanel} from './features/sidebar';
 import {TextSelection} from './features/selection';
@@ -173,6 +174,7 @@ export class FutrynTuiApp {
       new PaletteFeature(host),
       new SessionsFeature(host),
       new PermissionsFeature(host),
+      new QuestionFeature(host),
       new DiffFeature(host),
       new HelpFeature(host),
       new ReportsFeature(host),
@@ -189,6 +191,8 @@ export class FutrynTuiApp {
 
   public async initialize(): Promise<void> {
     await this.themeEngine.initialize();
+    // An interactive UI can answer request_user_input (ADR 0042).
+    this.client.setUserInputAvailable(true);
     this.chat.syncFromSession();
     this.invalidateContext();
     this.subscriptions.push(
@@ -231,6 +235,9 @@ export class FutrynTuiApp {
       this.client.listPendingPermissions().length
     )
       this.openOverlay('permissions');
+    // A question of the running turn (ADR 0042) opens its dialog the same way.
+    if (!this.gate.active && this.overlay === 'none' && this.client.listPendingQuestions().length)
+      this.openOverlay('question');
   }
 
   public isExitRequested(): boolean {
@@ -293,6 +300,7 @@ export class FutrynTuiApp {
   }
 
   public async shutdown(): Promise<void> {
+    this.client.setUserInputAvailable(false);
     this.textSelection.clear();
     this.clipboardSequence = '';
     for (const unsubscribe of this.subscriptions.splice(0)) unsubscribe();

@@ -12,6 +12,8 @@ export type PreparedTool = {
   | {kind: 'read'; file: ResolvedPath}
   /** Agent session state (plan): no workspace effect, no approval; audited (ADR 0042). */
   | {kind: 'state'}
+  /** A question to the user: no workspace effect; the answer is text (ADR 0042). */
+  | {kind: 'question'}
   /** `request_permissions` (ADR 0040): a grant for later calls, never an action by itself. */
   | {kind: 'permissions'; network: boolean; writable: string[]; justification?: string}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}

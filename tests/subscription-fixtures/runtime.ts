@@ -469,6 +469,7 @@ if (copilot && process.argv.includes('login')) {
                 'write',
                 'request_permissions',
                 'update_plan',
+                'request_user_input',
               ].includes(t.name),
           )
         )

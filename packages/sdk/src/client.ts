@@ -27,6 +27,10 @@ import {
   type PermissionMode,
   type PermissionKind,
   type PlanState,
+  type PendingQuestion,
+  type UserAnswers,
+  type UserInputOutcome,
+  type UserQuestion,
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
   APPROVAL_POLICY_FOR_MODE,
@@ -554,6 +558,89 @@ export class FutrynClient {
   plan(): PlanState | null {
     const id = this.currentSession?.id;
     return id ? (this.ports.getPlan?.(id) ?? null) : null;
+  }
+
+  // ---- request_user_input (ADR 0042) -------------------------------------------------------
+  private readonly questions = new Map<
+    string,
+    {request: PendingQuestion; settle: (outcome: UserInputOutcome) => void}
+  >();
+  private userInputAvailable = false;
+
+  /** An interactive UI is attached and can answer questions (the TUI sets it; `exec` never does). */
+  setUserInputAvailable(available: boolean): void {
+    this.userInputAvailable = available;
+    if (!available) for (const id of [...this.questions.keys()]) this.settleQuestion(id, {kind: 'dismissed'});
+  }
+
+  /** True while an interactive UI can answer questions. */
+  userInputReady(): boolean {
+    return this.userInputAvailable;
+  }
+
+  listPendingQuestions(): PendingQuestion[] {
+    return [...this.questions.values()].map(entry => structuredClone(entry.request));
+  }
+
+  /**
+   * Ask the user and wait. Without a UI it resolves `unavailable` at once; an aborted turn removes
+   * the question and rejects with CANCELLED. Answers are text for the model and never grant anything.
+   */
+  askUser(questions: UserQuestion[], signal?: AbortSignal): Promise<UserInputOutcome> {
+    if (!this.userInputAvailable)
+      return Promise.resolve({kind: 'unavailable', reason: 'no interactive user is attached (non-interactive run)'});
+    if (signal?.aborted) return Promise.reject(new FutrynError('CANCELLED'));
+    const questionId = crypto.randomUUID();
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        this.questions.delete(questionId);
+        this.notifyStateChange();
+        reject(new FutrynError('CANCELLED'));
+      };
+      signal?.addEventListener('abort', onAbort, {once: true});
+      this.questions.set(questionId, {
+        request: {questionId, questions: structuredClone(questions), createdAt: new Date().toISOString()},
+        settle: outcome => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve(outcome);
+        },
+      });
+      this.notify('question.asked', questions.map(q => q.header).join(', '));
+    });
+  }
+
+  /** Answer by question id; every question needs at least one answer (a label or free text). */
+  answerQuestion(questionId: string, answers: UserAnswers): void {
+    const entry = this.questions.get(questionId);
+    if (!entry) throw new FutrynError('NOT_FOUND');
+    const clean: UserAnswers = {};
+    for (const question of entry.request.questions) {
+      const given = answers[question.id]?.answers
+        ?.map(answer =>
+          String(answer)
+            .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+            .trim()
+            .slice(0, 2000),
+        )
+        .filter(Boolean);
+      if (!given?.length || (!question.multiple && given.length > 1)) throw new FutrynError('INVALID_INPUT');
+      clean[question.id] = {answers: given};
+    }
+    this.settleQuestion(questionId, {kind: 'answered', answers: clean});
+  }
+
+  /** Closing the dialog is an answer too (OpenCode): the model continues without one. */
+  dismissQuestion(questionId: string): void {
+    if (!this.questions.has(questionId)) throw new FutrynError('NOT_FOUND');
+    this.settleQuestion(questionId, {kind: 'dismissed'});
+  }
+
+  private settleQuestion(questionId: string, outcome: UserInputOutcome): void {
+    const entry = this.questions.get(questionId);
+    if (!entry) return;
+    this.questions.delete(questionId);
+    entry.settle(outcome);
+    this.notify('question.answered', outcome.kind);
   }
 
   /** Called by the composition root after `update_plan` stored a new plan. */

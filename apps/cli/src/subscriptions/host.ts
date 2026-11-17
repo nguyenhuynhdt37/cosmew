@@ -40,6 +40,7 @@ const HANNES_BRIDGE_TOOLS = [
   'write',
   'request_permissions',
   'update_plan',
+  'request_user_input',
 ];
 
 type RuntimeRef = Extract<CredentialRef, {kind: 'runtime'}>;

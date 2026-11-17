@@ -441,6 +441,12 @@ export function startup(
             plans.set(id, plan);
             client?.planUpdated();
           },
+          // Questions go to the attached UI; without one the tool reports itself unavailable.
+          askUser: (questions, signal) =>
+            client
+              ? client.askUser(questions, signal)
+              : Promise.resolve({kind: 'unavailable' as const, reason: 'no client'}),
+          canAskUser: () => client?.userInputReady() === true,
         },
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),

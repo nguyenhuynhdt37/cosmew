@@ -50,6 +50,31 @@ export const planStateSchema = z.strictObject({
   updatedAt: z.string().datetime(),
 });
 export type PlanItem = z.infer<typeof planItemSchema>;
+
+/**
+ * `request_user_input` (ADR 0042): Codex schema (1–3 questions, `header` ≤ 12 chars, options with
+ * label + description, a free-form "Other" added by the client) plus OpenCode's `multiple`.
+ */
+export const userQuestionSchema = z.strictObject({
+  id: z.string().regex(/^[a-z0-9_]{1,64}$/),
+  header: z.string().min(1).max(12),
+  question: z.string().min(1).max(500),
+  options: z
+    .array(z.strictObject({label: z.string().min(1).max(80), description: z.string().max(300)}))
+    .min(1)
+    .max(6),
+  multiple: z.boolean().optional(),
+});
+export type UserQuestion = z.infer<typeof userQuestionSchema>;
+export interface PendingQuestion {
+  questionId: string;
+  questions: UserQuestion[];
+  createdAt: string;
+}
+/** Codex `RequestUserInputResponse`: answers by question id (labels, or the user's own text). */
+export type UserAnswers = Record<string, {answers: string[]}>;
+export type UserInputOutcome =
+  {kind: 'answered'; answers: UserAnswers} | {kind: 'dismissed'} | {kind: 'unavailable'; reason: string};
 export type PlanState = z.infer<typeof planStateSchema>;
 
 export interface ToolDescriptor {
