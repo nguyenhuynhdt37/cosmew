@@ -163,6 +163,7 @@ test('custom endpoint dialog configures protocol, no-auth and manual model with 
   await tui.handleKey('Enter'); // Manual
   await type(tui, 'manual-model');
   await tui.handleKey('Enter');
+  await tui.handleKey('Enter'); // No extra headers
   await tui.handleKey('Enter'); // No auth method
   await waitFor(() => tui.getActiveOverlay() === 'models');
   expect(app.registry.get('gateway').protocol).toBe('chat');

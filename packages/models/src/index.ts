@@ -6,3 +6,4 @@ export * from './adapter';
 export * from './router';
 export * from './subscription';
 export * from './limits';
+export * from './host-config';

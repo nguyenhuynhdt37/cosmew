@@ -66,10 +66,19 @@ export class ModelCatalog {
     this.save([...cache, model]);
     return model;
   }
+  /** Models listed in the host config (`models = [...]`) join the catalog as manual entries. */
+  private configured(): ModelInfo[] {
+    const cached = this.cached();
+    const missing = (this.transport.provider.models ?? []).filter(id => !cached.some(m => m.id === id));
+    if (!missing.length) return cached;
+    const merged = [...cached, ...missing.map(id => normalizeModel(id, id, 'manual'))];
+    this.save(merged);
+    return merged;
+  }
   async discover(signal?: AbortSignal): Promise<{models: ModelInfo[]; stale: boolean; warning?: string}> {
     if (this.transport.provider.catalog === 'manual')
       return {
-        models: this.cached(),
+        models: this.configured(),
         stale: false,
         warning: 'Manual catalog; model availability is unverified until generation succeeds.',
       };
@@ -79,8 +88,9 @@ export class ModelCatalog {
       const cursors = new Set<string>();
       for (let page = 0; page < 20; page++) {
         const kind = this.transport.provider.catalog;
-        const path =
-          kind === 'ollama'
+        const path = this.transport.provider.modelCatalogURL
+          ? this.transport.provider.modelCatalogURL
+          : kind === 'ollama'
             ? '/api/tags'
             : 'models' +
               (cursor
@@ -149,7 +159,7 @@ export class ModelCatalog {
         cursor = next;
       }
       const merged = new Map(
-        this.cached()
+        this.configured()
           .filter(m => m.source === 'manual')
           .map(m => [m.id, m]),
       );

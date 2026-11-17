@@ -21,6 +21,7 @@ import {
   analysisCapability,
   permissionRuleDecision,
   type PlanState,
+  type Provider,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
@@ -38,6 +39,9 @@ import {
   SubscriptionAdapter,
   parseOpenRouterKeyLimits,
   providerPresets,
+  type HostProviderEntry,
+  loadHostConfig,
+  renderProviderToml,
 } from '@futryn/models';
 import {
   FileCustomThemeStore,
@@ -62,6 +66,7 @@ import {
 } from '@futryn/security';
 import {SubscriptionHost, type SubscriptionHostOptions} from '../subscriptions/host';
 import {grantLabel, toolPermissionRequest} from './approvals';
+import {HostConfigStore, TokenCommandRunner} from './host-config';
 import {CommandRuntimes, createCommandRuntime, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
 import {defaultStateDirectory} from './paths';
 import {fitUtf8Prefix} from './utf8';
@@ -166,6 +171,72 @@ export function startup(
     }
   })();
   const registry = new ProviderRegistry(settings);
+  // Host providers (ADR 0046) come only from <state directory>/config.toml, never from a workspace.
+  const hostConfig = new HostConfigStore(directory, new Set(providerPresets.filter(p => p.runtime).map(p => p.id)));
+  const hostEntries = new Map<string, HostProviderEntry>();
+  const registerHostSecrets = (provider: Provider) => {
+    for (const variable of Object.values(provider.envHttpHeaders ?? {}))
+      if (process.env[variable]) redactor.register(process.env[variable]!);
+  };
+  /** Make the settings match the config file: its providers replace same-id entries; removed ones go unless accounts use them. */
+  const syncHostProviders = () => {
+    const loaded = hostConfig.load();
+    if (loaded.usable) {
+      hostEntries.clear();
+      for (const entry of loaded.providers) {
+        hostEntries.set(entry.provider.id, entry);
+        registerHostSecrets(entry.provider);
+      }
+      const state = settings.read();
+      const wanted = new Set(loaded.providers.map(e => e.provider.id));
+      const next = state.providers.filter(
+        p => !(p.source === 'config' && !wanted.has(p.id) && !state.accounts.some(a => a.providerId === p.id)),
+      );
+      for (const {provider} of loaded.providers) {
+        const index = next.findIndex(p => p.id === provider.id);
+        if (index >= 0) next[index] = provider;
+        else next.push(provider);
+      }
+      if (JSON.stringify(next) !== JSON.stringify(state.providers))
+        settings.update(fresh => {
+          fresh.providers = next;
+        });
+    }
+    return loaded;
+  };
+  let hostLoaded = syncHostProviders();
+  /** A custom provider is a host config entry: written to config.toml, then loaded like any other. */
+  const reservedIds = new Set(providerPresets.filter(p => p.runtime).map(p => p.id));
+  /** The host config rules applied to a provider built elsewhere (TUI form): render it, parse it back, report why not. */
+  const validateHostProvider = (provider: Provider): string | null => {
+    try {
+      const loaded = loadHostConfig(Bun.TOML.parse(renderProviderToml({provider})), reservedIds);
+      return loaded.providers.length ? null : (loaded.diagnostics[0]?.message ?? 'invalid provider');
+    } catch {
+      return 'invalid provider';
+    }
+  };
+  const addHostProvider = (entry: HostProviderEntry): Provider => {
+    if (registry.list().some(x => x.id === entry.provider.id)) throw new FutrynError('INVALID_INPUT');
+    if (validateHostProvider(entry.provider)) throw new FutrynError('INVALID_INPUT');
+    hostConfig.add(entry);
+    hostLoaded = syncHostProviders();
+    if (!registry.list().some(x => x.id === entry.provider.id)) throw new FutrynError('INVALID_INPUT');
+    return registry.get(entry.provider.id);
+  };
+  const removeProvider = (id: string) => {
+    const provider = registry.get(id);
+    if (provider.source === 'config') {
+      if (settings.read().accounts.some(a => a.providerId === id)) throw new FutrynError('POLICY');
+      hostConfig.remove(id);
+    }
+    registry.remove(id);
+    hostEntries.delete(id);
+  };
+  const tokens = new TokenCommandRunner(
+    id => hostEntries.get(id)?.tokenCommand,
+    token => redactor.register(token),
+  );
   const integrations = new IntegrationRegistry(registry);
   const accounts = new AccountManager(settings, vault);
   const router = new ModelRouter(settings);
@@ -190,6 +261,7 @@ export function startup(
         },
       },
       services.fetch,
+      (provider, signal) => tokens.token(provider, signal),
     );
 
   const catalog = (account: Account) => new ModelCatalog(settings, transport(account));
@@ -272,6 +344,7 @@ export function startup(
         analysisOnly: wiring.analysisOnly ?? (() => false),
         contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
         outputLimit: () => cachedModel(account, selection.modelId)?.outputLimit ?? null,
+        streamMaxRetries: () => registry.get(account.providerId).streamMaxRetries,
       },
     );
   };
@@ -769,8 +842,15 @@ export function startup(
       },
       listProviders: () => registry.list(),
       listProviderPresets: () => [...providerPresets],
-      addProvider: p => registry.add({...p, baseURL: validateEndpoint(p.baseURL)}),
-      removeProvider: id => registry.remove(id),
+      addProvider: p => {
+        const provider = {...p, baseURL: validateEndpoint(p.baseURL)};
+        if (provider.source !== 'config') return registry.add(provider);
+        return addHostProvider({provider});
+      },
+      removeProvider,
+      validateHostProvider,
+      hostConfigDiagnostics: () =>
+        hostLoaded.diagnostics.map(d => (d.providerId ? `${d.providerId}: ` : '') + d.message),
 
       // Accounts and models
       listAccounts: () => settings.read().accounts,
@@ -893,6 +973,10 @@ export function startup(
     validateAccount,
     discoverModels,
     subscriptions,
+    hostConfig,
+    addHostProvider,
+    removeProvider,
+    hostConfigDiagnostics: () => hostLoaded.diagnostics,
     /** Resolves when credentials of migrated-away accounts are deleted. */
     migrationCleanup,
     takeStartupNotices: () => outbox.takeNotices(),

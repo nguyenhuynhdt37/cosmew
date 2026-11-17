@@ -11,6 +11,7 @@ export type ConnectStep =
   | 'auth'
   | 'catalog'
   | 'manual'
+  | 'headers'
   | 'accounts'
   | 'actions'
   | 'rename'

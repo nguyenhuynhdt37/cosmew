@@ -15,6 +15,7 @@ const labels: Partial<Record<ConnectStep, string>> = {
   auth: 'Choose endpoint authentication',
   catalog: 'Choose model discovery',
   manual: 'Manual model ID',
+  headers: 'Extra headers · Name=Value, Name=$ENV_VAR · Enter to skip',
   accounts: 'Manage accounts',
   actions: 'Account actions',
   rename: 'Rename account',
@@ -132,7 +133,9 @@ export function renderConnectProviderOverlay(options: {
         ? 'Paste your API key. Input is hidden.'
         : s.step === 'env'
           ? 'Enter the variable name, not the key.'
-          : '';
+          : s.step === 'headers'
+            ? 'Separate headers with ; · $VAR reads the value from an environment variable · no tokens here.'
+            : '';
   if (statusLines.length) for (const line of statusLines.slice(0, 3)) row(line, t.warning);
   else row(hint, t.foregroundMuted);
   row(

@@ -43,6 +43,8 @@ export interface ConversationOptions {
   /** Model context window in tokens, when known. */
   contextLimit?: () => number | null | undefined;
   outputLimit?: () => number | null | undefined;
+  /** The provider's `stream_max_retries` (host config); absent means the Codex default. */
+  streamMaxRetries?: () => number | undefined;
   compactor?: ContextCompactor;
   /** Explicit analysis modes cannot be converted into mutating artifact recovery. */
   analysisOnly?: () => boolean;

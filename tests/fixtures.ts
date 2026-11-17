@@ -131,7 +131,15 @@ export function scriptedView(protocol: ScriptedView['protocol'], body: any): Scr
   };
 }
 export function fixtureServer() {
-  const requests: {path: string; body: any; authorization: string | null; apiKey: string | null}[] = [];
+  const requests: {
+    path: string;
+    body: any;
+    authorization: string | null;
+    apiKey: string | null;
+    /** Every request header, lower-cased (host-config header tests, ADR 0046). */
+    headers: Record<string, string>;
+    search: string;
+  }[] = [];
   let cacheTokens: number | undefined;
   let reasoning = false;
   let status = 200;
@@ -189,6 +197,8 @@ export function fixtureServer() {
         body,
         authorization: req.headers.get('authorization'),
         apiKey: req.headers.get('x-api-key') ?? req.headers.get('x-goog-api-key'),
+        headers: Object.fromEntries(req.headers),
+        search: url.search,
       });
       if (delay) await Bun.sleep(delay);
       if (status !== 200)

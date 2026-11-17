@@ -41,6 +41,30 @@ export function retryDelay(attempt: number, retryMs: number | null, random = Mat
   return Math.min(30000, Math.max(retryMs ?? 0, Math.floor(250 * 2 ** attempt * (0.5 + random()))));
 }
 
+/** Supplies the bearer token of a `command` provider (the composition root runs the user's command). */
+export type TokenSource = (provider: Provider, signal?: AbortSignal) => Promise<string | undefined>;
+
+/**
+ * Host-config request decoration (ADR 0046): query parameters, static headers and headers whose value
+ * comes from an environment variable. Credential headers already set by the adapter are never replaced
+ * by static headers; env headers are applied only when the variable is set and non-empty (Codex).
+ */
+export function decorate(
+  provider: Provider,
+  target: URL,
+  headers: Headers,
+  env: Record<string, string | undefined> = process.env,
+): void {
+  for (const [name, value] of Object.entries(provider.queryParams ?? {}))
+    if (!target.searchParams.has(name)) target.searchParams.set(name, value);
+  for (const [name, value] of Object.entries(provider.httpHeaders ?? {}))
+    if (!headers.has(name)) headers.set(name, value);
+  for (const [name, variable] of Object.entries(provider.envHttpHeaders ?? {})) {
+    const value = env[variable];
+    if (value) headers.set(name, value);
+  }
+}
+
 export class ProviderTransport {
   constructor(
     readonly provider: Provider,
@@ -48,9 +72,15 @@ export class ProviderTransport {
     private readonly vault: CredentialVault,
     private readonly policy: NetworkPolicy,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly tokenSource?: TokenSource,
   ) {}
-  async credential(): Promise<string | undefined> {
+  async credential(signal?: AbortSignal): Promise<string | undefined> {
     this.policy.authorize(this.provider, this.account);
+    if (this.provider.auth === 'command') {
+      const token = await this.tokenSource?.(this.provider, signal);
+      if (!token) throw new FutrynError('AUTH');
+      return token;
+    }
     const key = await this.vault.get(this.account.credential);
     if (this.provider.auth === 'api-key' && !key) throw new FutrynError('AUTH');
     return key;
@@ -77,9 +107,11 @@ export class ProviderTransport {
       target.searchParams.has('key')
     )
       throw new FutrynError('POLICY');
+    const headers = new Headers(init.headers);
+    decorate(this.provider, target, headers);
     let response: Response;
     try {
-      response = await this.fetchImpl(target, {...init, redirect: 'error'});
+      response = await this.fetchImpl(target, {...init, headers, redirect: 'error'});
     } catch {
       throw init.signal?.aborted ? normalizeError(null, init.signal) : new FutrynError('TRANSPORT', true);
     }
@@ -128,7 +160,7 @@ export class ProviderTransport {
   }
   async json(path: string, signal?: AbortSignal): Promise<unknown> {
     const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(this.provider.timeoutMs)]);
-    const key = await this.credential();
+    const key = await this.credential(combined);
     const headers: Record<string, string> = {};
     if (key) {
       if (this.provider.protocol === 'anthropic') {
@@ -139,9 +171,11 @@ export class ProviderTransport {
     }
     for (let attempt = 0; ; attempt++) {
       try {
-        const url = path.startsWith('/api/')
-          ? new URL(path, this.provider.baseURL).href
-          : this.provider.baseURL.replace(/\/$/, '') + '/' + path;
+        const url = /^https?:\/\//.test(path)
+          ? path
+          : path.startsWith('/api/')
+            ? new URL(path, this.provider.baseURL).href
+            : this.provider.baseURL.replace(/\/$/, '') + '/' + path;
         return await (await this.request(url, {headers, signal: combined})).json();
       } catch (error) {
         const safe = normalizeError(error, combined);

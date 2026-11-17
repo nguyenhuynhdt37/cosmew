@@ -111,7 +111,7 @@ export async function loginWizard(
       .list()
       .find(i => (i.providerIds ?? [i.provider.id]).includes(provider.id))!.methods;
     const method =
-      provider.auth === 'none'
+      provider.auth !== 'api-key'
         ? 'none'
         : await choose(
             input,

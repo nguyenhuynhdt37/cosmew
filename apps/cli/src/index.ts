@@ -1,17 +1,10 @@
 #!/usr/bin/env -S bun --config=/dev/null --no-env-file
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
-import {
-  FutrynError,
-  providerSchema,
-  type Account,
-  type AnimationConfig,
-  type ModelInfo,
-  type ThemeMode,
-} from '@futryn/contracts';
+import {FutrynError, type Account, type AnimationConfig, type ModelInfo, type ThemeMode} from '@futryn/contracts';
 import {parseSlashCommand} from '@futryn/sdk';
-import {providerPresets} from '@futryn/models';
-import {fetchModelsDev, terminalText, validateEndpoint} from '@futryn/security';
+import {loadHostConfig, providerPresets} from '@futryn/models';
+import {fetchModelsDev, terminalText} from '@futryn/security';
 import {reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
 import {loginSubscription} from './subscriptions/login';
 import {loginWizard} from './auth-wizard';
@@ -24,8 +17,12 @@ import {ChatInput, ask, readSecretStdin, secretInput} from './input';
 const HELP = `Futryn (fyn) provider, authentication & TUI CLI
 
   providers list | add [id] | show <id> | test | remove <id>
-    add --url <base-url> --protocol chat|responses|anthropic|gemini
-        --catalog openai|anthropic|gemini|ollama|manual --auth api-key|none [--stream-usage]
+    add --url <base-url> --protocol chat|responses|anthropic|gemini [--name <label>]
+        --catalog openai|anthropic|gemini|ollama|manual [--models a,b] [--catalog-url <url>] [--no-auth]
+        [--env-key NAME] [--header Name=Value]... [--env-header Name=ENV_NAME]... [--query name=value]...
+        [--auth-command <exe> [--auth-arg <arg>]...] [--idle-timeout-ms n] [--request-retries n]
+        [--stream-retries n] [--replay-reasoning]
+        Writes [model_providers.<id>] in ~/.futryn/config.toml (user-level only; no tokens in the file).
   login --provider <id> (alias of auth login)
   logout [--account <id-or-alias>] | status | doctor
   auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
@@ -46,7 +43,7 @@ const HELP = `Futryn (fyn) provider, authentication & TUI CLI
   fyn [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
   fyn run [--json] < message.txt
 
-Options: --json, --help, --project, --timeout-ms <100..300000> (provider add).
+Options: --json, --help, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
 variable NAME. Never pass a key as an argument. Default storage: ~/.futryn (0700); existing ~/.hannes is reused.
 FUTRYN_HOME overrides storage; HANNES_HOME remains compatible.
@@ -88,9 +85,39 @@ const stringOptions = [
   'reduced-motion',
   'css',
   'id',
+  'models',
+  'env-key',
+  'auth-command',
+  'catalog-url',
+  'idle-timeout-ms',
+  'request-retries',
+  'stream-retries',
 ];
-const booleanOptions = ['json', 'help', 'key-stdin', 'offline', 'project', 'generate', 'stream-usage', 'tui'];
-type Options = Record<string, string | boolean | undefined>;
+/** Repeatable `Name=Value` options of `providers add`. */
+const listOptions = ['header', 'env-header', 'query', 'auth-arg'];
+const booleanOptions = [
+  'json',
+  'help',
+  'key-stdin',
+  'offline',
+  'project',
+  'generate',
+  'stream-usage',
+  'tui',
+  'no-auth',
+  'replay-reasoning',
+];
+type Options = Record<string, string | string[] | boolean | undefined>;
+const list = (options: Options, key: string): string[] =>
+  Array.isArray(options[key]) ? (options[key] as string[]) : [];
+const pairs = (values: string[]): Record<string, string> =>
+  Object.fromEntries(
+    values.map(value => {
+      const at = value.indexOf('=');
+      if (at <= 0) throw new FutrynError('INVALID_INPUT');
+      return [value.slice(0, at), value.slice(at + 1)];
+    }),
+  );
 const str = (options: Options, key: string) =>
   typeof options[key] === 'string' ? (options[key] as string) : undefined;
 const fail = (): never => {
@@ -175,8 +202,20 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
     output(app, {accountId: account.id, alias: account.alias, status: account.status}, !!options.json);
     return account;
   }
+  // A host-config provider can name its key variable (Codex env_key): use it when it is set.
+  const hintedEnv =
+    provider.envKey && !options['key-stdin'] && !str(options, 'method') && !str(options, 'env')
+      ? provider.envKey
+      : undefined;
+  if (hintedEnv && !process.env[hintedEnv])
+    process.stderr.write(
+      provider.envKeyInstructions
+        ? `${provider.envKeyInstructions}\n`
+        : `Tip: set ${hintedEnv} to skip the key prompt.\n`,
+    );
+  if (hintedEnv && process.env[hintedEnv]) options.env = hintedEnv;
   const method =
-    str(options, 'method') ?? (str(options, 'env') ? 'env' : provider.auth === 'none' ? 'none' : 'api-key');
+    str(options, 'method') ?? (str(options, 'env') ? 'env' : provider.auth !== 'api-key' ? 'none' : 'api-key');
   if (!['env', 'api-key', 'none'].includes(method)) throw new FutrynError('UNSUPPORTED');
   if (
     (options['key-stdin'] && str(options, 'env')) ||
@@ -661,6 +700,7 @@ async function main() {
       strict: true,
       options: Object.fromEntries([
         ...stringOptions.map(name => [name, {type: 'string' as const}]),
+        ...listOptions.map(name => [name, {type: 'string' as const, multiple: true}]),
         ...booleanOptions.map(name => [name, {type: 'boolean' as const}]),
       ]),
     });
@@ -737,11 +777,13 @@ async function main() {
           {
             configured: app.registry.list(),
             availablePresets: providerPresets.map(p => ({...p, liveVerified: false})),
-            customGateway: 'URL + protocol + model ID; 9Router uses custom configuration.',
+            hostConfig: {path: app.hostConfig.path, problems: app.hostConfigDiagnostics()},
+            customGateway: `Gateways such as 9Router: providers add <id> --url <base-url> --header Name=Value; see ${app.hostConfig.path}.`,
           },
           !!options.json,
         );
       } else if (action === 'add') {
+        // Writes `[model_providers.<id>]` in the user-level config.toml (ADR 0046), the same file a user edits by hand.
         const id = argument ?? (await ask('Configuration ID'));
         const preset = providerPresets.find(p => p.id === id);
         const url =
@@ -750,22 +792,47 @@ async function main() {
           str(options, 'protocol') ??
           preset?.protocol ??
           (await ask('Protocol: chat, responses, anthropic, gemini', 'chat'));
-        const config = providerSchema.parse({
-          id,
+        const authCommand = str(options, 'auth-command');
+        const raw: Record<string, unknown> = {
           name: str(options, 'name') ?? preset?.name ?? id,
-          baseURL: validateEndpoint(url),
-          protocol,
-          catalog: str(options, 'catalog') ?? preset?.catalog ?? 'manual',
-          auth: str(options, 'auth') ?? preset?.auth ?? 'api-key',
-          metadataVersion: 1,
-          timeoutMs: numberOption(options, 'timeout-ms', preset?.timeoutMs ?? 60000),
-          streamUsage: options['stream-usage'] === true || preset?.streamUsage,
-        });
-        output(app, app.registry.add(config), !!options.json);
+          base_url: url,
+          wire_api: protocol,
+          ...(str(options, 'catalog') ? {catalog: str(options, 'catalog')} : {}),
+          ...(str(options, 'env-key') ? {env_key: str(options, 'env-key')} : {}),
+          ...(str(options, 'models')
+            ? {
+                models: str(options, 'models')!
+                  .split(',')
+                  .map(m => m.trim())
+                  .filter(Boolean),
+              }
+            : {}),
+          ...(str(options, 'catalog-url') ? {model_catalog_url: str(options, 'catalog-url')} : {}),
+          ...(list(options, 'header').length ? {http_headers: pairs(list(options, 'header'))} : {}),
+          ...(list(options, 'env-header').length ? {env_http_headers: pairs(list(options, 'env-header'))} : {}),
+          ...(list(options, 'query').length ? {query_params: pairs(list(options, 'query'))} : {}),
+          ...(str(options, 'idle-timeout-ms')
+            ? {stream_idle_timeout_ms: numberOption(options, 'idle-timeout-ms', 0)}
+            : {}),
+          ...(str(options, 'request-retries')
+            ? {request_max_retries: numberOption(options, 'request-retries', 0)}
+            : {}),
+          ...(str(options, 'stream-retries') ? {stream_max_retries: numberOption(options, 'stream-retries', 0)} : {}),
+          ...(options['no-auth'] === true || str(options, 'auth') === 'none' ? {requires_auth: false} : {}),
+          ...(options['replay-reasoning'] === true ? {replay_reasoning: true} : {}),
+          ...(authCommand ? {auth: {command: authCommand, args: list(options, 'auth-arg')}} : {}),
+        };
+        const loaded = loadHostConfig({model_providers: {[id]: raw}}, new Set(['chatgpt']));
+        const entry = loaded.providers[0];
+        if (!entry) {
+          process.stderr.write(`Provider not added: ${loaded.diagnostics.map(d => d.message).join('; ')}\n`);
+          throw new FutrynError('INVALID_INPUT');
+        }
+        output(app, app.addHostProvider(entry), !!options.json);
       } else if (action === 'show') {
         output(app, app.registry.get(argument ?? fail()), !!options.json);
       } else if (action === 'remove') {
-        app.registry.remove(argument ?? fail());
+        app.removeProvider(argument ?? fail());
         output(app, 'Provider removed.');
       } else if (action === 'test') {
         output(

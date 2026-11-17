@@ -145,6 +145,10 @@ export interface FutrynBackendPorts {
   listProviderPresets(): Provider[];
   addProvider(provider: Provider): Provider;
   removeProvider(id: string): void;
+  /** Problems found in the user-level host config (ADR 0046); empty when it is fine or absent. */
+  hostConfigDiagnostics?(): string[];
+  /** Why a custom provider would be refused by the host config rules, or null when it is fine. */
+  validateHostProvider?(provider: Provider): string | null;
   listAccounts(): Account[];
   getAccount(idOrAlias: string): Account;
   addAccount(providerId: string, alias: string, credential: CredentialRef, secret?: string): Promise<Account>;
@@ -819,6 +823,11 @@ export class FutrynClient {
     return added;
   }
 
+  /** Null when the host config would accept this custom provider; otherwise the reason (ADR 0046). */
+  validateCustomProvider(provider: Provider): string | null {
+    return this.ports.validateHostProvider?.(provider) ?? null;
+  }
+
   removeProvider(id: string): void {
     this.ports.removeProvider(id);
     this.notifyStateChange();
@@ -908,14 +917,21 @@ export class FutrynClient {
   async diagnose(signal?: AbortSignal, generate = false): Promise<string> {
     const status = this.status();
     const account = status.activeAccount;
-    if (!account) return 'No active account. Use /login. Runtime and private settings loaded.';
+    let configProblems = '';
+    try {
+      const problems = this.ports.hostConfigDiagnostics?.() ?? [];
+      if (problems.length) configProblems = `\nHost config problems (~/.futryn/config.toml): ${problems.join('; ')}`;
+    } catch {
+      /* diagnostics must never break /doctor */
+    }
+    if (!account) return `No active account. Use /login. Runtime and private settings loaded.${configProblems}`;
     const target =
       generate && status.selection?.accountId === account.id
         ? {...account, defaultModel: status.selection.modelId}
         : account;
     const result = await this.ports.validateAccount(target, signal, generate);
     this.notifyStateChange();
-    return `Connected: ${account.alias}; ${result.models} models; validated via ${result.validation}. Runtime and private settings loaded.`;
+    return `Connected: ${account.alias}; ${result.models} models; validated via ${result.validation}. Runtime and private settings loaded.${configProblems}`;
   }
 
   useAccount(idOrAlias: string): Account {

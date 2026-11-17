@@ -653,11 +653,11 @@ export class TurnRun {
   private async *prepareRetry(sample: SampleResult, attempt: number): AsyncGenerator<ModelEvent> {
     const error = sample.streamError;
     if (this.signal.aborted) throw new FutrynError('CANCELLED');
-    const retryable =
-      error instanceof FutrynError && error.retryable && !sample.acted && attempt < SAFETY_LIMITS.roundRetries;
+    const maxRetries = this.host.options.streamMaxRetries?.() ?? SAFETY_LIMITS.roundRetries;
+    const retryable = error instanceof FutrynError && error.retryable && !sample.acted && attempt < maxRetries;
     if (!retryable || !(error instanceof FutrynError)) throw error;
     // Codex notify_stream_error("Reconnecting... n/max"): every retry is visible, with or without partial output.
-    yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1, maxRetries: SAFETY_LIMITS.roundRetries};
+    yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1, maxRetries};
     const sleep = this.host.options.sleep ?? defaultSleep;
     // Codex: a server Retry-After wins; otherwise backoff(n) = 200 ms × 2^(n-1) with ±10% jitter.
     await sleep(error.retryAfterMs ?? codexBackoffMs(attempt + 1), this.signal);

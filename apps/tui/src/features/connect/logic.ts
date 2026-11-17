@@ -26,7 +26,7 @@ export function connectionChoices(
           id: i.provider.id,
           label: `${i.provider.name}${accounts.some(a => (i.providerIds ?? [i.provider.id]).includes(a.providerId) && a.status === 'valid') ? ' · Connected' : ''}`,
         })),
-        {id: '__custom', label: 'Advanced · Custom endpoint…'},
+        {id: '__custom', label: 'Custom provider · any gateway or endpoint (9Router, LiteLLM…)'},
       ];
     case 'method':
       return [
@@ -144,3 +144,26 @@ export const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,99}$/;
 export const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/;
 /** Control characters never belong in a typed draft. */
 export const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/;
+
+/** `Name=Value; Name2=$ENV_VAR` → static and environment-backed headers; a string is an error message. */
+export function parseHeaderDraft(
+  draft: string,
+): {httpHeaders?: Record<string, string>; envHttpHeaders?: Record<string, string>} | string {
+  const httpHeaders: Record<string, string> = {};
+  const envHttpHeaders: Record<string, string> = {};
+  for (const part of draft
+    .split(';')
+    .map(item => item.trim())
+    .filter(Boolean)) {
+    const at = part.indexOf('=');
+    if (at <= 0) return `"${part.slice(0, 40)}" is not Name=Value.`;
+    const name = part.slice(0, at).trim();
+    const value = part.slice(at + 1).trim();
+    if (value.startsWith('$')) envHttpHeaders[name] = value.slice(1);
+    else httpHeaders[name] = value;
+  }
+  return {
+    ...(Object.keys(httpHeaders).length ? {httpHeaders} : {}),
+    ...(Object.keys(envHttpHeaders).length ? {envHttpHeaders} : {}),
+  };
+}

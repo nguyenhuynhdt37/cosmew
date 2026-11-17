@@ -2,7 +2,7 @@ import {FutrynError, modelIdSchema, providerSchema, type Provider} from '@futryn
 import type {AccountWorkflow, OverlayFeature, OverlayLayout, ThemeFrame, TuiHost} from '../../core/feature';
 import {wideLayout} from '../../core/layout';
 import {editField, stepIndex} from '../../ui';
-import {ENV_NAME, PROVIDER_ID, connectionChoices, describeProviderError} from './logic';
+import {ENV_NAME, PROVIDER_ID, connectionChoices, describeProviderError, parseHeaderDraft} from './logic';
 import {createInitialConnectProviderState, type ConnectProviderState} from './types';
 import {renderConnectProviderOverlay} from './view';
 
@@ -392,7 +392,11 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         } else if (st.method === 'openrouter-oauth') {
           this.startProviderSignIn(st);
         } else if (st.method === 'none') this.startConnectionAuthentication(st);
-        else next(st.method === 'env' ? 'env' : 'secret');
+        else
+          next(
+            st.method === 'env' ? 'env' : 'secret',
+            st.method === 'env' ? (client.listProviders().find(p => p.id === st.providerId)?.envKey ?? '') : '',
+          );
       } else if (st.step === 'secret' || st.step === 'env' || st.step === 'oauth') {
         if (!(st.step === 'secret' || st.step === 'oauth' ? st.secretDraft : st.draft).trim()) {
           st.statusMessage = 'A credential or variable name is required.';
@@ -427,11 +431,18 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         next('catalog');
       } else if (st.step === 'catalog' && chosen) {
         st.custom = {...st.custom, catalog: chosen.id as Provider['catalog']};
-        if (chosen.id === 'manual') next('manual');
-        else this.saveCustomProvider(st);
+        next(chosen.id === 'manual' ? 'manual' : 'headers');
       } else if (st.step === 'manual') {
         modelIdSchema.parse(st.draft);
         st.customModelId = st.draft;
+        next('headers');
+      } else if (st.step === 'headers') {
+        const parsed = parseHeaderDraft(st.draft);
+        if (typeof parsed === 'string') {
+          st.statusMessage = parsed;
+          return;
+        }
+        st.custom = {...st.custom, ...parsed};
         this.saveCustomProvider(st);
       } else if (st.step === 'accounts' && chosen) {
         if (st.logoutOnly || st.switchOnly) {
@@ -503,7 +514,19 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
   }
 
   private saveCustomProvider(st: ConnectProviderState): void {
-    const provider = providerSchema.parse({...st.custom, metadataVersion: 1, timeoutMs: 60000});
+    // A custom provider is a user-level host config entry (ADR 0046): written to config.toml, validated there.
+    const provider = providerSchema.parse({
+      ...st.custom,
+      source: 'config',
+      ...(st.customModelId ? {models: [st.customModelId]} : {}),
+      metadataVersion: 1,
+      timeoutMs: 60000,
+    });
+    const problem = this.host.client.validateCustomProvider(provider);
+    if (problem) {
+      st.statusMessage = `Not saved: ${problem}`;
+      return;
+    }
     this.host.client.addProvider(provider);
     this.state = {
       ...st,

@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.19' as const;
+export const CONTRACT_VERSION = '1.20' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -18,6 +18,9 @@ export const modelIdSchema = z
 export const subscriptionRuntimeSchema = z.enum(['codex']);
 export type SubscriptionRuntime = z.infer<typeof subscriptionRuntimeSchema>;
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
+export const envNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/);
+/** HTTP header name (RFC 9110 token); credentials never travel in static headers (ADR 0046). */
+export const headerNameSchema = z.string().regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$/);
 export const providerSchema = z.strictObject({
   id: idSchema,
   name: z
@@ -27,7 +30,8 @@ export const providerSchema = z.strictObject({
     .regex(/^[^\x00-\x1f\x7f]+$/),
   protocol: protocolSchema,
   baseURL: z.string().url().max(2048),
-  auth: z.enum(['api-key', 'none']),
+  /** `command`: a bearer token printed by a user-configured command (host config only, ADR 0046). */
+  auth: z.enum(['api-key', 'none', 'command']),
   catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
   metadataVersion: z.literal(1),
   /** Metadata requests and runtime handshakes. Model streams use `streamIdleTimeoutMs`. */
@@ -37,6 +41,39 @@ export const providerSchema = z.strictObject({
   streamUsage: z.boolean().optional(),
   runtime: subscriptionRuntimeSchema.optional(),
   family: idSchema.optional(),
+  /** Declared in the user-level host config (~/.futryn/config.toml), the source of truth for it. Contract 1.20. */
+  source: z.literal('config').optional(),
+  /** Environment variable that conventionally holds the API key (Codex `env_key`). */
+  envKey: envNameSchema.optional(),
+  envKeyInstructions: z
+    .string()
+    .max(500)
+    .regex(/^[^\x00-\x08\x0b-\x1f\x7f]*$/)
+    .optional(),
+  /** Appended to every request URL (Codex `query_params`); never credentials. */
+  queryParams: z
+    .record(z.string().min(1).max(100), z.string().max(500))
+    .refine(v => Object.keys(v).length <= 20)
+    .optional(),
+  /** Static request headers (Codex `http_headers`); never credentials. */
+  httpHeaders: z
+    .record(headerNameSchema, z.string().max(500))
+    .refine(v => Object.keys(v).length <= 20)
+    .optional(),
+  /** Header name -> environment variable holding its value (Codex `env_http_headers`); skipped when unset. */
+  envHttpHeaders: z
+    .record(headerNameSchema, envNameSchema)
+    .refine(v => Object.keys(v).length <= 20)
+    .optional(),
+  /** Codex `request_max_retries` / `stream_max_retries` (hard cap 100). */
+  requestMaxRetries: z.number().int().min(0).max(100).optional(),
+  streamMaxRetries: z.number().int().min(0).max(100).optional(),
+  /** Same-origin catalog URL under the base URL (Codex `model_catalog_url`). */
+  modelCatalogURL: z.string().url().max(2048).optional(),
+  /** Hand-written model list for gateways that do not serve /models. */
+  models: z.array(modelIdSchema).max(500).optional(),
+  /** Send the assistant's earlier reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
+  replayReasoning: z.boolean().optional(),
 });
 export type Provider = z.infer<typeof providerSchema>;
 

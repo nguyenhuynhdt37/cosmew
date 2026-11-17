@@ -208,7 +208,7 @@ export class ProviderAdapter implements ModelPort {
       throw new FutrynError('UNSUPPORTED');
     if (this.info?.contextLimit && maxOutputTokens !== undefined && maxOutputTokens >= this.info.contextLimit)
       throw new FutrynError('CONTEXT_LIMIT');
-    const key = await this.transport.credential();
+    const key = await this.transport.credential(signal);
     const p = this.transport.provider;
     // Rate-limit headers of the latest response; read once the turn finishes.
     const responseHeaders: {value?: Headers} = {};
@@ -315,7 +315,7 @@ export class ProviderAdapter implements ModelPort {
           error instanceof FutrynError &&
           error.code === 'TRANSPORT' &&
           error.retryable &&
-          attempt < GENERATION_LIMITS.requestMaxRetries &&
+          attempt < (this.transport.provider.requestMaxRetries ?? GENERATION_LIMITS.requestMaxRetries) &&
           !init.signal?.aborted;
         if (!retry) throw error;
         activity();

@@ -134,15 +134,23 @@ export class AuthMethodRegistry {
     const methods: import('@futryn/contracts').AuthMethod[] =
       provider.auth === 'none'
         ? [{id: 'none', name: 'No authentication', description: 'For explicitly configured local or public endpoints.'}]
-        : [
-            {id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.'},
-            {
-              id: 'env',
-              name: 'Environment variable',
-              description: 'Use an existing environment variable.',
-              advanced: true,
-            },
-          ];
+        : provider.auth === 'command'
+          ? [
+              {
+                id: 'none',
+                name: 'Token command',
+                description: 'The bearer token comes from the command set in your host config; nothing is stored.',
+              },
+            ]
+          : [
+              {id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.'},
+              {
+                id: 'env',
+                name: 'Environment variable',
+                description: 'Use an existing environment variable.',
+                advanced: true,
+              },
+            ];
     if (
       provider.id === 'openrouter' &&
       provider.baseURL === 'https://openrouter.ai/api/v1' &&
