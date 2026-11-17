@@ -158,7 +158,6 @@ test('config never renders vault credentials and rejects permission-bearing pref
       }),
     ).toThrow();
     expect(app.settings.read()).toEqual(before);
-    expect(client.delegatedAgent()).toBe(false);
     expect(client.toolsEnabled()).toBe(false);
   } finally {
     app.db.close();
@@ -249,7 +248,6 @@ test('session modes persist per conversation and forks across restart while sess
     client.setPermissionMode('auto');
     client.clearSessionView();
     expect(client.permissionMode()).toBe('default');
-    expect(client.delegatedAgent()).toBe(false);
   } finally {
     app.db.close();
     server.server.stop(true);
@@ -296,9 +294,9 @@ test('failed session deletion preserves selected history and authorization; resu
   }
 });
 
-test('new and resumed subscription sessions revoke delegated execution while invalid resume leaves opt-in intact', async () => {
+test('new and resumed sessions reset the permission mode while invalid resume leaves it intact', async () => {
   const {providerPresets} = await import('@futryn/models');
-  const dir = mkdtempSync(join(tmpdir(), 'futryn-session-delegation-'));
+  const dir = mkdtempSync(join(tmpdir(), 'futryn-session-mode-'));
   const app = startup(dir, {vault: memoryVault()});
   try {
     app.registry.add(providerPresets.find(provider => provider.id === 'chatgpt')!);
@@ -312,55 +310,17 @@ test('new and resumed subscription sessions revoke delegated execution while inv
     client.selectModel('gpt-5');
     const first = client.createSession();
     client.setToolsEnabled(true);
-    client.setDelegatedAgent(true);
     client.setPermissionMode('bypassPermissions');
     expect(() => client.resumeSession('invalid-session')).toThrow();
-    expect(client.delegatedAgent()).toBe(true);
     expect(client.permissionMode()).toBe('bypassPermissions');
     client.createSession();
-    expect(client.delegatedAgent()).toBe(false);
     expect(client.permissionMode()).toBe('default');
-    client.setDelegatedAgent(true);
+    client.setPermissionMode('auto');
     client.resumeSession(first.id);
-    expect(client.delegatedAgent()).toBe(false);
     expect(client.permissionMode()).toBe('default');
-    client.setDelegatedAgent(true);
-    client.clearSessionView();
-    expect(client.delegatedAgent()).toBe(false);
   } finally {
     await app.subscriptions.shutdown();
     app.db.close();
-    rmSync(dir, {recursive: true, force: true});
-  }
-});
-
-test('failed mode persistence does not claim a different mode or revoke active session authority', async () => {
-  const {fixtureServer} = await import('../fixtures');
-  const dir = mkdtempSync(join(tmpdir(), 'futryn-mode-save-failure-'));
-  const server = fixtureServer();
-  const app = startup(dir, {vault: memoryVault()});
-  try {
-    app.registry.add(server.provider('chat', {id: 'mode-save-failure', auth: 'none'}));
-    await app.accounts.add('mode-save-failure', 'mode-save-failure', {kind: 'none'});
-    const client = app.createFutrynClient(dir);
-    await client.discoverModels();
-    client.selectModel('fixture-model');
-    const session = client.createSession();
-    client.setMode('plan');
-    client.setPermissionMode('auto');
-    const originalUpdate = app.settings.update.bind(app.settings);
-    app.settings.update = () => {
-      throw new Error('injected preferences save failure');
-    };
-    expect(() => client.setMode('review')).toThrow('injected preferences save failure');
-    expect(client.mode()).toBe('plan');
-    expect(client.activeSession()?.id).toBe(session.id);
-    expect(client.permissionMode()).toBe('auto');
-    app.settings.update = originalUpdate;
-    expect(app.settings.read().sessionModes?.[session.id]).toBe('plan');
-  } finally {
-    app.db.close();
-    server.server.stop(true);
     rmSync(dir, {recursive: true, force: true});
   }
 });

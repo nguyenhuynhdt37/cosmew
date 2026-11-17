@@ -2,7 +2,6 @@ import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
 import type {ApprovalRequest} from '@futryn/tools';
 import type {WorkspaceRoot} from '@futryn/workspace';
 import type {FutrynClient} from '@futryn/sdk';
-import type {RuntimeApprover} from '../subscriptions/host';
 
 /**
  * How tool and runtime permission requests are shown to the user. The decision itself is made by
@@ -104,45 +103,6 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
     target: request.target,
     reason: reasonText(request.reason),
     riskLevel: 'medium',
-  };
-}
-
-/** Native runtime tools map onto the same capabilities as Futryn tools (ADR 0027). */
-const RUNTIME_CAPABILITY = {
-  secret: 'fs.read',
-  edit: 'fs.write',
-  execute: 'process.execute',
-  network: 'network.connect',
-  other: 'extension.service',
-} as const;
-
-const RUNTIME_ACTION = {
-  secret: 'read a sensitive file',
-  edit: 'change files',
-  execute: 'run a command',
-  network: 'use the network',
-  other: 'use a tool',
-} as const;
-
-/** Native runtime tools ask through the same prompt and permission mode as Futryn tools. */
-export function runtimeApprover(client: () => FutrynClient | undefined): RuntimeApprover {
-  return async (request, signal) => {
-    const current = client();
-    if (!current?.toolsEnabled()) return false;
-    const decision = await current.requestPermission(
-      {
-        capability: RUNTIME_CAPABILITY[request.kind],
-        kind: request.kind,
-        action: `${request.runtime}: ${request.label}`.slice(0, 200),
-        target: request.label.slice(0, 1024) || request.kind,
-        reason: `The ${request.runtime} runtime wants to ${RUNTIME_ACTION[request.kind]} in this project.`,
-        riskLevel: request.kind === 'execute' || request.kind === 'edit' ? 'high' : 'medium',
-        scopeKey: `runtime:${request.runtime}:${request.kind}:${request.fingerprint}`,
-        ruleTarget: request.ruleTarget,
-      },
-      signal,
-    );
-    return decision !== 'deny';
   };
 }
 

@@ -204,10 +204,9 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     duringRequest: true,
     handler: 'backend',
     arguments: 'optional',
-    aliases: ['/delegate'],
+    aliases: [],
     title: 'Execution Backend',
-    description:
-      "Who runs the agent and tools; /backend delegated opts into the runtime's own agent, /backend hannes returns",
+    description: 'Shows who runs the agent loop and the project tools for the selected model',
     category: 'Workspace & Security',
   },
   {

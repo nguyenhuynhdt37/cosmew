@@ -580,7 +580,7 @@ function renderActivity(options: {
       : activity.status === 'completed'
         ? 'ok'
         : 'error';
-  // Delegated work is labelled with its runtime: Futryn did not run it and holds no receipt for it.
+  // Runtime-reported work is labelled with its runtime: Futryn did not run it and holds no receipt for it.
   const lines = callHeader(
     `${activity.runtime ?? 'runtime'} · ${activity.name}`,
     activity.label,

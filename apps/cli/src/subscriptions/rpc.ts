@@ -20,14 +20,6 @@ export class SubscriptionRpc {
     {resolve(value: any): void; reject(error: unknown): void; timer: ReturnType<typeof setTimeout> | undefined}
   >();
   private dynamicToolHandler?: (params: any) => Promise<unknown>;
-  private permissionHandler?: (method: string, params: any) => Promise<unknown | undefined>;
-  /** Full-access sessions answer runtime permission requests through Futryn (ADR 0027); undefined denies. */
-  onPermissionRequest(handler: (method: string, params: any) => Promise<unknown | undefined>): () => void {
-    this.permissionHandler = handler;
-    return () => {
-      this.permissionHandler = undefined;
-    };
-  }
   onDynamicTool(handler: (params: any) => Promise<unknown>): () => void {
     this.dynamicToolHandler = handler;
     return () => {
@@ -102,29 +94,6 @@ export class SubscriptionRpc {
                 if (!this.closed) this.write({id, error: {code: -32601, message: 'Tool request denied.'}});
               },
             )
-            .catch(() => {});
-          continue;
-        }
-        if (this.permissionHandler) {
-          const {id, method, params} = message;
-          const deny = () => {
-            try {
-              return denyRuntimeRequest(method);
-            } catch {
-              return undefined;
-            }
-          };
-          void this.permissionHandler(method, params)
-            .catch(() => undefined)
-            .then(result => {
-              if (this.closed) return;
-              const answer = result ?? deny();
-              this.write(
-                answer === undefined
-                  ? {id, error: {code: -32601, message: 'FUTRYN does not authorize this runtime request.'}}
-                  : {id, result: answer},
-              );
-            })
             .catch(() => {});
           continue;
         }

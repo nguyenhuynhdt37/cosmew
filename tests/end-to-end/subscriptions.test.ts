@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
 import {SAFETY_LIMITS} from '@futryn/core';
@@ -25,13 +25,12 @@ const ids = {
   'qwen-code': 'qwen-subscription',
   'grok-build': 'grok-subscription',
 };
-async function context(scenario = 'normal', nativeRuntimeTools = false) {
+async function context(scenario = 'normal') {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-subscriptions-'));
   const vault = memoryVault();
   const app = startup(dir, {
     vault,
     subscriptions: {
-      nativeRuntimeTools,
       openURL: async () => {},
       resolveCommand: runtime => ({
         command: process.execPath,
@@ -47,7 +46,7 @@ async function context(scenario = 'normal', nativeRuntimeTools = false) {
   const client = app.createFutrynClient(dir);
   return {app, client, dir, vault};
 }
-async function connect(c: Awaited<ReturnType<typeof context>>, runtime: SubscriptionRuntime, alias = runtime) {
+async function connect(c: Awaited<ReturnType<typeof context>>, runtime: SubscriptionRuntime, alias: string = runtime) {
   const challenge = await c.client.beginProviderAuth(ids[runtime], 'subscription-device');
   expect(challenge.autoComplete).toBe(true);
   const account = await c.client.connectAccount({
@@ -76,14 +75,13 @@ for (const runtime of Object.keys(ids) as SubscriptionRuntime[]) {
       /* execute real subprocess */
     }
     expect(c.client.activeSession()!.id).not.toBe(sessionId);
-    const b = await connect(c, runtime, (runtime + '-work') as SubscriptionRuntime);
+    const b = await connect(c, runtime, runtime + '-work');
     expect(a.id).not.toBe(b.id);
     expect(a.credential).not.toEqual(b.credential);
     expect(c.vault.values.size).toBe(2);
     const restarted = startup(c.dir, {
       vault: c.vault,
       subscriptions: {
-        nativeRuntimeTools: false,
         openURL: async () => {},
         resolveCommand: r => ({
           command: process.execPath,
@@ -311,7 +309,6 @@ test('two clients cannot race rotating credentials for the same account', async 
   const other = startup(c.dir, {
     vault: c.vault,
     subscriptions: {
-      nativeRuntimeTools: false,
       openURL: async () => {},
       resolveCommand: r => ({
         command: process.execPath,
@@ -1093,57 +1090,6 @@ test('Codex native file-change requests stay denied while the Futryn patch tool 
   expect(c.app.db.query('SELECT * FROM tool_audit').all()).toHaveLength(0);
 });
 
-/** ADR 0027: native runtime tools run in the consented workspace and every request they make
- * goes through the Futryn prompt, answered by the session permission mode. Fixture evidence only. */
-for (const runtime of ['grok-build', 'codex'] as const)
-  test(`${runtime}: native tools ask Futryn and follow the permission mode`, async () => {
-    const c = await context('native-tool', true);
-    await connect(c, runtime);
-    const ws = mkdtempSync(join(tmpdir(), 'futryn-native-ws-'));
-    cleanup.push(() => rmSync(ws, {recursive: true, force: true}));
-    const client = c.app.createFutrynClient(ws);
-    client.setToolsEnabled(true);
-    client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
-    const run = async () => {
-      let text = '';
-      for await (const e of client.sendMessage('Create native-proof.txt')) if (e.type === 'textDelta') text += e.text;
-      return text;
-    };
-    const proof = join(ws, 'native-proof.txt');
-
-    // default: the request becomes a Futryn prompt; dismissing it denies and nothing runs.
-    const first = run();
-    const end = Date.now() + 4000;
-    while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
-    const prompt = client.listPendingPermissions()[0]!;
-    expect(prompt.capability).toBe('process.execute');
-    expect(prompt.action).toContain('touch native-proof.txt');
-    client.dismissPermissionDialog(prompt.approvalId);
-    expect(await first).toBe('native:denied');
-    expect(existsSync(proof)).toBe(false);
-
-    // plan: refused without a prompt.
-    client.setPermissionMode('plan');
-    expect(await run()).toBe('native:denied');
-    expect(client.listPendingPermissions()).toHaveLength(0);
-    expect(existsSync(proof)).toBe(false);
-
-    // auto: approved without a prompt; the runtime works in the real workspace, not its profile.
-    client.setPermissionMode('auto');
-    expect(await run()).toBe('native:allowed');
-    expect(readFileSync(proof, 'utf8')).toBe('native\n');
-
-    // Without workspace consent the same account stays chat-only: the attempt fails closed.
-    client.setToolsEnabled(false);
-    await expect(
-      (async () => {
-        for await (const _e of client.sendMessage('again')) {
-          /* drain */
-        }
-      })(),
-    ).rejects.toBeDefined();
-  });
-
 test('permission modes only answer ask decisions and Shift+Tab cycles them like Claude Code', async () => {
   const {permissionModeDecision} = await import('@futryn/contracts');
   expect(permissionModeDecision('default', 'edit')).toBe('ask');
@@ -1173,25 +1119,6 @@ test('permission modes only answer ask decisions and Shift+Tab cycles them like 
   expect(c.client.permissionMode()).toBe('bypassPermissions');
 });
 
-test('runtime session grants bind to the complete request, not a clipped or generic label', async () => {
-  const {classifyRuntimeApproval} = await import('@futryn/security');
-  const prefix = 'echo ' + 'x'.repeat(400);
-  const a = classifyRuntimeApproval('item/commandExecution/requestApproval', {
-    itemId: 'i1',
-    command: prefix + ' safe',
-  })!;
-  const b = classifyRuntimeApproval('item/commandExecution/requestApproval', {
-    itemId: 'i1',
-    command: prefix + '; rm -rf ~',
-  })!;
-  expect(a.label).toBe(b.label); // display is clipped …
-  expect(a.fingerprint).not.toBe(b.fingerprint); // … but the grant scope is not.
-  const edit1 = classifyRuntimeApproval('item/fileChange/requestApproval', {threadId: 't', turnId: 'u', itemId: 'f1'})!;
-  const edit2 = classifyRuntimeApproval('item/fileChange/requestApproval', {threadId: 't', turnId: 'u', itemId: 'f2'})!;
-  expect(edit1.label).toBe(edit2.label);
-  expect(edit1.fingerprint).not.toBe(edit2.fingerprint);
-});
-
 test('project permission rules match Claude-style patterns with deny > ask > allow', async () => {
   const {permissionRuleMatches: m, permissionRuleDecision: d} = await import('@futryn/contracts');
   expect(m('Bash(npm test:*)', {tool: 'Bash', target: 'npm test -- --watch'})).toBe(true);
@@ -1211,54 +1138,9 @@ test('project permission rules match Claude-style patterns with deny > ask > all
   expect(d(rules, {tool: 'Edit', target: 'src/a.ts'})).toBe('allow');
 });
 
-test('grok-build: project rules answer native requests before the mode; ask rules prompt, or are refused in bypass (never)', async () => {
-  const c = await context('native-tool', true);
-  await connect(c, 'grok-build');
-  const ws = mkdtempSync(join(tmpdir(), 'futryn-rules-ws-'));
-  cleanup.push(() => rmSync(ws, {recursive: true, force: true}));
-  const client = c.app.createFutrynClient(ws);
-  client.setToolsEnabled(true);
-  client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
-  const run = async () => {
-    let text = '';
-    for await (const e of client.sendMessage('touch')) if (e.type === 'textDelta') text += e.text;
-    return text;
-  };
-  // default mode + allow rule: runs without a prompt.
-  client.addPermissionRule('allow', 'Bash(touch:*)');
-  expect(await run()).toBe('native:allowed');
-  expect(client.listPendingPermissions()).toHaveLength(0);
-  // deny rule wins even in bypass mode.
-  rmSync(join(ws, 'native-proof.txt'));
-  client.setPermissionMode('bypassPermissions');
-  client.addPermissionRule('deny', 'Bash(touch:*)');
-  expect(client.permissionRules()).toEqual({allow: [], ask: [], deny: ['Bash(touch:*)']}); // moved, not duplicated
-  expect(await run()).toBe('native:denied');
-  expect(existsSync(join(ws, 'native-proof.txt'))).toBe(false);
-  // ADR 0040: bypass is Codex `never`, which never prompts: an ask rule is refused, not shown.
-  client.removePermissionRule('deny', 'Bash(touch:*)');
-  client.addPermissionRule('ask', 'Bash(touch native-proof.txt)');
-  expect(await run()).toBe('native:denied');
-  expect(client.listPendingPermissions()).toHaveLength(0);
-  expect(existsSync(join(ws, 'native-proof.txt'))).toBe(false);
-  // In a prompting mode the ask rule prompts, even though on-request would allow the command.
-  client.setPermissionMode('auto');
-  const turn = run();
-  const end = Date.now() + 4000;
-  while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
-  const prompt = client.listPendingPermissions()[0]!;
-  expect(prompt.target).toBe('touch native-proof.txt');
-  client.resolvePermission(prompt.approvalId, prompt.scopeHash, 'once');
-  expect(await turn).toBe('native:allowed');
-  // Rules are per project and persisted.
-  expect(c.app.createFutrynClient(ws).permissionRules().ask).toEqual(['Bash(touch native-proof.txt)']);
-  expect(c.app.createFutrynClient(c.dir).permissionRules()).toEqual({allow: [], ask: [], deny: []});
-  expect(() => client.addPermissionRule('allow', 'rm -rf /')).toThrow();
-});
-
 test('/permissions edits rules with the keyboard and the prompt can save "don\'t ask again"', async () => {
-  const c = await context('native-tool', true);
-  await connect(c, 'grok-build');
+  const c = await context();
+  await connect(c, 'codex');
   const ws = mkdtempSync(join(tmpdir(), 'futryn-rules-tui-'));
   cleanup.push(() => rmSync(ws, {recursive: true, force: true}));
   const client = c.app.createFutrynClient(ws);
@@ -1266,7 +1148,6 @@ test('/permissions edits rules with the keyboard and the prompt can save "don\'t
   await tui.initialize();
   cleanup.push(() => tui.shutdown());
   client.setToolsEnabled(true);
-  client.setDelegatedAgent(true); // ADR 0029: native runtime tools are an explicit opt-in
   await tui.executeSlashCommand('/permissions');
   let frame = tui.computeFrameSnapshot().plainText;
   expect(frame).toContain('Allow 0');
@@ -1292,18 +1173,6 @@ test('/permissions edits rules with the keyboard and the prompt can save "don\'t
   await tui.handleKey('Enter');
   expect(client.permissionMode()).toBe('acceptEdits');
   await tui.handleKey('Escape');
-  // The live prompt offers "[4] Yes, and don't ask again for Bash(touch native-proof.txt:*)".
-  const turn = tui.submitPrompt('touch');
-  const end = Date.now() + 4000;
-  while (!client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
-  tui.advanceStartupGate();
-  frame = tui.computeFrameSnapshot().plainText;
-  expect(frame).toContain("[4] Yes, and don't ask again for Bash(touch native-proof.txt:*)");
-  await tui.handleKey('4');
-  await turn;
-  expect(client.permissionRules().allow).toEqual(['Bash(touch native-proof.txt:*)']);
-  expect(existsSync(join(ws, 'native-proof.txt'))).toBe(true);
-  expect(tui.computeFrameSnapshot().plainText).toContain('⏺ grok-build · Bash(touch native-proof.txt)');
 });
 
 test('Bash allow rules never cover chained, substituted or redirected commands', async () => {
@@ -1330,74 +1199,6 @@ test('Bash allow rules never cover chained, substituted or redirected commands',
   expect(ask('/bin/zsh -lc "ls"')).toBe('Bash(/bin/zsh -lc "ls")');
   expect(ask('npm test && rm -rf ~')).toBeNull(); // such a rule could never apply
   expect(ask('ls > out.txt')).toBeNull();
-});
-
-test('rules judge the exact structured target: no clipping, traversal, fake hosts or display labels', async () => {
-  const {permissionRuleDecision: d, normalizeRulePath} = await import('@futryn/contracts');
-  const {classifyRuntimeApproval} = await import('@futryn/security');
-  const rules = {
-    allow: ['Bash(npm test:*)', 'Read(src/**)', 'Edit(src/**)', 'WebFetch(domain:x.ai)', 'Tool(safe)'],
-    ask: [],
-    deny: [],
-  };
-  // 1. Runtime label is clipped/cleaned for display; the rule target keeps newlines and the full length.
-  const hidden = 'npm test ' + 'a'.repeat(400) + '; rm -rf ~';
-  const multi = classifyRuntimeApproval('session/request_permission', {
-    toolCall: {kind: 'execute', title: 'Run', rawInput: {command: 'npm test\nrm -rf ~'}},
-  })!;
-  expect(multi.label).toBe('npm test rm -rf ~');
-  expect(multi.ruleTarget).toBe('npm test\nrm -rf ~');
-  expect(d(rules, {tool: 'Bash', target: multi.ruleTarget!})).toBeUndefined();
-  expect(
-    d(rules, {
-      tool: 'Bash',
-      target: classifyRuntimeApproval('item/commandExecution/requestApproval', {command: hidden})!.ruleTarget!,
-    }),
-  ).toBeUndefined();
-  expect(d(rules, {tool: 'Bash', target: 'npm test\r rm -rf ~'})).toBeUndefined();
-  expect(d(rules, {tool: 'Bash', target: 'npm test \u0000x'})).toBeUndefined();
-  // Display-only requests carry no rule target at all.
-  expect(
-    classifyRuntimeApproval('session/request_permission', {toolCall: {kind: 'other', title: 'safe'}})!.ruleTarget,
-  ).toBeNull();
-  expect(classifyRuntimeApproval('item/fileChange/requestApproval', {reason: 'src/a.ts'})!.ruleTarget).toBeNull();
-  // 2. Traversal and absolute paths never match an allow glob.
-  expect(normalizeRulePath('src/./a/../b.ts')).toBe('src/b.ts');
-  for (const path of ['src/../../.ssh/id_rsa', '/etc/passwd', '~/.aws/credentials', 'src/../../x', 'C:\\x'])
-    expect(d(rules, {tool: 'Read', target: path})).toBeUndefined();
-  expect(d(rules, {tool: 'Read', target: 'src/a/../b.ts'})).toBe('allow');
-  expect(d({allow: [], ask: [], deny: ['Read(.ssh/**)']}, {tool: 'Read', target: 'src/../.ssh/id_rsa'})).toBe('deny'); // deny sees through ..
-  // 3. A string that is not a URL must be a bare host to count as one.
-  expect(d(rules, {tool: 'WebFetch', target: 'evil.com/x.ai'})).toBeUndefined();
-  expect(d(rules, {tool: 'WebFetch', target: 'evil.com#.x.ai'})).toBeUndefined();
-  expect(d(rules, {tool: 'WebFetch', target: 'https://x.ai@evil.com/'})).toBeUndefined();
-  expect(d(rules, {tool: 'WebFetch', target: 'https://docs.x.ai/a'})).toBe('allow');
-  // 4. The SDK never applies a rule to a display label.
-  const c = await context();
-  c.client.addPermissionRule('allow', 'Tool(safe)');
-  c.client.addPermissionRule('allow', 'Bash(npm test:*)');
-  const pending = c.client.requestPermission({
-    capability: 'extension.service',
-    action: 'safe',
-    target: 'safe',
-    reason: 'r',
-  });
-  expect(c.client.listPendingPermissions()).toHaveLength(1);
-  c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId);
-  expect(await pending).toBe('deny');
-  const unlabeled = c.client.requestPermission({
-    capability: 'process.execute',
-    action: 'grok: npm test',
-    target: 'npm test',
-    reason: 'r',
-    ruleTarget: null,
-  });
-  expect(c.client.listPendingPermissions()).toHaveLength(1);
-  c.client.dismissPermissionDialog(c.client.listPendingPermissions()[0]!.approvalId);
-  expect(await unlabeled).toBe('deny');
-  expect(
-    await c.client.requestPermission({capability: 'process.execute', action: 'run', target: 'npm test', reason: 'r'}),
-  ).toBe('once');
 });
 
 test('requests without a structured target fail closed against deny/ask rules, even in bypass', async () => {
@@ -1450,74 +1251,48 @@ test('requests without a structured target fail closed against deny/ask rules, e
   ).toBe('deny');
 });
 
-/** ADR 0029: folder consent never turns a subscription runtime into the coding engine by itself. */
-test('folder consent alone keeps runtimes on Futryn-owned or chat-only backends; delegation is explicit', async () => {
+/** ADR 0029/0045: folder consent never turns a subscription runtime into the coding engine by itself. */
+test('folder consent keeps Codex on the bridge and direct APIs on the Futryn agent; delegation does not exist', async () => {
   const c = await context();
-  await connect(c, 'grok-build');
-  c.client.setToolsEnabled(true);
-  expect(c.client.status().executionBackend).toMatchObject({
-    kind: 'chat-only',
-    toolOwner: 'none',
-    runtime: 'grok-build',
-  });
-  // The fixture exits unless chat-only runs in its private profile, so a completed turn proves no native mode.
-  const events = [];
-  for await (const e of c.client.sendMessage('hi')) events.push(e);
-  expect(events.at(-1)?.type).toBe('completed');
-  expect(c.client.setDelegatedAgent(true)).toMatchObject({
-    kind: 'delegated',
-    loopOwner: 'runtime',
-    toolOwner: 'runtime',
-  });
-  expect(c.client.setDelegatedAgent(false)).toMatchObject({kind: 'chat-only'});
-  // Codex with consent is the bridge: Codex loop, every project tool a Futryn tool.
   await connect(c, 'codex');
+  expect(c.client.status().executionBackend).toMatchObject({kind: 'chat-only', toolOwner: 'none', runtime: 'codex'});
+  c.client.setToolsEnabled(true);
+  // Codex with consent is the bridge: Codex loop, every project tool a Futryn tool.
   expect(c.client.status().executionBackend).toMatchObject({
     kind: 'codex-bridge',
     loopOwner: 'runtime',
     toolOwner: 'hannes',
   });
-  // Delegation needs consent and a runtime provider.
-  c.client.setToolsEnabled(false);
-  expect(() => c.client.setDelegatedAgent(true)).toThrow(expect.objectContaining({code: 'POLICY'}));
-  c.client.setToolsEnabled(true);
-  // Direct API models are always Futryn-owned, even if delegation were requested.
-  expect(executionBackendFor({}, {toolsEnabled: true, delegated: true})).toMatchObject({
+  expect(executionBackendFor({}, {toolsEnabled: true})).toMatchObject({
     kind: 'hannes',
     loopOwner: 'hannes',
     toolOwner: 'hannes',
   });
+  expect(executionBackendFor({runtime: 'codex'}, {toolsEnabled: false}).kind).toBe('chat-only');
+  expect((c.client as unknown as Record<string, unknown>).setDelegatedAgent).toBeUndefined();
 });
 
-test('switching provider drops elevated state: mode, delegation and session grants', async () => {
+test('switching account drops elevated state: mode and session grants', async () => {
   const c = await context();
-  const grok = await connect(c, 'grok-build');
+  const first = await connect(c, 'codex');
   c.client.setToolsEnabled(true);
   c.client.setPermissionMode('bypassPermissions');
-  c.client.setDelegatedAgent(true);
-  expect(c.client.status().executionBackend?.kind).toBe('delegated');
-  await connect(c, 'codex'); // selects another account/provider
+  await connect(c, 'codex', 'codex-work'); // selects another account
   expect(c.client.permissionMode()).toBe('default');
-  expect(c.client.delegatedAgent()).toBe(false);
-  expect(c.client.status().executionBackend?.kind).toBe('codex-bridge');
-  // Coming back does not restore anything either.
-  c.client.useAccount(grok.id);
+  c.client.useAccount(first.id);
   expect(c.client.permissionMode()).toBe('default');
-  expect(c.client.status().executionBackend?.kind).toBe('chat-only');
 });
 
-test('/backend shows ownership and opts in or out of delegation', async () => {
+test('/backend shows ownership; delegation is gone and says so', async () => {
   const c = await context();
-  await connect(c, 'grok-build');
+  await connect(c, 'codex');
   const tui = new FutrynTuiApp({client: c.client, cols: 120, rows: 30});
   await tui.initialize();
   cleanup.push(() => tui.shutdown());
   c.client.setToolsEnabled(true);
   await tui.executeSlashCommand('/backend');
-  expect(tui.computeFrameSnapshot().plainText).toContain('grok-build chat only');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Codex loop · Futryn tools');
   await tui.executeSlashCommand('/backend delegated');
-  expect(c.client.delegatedAgent()).toBe(true);
-  expect(tui.computeFrameSnapshot().plainText).toContain('DELEGATED');
-  await tui.executeSlashCommand('/backend hannes');
-  expect(c.client.delegatedAgent()).toBe(false);
+  expect(tui.computeFrameSnapshot().plainText).toContain('Not implemented');
+  expect(c.client.status().executionBackend?.kind).toBe('codex-bridge');
 });

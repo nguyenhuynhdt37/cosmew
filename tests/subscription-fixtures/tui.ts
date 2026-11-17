@@ -6,7 +6,6 @@ import {memoryVault} from '../fixtures';
 const app = startup(process.env.FUTRYN_TEST_HOME!, {
   vault: memoryVault(),
   subscriptions: {
-    nativeRuntimeTools: process.env.FUTRYN_TEST_NATIVE === '1',
     openURL: async () => {},
     resolveCommand: runtime => ({
       command: process.execPath,

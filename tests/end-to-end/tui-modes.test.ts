@@ -208,7 +208,6 @@ test('fork copies committed transcript without replay, preserves the source and 
   expect(c.server.requests).toHaveLength(requests);
   expect(c.client.listSessions().map(session => session.id)).toContain(source.id);
   expect(c.client.permissionMode()).toBe('default');
-  expect(c.client.delegatedAgent()).toBe(false);
   expect(c.client.mode()).toBe('plan');
   expect(c.tui.getTranscript().flatMap(item => item.toolCalls ?? [])).toHaveLength(1);
   await c.tui.submitPrompt(`/resume ${source.id}`);

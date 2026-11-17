@@ -71,7 +71,6 @@ async function make(codex = false, enabled = true, real = false) {
         }
       : {}),
     subscriptions: {
-      nativeRuntimeTools: false,
       openURL: async () => {},
       resolveCommand: r => ({
         command: process.execPath,
