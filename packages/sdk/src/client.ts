@@ -26,6 +26,7 @@ import {
   type PermissionResolutionScope,
   type PermissionMode,
   type PermissionKind,
+  type PlanState,
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
   APPROVAL_POLICY_FOR_MODE,
@@ -54,7 +55,19 @@ import {
 export type AgentMode = 'chat' | 'plan' | 'review';
 
 export type ReactiveAgentEventKind =
-  'idle' | 'thinking' | 'waiting' | 'reasoning' | 'streaming' | 'tool' | 'permission' | 'error' | 'done';
+  | 'idle'
+  | 'thinking'
+  | 'waiting'
+  | 'reasoning'
+  | 'streaming'
+  | 'tool'
+  | 'permission'
+  | 'error'
+  | 'done'
+  /** Wave 1 notifications (contract 1.19); they never replace the current activity state. */
+  | 'plan.updated'
+  | 'question.asked'
+  | 'question.answered';
 
 export interface ReactiveAgentEvent {
   seq: number;
@@ -115,6 +128,8 @@ export interface FutrynBackendPorts {
    * (Codex `on-request` in the workspace-write sandbox).
    */
   permissionMode?: PermissionMode;
+  /** Durable plan of a session (ADR 0042). */
+  getPlan?(sessionId: string): PlanState | null;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -512,6 +527,38 @@ export class FutrynClient {
       }
     }
     return event;
+  }
+
+  /**
+   * A notification for observers that does not change the activity state shown by the UI
+   * (`latestEvent` keeps the running kind): plan and question events (ADR 0042).
+   */
+  private notify(kind: ReactiveAgentEventKind, detail?: string): void {
+    const event: ReactiveAgentEvent = {
+      seq: ++this.eventSeq,
+      kind,
+      detail: detail ? this.ports.sanitizeText(detail) : undefined,
+      timestamp: Date.now(),
+    };
+    for (const listener of this.eventListeners) {
+      try {
+        listener(event);
+      } catch {
+        // Ignore observer errors
+      }
+    }
+    this.notifyStateChange();
+  }
+
+  /** The active session's plan (`update_plan`, ADR 0042), or null. */
+  plan(): PlanState | null {
+    const id = this.currentSession?.id;
+    return id ? (this.ports.getPlan?.(id) ?? null) : null;
+  }
+
+  /** Called by the composition root after `update_plan` stored a new plan. */
+  planUpdated(): void {
+    this.notify('plan.updated');
   }
 
   private notifyStateChange(): void {

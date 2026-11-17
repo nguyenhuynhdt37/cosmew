@@ -2,7 +2,9 @@ import type {Database} from 'bun:sqlite';
 import {
   FutrynError,
   attachmentSchema,
+  planStateSchema,
   type Attachment,
+  type PlanState,
   turnReceiptSchema,
   type TurnReceipt,
   messageSchema,
@@ -170,6 +172,25 @@ export class SqliteConversations implements ConversationStore {
           }
         })
         .immediate();
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  savePlan(id: string, plan: PlanState): void {
+    try {
+      this.db
+        .query(
+          'INSERT INTO session_plan(conversation,data) VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET data=excluded.data',
+        )
+        .run(id, JSON.stringify(planStateSchema.parse(plan)));
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  loadPlan(id: string): PlanState | null {
+    try {
+      const row = this.db.query('SELECT data FROM session_plan WHERE conversation=?').get(id) as {data: string} | null;
+      return row ? planStateSchema.parse(JSON.parse(row.data)) : null;
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -432,6 +453,7 @@ export class SqliteConversations implements ConversationStore {
           this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(id);
           this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(id);
           this.db.query('DELETE FROM session_instructions WHERE conversation=?').run(id);
+          this.db.query('DELETE FROM session_plan WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
           this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
           this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);

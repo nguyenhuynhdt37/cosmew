@@ -13,6 +13,7 @@ import {
   type TurnStopReason,
   type Usage,
   codexBackoffMs,
+  analysisCapability,
 } from '@futryn/contracts';
 import {normalizeHistory, truncateToolResults} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
@@ -310,7 +311,7 @@ export class TurnRun {
 
     const offered =
       host.tools && !this.stop
-        ? host.tools.descriptors().filter(d => !host.options.analysisOnly?.() || d.capability === 'fs.read')
+        ? host.tools.descriptors().filter(d => !host.options.analysisOnly?.() || analysisCapability(d.capability))
         : [];
     const guidanceEstimate =
       offered.length || this.steps.length

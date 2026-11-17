@@ -1,4 +1,4 @@
-import type {ToolResult, CommandRuntime, CommandSandbox} from '@futryn/contracts';
+import type {ToolResult, CommandRuntime, CommandSandbox, PlanState} from '@futryn/contracts';
 import type {SessionGrants, SandboxEscalation} from '@futryn/security';
 import type {WorkspaceRoot} from '@futryn/workspace';
 
@@ -66,6 +66,13 @@ export interface ToolDispatcherOptions {
    * (Codex); without it such grants cover only the request itself.
    */
   turnId?: () => string | undefined;
+  /**
+   * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it
+   * are offered only when it is wired.
+   */
+  agentState?: {
+    updatePlan?(plan: PlanState): void;
+  };
 }
 
 /** Grant keys for `request_permissions` (ADR 0040), stored in the session grants. */

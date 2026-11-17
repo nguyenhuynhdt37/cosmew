@@ -86,6 +86,9 @@ export interface ConversationStore {
   /** Workspace-relative directories whose nested AGENTS.md this session loaded (ADR 0041); durable. */
   addInstructionDirectory?(id: string, directory: string): void;
   listInstructionDirectories?(id: string): string[];
+  /** The session's current plan (`update_plan`, ADR 0042); durable, replaced as a whole. */
+  savePlan?(id: string, plan: import('./tools').PlanState): void;
+  loadPlan?(id: string): import('./tools').PlanState | null;
   append(
     id: string,
     message: Message,

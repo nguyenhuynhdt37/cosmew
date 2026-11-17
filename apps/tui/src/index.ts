@@ -14,6 +14,7 @@ export * from './features/welcome';
 export * from './features/sidebar';
 export * from './features/header';
 export * from './features/context-meter';
+export * from './features/plan';
 export * from './features/selection';
 export * from './features/sessions';
 export * from './features/permissions';

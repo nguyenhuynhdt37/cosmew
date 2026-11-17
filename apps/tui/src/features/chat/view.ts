@@ -16,6 +16,7 @@ import {
   type TranscriptItem,
 } from '../transcript';
 import {renderWelcomeScreen} from '../welcome';
+import {activePlanLabel, renderPlanLines} from '../plan';
 import type {ScreenMetrics} from '../../render/metrics';
 
 /** Everything the chat screen needs to paint one frame; no hidden state. */
@@ -143,7 +144,11 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
     }
     // Live model/tool status remains above the composer, without companion artwork.
     const statusRow = v.isStreaming ? composerStartRow - 1 : -1;
-    const transcriptHeight = Math.max(0, (statusRow >= 0 ? statusRow : composerStartRow) - transcriptStartRow);
+    // The plan checklist (ADR 0042) is pinned just above the status line / composer.
+    const planLines =
+      rows >= 14 ? renderPlanLines(v.client.plan(), contentWidth, Math.min(8, Math.floor(rows / 4)), tokens) : [];
+    const planRow = (statusRow >= 0 ? statusRow : composerStartRow) - planLines.length;
+    const transcriptHeight = Math.max(0, planRow - transcriptStartRow);
     const transcriptWidth = contentWidth;
     if (transcriptHeight > 0) {
       const vp = renderTranscriptViewport({
@@ -184,6 +189,7 @@ export function drawChatScreen(canvas: Canvas, v: ChatScreenInput): TranscriptVi
         ),
       };
     }
+    if (planLines.length && planRow > transcriptStartRow) canvas.block(planRow, contentLeft, planLines, contentWidth);
     if (statusRow > transcriptStartRow)
       canvas.spans(statusRow, contentLeft, turnStatusSpans(v, companionView.time), contentWidth);
     canvas.block(composerStartRow, contentLeft, composerLines, contentWidth);
@@ -205,24 +211,27 @@ export function turnStatusSpans(
   const waitingTool = turn?.toolCalls?.some(call => !turn.toolResults?.some(result => result.callId === call.id));
   const pendingApproval = v.client.listPendingPermissions().length > 0;
   const last = turn?.parts?.at(-1);
+  const planLabel = activePlanLabel(v.client.plan());
   const label = pendingApproval
     ? 'Waiting for your approval'
-    : waitingTool
-      ? (() => {
-          const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
-          if (running.some(call => call.name === 'exec_command')) return 'Command pending';
-          if (running.some(call => isFileChangeTool(call.name))) return 'Patch pending';
-          return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
-        })()
-      : turn?.awaitingModel
-        ? 'Waiting for model'
-        : last?.kind === 'reasoning'
-          ? (reasoningTitle(last.text) ?? 'Thinking')
-          : last?.kind === 'text'
-            ? 'Replying'
-            : v.status.phase === 'waiting'
-              ? 'Waiting for provider'
-              : 'Working';
+    : planLabel
+      ? planLabel
+      : waitingTool
+        ? (() => {
+            const running = turn!.toolCalls!.filter(call => !turn!.toolResults?.some(r => r.callId === call.id));
+            if (running.some(call => call.name === 'exec_command')) return 'Command pending';
+            if (running.some(call => isFileChangeTool(call.name))) return 'Patch pending';
+            return explorationRows(running, []).at(0)?.verb === 'Read' ? 'Reading' : 'Exploring';
+          })()
+        : turn?.awaitingModel
+          ? 'Waiting for model'
+          : last?.kind === 'reasoning'
+            ? (reasoningTitle(last.text) ?? 'Thinking')
+            : last?.kind === 'text'
+              ? 'Replying'
+              : v.status.phase === 'waiting'
+                ? 'Waiting for provider'
+                : 'Working';
   const elapsed = v.turnStartedAt ? formatElapsed(Date.now() - v.turnStartedAt) : '0s';
   return [
     {text: Math.floor(time * 2) % 2 ? '◦ ' : '• ', fg: tokens.accent},

@@ -10,6 +10,8 @@ export type PreparedTool = {
 } & (
   | {kind: 'patch'; plan: PatchPlan; runtime: ApplyPatchRuntime}
   | {kind: 'read'; file: ResolvedPath}
+  /** Agent session state (plan): no workspace effect, no approval; audited (ADR 0042). */
+  | {kind: 'state'}
   /** `request_permissions` (ADR 0040): a grant for later calls, never an action by itself. */
   | {kind: 'permissions'; network: boolean; writable: string[]; justification?: string}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}

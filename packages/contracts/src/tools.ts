@@ -6,8 +6,51 @@ import type {ToolCall} from './models';
  * TOOLS1 (ADR 0017): read-only workspace tools. Descriptors carry no executable code; the
  * dispatcher in `@futryn/tools` is the single enforcement point and `@futryn/security` decides.
  */
-export const toolCapabilitySchema = z.enum(['fs.read', 'fs.write', 'process.execute']);
+export const toolCapabilitySchema = z.enum([
+  'fs.read',
+  'fs.write',
+  'process.execute',
+  /** Session state the agent keeps for itself: plan, memory (wave 1, ADR 0042). */
+  'agent.state',
+  /** Questions to the user (ADR 0042). */
+  'user.input',
+  /** Language-server queries (ADR 0043). */
+  'code.intel',
+  /** Web fetch and search (ADR 0044). */
+  'network.fetch',
+  'network.search',
+  'mcp.call',
+]);
 export type ToolCapability = z.infer<typeof toolCapabilitySchema>;
+/**
+ * Capabilities Plan and Review modes may use (plan section 4): reading, code intelligence, the
+ * agent's own state, questions, and outside reads that never change the workspace.
+ */
+export const ANALYSIS_CAPABILITIES: readonly ToolCapability[] = [
+  'fs.read',
+  'code.intel',
+  'agent.state',
+  'user.input',
+  'network.search',
+  'network.fetch',
+];
+export const analysisCapability = (capability: ToolCapability | undefined): boolean =>
+  capability !== undefined && ANALYSIS_CAPABILITIES.includes(capability);
+
+/** `update_plan` (ADR 0042): Codex schema + `cancelled` (OpenCode) + `activeForm` (Claude Code). */
+export const planStatusSchema = z.enum(['pending', 'in_progress', 'completed', 'cancelled']);
+export const planItemSchema = z.strictObject({
+  step: z.string().min(1).max(500),
+  status: planStatusSchema,
+  activeForm: z.string().min(1).max(200).optional(),
+});
+export const planStateSchema = z.strictObject({
+  explanation: z.string().max(2000).optional(),
+  items: z.array(planItemSchema).max(50),
+  updatedAt: z.string().datetime(),
+});
+export type PlanItem = z.infer<typeof planItemSchema>;
+export type PlanState = z.infer<typeof planStateSchema>;
 
 export interface ToolDescriptor {
   name: string;

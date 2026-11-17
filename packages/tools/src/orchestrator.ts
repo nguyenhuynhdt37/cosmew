@@ -92,7 +92,9 @@ export class ToolOrchestrator {
             ? await this.authorizeCommand(prepared, audit, signal)
             : prepared.kind === 'read'
               ? await this.authorizeRead(call.name, prepared.file, audit, signal)
-              : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
+              : prepared.kind === 'state'
+                ? this.authorizeState(audit)
+                : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
@@ -255,6 +257,12 @@ export class ToolOrchestrator {
       };
     }
     return null;
+  }
+
+  /** Agent state touches no workspace, process or network: allowed, but audited like any call. */
+  private authorizeState(audit: Audit): Authorization {
+    audit({target: null, phase: 'decided', decision: 'allow', reason: 'agent-state'});
+    return {gate: null, viaSession: false};
   }
 
   private authorizeSearch(prepared: Extract<PreparedTool, {kind: 'search'}>, audit: Audit): ToolOutput | null {

@@ -18,6 +18,8 @@ import {
   type ToolPort,
   type ToolResult,
   type TurnBudget,
+  analysisCapability,
+  type PlanState,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
@@ -406,6 +408,7 @@ export function startup(
     let diffRefresh: Promise<WorkspaceDiffReport> | undefined;
     let terminalReport: TerminalRuntimeReport | undefined;
     const toolsEnabled = () => client?.toolsEnabled() === true;
+    const plans = new Map<string, PlanState | null>();
 
     // Everything below is created lazily, on first use after folder consent.
     const workspaceTree = () => (workspace ??= new WorkspaceRoot(workspaceRoot));
@@ -429,6 +432,16 @@ export function startup(
         commands: commands(),
         sandbox: () => sandboxSettings,
         turnId: () => client?.currentTurnId(),
+        agentState: {
+          // The plan belongs to the active session and survives restart (ADR 0042).
+          updatePlan: plan => {
+            const id = client?.activeSession()?.id;
+            if (!id) return;
+            conversations.savePlan(id, plan);
+            plans.set(id, plan);
+            client?.planUpdated();
+          },
+        },
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),
         approve: (request, signal) =>
@@ -502,13 +515,14 @@ export function startup(
           const descriptor = tools()
             .descriptors()
             .find(item => item.name === call.name);
-          if (analysis && descriptor?.capability !== 'fs.read')
+          if (analysis && !analysisCapability(descriptor?.capability))
             return {
               callId: call.id,
               name: call.name,
               status: 'denied',
               code: 'MODE_RESTRICTED',
-              content: 'Plan and Review modes permit only workspace read/search tools. Nothing was executed.',
+              content:
+                'Plan and Review modes permit only read, search, code-intelligence, plan, question and web-read tools. Nothing was executed.',
             };
           const result = await tools().invoke(call, signal, onOutput);
           return call.name === 'read' ? withNestedInstructions(result, signal) : result;
@@ -592,6 +606,10 @@ export function startup(
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
       permissionMode: permissionModeFromEnv(),
+      getPlan: id => {
+        if (!plans.has(id)) plans.set(id, conversations.loadPlan(id));
+        return plans.get(id) ?? null;
+      },
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),

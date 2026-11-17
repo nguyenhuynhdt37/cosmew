@@ -46,3 +46,15 @@ Ghi chú: các bộ test fixture viết cho hộp thoại duyệt chạy ở `un
 | `bun test tests/security/read-extended.test.ts` | 0 | 6 | 0 | 0 |
 | `bun test tests/end-to-end/read-media.test.ts` | 0 | 3 | 0 | 0 |
 | `bun test tests` | 0 | 693 | 33 | 0 |
+
+### W1.5 — review bảo mật (`2c718e6`)
+
+AGENTS.md lồng nhau không nạp từ thư mục vendored/bị git ignore; media phải đúng cấu trúc, bị từ chối nếu chứa secret đã đăng ký. `bun test tests/security/read-extended.test.ts tests/end-to-end/read-media.test.ts`: 11 pass, 0 fail.
+
+## W2 — `update_plan` (ADR 0042)
+
+| Lệnh | Exit | Pass | Skip | Fail |
+|---|---:|---:|---:|---:|
+| `bun run typecheck && bun run lint` | 0 | — | — | — |
+| `bun test tests/end-to-end/plan.test.ts` | 0 | 3 | 0 | 0 |
+| `bun test tests` | 0 | 698 | 33 | 0 |

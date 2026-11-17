@@ -29,6 +29,16 @@ export function taskForRequest(request: string, previous?: ActiveTaskCheckpoint)
 }
 export function observeResult(task: ActiveTaskCheckpoint, call: ToolCall, result: ToolResult, sequence: number): void {
   task.lastSafeSequence = sequence;
+  // The model's own plan (ADR 0042) replaces the heuristic pending list while it exists.
+  if (call.name === 'update_plan' && result.status === 'ok') {
+    const plan = (call.input as {plan?: {step?: unknown; status?: unknown}[]} | undefined)?.plan;
+    if (Array.isArray(plan))
+      task.pending = plan
+        .filter(item => item.status === 'pending' || item.status === 'in_progress')
+        .map(item => String(item.step).slice(0, 500))
+        .slice(0, 50);
+    return;
+  }
   const session =
     call.input && typeof call.input === 'object' ? (call.input as {session_id?: string}).session_id : undefined;
   if (result.sessionId) {

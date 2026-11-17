@@ -125,7 +125,9 @@ test('project text cannot authorize a tool to read outside the workspace', async
   for (const request of c.server.requests.filter(r => r.body)) {
     expect(
       request.body.tools.every((t: any) =>
-        ['read', 'glob', 'grep', 'exec_command', 'apply_patch', 'edit', 'write'].includes(t.function.name),
+        ['read', 'glob', 'grep', 'exec_command', 'apply_patch', 'edit', 'write', 'update_plan'].includes(
+          t.function.name,
+        ),
       ),
     ).toBe(true);
     expect(contextual(request.body)).toHaveLength(1);

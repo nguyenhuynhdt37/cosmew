@@ -400,7 +400,20 @@ const TOOL_NAMES: Record<string, string> = {
   apply_patch: 'Update',
   edit: 'Update',
   write: 'Write',
+  update_plan: 'Plan',
+  request_permissions: 'Permissions',
 };
+
+/** Short argument text for wave-1 tools whose input is not a path or command (ADR 0042). */
+function stateToolArgs(call: ToolCall): string | undefined {
+  const input = call.input as Record<string, unknown> | undefined;
+  if (call.name === 'update_plan') {
+    const plan = Array.isArray(input?.plan) ? (input.plan as {status?: unknown}[]) : [];
+    const done = plan.filter(item => item.status === 'completed').length;
+    return `${done}/${plan.length} completed`;
+  }
+  return undefined;
+}
 
 /** One Futryn tool call with its paired result. */
 function renderToolCall(options: {
@@ -419,7 +432,8 @@ function renderToolCall(options: {
   const name = TOOL_NAMES[call.name] ?? call.name;
   const input = call.input as Record<string, unknown> | undefined;
   const args =
-    call.name === 'exec_command'
+    stateToolArgs(call) ??
+    (call.name === 'exec_command'
       ? commandSummary(call, result, {live}).command
       : isFileChangeTool(call.name)
         ? toolTarget(call)
@@ -429,7 +443,7 @@ function renderToolCall(options: {
             ? String(toolTarget(call))
             : call.name === 'glob' || call.name === 'grep'
               ? toolTarget(call)
-              : String(toolTarget(call) || JSON.stringify(input ?? {}));
+              : String(toolTarget(call) || JSON.stringify(input ?? {})));
   const state = result?.sessionId
     ? 'running'
     : !result

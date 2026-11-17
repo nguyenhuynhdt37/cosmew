@@ -56,14 +56,16 @@ export function openPrivateDatabase(directory: string): Database {
         conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL UNIQUE, content TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS next_turn_input_session ON next_turn_input(conversation,position);`);
       // v6 (wave 1, ADR 0041/0042): tool media apart from messages and the journal (bounded per
-      // conversation by the store), and nested AGENTS.md directories discovered by reads.
+      // conversation by the store), nested AGENTS.md directories discovered by reads, the plan.
       db.exec(`CREATE TABLE IF NOT EXISTS tool_attachments (
         position INTEGER PRIMARY KEY AUTOINCREMENT,
         conversation TEXT NOT NULL REFERENCES conversations(id), call_id TEXT NOT NULL,
         bytes INTEGER NOT NULL, data TEXT NOT NULL, UNIQUE(conversation, call_id));
         CREATE TABLE IF NOT EXISTS session_instructions (
         conversation TEXT NOT NULL REFERENCES conversations(id), directory TEXT NOT NULL,
-        PRIMARY KEY(conversation, directory));`);
+        PRIMARY KEY(conversation, directory));
+        CREATE TABLE IF NOT EXISTS session_plan (
+        conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);`);
       db.exec('PRAGMA user_version=6;');
     })();
     return db;
