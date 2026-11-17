@@ -8,7 +8,7 @@ import {
   type ToolResult,
 } from '@futryn/contracts';
 import {classifyCommand, evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
-import {analyzeShell, ensureShellParser, inputIsShellCommand} from './exec/shell-parse';
+import {analyzeShell, ensureShellParser} from './exec/shell-parse';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {
   commandGrantTarget,
@@ -405,7 +405,6 @@ export class ToolOrchestrator {
         ...prepared.stdin,
         current: {mode: config.mode, network: false},
         escalation: config.escalation,
-        classification: prepared.classification,
       });
     }
     return evaluateExec(prepared.command, file.relative, file.absolute, {
@@ -424,20 +423,11 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
   ): Promise<Authorization> {
     const {command, file, runtime, runtimeId, label} = prepared;
-    // Tree-sitter classification (ADR 0040); a parser that cannot load leaves it unverified.
-    await ensureShellParser();
-    signal?.throwIfAborted();
     if (!prepared.stdin) {
+      // Tree-sitter classification (ADR 0040); a parser that cannot load leaves it unverified.
+      await ensureShellParser();
+      signal?.throwIfAborted();
       prepared.classification = classifyCommand(analyzeShell(command), analyzeShell);
-    } else if (
-      prepared.stdin.chars &&
-      !prepared.stdin.interrupt &&
-      inputIsShellCommand(prepared.stdin.sessionCommand)
-    ) {
-      // Input to a shell is a command line: the same gate as exec_command (W1 security review).
-      prepared.classification = classifyCommand(analyzeShell(prepared.stdin.chars), analyzeShell);
-      // A "session" answer for ordinary input never covers dangerous or unverified input.
-      if (prepared.classification.dangerous || prepared.classification.uncertain) prepared.grantCommand = command;
     }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);

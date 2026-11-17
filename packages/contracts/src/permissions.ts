@@ -66,7 +66,8 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
  * - `execute`: an ordinary command inside the configured sandbox;
  * - `uncertain`: a command whose sub-commands cannot be verified (parse error, substitution, dynamic name);
  * - `dangerous`: a command on Codex's dangerous list (`rm` with force, also through sudo/env/trap/`sh -c`);
- * - `stdin`: input to a running command, inside its launch sandbox;
+ * - `stdin`: non-empty input to a running command. It always asks (`never` refuses): what a running
+ *   program does with typed input cannot be verified (ADR 0040, stricter than Codex);
  * - `network` / `escalation`: anything beyond the sandbox (network, writes outside writable roots,
  *   `request_permissions`).
  */
@@ -91,7 +92,6 @@ export function decideApproval(
     case 'edit':
       return policy === 'untrusted' && !options.autoApproveEdits ? 'ask' : 'allow';
     case 'execute':
-    case 'stdin':
       return policy === 'untrusted' ? 'ask' : 'allow';
     case 'uncertain':
       // Codex runs anything that is not dangerous under `never`, relying on the sandbox.

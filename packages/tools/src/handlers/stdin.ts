@@ -96,13 +96,7 @@ export function stdinHandler(options: ToolDispatcherOptions): ToolHandler {
         // A "session" approval covers input to this one session only, never other sessions or launches.
         grantCommand: `stdin ${data.session_id}`,
         executionKey: JSON.stringify({session: data.session_id, launch}),
-        stdin: {
-          chars: data.chars,
-          interrupt: data.signal !== undefined,
-          tty: session.tty === true,
-          launch,
-          sessionCommand: session.command,
-        },
+        stdin: {chars: data.chars, interrupt: data.signal !== undefined, tty: session.tty === true, launch},
         execute: async (signal, onOutput) => {
           const outcome = await runtime.writeStdin!(
             data.session_id,

@@ -28,7 +28,7 @@ const APPROVAL_REASONS: Record<string, string> = {
     'The model asks for more than the sandbox allows. "Allow once" grants it for the rest of this turn, "for session" until the session ends.',
   'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',
   'stdin-retained-escalation': 'Sends input to a running command that still has network access.',
-  'stdin-input':
+  'stdin-input-approval-required':
     'Sends input to a running command; for a shell or REPL this runs new commands. "Allow for session" covers this session only.',
 };
 

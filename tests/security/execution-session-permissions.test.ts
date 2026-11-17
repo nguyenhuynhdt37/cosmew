@@ -186,22 +186,19 @@ test('stdin review: polls and interrupts never prompt; input always asks; a sess
   expect((await stdin(id, {signal: 'SIGINT'})).status).toBe('ok');
   expect(prompts).toBe(0);
   // Input to an approved shell is a new command: it asks; "session" then covers this session's later input only.
-  expect((await stdin(id, {chars: 'make build\n'})).status).toBe('ok');
+  expect((await stdin(id, {chars: 'rm -rf build\n'})).status).toBe('ok');
   expect(prompts).toBe(1);
   expect((await stdin(id, {chars: 'ls\n'})).status).toBe('ok');
   expect(prompts).toBe(1);
   expect((await stdin(other, {chars: 'ls\n'})).status).toBe('ok');
   expect(prompts).toBe(2);
-  // The session answer never covers dangerous input: it asks again (W1 security review).
-  expect((await stdin(id, {chars: 'rm -rf build\n'})).status).toBe('ok');
-  expect(prompts).toBe(3);
   mode = 'read-only';
   const refused = await stdin(id, {chars: 'more\n'});
   expect(refused.status).toBe('denied');
   expect(refused.content).toContain('start a new command');
-  expect(sent).toEqual(['', '', 'make build\n', 'ls\n', 'ls\n', 'rm -rf build\n']);
+  expect(sent).toEqual(['', '', 'rm -rf build\n', 'ls\n', 'ls\n']);
   expect((await stdin(id, {})).status).toBe('ok');
-  expect(prompts).toBe(3);
+  expect(prompts).toBe(2);
 });
 
 test('stdin input that the approval cannot show in full is refused before any prompt; nothing is sent', async () => {

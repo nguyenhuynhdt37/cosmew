@@ -1,5 +1,5 @@
 import {createRequire} from 'node:module';
-import type {ShellAnalysis} from '@futryn/security';
+import type {ShellAnalysis, ShellInput} from '@futryn/security';
 
 /**
  * Bash parsing with tree-sitter (ADR 0040), as Codex does (`shell-command/src/bash.rs`, pinned
@@ -16,6 +16,8 @@ type Node = {
   isNamed: boolean;
   text: string;
   startIndex: number;
+  endIndex: number;
+  parent: Node | null;
   namedChildren: (Node | null)[];
   children: (Node | null)[];
   namedChild(index: number): Node | null;
@@ -105,6 +107,52 @@ function literal(node: Node): string | null {
   }
 }
 
+const same = (a: Node, b: Node) => a.startIndex === b.startIndex && a.endIndex === b.endIndex && a.type === b.type;
+const INPUT_OPERATORS = new Set(['<', '<&', '<>', '<&-']);
+
+/**
+ * Where a command's stdin comes from (W1 security review): a heredoc (literal when its delimiter is
+ * quoted or its body has no expansion), a herestring (literal when the word is), an input file
+ * redirect, or an earlier command of a pipeline. Redirects on an enclosing statement count for
+ * every command inside it, which over-approximates and so fails closed.
+ */
+function commandInputs(command: Node): ShellInput[] {
+  const inputs: ShellInput[] = [];
+  const scan = (redirect: Node) => {
+    if (redirect.type === 'herestring_redirect') {
+      const word = redirect.namedChildren.find(c => c !== null) ?? null;
+      const body = word ? literal(word) : null;
+      inputs.push({kind: 'herestring', ...(body !== null ? {body} : {})});
+    } else if (redirect.type === 'heredoc_redirect') {
+      const start = redirect.namedChildren.find(c => c?.type === 'heredoc_start');
+      const body = redirect.namedChildren.find(c => c?.type === 'heredoc_body');
+      const quoted = !!start && /['"\\]/.test(start.text);
+      const text = body ? body.text : '';
+      inputs.push({kind: 'heredoc', ...(quoted || (body && !body.namedChildren.length) || !body ? {body: text} : {})});
+    } else if (
+      redirect.type === 'file_redirect' &&
+      redirect.children.some(c => c && !c.isNamed && INPUT_OPERATORS.has(c.type))
+    )
+      inputs.push({kind: 'file'});
+  };
+  const scanStatement = (statement: Node | null, body: Node) => {
+    if (statement?.type !== 'redirected_statement') return;
+    for (const child of statement.namedChildren)
+      if (child && !same(child, body) && REDIRECTS.has(child.type)) scan(child);
+  };
+  for (const child of command.namedChildren) if (child && REDIRECTS.has(child.type)) scan(child);
+  let holder: Node = command;
+  scanStatement(command.parent, command);
+  if (command.parent?.type === 'redirected_statement') holder = command.parent;
+  const pipeline = holder.parent;
+  if (pipeline?.type === 'pipeline') {
+    const first = pipeline.namedChildren.find(c => c !== null);
+    if (first && !same(first, holder)) inputs.push({kind: 'pipe'});
+    scanStatement(pipeline.parent, pipeline);
+  }
+  return inputs;
+}
+
 /**
  * Analyze one script. Returns null when the parser is not loaded. A parse error yields no
  * commands and `uncertain`, as Codex refuses to read words from an error tree.
@@ -117,7 +165,7 @@ export function analyzeShell(script: string): ShellAnalysis | null {
   try {
     const root = tree.rootNode;
     if (root.hasError) return {commands: [], uncertain: true};
-    const commands: {start: number; words: string[]}[] = [];
+    const commands: {start: number; words: string[]; inputs?: ShellInput[]}[] = [];
     let uncertain = false;
     const stack: Node[] = [root];
     while (stack.length) {
@@ -149,52 +197,15 @@ export function analyzeShell(script: string): ShellAnalysis | null {
         if (named) {
           const program = words[0]!.split('/').at(-1);
           if (program === 'eval') uncertain = true;
-          commands.push({start: node.startIndex, words});
+          const inputs = commandInputs(node);
+          commands.push({start: node.startIndex, words, ...(inputs.length ? {inputs} : {})});
         }
       }
       for (const child of node.namedChildren) if (child) stack.push(child);
     }
     commands.sort((a, b) => a.start - b.start);
-    return {commands: commands.map(c => c.words), uncertain};
+    return {commands: commands.map(c => c.words), inputs: commands.map(c => c.inputs), uncertain};
   } finally {
     tree.delete();
   }
-}
-
-/** Interactive programs whose input is not a shell command line. */
-const NON_SHELL_PROGRAMS = new Set([
-  'python',
-  'python3',
-  'node',
-  'bun',
-  'deno',
-  'irb',
-  'ruby',
-  'ghci',
-  'psql',
-  'sqlite3',
-  'mysql',
-  'redis-cli',
-  'less',
-  'more',
-  'man',
-  'vi',
-  'vim',
-  'nvim',
-  'nano',
-  'top',
-  'htop',
-]);
-
-/**
- * Whether input to a session launched with `command` must be judged as a shell command line:
- * true for shells and for anything Futryn cannot identify (fail closed), false only for a known
- * non-shell interactive program as the last command of a verifiable launch line.
- */
-export function inputIsShellCommand(command: string | undefined): boolean {
-  if (command === undefined) return true;
-  const analysis = analyzeShell(command);
-  if (!analysis || analysis.uncertain) return true;
-  const program = analysis.commands.at(-1)?.[0]?.split('/').at(-1);
-  return !program || !NON_SHELL_PROGRAMS.has(program);
 }
