@@ -136,7 +136,8 @@ test('TUI subscription flow auto-completes browser/device sign-in and opens a us
   await tui.executeSlashCommand('/login');
   for (const key of 'chatgpt') await tui.handleKey(key);
   await tui.handleKey('Enter');
-  expect(tui.computeFrameSnapshot().plainText).toContain('Sign in with ChatGPT');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Sign in with ChatGPT via Codex CLI');
+  await tui.handleKey('ArrowDown'); // the direct API sign-in is first; Codex CLI is the fallback
   await tui.handleKey('Enter');
   const deadline = Date.now() + 5000;
   while (tui.getActiveOverlay() !== 'models' && Date.now() < deadline) await Bun.sleep(10);
@@ -187,6 +188,7 @@ test('login UX groups subscriptions under the vendor and asks only for the selec
   expect(methods).toContain('API key');
   expect(methods).not.toContain('Environment variable');
   await tui.handleKey('ArrowDown');
+  await tui.handleKey('ArrowDown');
   await tui.handleKey('Enter');
   expect(tui.computeFrameSnapshot().plainText).toContain('Paste your API key');
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Name this account');
@@ -223,7 +225,7 @@ for (const vendor of ['OpenAI'])
         await wait('Choose your provider');
         terminal.write('\r');
         await wait(`Sign in to ${vendor}`);
-        terminal.write('\r');
+        terminal.write('\x1b[B\r'); // Codex CLI is the fallback below the direct API sign-in
         await wait('runtime-model');
         expect(output).not.toContain('Name this account');
         expect(output).not.toContain('Enter API key');
@@ -384,7 +386,7 @@ test.skipIf(process.platform === 'win32')(
       await wait('Choose your provider');
       terminal.write('\r');
       await wait('Sign in to OpenAI');
-      terminal.write('\r');
+      terminal.write('\x1b[B\r'); // Codex CLI is the fallback below the direct API sign-in
       await wait('ABCD-1234');
       const mark = output.length;
       terminal.write('\x1b');
@@ -687,7 +689,7 @@ test.skipIf(process.platform === 'win32')(
       await wait('Choose your provider');
       terminal.write('\r');
       await wait('Sign in to OpenAI');
-      terminal.write('\r');
+      terminal.write('\x1b[B\r'); // Codex CLI is the fallback below the direct API sign-in
       await wait('runtime-model');
       terminal.write('\r');
       await wait('Ask anything');
@@ -793,7 +795,7 @@ test.skipIf(process.platform === 'win32')(
       await wait('Choose your provider');
       terminal.write('\r');
       await wait('Sign in to OpenAI');
-      terminal.write('\r');
+      terminal.write('\x1b[B\r'); // Codex CLI is the fallback below the direct API sign-in
       await wait('runtime-model');
       terminal.write('\r');
       await wait('Ask anything');

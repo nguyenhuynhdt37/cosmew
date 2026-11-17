@@ -26,7 +26,7 @@ export class ConfiguredNetworkPolicy implements NetworkPolicy {
     if (
       account.providerId !== provider.id ||
       account.status === 'logged-out' ||
-      (provider.auth === 'api-key' && account.credential.kind === 'none')
+      ((provider.auth === 'api-key' || provider.auth === 'oauth') && account.credential.kind === 'none')
     )
       throw new FutrynError('POLICY');
   }

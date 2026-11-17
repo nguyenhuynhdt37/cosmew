@@ -12,7 +12,8 @@ export async function loginSubscription(
   device = false,
 ): Promise<Account> {
   const client = app.createFutrynClient();
-  const methodId = device ? 'subscription-device' : 'subscription-browser';
+  const methodId =
+    provider.auth === 'oauth' ? 'oauth-browser' : device ? 'subscription-device' : 'subscription-browser';
   const integration = client.listIntegrations().find(i => i.provider.id === provider.id);
   const method = integration?.methods.find(m => m.id === methodId);
   if (method?.available === false) {

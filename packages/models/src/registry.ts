@@ -80,8 +80,33 @@ export const providerPresets: readonly Provider[] = [
     timeoutMs: 120000,
   },
   {
+    // ADR 0047: "Sign in with ChatGPT" token sharing; Futryn runs the agent loop (backend `hannes`).
+    // The model list is the one OpenCode 0ac0d7e ships for this sign-in; correct it with /model or models add.
+    id: 'chatgpt-api',
+    name: 'ChatGPT subscription · API',
+    protocol: 'responses',
+    baseURL: 'https://api.openai.com/v1',
+    auth: 'oauth',
+    catalog: 'manual',
+    metadataVersion: 1,
+    timeoutMs: 60000,
+    family: 'openai',
+    requestEncoding: 'zstd',
+    models: [
+      'gpt-5.5',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6.1-terra',
+    ],
+  },
+  {
     id: 'chatgpt',
-    name: 'ChatGPT subscription · Codex',
+    name: 'ChatGPT subscription · Codex CLI (fallback)',
     protocol: 'responses',
     baseURL: 'https://chatgpt.com',
     auth: 'api-key',
@@ -92,6 +117,10 @@ export const providerPresets: readonly Provider[] = [
     family: 'openai',
   },
 ];
+/** Built-in sign-in providers whose ids a host config may not redefine. */
+export const reservedProviderIds: ReadonlySet<string> = new Set(
+  providerPresets.filter(p => p.runtime || p.auth === 'oauth').map(p => p.id),
+);
 export class ProviderRegistry {
   constructor(private readonly store: SettingsStore) {}
   list(): Provider[] {
@@ -133,7 +162,7 @@ export class AuthMethodRegistry {
       return [
         {
           id: 'subscription-browser',
-          name: 'Sign in with ChatGPT',
+          name: 'Sign in with ChatGPT via Codex CLI (fallback)',
           description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.',
           autoComplete: true,
         },
@@ -143,6 +172,15 @@ export class AuthMethodRegistry {
           description: 'Official Codex device-code flow.',
           autoComplete: true,
           advanced: true,
+        },
+      ];
+    if (provider.auth === 'oauth')
+      return [
+        {
+          id: 'oauth-browser',
+          name: 'Sign in with ChatGPT',
+          description: 'Browser sign-in; Futryn runs the agent and tools. Tokens stay in the OS keyring.',
+          autoComplete: true,
         },
       ];
     const methods: import('@futryn/contracts').AuthMethod[] =

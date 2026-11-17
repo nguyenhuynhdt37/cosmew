@@ -7,6 +7,9 @@ import {
   type SettingsStore,
 } from '@futryn/contracts';
 
+/** API-key and OAuth providers keep a credential; `none` and `command` providers have none to store. */
+const holdsCredential = (provider: {auth: string}) => provider.auth === 'api-key' || provider.auth === 'oauth';
+
 export class AccountManager {
   constructor(
     private readonly store: SettingsStore,
@@ -54,7 +57,7 @@ export class AccountManager {
         if (!provider || s.accounts.some(a => a.alias === alias)) throw new FutrynError('INVALID_INPUT');
         if (
           (credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) ||
-          (provider.auth === 'api-key') === (credential.kind === 'none')
+          holdsCredential(provider) === (credential.kind === 'none')
         )
           throw new FutrynError('AUTH');
         s.accounts.push(account);
@@ -82,7 +85,7 @@ export class AccountManager {
     accountSchema.parse({...current, credential});
     if (
       (credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) ||
-      (provider.auth === 'api-key') === (credential.kind === 'none')
+      holdsCredential(provider) === (credential.kind === 'none')
     )
       throw new FutrynError('AUTH');
     if (

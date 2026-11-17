@@ -3,7 +3,7 @@ import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {FutrynError, type Account, type AnimationConfig, type ModelInfo, type ThemeMode} from '@futryn/contracts';
 import {parseSlashCommand} from '@futryn/sdk';
-import {loadHostConfig, providerPresets} from '@futryn/models';
+import {loadHostConfig, providerPresets, reservedProviderIds} from '@futryn/models';
 import {fetchModelsDev, terminalText} from '@futryn/security';
 import {reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
 import {loginSubscription} from './subscriptions/login';
@@ -153,7 +153,9 @@ async function check(app: Application, account: Account, signal: AbortSignal, ge
 async function login(app: Application, options: Options, signal: AbortSignal) {
   if (
     str(options, 'method') &&
-    !['env', 'api-key', 'none', 'subscription-browser', 'subscription-device'].includes(str(options, 'method')!)
+    !['env', 'api-key', 'none', 'subscription-browser', 'subscription-device', 'oauth-browser'].includes(
+      str(options, 'method')!,
+    )
   ) {
     throw new FutrynError('UNSUPPORTED');
   }
@@ -184,11 +186,11 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
     while (app.accounts.list().some(account => account.alias === alias))
       alias = `${provider.id.slice(0, 90)}-${suffix++}`;
   }
-  if (provider.runtime) {
+  if (provider.runtime || provider.auth === 'oauth') {
     if (
       options['key-stdin'] ||
       str(options, 'env') ||
-      (requestedMethod && !['subscription-browser', 'subscription-device'].includes(requestedMethod))
+      (requestedMethod && !['subscription-browser', 'subscription-device', 'oauth-browser'].includes(requestedMethod))
     )
       fail();
     const account = await loginSubscription(
@@ -822,7 +824,7 @@ async function main() {
           ...(options['replay-reasoning'] === true ? {replay_reasoning: true} : {}),
           ...(authCommand ? {auth: {command: authCommand, args: list(options, 'auth-arg')}} : {}),
         };
-        const loaded = loadHostConfig({model_providers: {[id]: raw}}, new Set(['chatgpt']));
+        const loaded = loadHostConfig({model_providers: {[id]: raw}}, reservedProviderIds);
         const entry = loaded.providers[0];
         if (!entry) {
           process.stderr.write(`Provider not added: ${loaded.diagnostics.map(d => d.message).join('; ')}\n`);

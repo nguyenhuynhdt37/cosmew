@@ -42,7 +42,7 @@ export function retryDelay(attempt: number, retryMs: number | null, random = Mat
 }
 
 /** Supplies the bearer token of a `command` provider (the composition root runs the user's command). */
-export type TokenSource = (provider: Provider, signal?: AbortSignal) => Promise<string | undefined>;
+export type TokenSource = (provider: Provider, account: Account, signal?: AbortSignal) => Promise<string | undefined>;
 
 /**
  * Host-config request decoration (ADR 0046): query parameters, static headers and headers whose value
@@ -76,8 +76,8 @@ export class ProviderTransport {
   ) {}
   async credential(signal?: AbortSignal): Promise<string | undefined> {
     this.policy.authorize(this.provider, this.account);
-    if (this.provider.auth === 'command') {
-      const token = await this.tokenSource?.(this.provider, signal);
+    if (this.provider.auth === 'command' || this.provider.auth === 'oauth') {
+      const token = await this.tokenSource?.(this.provider, this.account, signal);
       if (!token) throw new FutrynError('AUTH');
       return token;
     }
@@ -109,9 +109,19 @@ export class ProviderTransport {
       throw new FutrynError('POLICY');
     const headers = new Headers(init.headers);
     decorate(this.provider, target, headers);
+    let payload: BodyInit | null | undefined = init.body;
+    // Large request bodies are zstd-compressed where the provider requires it (ADR 0047).
+    if (
+      this.provider.requestEncoding === 'zstd' &&
+      typeof payload === 'string' &&
+      Buffer.byteLength(payload) > 256 * 1024
+    ) {
+      payload = new Uint8Array(await Bun.zstdCompress(new TextEncoder().encode(payload))) as unknown as BodyInit;
+      headers.set('content-encoding', 'zstd');
+    }
     let response: Response;
     try {
-      response = await this.fetchImpl(target, {...init, headers, redirect: 'error'});
+      response = await this.fetchImpl(target, {...init, body: payload, headers, redirect: 'error'});
     } catch {
       throw init.signal?.aborted ? normalizeError(null, init.signal) : new FutrynError('TRANSPORT', true);
     }

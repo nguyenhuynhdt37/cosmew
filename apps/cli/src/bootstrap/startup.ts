@@ -39,6 +39,7 @@ import {
   SubscriptionAdapter,
   parseOpenRouterKeyLimits,
   providerPresets,
+  reservedProviderIds,
   type HostProviderEntry,
   loadHostConfig,
   renderProviderToml,
@@ -64,6 +65,7 @@ import {
   terminalText,
   validateEndpoint,
 } from '@futryn/security';
+import {ChatGPTOAuth, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
 import {SubscriptionHost, type SubscriptionHostOptions} from '../subscriptions/host';
 import {grantLabel, toolPermissionRequest} from './approvals';
 import {HostConfigStore, TokenCommandRunner} from './host-config';
@@ -138,6 +140,8 @@ export function startup(
     vault?: CredentialVault;
     fetch?: typeof fetch;
     subscriptions?: SubscriptionHostOptions;
+    /** Test seams for the ChatGPT sign-in (issuer, browser opener, clock). */
+    chatgpt?: ChatGPTOAuthOptions;
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
   } = {},
 ) {
@@ -157,6 +161,7 @@ export function startup(
   const customThemes = new FileCustomThemeStore(directory);
   const vault = services.vault ?? new SecureVault(redactor);
   const oauth = new OpenRouterPKCE(redactor, services.fetch);
+  const chatgpt = new ChatGPTOAuth(redactor, {fetch: services.fetch, ...services.chatgpt});
   // Credentials of accounts removed by a migration (ADR 0045) are deleted here, where the vault lives.
   // A failed deletion stays queued and is retried on the next start.
   const outbox = new MigrationOutbox(db);
@@ -172,7 +177,7 @@ export function startup(
   })();
   const registry = new ProviderRegistry(settings);
   // Host providers (ADR 0046) come only from <state directory>/config.toml, never from a workspace.
-  const hostConfig = new HostConfigStore(directory, new Set(providerPresets.filter(p => p.runtime).map(p => p.id)));
+  const hostConfig = new HostConfigStore(directory, reservedProviderIds);
   const hostEntries = new Map<string, HostProviderEntry>();
   const registerHostSecrets = (provider: Provider) => {
     for (const variable of Object.values(provider.envHttpHeaders ?? {}))
@@ -212,11 +217,10 @@ export function startup(
   };
   let hostLoaded = syncHostProviders();
   /** A custom provider is a host config entry: written to config.toml, then loaded like any other. */
-  const reservedIds = new Set(providerPresets.filter(p => p.runtime).map(p => p.id));
   /** The host config rules applied to a provider built elsewhere (TUI form): render it, parse it back, report why not. */
   const validateHostProvider = (provider: Provider): string | null => {
     try {
-      const loaded = loadHostConfig(Bun.TOML.parse(renderProviderToml({provider})), reservedIds);
+      const loaded = loadHostConfig(Bun.TOML.parse(renderProviderToml({provider})), reservedProviderIds);
       return loaded.providers.length ? null : (loaded.diagnostics[0]?.message ?? 'invalid provider');
     } catch {
       return 'invalid provider';
@@ -264,7 +268,8 @@ export function startup(
         },
       },
       services.fetch,
-      (provider, signal) => tokens.token(provider, signal),
+      (provider, account, signal) =>
+        provider.auth === 'oauth' ? chatgpt.accessToken(account, vault, signal) : tokens.token(provider, signal),
     );
 
   const catalog = (account: Account) => new ModelCatalog(settings, transport(account));
@@ -827,6 +832,7 @@ export function startup(
         if (integration?.provider.runtime) {
           return subscriptions.begin(integration.provider, methodId === 'subscription-device', signal);
         }
+        if (integration?.provider.auth === 'oauth') return chatgpt.begin(signal);
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.begin();
       },
@@ -835,12 +841,14 @@ export function startup(
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.complete(challengeId, code, signal);
       },
-      providerAuthProgress: id => subscriptions.progress(id),
+      providerAuthProgress: id => (chatgpt.has(id) ? chatgpt.progress(id) : subscriptions.progress(id)),
+      completeOAuthSignIn: (_providerId, id, signal) => chatgpt.complete(id, signal),
       completeSubscriptionAuth: (providerId, id, signal) =>
         subscriptions.complete(registry.get(providerId), id, signal),
       discardSubscriptionCredential: ref => vault.delete(ref),
       cancelProviderAuth: id => {
         oauth.cancel(id);
+        chatgpt.cancel(id);
         return subscriptions.cancel(id);
       },
       listProviders: () => registry.list(),

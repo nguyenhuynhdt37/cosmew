@@ -30,8 +30,8 @@ export const providerSchema = z.strictObject({
     .regex(/^[^\x00-\x1f\x7f]+$/),
   protocol: protocolSchema,
   baseURL: z.string().url().max(2048),
-  /** `command`: a bearer token printed by a user-configured command (host config only, ADR 0046). */
-  auth: z.enum(['api-key', 'none', 'command']),
+  /** `command`: a bearer token printed by a user-configured command (host config only, ADR 0046). `oauth`: an access token the sign-in flow refreshes (ADR 0047). */
+  auth: z.enum(['api-key', 'none', 'command', 'oauth']),
   catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
   metadataVersion: z.literal(1),
   /** Metadata requests and runtime handshakes. Model streams use `streamIdleTimeoutMs`. */
@@ -72,6 +72,8 @@ export const providerSchema = z.strictObject({
   modelCatalogURL: z.string().url().max(2048).optional(),
   /** Hand-written model list for gateways that do not serve /models. */
   models: z.array(modelIdSchema).max(500).optional(),
+  /** Compress large request bodies with zstd (ChatGPT sign-in rejects uncompressed bodies over ~1 MiB, ADR 0047). */
+  requestEncoding: z.literal('zstd').optional(),
   /** Send the assistant's earlier reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
   replayReasoning: z.boolean().optional(),
 });
@@ -79,7 +81,8 @@ export type Provider = z.infer<typeof providerSchema>;
 
 /** Registry metadata is introduced in contract 1.1; no credential bytes cross this boundary. */
 export interface AuthMethod {
-  id: 'api-key' | 'env' | 'none' | 'openrouter-oauth' | 'subscription-browser' | 'subscription-device';
+  id:
+    'api-key' | 'env' | 'none' | 'openrouter-oauth' | 'oauth-browser' | 'subscription-browser' | 'subscription-device';
   name: string;
   description: string;
   providerId?: string;

@@ -136,6 +136,8 @@ export interface FutrynBackendPorts {
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
+  /** Finish an OAuth sign-in that runs a local callback; resolves to the secret the keyring stores (ADR 0047). */
+  completeOAuthSignIn?(providerId: string, challengeId: string, signal?: AbortSignal): Promise<string>;
   completeProviderAuth?(providerId: string, challengeId: string, code: string, signal?: AbortSignal): Promise<string>;
   cancelProviderAuth?(challengeId: string): void | Promise<void>;
   providerAuthProgress?(challengeId: string): ProviderAuthProgress;
@@ -858,6 +860,13 @@ export class FutrynClient {
           input.authChallengeId,
           signal,
         );
+      } else if (
+        input.authChallengeId &&
+        this.ports.listProviders().find(p => p.id === input.providerId)?.auth === 'oauth'
+      ) {
+        if (!this.ports.completeOAuthSignIn || input.credential.kind !== 'keyring')
+          throw new FutrynError('UNSUPPORTED');
+        secret = await this.ports.completeOAuthSignIn(input.providerId, input.authChallengeId, signal);
       } else if (input.authChallengeId) {
         if (!this.ports.completeProviderAuth || !input.authorizationCode || input.credential.kind !== 'keyring')
           throw new FutrynError('UNSUPPORTED');
