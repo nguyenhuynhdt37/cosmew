@@ -7,6 +7,7 @@ import {
   openSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
   writeSync,
 } from 'node:fs';
@@ -224,4 +225,21 @@ test('media is validated and scanned: malformed media is binary, a registered se
   const notebook = await s.read({path: 'leak.ipynb'});
   expect(notebook.attachments).toBeUndefined();
   expect(notebook.content).toContain('omitted');
+});
+
+test('directory listing omits symlinks pointing to .git, Futryn state, or outside the workspace', async () => {
+  const s = setup();
+  writeFileSync(join(s.base, 'outside.txt'), 'outside\n');
+  writeFileSync(join(s.root, 'state', 'token.json'), 'secret\n');
+  symlinkSync(join(s.root, '.git', 'config'), join(s.root, 'innocent-git-link'));
+  symlinkSync(join(s.root, 'state', 'token.json'), join(s.root, 'innocent-state-link'));
+  symlinkSync(join(s.base, 'outside.txt'), join(s.root, 'innocent-outside-link'));
+  symlinkSync(join(s.root, 'src', 'App.ts'), join(s.root, 'safe-link.ts'));
+  const listing = await s.read({path: '.'});
+  expect(listing.status).toBe('ok');
+  const entries = listing.content.split('\n').slice(1);
+  expect(entries).not.toContain('innocent-git-link');
+  expect(entries).not.toContain('innocent-state-link');
+  expect(entries).not.toContain('innocent-outside-link');
+  expect(entries).toContain('safe-link.ts');
 });

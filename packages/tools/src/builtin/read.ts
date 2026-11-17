@@ -1,4 +1,4 @@
-import {readdirSync, statSync} from 'node:fs';
+import {readdirSync} from 'node:fs';
 import {basename, dirname, extname, join} from 'node:path';
 import {z} from 'zod';
 import type {Attachment} from '@futryn/contracts';
@@ -64,7 +64,7 @@ export function runRead(
   redact: (text: string) => string = text => text,
   readPolicy?: ToolDispatcherOptions['readPolicy'],
 ): ReadOutcome {
-  if (file.kind === 'directory') return listDirectory(file, input, stateDirectory, readPolicy);
+  if (file.kind === 'directory') return listDirectory(workspace, file, input, stateDirectory, readPolicy);
   const head = workspace.readBytes(file, MEDIA_SNIFF_BYTES);
   const media = sniffMedia(head.bytes);
   if (media) {
@@ -134,9 +134,11 @@ function pageLines(text: string, input: z.infer<typeof readInput>): {ok: true; c
 
 /**
  * Directory listing (OpenCode `read` list page): directories first, then files, each sorted; `/`
- * marks directories. Entries policy denies (`.git`, Futryn state) are omitted.
+ * marks directories. Entries policy denies (`.git`, Futryn state) or symlinks pointing there or
+ * outside the workspace are omitted.
  */
 function listDirectory(
+  workspace: WorkspaceRoot,
   file: ResolvedPath,
   input: z.infer<typeof readInput>,
   stateDirectory?: string,
@@ -149,19 +151,26 @@ function listDirectory(
     entries = readdirSync(file.absolute, {withFileTypes: true}).flatMap(entry => {
       const relative = file.relative === '.' ? entry.name : `${file.relative}/${entry.name}`;
       let directory = entry.isDirectory();
+      let targetRelative = relative;
+      let targetAbsolute = join(file.absolute, entry.name);
       if (entry.isSymbolicLink()) {
         try {
-          directory = statSync(join(file.absolute, entry.name)).isDirectory();
+          const resolved = workspace.resolve(relative);
+          directory = resolved.kind === 'directory';
+          targetRelative = resolved.relative;
+          targetAbsolute = resolved.absolute;
         } catch {
           return [];
         }
       } else if (!directory && !entry.isFile()) return [];
-      const decision = readDecision(
-        {stateDirectory, readPolicy},
-        directory ? relative + '/' : relative,
-        join(file.absolute, entry.name),
-      );
-      return decision.effect === 'deny' ? [] : [{name: entry.name, directory}];
+      const suffix = directory ? '/' : '';
+      const entryDecision = readDecision({stateDirectory, readPolicy}, relative + suffix, targetAbsolute);
+      if (entryDecision.effect === 'deny') return [];
+      if (targetRelative !== relative) {
+        const targetDecision = readDecision({stateDirectory, readPolicy}, targetRelative + suffix, targetAbsolute);
+        if (targetDecision.effect === 'deny') return [];
+      }
+      return [{name: entry.name, directory}];
     });
   } catch {
     throw new WorkspaceDenied('inaccessible');
