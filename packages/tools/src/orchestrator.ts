@@ -427,7 +427,13 @@ export class ToolOrchestrator {
       // Codex-style classification (ADR 0040); a parser that cannot load fails closed.
       const ready = await ensureShellParser();
       signal?.throwIfAborted();
-      prepared.classification = classifyCommand(command, prepared.shell ?? 'bash', shellParsers, ready);
+      prepared.classification = classifyCommand(
+        command,
+        prepared.shell ?? 'bash',
+        shellParsers,
+        ready,
+        this.options.workspace.root,
+      );
     }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);

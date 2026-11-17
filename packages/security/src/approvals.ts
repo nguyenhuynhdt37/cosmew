@@ -1,3 +1,4 @@
+import {realpathSync} from 'node:fs';
 import {decideApproval, type ApprovalPolicy, type PermissionKind} from '@futryn/contracts';
 
 /**
@@ -87,6 +88,35 @@ export function dangerousCommandMatch(argv: string[], parsers: ShellParsers, dep
   return null;
 }
 
+/** System directories a shell named by absolute path must resolve into to be unwrapped. */
+export const TRUSTED_SHELL_DIRECTORIES = ['/bin', '/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'] as const;
+
+/**
+ * Futryn deviation from Codex (`shell_detect.rs:39` matches the file stem, so `./bash` counts): a
+ * `-c` script is unwrapped for project rules only when the shell is the bare name `bash|zsh|sh`
+ * or an absolute path whose real path is a `bash|zsh|sh` in a system directory outside the
+ * workspace. A repository-planted `./bash` stays one opaque sub-command, so `Bash(npm test:*)`
+ * never covers `./bash -lc "npm test"`.
+ */
+export function trustedShell(word: string, workspaceRoot?: string): boolean {
+  if (['bash', 'zsh', 'sh'].includes(word)) return true;
+  if (!word.startsWith('/')) return false;
+  let real: string;
+  try {
+    real = realpathSync.native(word);
+  } catch {
+    return false;
+  }
+  if (workspaceRoot && (real === workspaceRoot || real.startsWith(workspaceRoot.replace(/\/+$/, '') + '/')))
+    return false;
+  const directory = real.slice(0, real.lastIndexOf('/'));
+  // Symlinks such as /bin/sh → dash resolve to another shell: accept any system shell binary.
+  return (
+    (TRUSTED_SHELL_DIRECTORIES as readonly string[]).includes(directory) &&
+    ['bash', 'zsh', 'sh', 'dash'].includes(basename(real))
+  );
+}
+
 export interface CommandClassification {
   /**
    * The parsed sub-commands (Codex `commands_for_exec_policy`), or null when the script is
@@ -109,10 +139,11 @@ export function classifyCommand(
   shell: string,
   parsers: ShellParsers,
   ready = true,
+  workspaceRoot?: string,
 ): CommandClassification {
   if (!ready) return {commands: null, dangerous: null, parserUnavailable: true};
   let commands = parsers.plain(script);
-  if (commands && commands.length === 1) {
+  if (commands && commands.length === 1 && trustedShell(commands[0]![0] ?? '', workspaceRoot)) {
     const inner = extractShellScript(commands[0]!);
     // Codex parses `bash -lc <script>` only when the script is plain; otherwise it stays opaque.
     if (inner !== null) commands = parsers.plain(inner);

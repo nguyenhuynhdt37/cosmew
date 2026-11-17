@@ -44,6 +44,7 @@ Under `never` an `ask` project rule is refused instead of shown (Codex `prompt_i
 
 - Fewer prompts: the sandbox (Seatbelt/bubblewrap/Docker) is now the main boundary for ordinary commands; every existing sandbox test still runs, and the policy matrix is pinned by tests.
 - Fixture suites that exercise the approval dialog start in `untrusted` (`tests/preload.ts` sets `FUTRYN_APPROVAL_POLICY=untrusted` unless already set); the default is tested explicitly.
+- Deviation from Codex (`shell-command/src/shell_detect.rs:39` detects the shell by file stem): a `-c|-lc` script is unwrapped for project rules only when the shell word is exactly `bash`/`zsh`/`sh`, or an absolute path whose real path is a `bash`/`zsh`/`sh`/`dash` in `/bin`, `/usr/bin`, `/usr/local/bin` or `/opt/homebrew/bin` and not inside the workspace. A repository-planted `./bash -lc "npm test"` stays one sub-command as written, so `Bash(npm test:*)` never allows it (test: "a -c script is unwrapped only for a bare or system shell").
 - Remaining differences from Codex: no exec-policy rule files (`execpolicy/` `.rules`); project rules replace them. Codex `prefix_rule` proposals from the model are still refused (`UNSUPPORTED`); the dialog suggests the prefix. `request_permissions` cannot grant writable roots outside the workspace or extra writable roots to the command sandbox (only to Futryn's file tools). `untrusted` has no known-safe command list (Codex at this revision also prompts for every unmatched command).
 
 ## Evidence
