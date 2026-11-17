@@ -53,3 +53,34 @@ Inspected 2026-11-17:
 Exa keyless availability/limits and authenticated provider operation remain **Needs
 verification**. No background tasks, sampling, OAuth discovery or remote tool
 registration is enabled by connecting the search adapter.
+
+## W6 — Public URL fetching
+
+`web_fetch` is a dispatcher-managed `network.fetch` capability. The orchestrator
+injects an authorization callback; the runtime refuses requests without one.
+Every redirected URL re-enters policy/approval/audit before DNS and connection.
+Grants bind the exact origin, so authorizing one site does not authorize another.
+`never` refuses network escalation. `WebFetch(domain:...)` and deny/ask precedence
+are handled by the shared permission engine rather than the transport.
+
+Only HTTP(S) without URL credentials is accepted. All DNS answers must be public;
+loopback/private/link-local, metadata, multicast, special-use IPv4 and IPv6,
+IPv4-embedded/transition IPv6 and alternate numeric loopback spellings are refused.
+The selected public address is pinned to Node HTTP(S)'s `lookup` callback for the
+actual socket, retaining the original Host/TLS SNI and certificate verification.
+No second resolver lookup can turn a checked public host into a private connection.
+Ambient proxies, credentials, cookies, automatic redirects and decompression are
+not used. Maximum body is 5 MiB, maximum redirects five, total deadline 120 seconds
+(default 30), with cancellation across authorization, DNS and body collection.
+Compressed and binary response types are explicitly unsupported in this slice.
+
+Markdown/text conversion uses inert Turndown DOM parsing and removes script/style,
+frames, objects, embeds and templates. Explicit `format: html` returns raw source
+as untrusted data. Output is redacted/bounded by the dispatcher. A regression caught
+a custom text-format rule taking precedence over removal rules; the rule now
+excludes those active-content elements and both formats have coverage.
+
+`tests/security/web-fetch.test.ts` distinguishes pure policy/redirect fixture
+checks from actual local socket tests for pinned address/Host, oversized response
+termination and abort. It does not claim real Internet/TLS, Linux or Windows
+compatibility. `tests/end-to-end/web-search.test.ts` remains the MCP/REST wire evidence.
