@@ -26,3 +26,14 @@ The model had no structured way to show its plan or to ask the user a question. 
 ## Evidence
 
 `tests/end-to-end/plan.test.ts` (schema and invariants through the dispatcher, Plan mode offers the tool and no writes, durable plan after restart, rendered checklist, windowing and collapse); `tests/end-to-end/question.test.ts` (single/multiple/Other answers as Codex JSON, dismissal, cancellation, non-interactive, invalid input, restart).
+
+Continuation review (2026-11-17): plan explanation/step/activeForm are redacted
+before the durable-state callback, and pending question header/question/option
+label/description are sanitized before SDK/UI exposure. IDs retain their stable
+mapping; selected labels and model-visible answers consistently use the displayed
+sanitized label. Rule additions/removals revoke both dispatcher and prompt grants,
+so a previously approved network search cannot bypass a newly added deny. Rule
+restrictions (adding deny/ask or removing allow) also deny and settle every
+unresolved prompt; an old dialog cannot approve an operation after policy
+tightened. Adding allow preserves the normal “don’t ask again” flow and unrelated
+pending requests. The session mode/delegation are not reset.

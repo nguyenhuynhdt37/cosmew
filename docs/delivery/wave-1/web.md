@@ -38,3 +38,14 @@ markdown/text conversion, and real local sockets for pinned address/Host and
 stream termination. The fixtures inject a trusted app-owned transport for public
 DNS success cases; no claim of live Internet service is made. Parent integration
 runs record final totals separately in [acceptance](acceptance.md).
+
+Continuation MCP regression gate: parent observed the transient-initialize test
+fail (cached rejected initialization); after fresh-attempt recovery it passed.
+`bun test tests/end-to-end/web-search.test.ts` then passed 8 tests / 33 assertions,
+including close-during-initialize cancellation. This is still local fixture
+verification and does not change the live-provider status above.
+
+Final integrated frozen snapshot: typecheck/lint/full/integration/e2e all exit 0.
+Counts: full 749 pass / 34 skip; integration 198 pass / 23 skip; e2e 286 pass /
+11 skip, zero failures in all three. Implementation head `5aca162`; these
+aggregate local gates do not turn provider fixtures into live-service evidence.

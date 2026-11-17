@@ -25,3 +25,12 @@ All of this stays inside the existing dispatcher pipeline: path resolution in `@
 ## Evidence
 
 `tests/security/read-extended.test.ts` (listing/omissions/paging, tails, did-you-mean incl. secret/.git/outside, media sniffing and 20 MiB bound, secret media still asks, notebooks, vision-unsupported and chat-PDF notes), `tests/end-to-end/read-media.test.ts` (wire format on chat and Anthropic fixture servers, no base64 in transcript or stored message, media and nested AGENTS.md after restart, nested instructions shown once), `tests/contracts/usage-context.test.ts` (schema 6, future schema 7 fails closed).
+
+Continuation review (2026-11-17): notebook attachment **names** now pass the same
+redactor as other result targets/attachments before provider/persistence/UI sinks.
+Registered-secret scanning checks both latin1 and UTF-8 interpretations, covering
+Unicode tokens inside otherwise valid media. Structural checks remain **minimal**,
+not full image/PDF decoding: compressed/encoded secret material or unknown secrets
+is not detected by raw-byte matching. No new decoder dependency was introduced.
+Project Read rules also filter directory/glob/suggestion/grep output and automatic
+instruction loading; builtin hard denies and secret approval remain in effect.

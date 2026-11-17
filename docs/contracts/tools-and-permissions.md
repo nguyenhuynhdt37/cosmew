@@ -36,3 +36,43 @@ Task 01 automatic instructions ([ADR 0019](../adr/0019-project-context-loader.md
 ## Contained exec/stdin (contract 1.13)
 
 [ADR0032](../adr/0032-contained-command-sessions.md) adds an opt-in fixed-image local Docker runtime, optional exec_command yield_time_ms and owned-session write_stdin. Both use the existing registry/orchestrator process.execute lifecycle. Exact input/command, canonical cwd, lease/session and policy bind approval; expiry/revocation/resume cannot restore authority. Snapshot filesystem, PID namespace, no-new-privileges, zero-capability nonroot child and immutable lease are separate OS gates. No PTY, host writes/network or unsandboxed fallback.
+
+## Integrated wave 1 (contract 1.19)
+
+The current implementation supersedes historical closed-gate descriptions above
+only for the capabilities described in ADRs 0040–0044. `ApprovalPolicy` is
+`untrusted | on-request | never`; the default is `on-request` inside the configured
+workspace sandbox. Hard denies precede project rules, user answers and grants.
+All project-rule changes revoke dispatcher/prompt session grant caches. Adding
+deny/ask or removing allow additionally denies and settles unresolved prompts;
+old dialogs cannot revive approval after a restriction. Adding allow preserves
+the legitimate “don’t ask again” prompt and unrelated pending requests.
+Nonempty terminal input always asks (and `never` refuses), including shells,
+REPLs, editors and pagers; polling/interrupt remain transport operations.
+
+`agent.state` (`update_plan`) and `user.input` (`request_user_input`) touch no
+workspace/process/network and are audited without an execution approval. Plan and
+question schemas are bounded; invalid inputs do not update state. Questions need
+an attached interactive UI and answers never grant permissions. Plan/question
+view text and all tool result targets/attachment names are redacted before sinks.
+
+`code.intel` requests authorize source reads before contacting a sandboxed helper.
+`lsp_rename` is `fs.write`, resolves a validated WorkspaceEdit to the normal patch
+plan and presents the combined diff for existing write policy. Returned source
+snippets obey current project Read rules and builtin secret/protected-path policy.
+No protocol message may execute a server-supplied command or applyEdit request.
+
+`network.search` sends a query only to the fixed configured provider and is audited
+without an unsolicited execution prompt unless project rules ask/deny.
+`network.fetch` requires network policy per origin. Redirects re-enter the same
+policy/audit callback; denied/absent callbacks make no connection. All DNS answers
+must be public, and the selected address is pinned to the actual socket. See
+[ADR 0044](../adr/0044-mcp-and-web-tools.md) for byte/deadline/media restrictions.
+
+The pure `readPolicy` composition port adds current project Read deny/ask decisions
+at every returned file-data sink. A project allow cannot override `.git`/state hard
+denies or directly bypass secret approval. Search/listing/suggestions do not quote
+ask-required content; automatic instructions do not prompt or create grants.
+Trusted ripgrep can scan before output filtering; the fallback worker also filters
+before reading. This distinction is an implementation limit, not proof of a
+per-file OS sandbox for arbitrary third-party language servers.

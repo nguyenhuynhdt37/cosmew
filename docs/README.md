@@ -1,3 +1,14 @@
+# Current wave 1 integration
+
+The continued Claude task implements W0–W7 from the approved
+[plan](delivery/wave-1/plan.md): [acceptance](delivery/wave-1/acceptance.md),
+[continuation/review](delivery/wave-1/continuation.md), [web usage](delivery/wave-1/web.md),
+[approval ADR 0040](adr/0040-codex-approval-policy.md), [extended read ADR 0041](adr/0041-full-read.md),
+[plan/questions ADR 0042](adr/0042-plan-and-questions.md),
+[LSP ADR 0043](adr/0043-sandboxed-code-intelligence.md), [MCP/web ADR 0044](adr/0044-mcp-and-web-tools.md).
+Public contract is 1.19; SQLite schema 6. Wave 2/3 remain future work.
+This is not authenticated-generation or Product MVP completion evidence.
+
 # Điều hướng đặc tả Futryn
 
 TUI V2: [architecture decision](adr/0039-tui-v2-virtualized-transcript.md),

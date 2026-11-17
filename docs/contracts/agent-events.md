@@ -81,3 +81,46 @@ ADR 0034 adds no new agent event. Command ports gain optional `CommandSandbox` (
 Workspace diff metadata adds optional staged/unstaged/untracked layer, original path, binary/truncation and readiness diagnostics. Async refresh updates a single cached report; render must never execute Git. Report totals cover returned lines/files, and bounded results are labeled. Optional terminal-runtime status reports the actual selected sandbox and limitations. A failed probe is unavailable, never successful execution.
 
 Turn receipts may declare `kind: user-shell`; these retain execution evidence without counting a user shell operation as provider usage. Missing kind means an agent receipt for backward compatibility.
+
+## Wave 1 integration (contract 1.19)
+
+[ADR 0040](../adr/0040-codex-approval-policy.md),
+[0041](../adr/0041-full-read.md), [0042](../adr/0042-plan-and-questions.md),
+[0043](../adr/0043-sandboxed-code-intelligence.md),
+[0044](../adr/0044-mcp-and-web-tools.md) define the additive wave-1 contract.
+
+- Capabilities add `agent.state`, `user.input`, `code.intel`, `network.search`,
+  `network.fetch`; Plan/Review permit these read/session-state capabilities but
+  still withhold writes and process execution. Permission policy remains a gate,
+  not authority supplied by a tool descriptor.
+- `ToolResult.attachments` and tool `Message.attachments` carry bounded media
+  (`mime`, base64 `data`, redacted `name`) beside the existing string content.
+  Transcript/journal text excludes base64; the persistence side table reattaches
+  media by call id on recovery. Older rows without attachments remain valid.
+- The SDK adds `plan()`, `listPendingQuestions()`, `answerQuestion()`,
+  `dismissQuestion()`, UI availability control, and observer notifications
+  `plan.updated`, `question.asked`, `question.answered`. These are SDK observer
+  notifications, not new durable domain envelopes. They do not replace the active
+  streaming/tool activity state. Plan and pending-question display text are
+  redacted before exposure. Question answers are tool results, never grants.
+- SQLite schema 6 adds per-session plans, discovered instruction directories and
+  bounded media storage. Schema 5 databases migrate transactionally; future
+  schemas fail closed. Answered questions persist as paired tool results;
+  interrupted pending dialogs are not replayed as live interactions after restart.
+- `CommandRuntime.spawnService?` and `ServiceProcess` form the optional sandboxed
+  helper port. Existing command runtimes without it remain valid and report LSP
+  unavailable. No helper execution is restored by journal replay.
+- Successful write receipts may include `diagnostics: string[]`; the TUI renders
+  them in error color below the edit. Standalone `diagnostics.reported` and
+  `mcp.server.status` SDK notifications from the original plan are not implemented;
+  web search uses fixed adapters, not a general MCP server-management surface.
+- All rule edits revoke dispatcher/prompt session caches. Restrictive edits (adding
+  deny/ask or removing allow) also deny/settle unresolved prompts, so a stale
+  dialog cannot approve an operation after policy tightens. Adding allow preserves
+  the current “don’t ask again” approval and other pending requests. New project read-rule checks cannot override builtin hard
+  denies or silently approve secret reads.
+
+The single public version bump is 1.18 → 1.19 for the integrated wave. Earlier
+wave commits referred to 1.19 while under construction; this integrated constant
+and consumers now agree. No wave-2 subagents/memory/skills/general MCP or wave-3
+CodeMode contract is claimed here.
