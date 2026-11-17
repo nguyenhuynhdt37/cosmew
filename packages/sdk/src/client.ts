@@ -1628,12 +1628,14 @@ export class FutrynClient {
       kind?: PermissionKind;
       /** Exact structured command/path for project rules; null skips rules (display-only request). Defaults to `target`. */
       ruleTarget?: string | null;
+      /** Bash: parsed sub-commands for project rules, or null for an unparsed script (ADR 0040). */
+      ruleSegments?: string[] | null;
     },
     signal?: AbortSignal,
   ): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
-    const {kind: explicitKind, ruleTarget, ...prompt} = input;
+    const {kind: explicitKind, ruleTarget, ruleSegments, ...prompt} = input;
     const kind: PermissionKind =
       explicitKind ??
       (
@@ -1656,7 +1658,14 @@ export class FutrynClient {
     const target =
       ruleTarget === null || (tool === 'Tool' && ruleTarget === undefined) ? null : (ruleTarget ?? input.target);
     const relative = (value: string) => (tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(value) : value);
-    let ruled = target === null ? undefined : permissionRuleDecision(rules, {tool, target: relative(target)});
+    let ruled =
+      target === null
+        ? undefined
+        : permissionRuleDecision(rules, {
+            tool,
+            target: relative(target),
+            ...(tool === 'Bash' && ruleSegments !== undefined ? {segments: ruleSegments} : {}),
+          });
     if (target === null) {
       // Fail closed: deny/ask rules still apply to the best text we have, and an unverifiable request
       // never slips past a deny/ask rule of its tool through a permissive mode such as bypass.

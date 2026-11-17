@@ -32,10 +32,10 @@ export type PermissionPromptResolution = z.infer<typeof permissionPromptResoluti
  * - default → `untrusted`: edits, commands and secret reads prompt (unless a project rule allows).
  * - acceptEdits → `untrusted` with workspace edits approved.
  * - auto → `on-request` (Futryn's default, as Codex): commands run in the sandbox and workspace
- *   edits apply without a prompt; dangerous or unverifiable commands, network and other sandbox
+ *   edits apply without a prompt; dangerous commands, network and other sandbox
  *   escalations, and secret reads prompt.
  * - bypassPermissions → `never`: nothing prompts; what would prompt runs in the sandbox when that
- *   is safe (unverifiable commands) or is refused (dangerous commands, escalations, secrets).
+ *   is safe (ordinary and unparsed commands) or is refused (dangerous commands, escalations, secrets).
  * - plan: read-only; edits and commands are refused, secret reads still prompt.
  * The mode answers only what policy left as `ask`; deny rules (outside workspace, `.git`, Futryn
  * state) never change.
@@ -64,7 +64,6 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
 /**
  * What a permission request is about, as far as the approval policy is concerned:
  * - `execute`: an ordinary command inside the configured sandbox;
- * - `uncertain`: a command whose sub-commands cannot be verified (parse error, substitution, dynamic name);
  * - `dangerous`: a command on Codex's dangerous list (`rm` with force, also through sudo/env/trap/`sh -c`);
  * - `stdin`: non-empty input to a running command. It always asks (`never` refuses): what a running
  *   program does with typed input cannot be verified (ADR 0040, stricter than Codex);
@@ -72,7 +71,7 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
  *   `request_permissions`).
  */
 export type PermissionKind =
-  'read' | 'secret' | 'edit' | 'execute' | 'uncertain' | 'dangerous' | 'stdin' | 'network' | 'escalation' | 'other';
+  'read' | 'secret' | 'edit' | 'execute' | 'dangerous' | 'stdin' | 'network' | 'escalation' | 'other';
 
 /**
  * The approval table (ADR 0040), after Codex `render_decision_for_unmatched_command` and
@@ -93,9 +92,6 @@ export function decideApproval(
       return policy === 'untrusted' && !options.autoApproveEdits ? 'ask' : 'allow';
     case 'execute':
       return policy === 'untrusted' ? 'ask' : 'allow';
-    case 'uncertain':
-      // Codex runs anything that is not dangerous under `never`, relying on the sandbox.
-      return policy === 'never' ? 'allow' : 'ask';
     default:
       return policy === 'never' ? 'deny' : 'ask';
   }
@@ -104,7 +100,7 @@ export function decideApproval(
 export function permissionModeDecision(mode: PermissionMode, kind: PermissionKind): 'allow' | 'ask' | 'deny' {
   if (mode === 'plan') {
     if (kind === 'read') return 'allow';
-    return ['edit', 'execute', 'uncertain', 'dangerous', 'stdin'].includes(kind) ? 'deny' : 'ask';
+    return ['edit', 'execute', 'dangerous', 'stdin'].includes(kind) ? 'deny' : 'ask';
   }
   return decideApproval(APPROVAL_POLICY_FOR_MODE[mode], kind, {autoApproveEdits: mode === 'acceptEdits'});
 }
@@ -140,6 +136,11 @@ export type PermissionRuleEffect = keyof PermissionRuleSet;
 export interface PermissionRuleRequest {
   tool: PermissionRuleTool;
   target: string;
+  /**
+   * Bash only (ADR 0040, Codex `commands_for_exec_policy`): the parsed sub-commands, or null for an
+   * unparsed script, which is one opaque command no allow rule can match. Absent: legacy text split.
+   */
+  segments?: string[] | null;
 }
 
 const globSource = (pattern: string) =>
@@ -213,17 +214,23 @@ export function permissionRuleDecision(
   const targets = paths
     ? [...rawPaths, ...normalPaths.filter((p): p is string => p !== null)]
     : bash
-      ? [request.target, ...shellSegments(request.target)]
+      ? [request.target, ...(request.segments ?? shellSegments(request.target))]
       : [request.target];
   const any = (list: string[]) =>
     targets.some(target => list.some(rule => permissionRuleMatches(rule, {tool: request.tool, target})));
   if (any(rules.deny)) return 'deny';
   if (any(rules.ask)) return 'ask';
+  // An unparsed script never matches an allow rule (Codex: allow needs every parsed sub-command).
+  if (bash && request.segments === null) return undefined;
   // Substitutions, redirects and control characters cannot be checked by prefix; they never auto-allow.
   if (bash && /\$\(|`|[<>]|[\u0000-\u0008\u000b-\u001f\u007f]/.test(request.target)) return undefined;
   // A path that escapes the workspace (or is absolute outside it) is never allowed by a rule.
   if (paths && normalPaths.some(path => path === null)) return undefined;
-  const allowTargets = bash ? shellSegments(request.target) : paths ? (normalPaths as string[]) : targets;
+  const allowTargets = bash
+    ? (request.segments ?? shellSegments(request.target))
+    : paths
+      ? (normalPaths as string[])
+      : targets;
   if (
     allowTargets.length &&
     allowTargets.every(target => rules.allow.some(rule => permissionRuleMatches(rule, {tool: request.tool, target})))

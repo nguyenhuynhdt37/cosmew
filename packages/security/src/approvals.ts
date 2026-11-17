@@ -1,18 +1,16 @@
 import {decideApproval, type ApprovalPolicy, type PermissionKind} from '@futryn/contracts';
 
 /**
- * Command classification for the approval policy (ADR 0040).
+ * Command classification for the approval policy (ADR 0040), ported from Codex at
+ * openai/codex 090be4df0724cdef5758e6a0934ba557af8b6bbe (read 2026-11-17):
+ * - `core/src/exec_policy.rs` `commands_for_exec_policy`: a script that parses as plain commands
+ *   (`try_parse_word_only_commands_sequence`) is judged per sub-command; anything else is one
+ *   opaque command;
+ * - `shell-command/src/command_safety/is_dangerous_command.rs`: `rm` with force, through `sudo`,
+ *   `env`, a `trap` action and the literal commands of a `bash|zsh|sh -c|-lc` script.
  *
- * Ported (behavior, not code) from Codex `shell-command/src/command_safety/is_dangerous_command.rs`
- * at openai/codex 090be4df0724cdef5758e6a0934ba557af8b6bbe (read 2026-11-17): an `rm` whose
- * arguments before `--` contain `--force` or a short-flag group with `f` is dangerous, also behind
- * `sudo`, `env [-i] [NAME=value…] [--]`, a `trap` action and a nested `sh/bash/zsh -c|-lc` script.
- * More than 8 nested wrappers fail closed (`MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH`).
- *
- * Futryn is stricter than Codex (plan W1 and two security reviews, 2026-11-17): a script that cannot
- * be parsed, a word whose runtime value is not its spelling, a shell fed from a pipe, file or
- * non-literal heredoc, an unknown shell or wrapper option, or a program name that cannot be known
- * statically (`$cmd`, `eval`) is `uncertain` and prompts under `untrusted`/`on-request`.
+ * The dangerous check is a best-effort guard, as in Codex, NOT a security boundary: the boundary
+ * is the sandbox (workspace-write, `.git` read-only, Futryn state denied, home hidden, no network).
  */
 
 export {decideApproval, type ApprovalPolicy};
@@ -20,37 +18,27 @@ export {decideApproval, type ApprovalPolicy};
 /** Codex `MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH`. */
 export const MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH = 8;
 
-/** Where a command's standard input comes from, when the script says so. */
-export interface ShellInput {
-  kind: 'pipe' | 'file' | 'heredoc' | 'herestring';
-  /** The literal text fed to the command (quoted or expansion-free heredoc, literal herestring). */
-  body?: string;
+/** Tree-sitter parsers supplied by `@futryn/tools` (Codex `bash.rs`); null = cannot parse. */
+export interface ShellParsers {
+  /** `try_parse_word_only_commands_sequence`: allowlist; null when anything else appears. */
+  plain(script: string): string[][] | null;
+  /** `parse_shell_lc_literal_commands` on a script: literal words of every command node. */
+  literal(script: string): string[][] | null;
 }
-
-/** Literal view of a shell script, produced by the tree-sitter parser in `@futryn/tools`. */
-export interface ShellAnalysis {
-  /** Statically known words of every command node, in source order. */
-  commands: string[][];
-  /** Standard-input sources of each command (same order as `commands`); absent means none. */
-  inputs?: (ShellInput[] | undefined)[];
-  /** Parse error, substitution, non-literal word, dynamic command name or `eval`. */
-  uncertain: boolean;
-}
-
-/** Parses a nested script (`bash -c '…'`, a heredoc body, a trap action); null when it cannot be parsed. */
-export type ShellParser = (script: string) => ShellAnalysis | null;
 
 export type DangerousCommandMatch = 'forced-rm' | 'other';
 
-export interface CommandClassification {
-  dangerous: DangerousCommandMatch | null;
-  uncertain: boolean;
+const basename = (word: string) => word.split('/').filter(Boolean).at(-1) ?? '';
+
+/** Codex `extract_bash_command`: exactly `[bash|zsh|sh, -c|-lc, script]`. */
+export function extractShellScript(argv: string[]): string | null {
+  if (argv.length !== 3) return null;
+  const [shell, flag, script] = argv as [string, string, string];
+  if (flag !== '-c' && flag !== '-lc') return null;
+  return ['bash', 'zsh', 'sh'].includes(basename(shell)) ? script : null;
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
-const basename = (word: string) => word.split('/').filter(Boolean).at(-1) ?? '';
-const programOf = (argv: string[]) => (argv[0] === undefined ? '' : basename(argv[0]));
-
+/** Codex `rm_args_include_force_option`. */
 function rmForces(args: string[]): boolean {
   for (const arg of args) {
     if (arg === '--') return false;
@@ -60,202 +48,85 @@ function rmForces(args: string[]): boolean {
   return false;
 }
 
-/** Long shell options that take no argument; any other long option is unverifiable. */
-const SHELL_LONG_FLAGS = new Set([
-  '--norc',
-  '--noprofile',
-  '--login',
-  '--posix',
-  '--restricted',
-  '--verbose',
-  '--noediting',
-]);
-const SHELL_LONG_WITH_VALUE = new Set(['--rcfile', '--init-file']);
-
-export interface ShellInvocation {
-  /** `-c` in any short-option cluster: the first operand is the script. */
-  commandString: boolean;
-  script: string | undefined;
-  /** Operands after the script (`$0`, `$1`, …) or after a script file. */
-  positional: string[];
-  /** An unknown long option: what the shell does is not known. */
-  unknownOption: boolean;
-}
-
-/** Parse `sh/bash/zsh/dash/ksh [options] [operands]`; null when `argv` is not a shell. */
-export function parseShellInvocation(argv: string[]): ShellInvocation | null {
-  if (!SHELLS.has(programOf(argv))) return null;
-  let commandString = false;
-  let unknownOption = false;
-  let index = 1;
-  while (index < argv.length) {
-    const arg = argv[index]!;
-    if (arg === '--' || arg === '-') {
-      index++;
-      break;
-    }
-    if (!/^[-+]/.test(arg)) break;
-    if (arg.startsWith('--')) {
-      if (SHELL_LONG_WITH_VALUE.has(arg)) index++;
-      else if (!SHELL_LONG_FLAGS.has(arg)) unknownOption = true;
-    } else {
-      if (arg.slice(1).includes('c')) commandString = true;
-      // `-o option`, `+o option`, `-O shopt`, `+O shopt` consume the next word.
-      if (/[oO]$/.test(arg)) index++;
-    }
-    index++;
-  }
-  return {commandString, script: argv[index], positional: argv.slice(index + 1), unknownOption};
-}
-
-/**
- * Transparent wrappers (`sudo`, `env`, `exec`, `command`, `nohup`, `timeout`, `nice`) → the command
- * they run. `uncertain` when an option is unknown or turns the wrapper into a shell (`sudo -s`,
- * `env -S`); `argv` empty when the wrapper runs nothing (`command -v x`).
- */
-function unwrap(argv: string[]): {argv: string[]; uncertain: boolean} | null {
-  const name = programOf(argv);
-  const skip = (valueOptions: Set<string>, onFlag?: (flag: string) => boolean | void) => {
+/** Codex `dangerous_command_match_with_depth` (POSIX). */
+export function dangerousCommandMatch(argv: string[], parsers: ShellParsers, depth = 0): DangerousCommandMatch | null {
+  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return 'other';
+  const name = argv[0] === undefined ? '' : basename(argv[0]);
+  if (name === 'rm' && rmForces(argv.slice(1))) return 'forced-rm';
+  if (name === 'sudo') return dangerousCommandMatch(argv.slice(1), parsers, depth + 1);
+  if (name === 'env') {
     let index = 1;
-    let uncertain = false;
     while (index < argv.length) {
       const arg = argv[index]!;
-      if (arg === '--') return {argv: argv.slice(index + 1), uncertain};
-      if (!arg.startsWith('-') || arg === '-') break;
-      if (onFlag?.(arg)) uncertain = true;
-      if (valueOptions.has(arg)) index++;
-      index++;
-    }
-    return {argv: argv.slice(index), uncertain};
-  };
-  switch (name) {
-    case 'sudo':
-      // `-s`/`-i` run a shell reading stdin; `-e` is sudoedit.
-      return skip(new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-r', '-t', '-U', '-T', '-R']), flag =>
-        flag.startsWith('--') ? !flag.includes('=') : /[sie]/.test(flag.slice(1)),
-      );
-    case 'env': {
-      let index = 1;
-      let uncertain = false;
-      while (index < argv.length) {
-        const arg = argv[index]!;
-        if (arg === '--') {
-          index++;
-          break;
-        }
-        const eq = arg.indexOf('=');
-        if (eq > 0 && !arg.startsWith('-')) {
-          index++;
-          continue;
-        }
-        if (!arg.startsWith('-')) break;
-        if (arg === '-S' || arg.startsWith('--split-string') || arg.startsWith('-S')) uncertain = true;
-        if (arg === '-u' || arg === '-C' || arg === '--unset' || arg === '--chdir') index++;
+      if (arg === '--') {
         index++;
+        break;
       }
-      return {argv: argv.slice(index), uncertain};
+      const eq = arg.indexOf('=');
+      if (arg === '-i' || arg === '--ignore-environment' || (eq > 0 && !arg.startsWith('-'))) {
+        index++;
+        continue;
+      }
+      break;
     }
-    case 'exec':
-      return skip(new Set(['-a']));
-    case 'command': {
-      const result = skip(new Set());
-      // `command -v/-V x` only describes x.
-      if (argv.slice(1, argv.length - result.argv.length).some(a => /^-[a-zA-Z]*[vV]/.test(a)))
-        return {argv: [], uncertain: false};
-      return result;
-    }
-    case 'nohup':
-      return skip(new Set());
-    case 'nice':
-      return skip(new Set(['-n']));
-    case 'timeout': {
-      const result = skip(new Set(['-s', '-k']));
-      // The first operand is the duration.
-      return {argv: result.argv.slice(1), uncertain: result.uncertain};
-    }
-    default:
-      return null;
+    return dangerousCommandMatch(argv.slice(index), parsers, depth + 1);
   }
-}
-
-function merge(a: CommandClassification, b: CommandClassification): CommandClassification {
-  return {dangerous: a.dangerous ?? b.dangerous, uncertain: a.uncertain || b.uncertain};
-}
-
-/** Classify one command (its literal argv and stdin sources). */
-function inspect(
-  argv: string[],
-  inputs: ShellInput[] | undefined,
-  parse: ShellParser,
-  depth: number,
-): CommandClassification {
-  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return {dangerous: 'other', uncertain: true};
-  const name = programOf(argv);
-  if (name === 'rm' && rmForces(argv.slice(1))) return {dangerous: 'forced-rm', uncertain: false};
   if (name === 'trap') {
     const action = argv[1] === '--' ? argv[2] : argv[1];
-    if (action === undefined || action.startsWith('-')) return {dangerous: null, uncertain: false};
-    return script(action, parse, depth + 1);
+    if (action === undefined || action.startsWith('-')) return null;
+    return dangerousCommandMatch(['sh', '-c', action], parsers, depth + 1);
   }
-  const wrapped = unwrap(argv);
-  if (wrapped) {
-    const inner = wrapped.argv.length
-      ? inspect(wrapped.argv, inputs, parse, depth + 1)
-      : {dangerous: null, uncertain: false};
-    return merge(inner, {dangerous: null, uncertain: wrapped.uncertain});
+  // Any literal command inside a `bash -lc` script, including control flow and substitutions.
+  const script = extractShellScript(argv);
+  if (script !== null) {
+    for (const command of parsers.literal(script) ?? []) {
+      const match = dangerousCommandMatch(command, parsers, depth + 1);
+      if (match) return match;
+    }
   }
-  const shell = parseShellInvocation(argv);
-  if (!shell) return {dangerous: null, uncertain: false};
-  let result: CommandClassification = {dangerous: null, uncertain: shell.unknownOption};
-  if (shell.commandString) {
-    result = merge(
-      result,
-      shell.script === undefined ? {dangerous: null, uncertain: true} : script(shell.script, parse, depth + 1),
-    );
-    // `bash -c '"$@"' _ rm -rf /` runs its positional arguments.
-    if (shell.positional.length > 1)
-      result = merge(inspect(shell.positional.slice(1), undefined, parse, depth + 1), {
-        dangerous: null,
-        uncertain: true,
-      });
-    return result;
-  }
-  // A shell reading its script from stdin: only a literal heredoc/herestring body can be checked.
-  for (const input of inputs ?? [])
-    result = merge(
-      result,
-      input.body === undefined ? {dangerous: null, uncertain: true} : script(input.body, parse, depth + 1),
-    );
-  return result;
+  return null;
 }
 
-function script(text: string, parse: ShellParser, depth: number): CommandClassification {
-  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return {dangerous: 'other', uncertain: true};
-  const analysis = parse(text);
-  if (!analysis) return {dangerous: null, uncertain: true};
-  let result: CommandClassification = {dangerous: null, uncertain: analysis.uncertain};
-  analysis.commands.forEach((command, i) => {
-    result = merge(result, inspect(command, analysis.inputs?.[i], parse, depth));
-  });
-  return result;
-}
-
-/** Codex `dangerous_command_match` for one argv. */
-export function dangerousCommandMatch(argv: string[], parse: ShellParser, depth = 0): DangerousCommandMatch | null {
-  return inspect(argv, undefined, parse, depth).dangerous;
+export interface CommandClassification {
+  /**
+   * The parsed sub-commands (Codex `commands_for_exec_policy`), or null when the script is
+   * unparsed: then it is one opaque command that no allow rule can match.
+   */
+  commands: string[][] | null;
+  dangerous: DangerousCommandMatch | null;
+  /** The parser could not load: nothing was checked (fail closed). */
+  parserUnavailable?: boolean;
 }
 
 /**
- * Classify a top-level command line. A null analysis (parser unavailable or failed) is uncertain:
- * fail closed, never silently treat an unverified command as ordinary.
+ * Classify the script `exec_command` runs as `<shell> -c <script>`. A plain script is split into
+ * sub-commands; a single `bash|zsh|sh -c|-lc <script>` sub-command is unwrapped the same way, as
+ * Codex parses `bash -lc` invocations. Every sub-command (or the opaque `<shell> -c <script>`) goes
+ * through the dangerous heuristic.
  */
-export function classifyCommand(analysis: ShellAnalysis | null, parse: ShellParser): CommandClassification {
-  if (!analysis) return {dangerous: null, uncertain: true};
-  let result: CommandClassification = {dangerous: null, uncertain: analysis.uncertain};
-  analysis.commands.forEach((command, i) => {
-    result = merge(result, inspect(command, analysis.inputs?.[i], parse, 0));
-  });
-  return result;
+export function classifyCommand(
+  script: string,
+  shell: string,
+  parsers: ShellParsers,
+  ready = true,
+): CommandClassification {
+  if (!ready) return {commands: null, dangerous: null, parserUnavailable: true};
+  let commands = parsers.plain(script);
+  if (commands && commands.length === 1) {
+    const inner = extractShellScript(commands[0]!);
+    // Codex parses `bash -lc <script>` only when the script is plain; otherwise it stays opaque.
+    if (inner !== null) commands = parsers.plain(inner);
+  }
+  if (commands && !commands.length) commands = null;
+  const judged = commands ?? [[shell, '-c', script]];
+  let dangerous: DangerousCommandMatch | null = null;
+  for (const command of judged) dangerous ??= dangerousCommandMatch(command, parsers);
+  return {commands, dangerous};
+}
+
+/** A sub-command as text for project rules (`Bash(npm test:*)`); quoted when needed. */
+export function commandText(argv: string[]): string {
+  return argv.map(word => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)).join(' ');
 }
 
 /** Permission kind for a policy reason, so every tool shares one approval table. */
@@ -264,8 +135,8 @@ export const APPROVAL_KIND_FOR_REASON: Record<string, PermissionKind> = {
   'workspace-patch': 'edit',
   'outside-writable-roots': 'escalation',
   'process-execute': 'execute',
-  'unverified-command': 'uncertain',
   'dangerous-command': 'dangerous',
+  'shell-parser-unavailable': 'dangerous',
   'network-escalation': 'network',
   'stdin-input-approval-required': 'stdin',
   'stdin-policy-drift': 'escalation',

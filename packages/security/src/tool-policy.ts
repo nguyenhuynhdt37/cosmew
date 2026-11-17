@@ -134,9 +134,10 @@ export function evaluateExec(
     if (sandbox.network && !context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
   }
   // ADR 0040: the session's approval policy answers these asks (Codex exec_policy.rs).
-  const classification = context.classification ?? {dangerous: null, uncertain: true};
+  // Missing classification means the parser never ran: fail closed (asks; refused under never).
+  const classification = context.classification ?? {dangerous: null, parserUnavailable: true};
+  if (classification.parserUnavailable) return {effect: 'ask', reason: 'shell-parser-unavailable'};
   if (classification.dangerous) return {effect: 'ask', reason: 'dangerous-command'};
-  if (classification.uncertain) return {effect: 'ask', reason: 'unverified-command'};
   return {effect: 'ask', reason: 'process-execute'};
 }
 
@@ -151,8 +152,8 @@ export interface ExecPolicyContext extends ReadPolicyContext {
   /** Mode configured for the session; requests cannot exceed it. */
   configuredMode?: ExecSandbox['mode'];
   escalation?: SandboxEscalation;
-  /** Tree-sitter classification (ADR 0040). Missing means unverified: fail closed. */
-  classification?: {dangerous: string | null; uncertain: boolean};
+  /** Codex-style classification (ADR 0040). Missing means the parser never ran: fail closed. */
+  classification?: {dangerous: string | null; parserUnavailable?: boolean};
   /** The user granted network for this turn or session through `request_permissions`. */
   networkGranted?: boolean;
 }

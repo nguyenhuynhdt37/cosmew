@@ -1,3 +1,4 @@
+import type {CommandClassification} from '@futryn/security';
 import type {CommandRuntime, CommandOutputChunk, CommandSandbox, ToolDescriptor} from '@futryn/contracts';
 import type {ResolvedPath} from '@futryn/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
@@ -29,8 +30,10 @@ export type PreparedTool = {
       stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox};
       /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
       grantCommand?: string;
-      /** Tree-sitter classification (ADR 0040), computed once at authorization. */
-      classification?: {dangerous: string | null; uncertain: boolean};
+      /** Shell `exec_command` runs the script with (Codex classifies `<shell> -c <script>`). */
+      shell?: string;
+      /** Codex-style classification (ADR 0040), computed once at authorization. */
+      classification?: CommandClassification;
     }
 );
 export interface ToolHandler {

@@ -7,8 +7,8 @@ import {
   type ToolCall,
   type ToolResult,
 } from '@futryn/contracts';
-import {classifyCommand, evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
-import {analyzeShell, ensureShellParser} from './exec/shell-parse';
+import {classifyCommand, commandText, evaluateRead, evaluateExec, evaluateStdin, evaluateWrite} from '@futryn/security';
+import {ensureShellParser, shellParsers} from './exec/shell-parse';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
 import {
   commandGrantTarget,
@@ -424,10 +424,10 @@ export class ToolOrchestrator {
   ): Promise<Authorization> {
     const {command, file, runtime, runtimeId, label} = prepared;
     if (!prepared.stdin) {
-      // Tree-sitter classification (ADR 0040); a parser that cannot load leaves it unverified.
-      await ensureShellParser();
+      // Codex-style classification (ADR 0040); a parser that cannot load fails closed.
+      const ready = await ensureShellParser();
       signal?.throwIfAborted();
-      prepared.classification = classifyCommand(analyzeShell(command), analyzeShell);
+      prepared.classification = classifyCommand(command, prepared.shell ?? 'bash', shellParsers, ready);
     }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);
@@ -447,6 +447,11 @@ export class ToolOrchestrator {
         // A request_permissions network grant turns the launch into an ordinary command decision.
         ...(prepared.sandbox?.network && decision.reason === 'network-escalation' ? {network: true} : {}),
         ...(prepared.justification ? {justification: this.options.redact(prepared.justification)} : {}),
+        ...(prepared.classification
+          ? {commands: prepared.classification.commands?.map(commandText) ?? null}
+          : prepared.stdin
+            ? {}
+            : {commands: null}),
       },
       grant,
       label,

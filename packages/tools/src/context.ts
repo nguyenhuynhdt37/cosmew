@@ -18,6 +18,8 @@ export interface ApprovalRequest {
   diffPreview?: string;
   /** The command asks for network access beyond the default sandbox (ADR 0034). */
   network?: boolean;
+  /** Commands: parsed sub-commands for project rules, null when the script is unparsed (ADR 0040). */
+  commands?: string[] | null;
   /** Model-supplied, user-facing reason for additional permissions. */
   justification?: string;
 }

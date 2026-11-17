@@ -20,8 +20,8 @@ const APPROVAL_REASONS: Record<string, string> = {
     'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
   'dangerous-command':
     'This command is on the dangerous list (forced rm, also through sudo/env/sh -c). It runs in the Futryn sandbox if approved.',
-  'unverified-command':
-    'Futryn could not verify every sub-command (parse error, $(...) substitution, eval or a dynamic program name). It runs in the Futryn sandbox if approved.',
+  'shell-parser-unavailable':
+    'Futryn could not load its shell parser, so it cannot check this command. It runs in the Futryn sandbox if approved.',
   'outside-writable-roots':
     'The session sandbox is read-only here: approving lets Futryn write this file anyway (workspace policy still applies).',
   'request-permissions':
@@ -74,6 +74,8 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
     return {
       capability: request.network ? 'network.connect' : request.capability,
       ...(request.network ? {kind: 'network' as const, ruleTarget: null} : kind ? {kind} : {}),
+      // Project rules judge Codex's parsed sub-commands; an unparsed script never matches an allow rule.
+      ...(!request.network && request.commands !== undefined ? {ruleSegments: request.commands} : {}),
       action: `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
       reason: reasonText(request.reason) + justification,

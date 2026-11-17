@@ -1,14 +1,20 @@
 import {createRequire} from 'node:module';
-import type {ShellAnalysis, ShellInput} from '@futryn/security';
+import type {ShellParsers} from '@futryn/security';
 
 /**
- * Bash parsing with tree-sitter (ADR 0040), as Codex does (`shell-command/src/bash.rs`, pinned
- * 090be4df, tree-sitter-bash): extract the statically known words of every command node so each
- * sub-command of `a && b | c`, a substitution or a control-flow body is classified on its own.
+ * Bash parsing with tree-sitter, ported from Codex `shell-command/src/bash.rs` (openai/codex
+ * 090be4df0724cdef5758e6a0934ba557af8b6bbe, read 2026-11-17). ADR 0040.
  *
- * The WASM runtime (`web-tree-sitter`) and grammar (`tree-sitter-bash.wasm`) are loaded once from
- * this package's own dependencies, never from the workspace. If loading fails every command is
- * "unverified" (fail closed): it prompts instead of running silently.
+ * - `parsePlainCommands` = `try_parse_word_only_commands_sequence`: an allowlist. Only plain words
+ *   joined by `&&`, `||`, `;` and `|` parse; anything else (subshells, redirects, heredocs,
+ *   expansions, substitutions, assignments, control flow, functions…) makes the whole script
+ *   unparsed, and an unparsed script is treated as one opaque command.
+ * - `parseLiteralCommands` = `parse_shell_lc_literal_commands`: the statically known words of every
+ *   command node of a valid tree. It feeds only the dangerous-command heuristic and must never be
+ *   used to prove a command safe.
+ *
+ * The WASM runtime and grammar load once from this package's own dependencies, never from the
+ * workspace. A parser that cannot load parses nothing (callers fail closed).
  */
 
 type Node = {
@@ -16,8 +22,6 @@ type Node = {
   isNamed: boolean;
   text: string;
   startIndex: number;
-  endIndex: number;
-  parent: Node | null;
   namedChildren: (Node | null)[];
   children: (Node | null)[];
   namedChild(index: number): Node | null;
@@ -50,162 +54,211 @@ export function ensureShellParser(): Promise<boolean> {
   })());
 }
 
-/** True once the parser is loaded; analysis before that is null (unverified). */
+/** True once the parser is loaded. */
 export function shellParserReady(): boolean {
   return parser !== null;
 }
 
-/** Longest script handed to the parser; a longer one is unverified. */
+/** Longest script handed to the parser; a longer one is unparsed. */
 const MAX_SCRIPT_CHARS = 64 * 1024;
-/** Redirections inside a command node: their targets do not change which program runs. */
-const REDIRECTS = new Set(['file_redirect', 'heredoc_redirect', 'herestring_redirect']);
-const DYNAMIC = new Set(['command_substitution', 'process_substitution']);
 
-/**
- * Codex `is_literal_word_or_number`: a word that can still undergo expansion or escape removal is
- * not proof of the runtime argv.
- */
-function literalWord(node: Node): string | null {
-  if (node.namedChildren.length) return null;
-  const word = node.text;
-  if (word.startsWith('=') || /[{}*?[\]\\~^#$`]/.test(word)) return null;
-  return word;
+function withTree<T>(script: string, use: (root: Node) => T | null): T | null {
+  if (!parser || script.length > MAX_SCRIPT_CHARS) return null;
+  const tree = parser.parse(script);
+  if (!tree) return null;
+  try {
+    return use(tree.rootNode);
+  } finally {
+    tree.delete();
+  }
 }
 
-function doubleQuoted(node: Node): string | null {
+/** Codex ALLOWED_KINDS of a word-only command sequence. */
+const ALLOWED_KINDS = new Set([
+  'program',
+  'list',
+  'pipeline',
+  'command',
+  'command_name',
+  'word',
+  'string',
+  'string_content',
+  'raw_string',
+  'number',
+  'concatenation',
+]);
+/** Codex ALLOWED_PUNCT_TOKENS. */
+const ALLOWED_PUNCT_TOKENS = new Set(['&&', '||', ';', '|', '"', "'"]);
+
+/** Codex `is_literal_word_or_number`. */
+function isLiteralWordOrNumber(node: Node): boolean {
+  if (node.type !== 'word' && node.type !== 'number') return false;
+  if (node.namedChildren.length) return false;
+  const word = node.text;
+  return !word.startsWith('=') && !/[{}*?[\]\\~^#$`]/.test(word);
+}
+
+/** Codex `parse_double_quoted_string`. */
+function parseDoubleQuoted(node: Node): string | null {
+  if (node.type !== 'string') return null;
   if (node.namedChildren.some(part => part?.type !== 'string_content')) return null;
   const raw = node.text;
-  if (!raw.startsWith('"') || !raw.endsWith('"') || raw.length < 2) return null;
-  const inner = raw.slice(1, -1);
-  if (/\\[$`"\\\n]/.test(inner)) return null;
-  return inner;
+  if (raw.length < 2 || !raw.startsWith('"') || !raw.endsWith('"')) return null;
+  const stripped = raw.slice(1, -1);
+  if (/\\[$`"\\\n]/.test(stripped)) return null;
+  return stripped;
+}
+
+/** Codex `parse_raw_string`. */
+function parseRawString(node: Node): string | null {
+  if (node.type !== 'raw_string') return null;
+  const raw = node.text;
+  return raw.length >= 2 && raw.startsWith("'") && raw.endsWith("'") ? raw.slice(1, -1) : null;
+}
+
+/** Codex `parse_plain_command_from_node`. */
+function plainCommand(command: Node): string[] | null {
+  const words: string[] = [];
+  for (const child of command.namedChildren) {
+    if (!child) return null;
+    switch (child.type) {
+      case 'command_name': {
+        const word = child.namedChild(0);
+        if (!word || word.type !== 'word') return null;
+        words.push(word.text);
+        break;
+      }
+      case 'word':
+      case 'number':
+        words.push(child.text);
+        break;
+      case 'string': {
+        const parsed = parseDoubleQuoted(child);
+        if (parsed === null) return null;
+        words.push(parsed);
+        break;
+      }
+      case 'raw_string': {
+        const parsed = parseRawString(child);
+        if (parsed === null) return null;
+        words.push(parsed);
+        break;
+      }
+      case 'concatenation': {
+        let joined = '';
+        for (const part of child.namedChildren) {
+          if (!part) return null;
+          if (part.type === 'word' || part.type === 'number') joined += part.text;
+          else if (part.type === 'string') {
+            const parsed = parseDoubleQuoted(part);
+            if (parsed === null) return null;
+            joined += parsed;
+          } else if (part.type === 'raw_string') {
+            const parsed = parseRawString(part);
+            if (parsed === null) return null;
+            joined += parsed;
+          } else return null;
+        }
+        if (!joined) return null;
+        words.push(joined);
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return words;
+}
+
+/** Codex `try_parse_word_only_commands_sequence` on a parsed script; null = unparsed. */
+export function parsePlainCommands(script: string): string[][] | null {
+  return withTree(script, root => {
+    if (root.hasError) return null;
+    const commands: Node[] = [];
+    const stack: Node[] = [root];
+    while (stack.length) {
+      const node = stack.pop()!;
+      if (node.isNamed) {
+        if (!ALLOWED_KINDS.has(node.type)) return null;
+        if ((node.type === 'word' || node.type === 'number') && !isLiteralWordOrNumber(node)) return null;
+        if (node.type === 'command') commands.push(node);
+      } else {
+        if (/[&;|]/.test(node.type) && !ALLOWED_PUNCT_TOKENS.has(node.type)) return null;
+        if (!(ALLOWED_PUNCT_TOKENS.has(node.type) || node.type.trim() === '')) return null;
+      }
+      for (const child of node.children) if (child) stack.push(child);
+    }
+    commands.sort((a, b) => a.startIndex - b.startIndex);
+    const out: string[][] = [];
+    for (const command of commands) {
+      const words = plainCommand(command);
+      if (!words) return null;
+      out.push(words);
+    }
+    return out;
+  });
 }
 
 /** Codex `parse_literal_shell_word`. */
-function literal(node: Node): string | null {
+function literalWord(node: Node): string | null {
   switch (node.type) {
     case 'word':
     case 'number':
-      return literalWord(node);
+      return isLiteralWordOrNumber(node) ? node.text : null;
     case 'string':
-      return doubleQuoted(node);
+      return parseDoubleQuoted(node);
     case 'raw_string':
-      return node.text.length >= 2 && node.text.startsWith("'") && node.text.endsWith("'")
-        ? node.text.slice(1, -1)
-        : null;
+      return parseRawString(node);
     case 'concatenation': {
-      let out = '';
+      let joined = '';
       for (const part of node.namedChildren) {
-        const text = part ? literal(part) : null;
+        const text = part ? literalWord(part) : null;
         if (text === null) return null;
-        out += text;
+        joined += text;
       }
-      return out || null;
+      return joined || null;
     }
     default:
       return null;
   }
 }
 
-const same = (a: Node, b: Node) => a.startIndex === b.startIndex && a.endIndex === b.endIndex && a.type === b.type;
-const INPUT_OPERATORS = new Set(['<', '<&', '<>', '<&-']);
-
-/**
- * Where a command's stdin comes from (W1 security review): a heredoc (literal when its delimiter is
- * quoted or its body has no expansion), a herestring (literal when the word is), an input file
- * redirect, or an earlier command of a pipeline. Redirects on an enclosing statement count for
- * every command inside it, which over-approximates and so fails closed.
- */
-function commandInputs(command: Node): ShellInput[] {
-  const inputs: ShellInput[] = [];
-  const scan = (redirect: Node) => {
-    if (redirect.type === 'herestring_redirect') {
-      const word = redirect.namedChildren.find(c => c !== null) ?? null;
-      const body = word ? literal(word) : null;
-      inputs.push({kind: 'herestring', ...(body !== null ? {body} : {})});
-    } else if (redirect.type === 'heredoc_redirect') {
-      const start = redirect.namedChildren.find(c => c?.type === 'heredoc_start');
-      const body = redirect.namedChildren.find(c => c?.type === 'heredoc_body');
-      const quoted = !!start && /['"\\]/.test(start.text);
-      const text = body ? body.text : '';
-      inputs.push({kind: 'heredoc', ...(quoted || (body && !body.namedChildren.length) || !body ? {body: text} : {})});
-    } else if (
-      redirect.type === 'file_redirect' &&
-      redirect.children.some(c => c && !c.isNamed && INPUT_OPERATORS.has(c.type))
-    )
-      inputs.push({kind: 'file'});
-  };
-  const scanStatement = (statement: Node | null, body: Node) => {
-    if (statement?.type !== 'redirected_statement') return;
-    for (const child of statement.namedChildren)
-      if (child && !same(child, body) && REDIRECTS.has(child.type)) scan(child);
-  };
-  for (const child of command.namedChildren) if (child && REDIRECTS.has(child.type)) scan(child);
-  let holder: Node = command;
-  scanStatement(command.parent, command);
-  if (command.parent?.type === 'redirected_statement') holder = command.parent;
-  const pipeline = holder.parent;
-  if (pipeline?.type === 'pipeline') {
-    const first = pipeline.namedChildren.find(c => c !== null);
-    if (first && !same(first, holder)) inputs.push({kind: 'pipe'});
-    scanStatement(pipeline.parent, pipeline);
-  }
-  return inputs;
-}
-
-/**
- * Analyze one script. Returns null when the parser is not loaded. A parse error yields no
- * commands and `uncertain`, as Codex refuses to read words from an error tree.
- */
-export function analyzeShell(script: string): ShellAnalysis | null {
-  if (!parser) return null;
-  if (script.length > MAX_SCRIPT_CHARS || script.includes('\u0000')) return {commands: [], uncertain: true};
-  const tree = parser.parse(script);
-  if (!tree) return {commands: [], uncertain: true};
-  try {
-    const root = tree.rootNode;
-    if (root.hasError) return {commands: [], uncertain: true};
-    const commands: {start: number; words: string[]; inputs?: ShellInput[]}[] = [];
-    let uncertain = false;
+/** Codex `parse_shell_lc_literal_commands` on a script: literal words of every command node. */
+export function parseLiteralCommands(script: string): string[][] | null {
+  return withTree(script, root => {
+    if (root.hasError) return null;
+    const commands: string[][] = [];
     const stack: Node[] = [root];
     while (stack.length) {
       const node = stack.pop()!;
-      if (DYNAMIC.has(node.type)) uncertain = true;
       if (node.type === 'command') {
+        // Codex `parse_literal_command_from_node`: dynamic words are omitted.
         const words: string[] = [];
         let named = false;
+        let valid = true;
         for (const child of node.namedChildren) {
           if (!child) continue;
           if (child.type === 'command_name') {
             const inner = child.namedChild(0);
-            const name = inner ? literal(inner) : null;
-            // `$cmd -rf x`, `"$(which rm)"`: the program cannot be known statically.
+            const name = inner ? literalWord(inner) : null;
             if (name === null) {
-              uncertain = true;
+              valid = false;
               break;
             }
             words.push(name);
             named = true;
           } else if (named) {
-            const word = literal(child);
+            const word = literalWord(child);
             if (word !== null) words.push(word);
-            // A word whose runtime value is not its spelling (`$(echo -rf)`, `"$F"`, `-r${X}f`)
-            // could be anything, so the command is unverifiable; it is never silently dropped.
-            else if (!REDIRECTS.has(child.type)) uncertain = true;
           }
         }
-        if (named) {
-          const program = words[0]!.split('/').at(-1);
-          if (program === 'eval') uncertain = true;
-          const inputs = commandInputs(node);
-          commands.push({start: node.startIndex, words, ...(inputs.length ? {inputs} : {})});
-        }
+        if (valid && named) commands.push(words);
       }
       for (const child of node.namedChildren) if (child) stack.push(child);
     }
-    commands.sort((a, b) => a.start - b.start);
-    return {commands: commands.map(c => c.words), inputs: commands.map(c => c.inputs), uncertain};
-  } finally {
-    tree.delete();
-  }
+    return commands;
+  });
 }
+
+/** The parsers `@futryn/security` uses for command classification. */
+export const shellParsers: ShellParsers = {plain: parsePlainCommands, literal: parseLiteralCommands};

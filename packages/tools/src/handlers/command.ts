@@ -78,6 +78,7 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
         runtime,
         runtimeId: runtime.id,
         executionKey,
+        shell: shell!,
         sandbox,
         ...(input.justification ? {justification: input.justification} : {}),
         execute: (signal, onOutput) => runCommand(runtime, {...request, onOutput}, label, signal),
