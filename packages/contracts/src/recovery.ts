@@ -56,7 +56,8 @@ export interface ContextSnapshot {
   throughRevision: number;
   sourceHash: string;
   createdAt: string;
-  strategy: 'deterministic';
+  /** `deterministic`: extractive checkpoint; `model`: handoff summary plus retained user messages (ADR 0054). */
+  strategy: 'deterministic' | 'model';
   /** Extractive user requirements and result references; never an approval grant. */
   summary: string;
   retainedUserRequests: string[];
@@ -86,7 +87,7 @@ export const contextSnapshotSchema = z.object({
   throughRevision: z.number().int().nonnegative(),
   sourceHash: z.string().min(1),
   createdAt: z.string().datetime(),
-  strategy: z.literal('deterministic'),
+  strategy: z.enum(['deterministic', 'model']),
   summary: z.string(),
   retainedUserRequests: z.array(z.string()),
 });

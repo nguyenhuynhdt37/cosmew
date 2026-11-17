@@ -864,6 +864,8 @@ export function startup(
         const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
         yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, queuedInputId);
       },
+      compactSession: (sessionId, instructions, signal) =>
+        (activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv).compact(instructions, signal),
       // Steering reaches only the conversation that owns the running turn; there is nothing to steer otherwise.
       steerTurn: (sessionId, content, expectedTurnId) =>
         activeConversations.get(sessionId)?.steer(content, expectedTurnId) ?? {

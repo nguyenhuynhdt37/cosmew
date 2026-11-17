@@ -63,6 +63,18 @@ export type SteerOutcome =
   | {accepted: true; turnId: string; steerId: string}
   | {accepted: false; reason: 'no_active_turn' | 'turn_mismatch' | 'not_steerable' | 'empty_input'};
 
+/** Result of a manual `/compact` (ADR 0054). `compacted: false` leaves the model-visible context unchanged. */
+export interface CompactionOutcome {
+  compacted: boolean;
+  strategy?: 'model' | 'excerpt';
+  tokensBefore: number;
+  tokensAfter: number;
+  usage: import('./models').Usage | null;
+  fallback?: boolean;
+  /** Why nothing changed (`empty`, `not_needed`, or the failing error code). */
+  reason?: string;
+}
+
 export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
@@ -105,6 +117,8 @@ export interface ConversationStore {
   ): void;
   interrupt(id: string, revision: number, receipt?: import('./telemetry').TurnReceipt, appliedSteps?: Message[]): void;
   observeTurn?(id: string, revision: number, receipt: import('./telemetry').TurnReceipt): void;
+  /** Add the usage of a manual compaction call to the latest agent turn's receipt (session usage, ADR 0054). */
+  addUsage?(id: string, usage: import('./models').Usage): void;
   list?(): SessionSummary[];
   get?(id: string): SessionRecord | undefined;
   delete?(id: string): boolean;

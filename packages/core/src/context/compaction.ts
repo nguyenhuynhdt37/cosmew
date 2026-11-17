@@ -6,6 +6,7 @@ import {
   type Message,
 } from '@futryn/contracts';
 import {contextHash, estimateContextTokens} from './builder';
+import {modelSnapshotMessages} from './model-compaction';
 
 export interface CompactionInput {
   messages: readonly Message[];
@@ -25,6 +26,8 @@ export function useContextSnapshot(messages: readonly Message[], snapshot?: Cont
   const source = messages.slice(0, snapshot.throughRevision);
   if (source.length !== snapshot.throughRevision || contextHash(source) !== snapshot.sourceHash)
     throw new FutrynError('STORAGE');
+  if (snapshot.strategy === 'model')
+    return [...modelSnapshotMessages(snapshot), ...messages.slice(snapshot.throughRevision)];
   return [
     {
       role: 'user',

@@ -42,6 +42,8 @@ export interface ConversationOptions {
   /** The provider's `stream_max_retries` (host config); absent means the Codex default. */
   streamMaxRetries?: () => number | undefined;
   compactor?: ContextCompactor;
+  /** Model-written compaction (ADR 0054). Default on; `false` keeps only the extractive checkpoint. */
+  modelCompaction?: boolean;
   /** Explicit analysis modes cannot be converted into mutating artifact recovery. */
   analysisOnly?: () => boolean;
   /** Injected wait used for retry backoff (tests). */

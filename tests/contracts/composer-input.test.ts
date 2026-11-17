@@ -285,7 +285,7 @@ test('busy shell input keeps its draft and a retained terminal session never rep
 });
 
 test('invalid and unavailable slash commands keep their editable draft', async () => {
-  for (const command of ['/unknown-command', '/help invalid-argument', '/compact']) {
+  for (const command of ['/unknown-command', '/help invalid-argument']) {
     const {chat} = chatFixture();
     chat.composer = updateComposerValue(chat.composer, command);
     await chat.submit(command);

@@ -196,6 +196,10 @@ export async function runExec(
     for await (const event of client.sendMessage(options.prompt, {signal})) {
       if (event.type === 'started' || event.type === 'responseDiscarded') finalText = '';
       if (event.type === 'textDelta') finalText += event.text;
+      if (event.type === 'context.compacted' && !options.json)
+        process.stderr.write(
+          `[context compacted (${event.strategy}): ~${event.tokensBefore} -> ~${event.tokensAfter} tokens]\n`,
+        );
       emit(event);
     }
     if (signal?.aborted) throw new FutrynError('CANCELLED');

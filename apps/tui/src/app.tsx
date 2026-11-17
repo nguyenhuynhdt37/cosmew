@@ -145,6 +145,10 @@ export class FutrynTuiApp {
         this.chat.syncFromSession();
         this.invalidateContext();
       },
+      addTranscriptNotice: text => {
+        this.chat.addNotice(text);
+        this.updateListener?.();
+      },
       clearTranscript: () => this.chat.clear(),
       clearSelection: () => this.textSelection.clear(),
       copyText: text => {

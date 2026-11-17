@@ -4,3 +4,9 @@ export {ExecutionGate} from './agent/tool-runtime';
 
 export {normalizeHistory, estimateContextTokens} from './context/builder';
 export {compactHistory, useContextSnapshot, DeterministicCompactor, type ContextCompactor} from './context/compaction';
+export {
+  AUTO_COMPACT_FRACTION,
+  COMPACT_USER_MESSAGE_MAX_TOKENS,
+  COMPACTION_PROMPT,
+  SUMMARY_PREFIX,
+} from './context/model-compaction';

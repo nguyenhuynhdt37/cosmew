@@ -86,6 +86,8 @@ Xong khi: có `uat-nextjs.md` với danh sách lỗi (có thể rỗng) và kế
 ### S2 — W8 Compaction bằng model + `/compact`
 Theo [wave-1/plan.md W8](../wave-1/plan.md). Đọc thêm Codex `core/src/compact.rs` và OpenCode `session/compaction.ts` ở revision đã ghim (mục 9 plan đợt 1). Kèm: `hannes exec` tự compact khi đầy.
 
+**Trạng thái (2026-11-17): đã làm** — [ADR 0054](../../adr/0054-model-compaction.md), contract 1.26, `tests/contracts/model-compaction.test.ts`. Auto ở 90% cửa sổ (Codex), `/compact [hướng dẫn]`, `client.compact()`, fallback trích đoạn, usage được tính, sự kiện `context.compacted`. Chưa kiểm chứng live với provider thật; compaction giữa turn chỉ lưu trong bộ nhớ (xem ADR).
+
 ### S3 — W11 Skills
 Theo W11. Bổ sung: đọc skill ở thư mục user đi qua reader có kiểm quyền riêng (không dùng sandbox workspace), giới hạn 64 KiB/skill; skill trong workspace là dữ liệu không tin cậy (chỉ nạp khi model gọi `skill`).
 

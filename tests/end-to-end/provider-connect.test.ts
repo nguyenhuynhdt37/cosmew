@@ -218,7 +218,7 @@ test('canonical commands, aliases, autocomplete, keyboard draft preservation, un
   await tui.handleKey('Ctrl+C');
   expect(tui.isExitRequested()).toBe(false);
   expect(tui.getComposerState().value).toBe('');
-  for (const c of ['/mcp', '/plugin', '/compact']) {
+  for (const c of ['/mcp', '/plugin']) {
     await tui.executeSlashCommand(c);
     expect(tui.getStatusBanner()).toContain('Not implemented');
   }

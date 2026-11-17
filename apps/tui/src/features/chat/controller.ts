@@ -4,6 +4,7 @@ import {FutrynError, type ToolCall} from '@futryn/contracts';
 import {acceptSlashSelection, parseSlashCommand} from '@futryn/sdk';
 import {nextGrapheme, previousGrapheme, verticalCursor} from '../../input/text';
 import type {TuiHost} from '../../core/feature';
+import {compactionNotice} from '../../ui/compaction-notice';
 import {FynCompanion} from '../companion';
 import {
   applyFileReferenceSelection,
@@ -90,6 +91,15 @@ export class ChatController {
     this.activeAbortController = null;
     this.isStreaming = false;
     this.turnStartedAt = null;
+  }
+
+  /** One dim line in the transcript, e.g. after `/compact`; presentation only. */
+  addNotice(text: string): void {
+    this.transcript = [
+      ...this.transcript,
+      {id: `notice-${crypto.randomUUID()}`, role: 'assistant', content: '', notices: [text]},
+    ];
+    this.scrollOffset = -1;
   }
 
   clear(): void {
@@ -324,6 +334,10 @@ export class ChatController {
             event.reason === 'retry'
               ? `Reconnecting... ${event.attempt ?? 1}/${event.maxRetries ?? '?'}` // Codex notify_stream_error
               : 'Response preempted by your new instruction.';
+        } else if (event.type === 'context.compacted') {
+          const notice = compactionNotice(event);
+          assistantItem.notices = [...(assistantItem.notices ?? []), notice].slice(-16);
+          this.banner = notice;
         } else if (event.type === 'inputDeferred') {
           assistantItem.notices = [
             ...(assistantItem.notices ?? []),

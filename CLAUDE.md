@@ -51,6 +51,8 @@ Tools (TOOLS1): `core`'s `Conversation` runs the Codex-parity loop ([ADR 0033](d
 
 Startup gate (ADR 0014): the TUI requires per-session workspace-folder consent, then verifies the selected account/model with a small (possibly billable) request; on failure the user picks another account or signs in.
 
+Compaction ([ADR 0054](docs/adr/0054-model-compaction.md), contract 1.26): at 90% of the usable window (Codex `auto_compact_token_limit`) or on `/compact [focus]` / `client.compact()` (idle only), the current model writes a handoff summary; recent user messages (≤20k tokens), the plan and file-change receipts are kept, tool output of the span is dropped. Durable snapshot (`ContextSnapshot.strategy: 'model'`) before a turn's first round, in-memory mid-turn; any model failure falls back to the extractive checkpoint, cancellation changes nothing, the journal is never modified. Usage is counted; event `context.compacted`. `ConversationOptions.modelCompaction=false` disables the model call.
+
 ## Conventions specific to this repo
 
 - Permission invariant (docs/architecture/dependency-rules.md): validate → normalize target → evaluate policy → persist intent → revalidate → execute → record. Nothing may bypass the permission engine, including builtin tools, plugins, MCP, SDK and recovery.

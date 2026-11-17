@@ -41,6 +41,7 @@ import {
   permissionModeDecision,
   permissionRuleDecision,
   permissionRuleSchema,
+  type CompactionOutcome,
   type PermissionRuleEffect,
   type PermissionRuleSet,
   type PermissionRuleTool,
@@ -189,6 +190,12 @@ export interface FutrynBackendPorts {
     reasoningEffort?: string,
     queuedInputId?: string,
   ): AsyncIterable<ModelEvent>;
+  /** Compact the idle conversation `sessionId` with its current model (ADR 0054). Absent when unsupported. */
+  compactSession?(
+    sessionId: string,
+    instructions: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<CompactionOutcome>;
   /** Steer the active turn of `sessionId` (ADR 0033). Absent when the backend cannot steer. */
   steerTurn?(sessionId: string, content: string, expectedTurnId?: string): SteerOutcome;
   /** Accepted instructions of `sessionId` that no turn processed yet (durable; they open its next turn). */
@@ -1355,6 +1362,32 @@ export class FutrynClient {
       outcome.accepted ? 'Steering queued for the next model request' : `Steering not accepted: ${outcome.reason}`,
     );
     return outcome;
+  }
+
+  /**
+   * `/compact [instructions]` (ADR 0054): replace older model-visible history by a model-written
+   * handoff summary plus recent user messages. Idle only: a running turn owns its context, so this
+   * throws `POLICY` while a turn runs. The model call is billed and counted in session usage; a failed
+   * summary falls back to the extractive checkpoint; cancellation changes nothing. Durable history is
+   * never modified.
+   */
+  async compact(instructions?: string, options?: {signal?: AbortSignal}): Promise<CompactionOutcome> {
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.compactSession) throw new FutrynError('UNSUPPORTED');
+    const session = this.currentSession;
+    if (!session) return {compacted: false, tokensBefore: 0, tokensAfter: 0, usage: null, reason: 'empty'};
+    this.sending = true; // blocks sendMessage and session changes while the checkpoint is written
+    this.emitReactiveEvent('thinking', 'Compacting context');
+    try {
+      const outcome = await this.ports.compactSession(session.id, instructions?.trim() || undefined, options?.signal);
+      if (outcome.usage) this.lastUsage = outcome.usage;
+      return outcome;
+    } finally {
+      this.sending = false;
+      this.statusUsage = null;
+      this.emitReactiveEvent('idle');
+      this.notifyStateChange();
+    }
   }
 
   usage() {

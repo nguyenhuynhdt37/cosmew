@@ -44,6 +44,8 @@ export interface TuiHost {
   requestExit(): void;
   /** Re-read the active session into the transcript after account/session changes. */
   syncTranscript(): void;
+  /** Append a one-line notice to the transcript (local presentation; never sent to the model). */
+  addTranscriptNotice(text: string): void;
   /** Empty the visible transcript (the stored sessions are untouched). */
   clearTranscript(): void;
   /** Drop any mouse text selection so it cannot outlive the screen it was made on. */

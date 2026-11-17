@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.25' as const;
+export const CONTRACT_VERSION = '1.26' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -226,6 +226,17 @@ export const requestSchema = z.strictObject({
 export type ModelRequest = z.infer<typeof requestSchema>;
 export type Usage = z.infer<typeof import('./telemetry').usageSchema>;
 export type ToolCall = z.infer<typeof toolCallSchema>;
+/** What one compaction did to the model-visible context. Durable history is never changed. */
+export interface ContextCompaction {
+  trigger: 'auto' | 'manual';
+  /** `model`: handoff summary written by the current model; `excerpt`: deterministic fallback. */
+  strategy: 'model' | 'excerpt';
+  /** Estimated model-visible tokens before and after (conservative estimate, not provider-measured). */
+  tokensBefore: number;
+  tokensAfter: number;
+  /** True when the model summary failed and the excerpt checkpoint was used instead. */
+  fallback?: boolean;
+}
 export type ModelEvent =
   | {type: 'started'; requestId: string}
   | {type: 'textDelta'; text: string}
@@ -245,7 +256,9 @@ export type ModelEvent =
   /** Streamed text/reasoning of the current response is void: it is being retried or was preempted by steering. */
   | {type: 'responseDiscarded'; reason: 'retry' | 'preempted'; attempt?: number; maxRetries?: number}
   /** Accepted steering the turn could not deliver (budget, context or interruption); it opens the next turn. */
-  | {type: 'inputDeferred'; steerIds: string[]; reason: string};
+  | {type: 'inputDeferred'; steerIds: string[]; reason: string}
+  /** Older history was replaced by a handoff summary (or, as a fallback, an excerpt checkpoint). ADR 0054. */
+  | ({type: 'context.compacted'} & ContextCompaction);
 /** A provider API adapter: Futryn sends the request and reads the response; it owns the loop and tools. */
 export interface ModelPort {
   stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;

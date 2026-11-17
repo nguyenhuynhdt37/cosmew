@@ -85,3 +85,27 @@ export interface SessionUsage {
   turns: TurnReceipt[];
   historicalTurns: number;
 }
+
+const addCounter = (a: number | null | undefined, b: number | null | undefined) =>
+  a == null || b == null ? null : a + b;
+/**
+ * Usage of several requests of one turn: token counts and cost add up; quota/pricing come from the latest
+ * request. A missing counter means unreported, so a partial sum is never presented as a total.
+ */
+export function combineUsage(
+  previous: z.infer<typeof usageSchema> | null,
+  next: z.infer<typeof usageSchema>,
+): z.infer<typeof usageSchema> {
+  if (!previous) return next;
+  return {
+    ...next,
+    inputTokens: addCounter(previous.inputTokens, next.inputTokens),
+    outputTokens: addCounter(previous.outputTokens, next.outputTokens),
+    costUSD: addCounter(previous.costUSD, next.costUSD),
+    costEstimated: Boolean(previous.costEstimated || next.costEstimated),
+    cacheReadTokens: addCounter(previous.cacheReadTokens, next.cacheReadTokens),
+    cacheWriteTokens: addCounter(previous.cacheWriteTokens, next.cacheWriteTokens),
+    reasoningTokens: addCounter(previous.reasoningTokens, next.reasoningTokens),
+    premiumRequests: addCounter(previous.premiumRequests, next.premiumRequests),
+  };
+}

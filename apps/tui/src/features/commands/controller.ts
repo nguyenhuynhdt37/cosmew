@@ -2,6 +2,7 @@ import {parseSlashCommand} from '@futryn/sdk';
 import type {TuiHost} from '../../core/feature';
 import {PERMISSION_MODES, PERMISSION_MODE_HINTS, type PermissionMode} from '@futryn/contracts';
 import {planEffort} from './logic';
+import {compactionNotice} from '../../ui/compaction-notice';
 
 /** Parses and dispatches slash commands. Holds no state of its own. */
 export class CommandRouter {
@@ -108,6 +109,24 @@ export class CommandRouter {
           host.closeOverlay();
           host.setBanner('Started a fresh conversation. Previous sessions remain in /resume.');
           return;
+        case 'compact': {
+          host.setBanner('Compacting context with the current model...');
+          const outcome = await client.compact(args || undefined);
+          if (epoch !== this.commandEpoch) return;
+          if (outcome.compacted) {
+            const notice = compactionNotice(outcome as Required<Pick<typeof outcome, 'strategy'>> & typeof outcome);
+            host.addTranscriptNotice(notice);
+            host.setBanner(notice);
+          } else
+            host.setBanner(
+              outcome.reason === 'empty'
+                ? 'Nothing to compact yet.'
+                : outcome.reason === 'not_needed'
+                  ? 'Context is already small; nothing was compacted.'
+                  : `Compaction failed (${outcome.reason ?? 'unknown'}); the conversation is unchanged.`,
+            );
+          return;
+        }
         case 'exit':
           if (host.themeEngine.isPreviewing()) host.themeEngine.cancelPreview();
           host.requestExit();

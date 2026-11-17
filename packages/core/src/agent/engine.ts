@@ -1,6 +1,7 @@
 import {
   FutrynError,
   messageSchema,
+  type CompactionOutcome,
   type ConversationStore,
   type Message,
   type ModelEvent,
@@ -11,6 +12,7 @@ import {
   type ToolPort,
 } from '@futryn/contracts';
 import {normalizeHistory} from '../context/builder';
+import {compactConversation} from './compact';
 import {TurnRun} from './turn';
 import type {ActiveTurn, ConversationOptions, ConversationState, TurnHost} from './turn-types';
 
@@ -116,6 +118,20 @@ export class Conversation {
     this.running = true;
     try {
       yield* turn.run();
+    } finally {
+      this.running = false;
+    }
+  }
+
+  /**
+   * Manual `/compact` (ADR 0054). Only an idle conversation can be compacted: during a turn the
+   * running loop owns the context (`POLICY`). Durable history is untouched; the checkpoint is durable.
+   */
+  async compact(instructions?: string, signal?: AbortSignal): Promise<CompactionOutcome> {
+    if (this.running) throw new FutrynError('POLICY');
+    this.running = true;
+    try {
+      return await compactConversation(this.host(), instructions, signal);
     } finally {
       this.running = false;
     }

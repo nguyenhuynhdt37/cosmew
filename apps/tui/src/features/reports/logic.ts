@@ -266,7 +266,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Measured at: ${context.lastMeasured?.measuredAt ?? 'Never'}`,
     'This historical measurement is not the next request estimate.',
     'Session cumulative token consumption is not context occupancy.',
-    'Automatic context compaction: extractive snapshots during active turns; source history is retained. Manual /compact is unavailable.',
+    'Context compaction: at 90% of the window the current model writes a handoff summary (excerpt checkpoint if that fails); /compact runs it on demand when idle. Source history is retained.',
   ];
   if (kind === 'usage') return usageRows;
   if (kind === 'context') return contextRows;

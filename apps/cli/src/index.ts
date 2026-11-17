@@ -53,7 +53,7 @@ FUTRYN_HOME overrides storage; HANNES_HOME remains compatible.
 Canonical TUI commands: /login (/connect), /logout, /model, /status,
   /config, /permissions, /mcp, /plugin, /theme, /resume,
   /usage (/cost), /context, /effort <level|auto|status>,
-  /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
+  /clear, /compact [focus], /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start Futryn in any project: fyn (or futryn). From source: bun run fyn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
 are automatic. ChatGPT signs in through the API (OAuth); Futryn runs every request itself,

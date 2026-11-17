@@ -11,9 +11,9 @@ test('every overlay command alias resolves to the overlay its command opens', ()
 });
 
 test('unsupported backends explain themselves instead of failing silently', () => {
-  for (const command of ['/mcp', '/plugin', '/plugins x', '/compact']) expect(isUnsupported(command)).toBe(true);
+  for (const command of ['/mcp', '/plugin', '/plugins x']) expect(isUnsupported(command)).toBe(true);
+  expect(isUnsupported('/compact')).toBe(false);
   expect(isUnsupported('/mcpx')).toBe(false);
-  expect(unsupportedMessage('/compact', '/compact')).toContain('Not implemented');
   expect(unsupportedMessage('/mcp', '/mcp')).toContain('MCP authentication');
 });
 

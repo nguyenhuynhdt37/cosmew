@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.25** (1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.26** (1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -59,7 +59,7 @@ UAT now subscribes to these events instead of polling the pending lists; pending
 
 `fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
 the top level, typed interaction events, then exactly one terminal `turn.completed` or
-`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.25"`, `seq`
+`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.26"`, `seq`
 starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
 means the entire run succeeded. `responseDiscarded` invalidates the current provisional response;
 plain output / `-o` keep only the final response. This stream is not the future durable domain
@@ -71,6 +71,13 @@ or empty/oversized stdin. Without TTY the default approval policy is `never`; ev
 selected interactive policies deny prompts immediately when no input UI is attached. Exec sets
 `setUserInputAvailable(false)`; SDK questions then return unavailable without waiting. Tools still
 use ToolDispatcher. No new execution authority, persistence schema, dependency or external agent.
+
+## Model compaction (contract 1.26)
+
+[ADR 0054](../adr/0054-model-compaction.md). Additive for older consumers:
+
+- Model event `context.compacted` `{trigger: 'auto' | 'manual', strategy: 'model' | 'excerpt', tokensBefore, tokensAfter, fallback?}`: older model-visible history was replaced by a handoff summary (`model`) or, when the model call failed, by the extractive checkpoint (`fallback: true`). Token counts are conservative estimates. It is emitted before the request that uses the compacted context and is not journaled; the durable record is the `ContextSnapshot` (`strategy: 'model'` carries `retainedUserRequests` = recent user messages up to 20,000 tokens, and `summary` = handoff text). Recovery after restart renders it; source history is never changed. `fyn exec --json` forwards it like other model events.
+- Auto compaction starts at 90% of the usable window (Codex `auto_compact_token_limit`); `/compact [instructions]` / `FutrynClient.compact(instructions?, {signal})` → `CompactionOutcome {compacted, strategy?, tokensBefore, tokensAfter, usage, fallback?, reason?}` runs it while idle and throws `POLICY` during a turn. Usage of the summary call is counted in the turn (auto) or added to the latest agent turn receipt (`ConversationStore.addUsage`, manual).
 
 ## Implemented execution evidence (contract 1.12)
 

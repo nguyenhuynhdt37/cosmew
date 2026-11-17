@@ -13,10 +13,19 @@ import {
   type TurnStopReason,
   type Usage,
   codexBackoffMs,
+  combineUsage,
   analysisCapability,
 } from '@futryn/contracts';
 import {normalizeHistory, truncateToolResults} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
+import {
+  AUTO_COMPACT_FRACTION,
+  assembleHandoff,
+  modelSnapshot,
+  modelSnapshotMessages,
+  retainRecentUserMessages,
+  summarizeWithModel,
+} from '../context/model-compaction';
 import {budgetExhaustedNotice, explorationGuidance} from './guidance';
 import {artifactWork, observeResult, recoveryContext, taskForRequest} from './progress';
 import {ProgressQueue} from './progress-queue';
@@ -49,25 +58,6 @@ const defaultSleep = (ms: number, signal?: AbortSignal) =>
     }, ms);
     signal?.addEventListener('abort', abort, {once: true});
   });
-
-const add = (a: number | null | undefined, b: number | null | undefined) => (a == null || b == null ? null : a + b);
-
-/** Usage of a multi-round turn: token counts and cost add up; quota/pricing come from the latest round. */
-function combine(previous: Usage | null, next: Usage): Usage {
-  if (!previous) return next;
-  return {
-    ...next,
-    inputTokens: add(previous.inputTokens, next.inputTokens),
-    outputTokens: add(previous.outputTokens, next.outputTokens),
-    costUSD: add(previous.costUSD, next.costUSD),
-    costEstimated: Boolean(previous.costEstimated || next.costEstimated),
-    // Missing counters mean unreported, not zero. Never present a partial sum as a total.
-    cacheReadTokens: add(previous.cacheReadTokens, next.cacheReadTokens),
-    cacheWriteTokens: add(previous.cacheWriteTokens, next.cacheWriteTokens),
-    reasoningTokens: add(previous.reasoningTokens, next.reasoningTokens),
-    premiumRequests: add(previous.premiumRequests, next.premiumRequests),
-  };
-}
 
 /** Everything one model request needs, built fresh before every request. */
 interface PreparedRequest {
@@ -140,6 +130,16 @@ export class TurnRun {
   /** Provider-measured tokens of the previous round: its input plus its output form the next prefix. */
   private lastInput: number | null | undefined;
   private lastOutput: number | null | undefined;
+  /** Compaction events produced while preparing a request, delivered before it is sent (ADR 0054). */
+  private notices: ModelEvent[] = [];
+  /** A model summary failed this turn: do not spend another request on it (the excerpt fallback applies). */
+  private modelCompactionOff = false;
+  /**
+   * In-turn compaction (Codex mid-turn auto compaction): the model-visible start of this turn is a
+   * handoff, with `consumed` tool-round messages already folded into it. Memory only; the journal is
+   * intact, and the next turn compacts durably if the context is still large.
+   */
+  private base?: {messages: Message[]; consumed: number};
 
   constructor(
     private readonly host: TurnHost,
@@ -197,6 +197,7 @@ export class TurnRun {
       if (requests > 0) yield* this.deliverSteering();
 
       const prepared = await this.prepareRequest(round);
+      yield* this.flushNotices();
       // Input accepted while this request was being prepared is delivered with it, keeping the
       // journal (steering before a non-first request) and the model-visible order identical.
       if (requests > 0 && this.turn.pending.length) {
@@ -313,7 +314,16 @@ export class TurnRun {
     const current = normalizeHistory([...this.carried, this.user, ...this.steps]);
     const taskMessage = this.recoveryMessage();
     let visible = useContextSnapshot(normalized, state.snapshot);
-    let history = [...this.projectMessages, ...visible, ...taskMessage, ...current];
+    const compose = () =>
+      this.base
+        ? [
+            ...this.projectMessages,
+            ...this.base.messages,
+            ...taskMessage,
+            ...normalizeHistory(this.steps.slice(this.base.consumed)),
+          ]
+        : [...this.projectMessages, ...visible, ...taskMessage, ...current];
+    let history = compose();
 
     const offered =
       host.tools && !this.stop
@@ -333,25 +343,55 @@ export class TurnRun {
       return Math.max(estimate, round > 0 ? (this.lastInput ?? 0) + (this.lastOutput ?? 0) : 0);
     };
 
-    // Compact older history once the window is three-quarters full and there is history to compact.
-    if (measure() >= this.window * 0.75 && normalized.filter(m => m.role === 'user').length >= 3) {
-      const allowance =
-        this.window -
-        estimateTokens([...this.projectMessages, ...taskMessage, ...current, ...offered]) -
-        guidanceEstimate;
-      const compacted = await compactHistory(
-        normalized,
-        state.task,
-        Math.max(0, allowance),
-        host.options.compactor,
-        this.signal,
-      );
-      if (compacted && compacted.throughRevision > (state.snapshot?.throughRevision ?? 0)) {
-        state.snapshot = compacted;
-        host.store.saveContextSnapshot?.(host.id, compacted);
-        visible = useContextSnapshot(normalized, compacted);
-        history = [...this.projectMessages, ...visible, ...taskMessage, ...current];
+    // Codex auto_compact_token_limit: compact once the context reaches 90% of the window.
+    if (measure() >= this.window * AUTO_COMPACT_FRACTION) {
+      const tokensBefore = measure();
+      let failed = false;
+      let strategy: 'model' | 'excerpt' | undefined;
+      if (!this.modelCompactionOff && this.host.options.modelCompaction !== false) {
+        try {
+          const folded = await this.compactWithModel(normalized, visible, current);
+          if (folded) {
+            visible = folded.visible;
+            strategy = 'model';
+          }
+        } catch (error) {
+          if (this.signal.aborted) throw error; // cancelled: nothing was changed
+          this.modelCompactionOff = true;
+          failed = true;
+        }
+      }
+      // The excerpt checkpoint covers earlier turns only; it is also the fallback when the model fails.
+      if (!strategy && !this.base && normalized.filter(m => m.role === 'user').length >= 3) {
+        const allowance =
+          this.window -
+          estimateTokens([...this.projectMessages, ...taskMessage, ...current, ...offered]) -
+          guidanceEstimate;
+        const compacted = await compactHistory(
+          normalized,
+          state.task,
+          Math.max(0, allowance),
+          host.options.compactor,
+          this.signal,
+        );
+        if (compacted && compacted.throughRevision > (state.snapshot?.throughRevision ?? 0)) {
+          state.snapshot = compacted;
+          host.store.saveContextSnapshot?.(host.id, compacted);
+          visible = useContextSnapshot(normalized, compacted);
+          strategy = 'excerpt';
+        }
+      }
+      if (strategy) {
+        history = compose();
         this.lastInput = this.lastOutput = undefined;
+        this.notices.push({
+          type: 'context.compacted',
+          trigger: 'auto',
+          strategy,
+          tokensBefore,
+          tokensAfter: measure(),
+          ...(failed && strategy === 'excerpt' ? {fallback: true} : {}),
+        });
       }
     }
 
@@ -373,6 +413,59 @@ export class TurnRun {
       taskMessage.length > 0,
     );
     return {history, available, tools, offerTools, instructions};
+  }
+
+  /**
+   * Model-written compaction (ADR 0054). Before the turn's first tool round it checkpoints earlier
+   * turns durably (recovery reloads it); mid-turn it folds this turn's rounds into an in-memory
+   * handoff. Returns the new model-visible prior history, or undefined when it would not shrink.
+   */
+  private async compactWithModel(
+    normalized: Message[],
+    visible: Message[],
+    current: Message[],
+  ): Promise<{visible: Message[]} | undefined> {
+    const {host} = this;
+    const {state, store} = host;
+    const inTurn = this.steps.length > 0 || this.base !== undefined;
+    if (!inTurn && !normalized.some(m => m.role === 'user')) return undefined;
+
+    const input = this.base
+      ? [...this.base.messages, ...normalizeHistory(this.steps.slice(this.base.consumed))]
+      : inTurn
+        ? [...visible, ...current]
+        : visible;
+    const summary = await summarizeWithModel({
+      model: host.model,
+      selection: host.selection,
+      visible: input,
+      window: this.window,
+      signal: this.signal,
+    });
+    // Billed whether or not it helps: count it in this turn's (and so the session's) usage.
+    if (summary.usage) {
+      this.receipt.usage = combineUsage(this.receipt.usage, summary.usage);
+      store.observeTurn?.(host.id, this.revision!, this.receipt);
+    }
+    const handoff = assembleHandoff(summary.text, input, store.loadPlan?.(host.id));
+    const before = estimateTokens(input);
+
+    if (inTurn) {
+      const retained = retainRecentUserMessages(input);
+      const messages = modelSnapshotMessages({summary: handoff, retainedUserRequests: retained});
+      if (estimateTokens(messages) >= before) throw new FutrynError('CONTEXT_LIMIT');
+      this.base = {messages, consumed: this.steps.length};
+      return {visible};
+    }
+    const snapshot = modelSnapshot(normalized, handoff, retainRecentUserMessages(normalized));
+    if (estimateTokens(modelSnapshotMessages(snapshot)) >= before) throw new FutrynError('CONTEXT_LIMIT');
+    state.snapshot = snapshot;
+    store.saveContextSnapshot?.(host.id, snapshot);
+    return {visible: useContextSnapshot(normalized, snapshot)};
+  }
+
+  private *flushNotices(): Generator<ModelEvent> {
+    while (this.notices.length) yield this.notices.shift()!;
   }
 
   /** After an interrupted or unfinished turn, the model gets an explicit checkpoint of the task. */
@@ -587,7 +680,7 @@ export class TurnRun {
       result.reasoningText += event.text;
     }
     if (event.type === 'usage' || event.type === 'completed') {
-      receipt.usage = combine(usageBefore, event.usage);
+      receipt.usage = combineUsage(usageBefore, event.usage);
       this.lastInput = event.usage.inputTokens;
       this.lastOutput = event.usage.outputTokens;
     }

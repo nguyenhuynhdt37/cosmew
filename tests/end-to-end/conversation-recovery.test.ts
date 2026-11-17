@@ -232,7 +232,7 @@ test('compaction survives restart and keeps the HTML objective and every explici
   await c.interrupt();
   c.app.settings.update(s => {
     const model = s.catalogs[0]!.models[0]!;
-    model.contextLimit = 24000;
+    model.contextLimit = 20000; // auto compaction starts at 90% of the window (ADR 0054)
     model.outputLimit = 4096;
   });
   c.client.setToolsEnabled(false);

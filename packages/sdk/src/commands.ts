@@ -25,6 +25,7 @@ export type CommandHandler =
   | 'logout'
   | 'accounts'
   | 'clear'
+  | 'compact'
   | 'exit'
   | 'mode'
   | 'unavailable';
@@ -158,13 +159,12 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/compact',
-    handler: 'unavailable',
-    autocomplete: false,
-    unavailable:
-      'Not implemented: manual compaction. Automatic extractive compaction exists, but no safe manual checkpoint action is exposed by the session backend.',
+    handler: 'compact',
+    arguments: 'optional',
     aliases: [],
     title: 'Compact Context',
-    description: 'Unavailable: automatic compaction exists; manual checkpoint action is not exposed',
+    description:
+      'Summarize older history with the current model to free context; optional text says what to preserve (idle only)',
     category: 'Sessions',
   },
   {

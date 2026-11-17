@@ -2,6 +2,7 @@ import type {Database} from 'bun:sqlite';
 import {
   FutrynError,
   attachmentSchema,
+  combineUsage,
   planStateSchema,
   type Attachment,
   type PlanState,
@@ -333,6 +334,23 @@ export class SqliteConversations implements ConversationStore {
       .query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?')
       .run(JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))), id, revision);
     if (result.changes !== 1) throw new FutrynError('STORAGE');
+  }
+  /** Fold a compaction call's usage into the latest agent turn so session usage counts it (ADR 0054). */
+  addUsage(id: string, usage: import('@futryn/contracts').Usage): void {
+    try {
+      const rows = this.db
+        .query('SELECT revision,data FROM turn_receipts WHERE conversation=? ORDER BY revision DESC')
+        .all(id) as {revision: number; data: string}[];
+      for (const row of rows) {
+        const receipt = turnReceiptSchema.parse(JSON.parse(row.data));
+        if (receipt.kind === 'user-shell') continue;
+        receipt.usage = combineUsage(receipt.usage, usage);
+        this.writeReceipt(id, row.revision, receipt);
+        return;
+      }
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
   }
   observeTurn(id: string, revision: number, receipt: TurnReceipt): void {
     try {

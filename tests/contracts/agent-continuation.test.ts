@@ -42,7 +42,10 @@ const callRead = (id: string, path = 'a.txt', u = usage(10, 5)): ModelEvent[] =>
   {type: 'completed', finishReason: 'tool_calls', usage: u},
 ];
 
-function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: number; outputLimit?: number} = {}) {
+function harness(
+  step: Step,
+  options: {budget?: TurnBudget; contextLimit?: number; outputLimit?: number; modelCompaction?: boolean} = {},
+) {
   const home = mkdtempSync(join(tmpdir(), 'hannes-continuation-'));
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(() => {
@@ -98,6 +101,7 @@ function harness(step: Step, options: {budget?: TurnBudget; contextLimit?: numbe
       budget: () => options.budget,
       contextLimit: () => options.contextLimit ?? null,
       outputLimit: () => options.outputLimit ?? null,
+      modelCompaction: options.modelCompaction,
       sleep: async ms => {
         sleeps.push(ms);
       },
@@ -202,7 +206,8 @@ test('context pressure: near the window the model answers without tools; over it
       request.tools.length
         ? callRead(`c${request.messages.length}`, big + request.messages.length)
         : answer('summary before the window fills'),
-    {contextLimit: 4096 + 4000},
+    // This test covers the no-compaction path (ADR 0054 tests the model summary separately).
+    {contextLimit: 4096 + 4000, modelCompaction: false},
   );
   const events = await pressure.send();
   expect(events.at(-1)?.type).toBe('completed');
