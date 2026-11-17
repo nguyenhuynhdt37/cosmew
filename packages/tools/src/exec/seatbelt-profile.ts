@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs';
 import {dirname, join} from 'node:path';
 import type {CommandSandbox} from '@futryn/contracts';
 import {SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES} from '@futryn/security';
@@ -140,10 +141,16 @@ const NETWORK_MACH_SERVICES = [
 ];
 
 /** Every ancestor directory of `path` below the file-system root, nearest first, excluding `path`. */
-function gitAncestors(path: string): string[] {
-  const result: string[] = [];
-  for (let dir = dirname(path); dir !== dirname(dir); dir = dirname(dir)) result.push(dir);
-  return result;
+/**
+ * Only the nearest enclosing repository's `.git` (what `git`/Next.js discovery stops at), never one
+ * in the home directory itself (a dotfiles repository can hold secrets in its history) or `/`.
+ */
+function gitAncestors(path: string, home: string): string[] {
+  for (let dir = dirname(path); dir !== dirname(dir); dir = dirname(dir)) {
+    if (dir === home) return [];
+    if (existsSync(join(dir, '.git'))) return [dir];
+  }
+  return [];
 }
 
 const globalNames = (services: string[]) => services.map(name => `(global-name ${quote(name)})`).join(' ');
@@ -215,7 +222,7 @@ export class SeatbeltSandbox implements NativeSandbox {
       `(allow file-read* ${subpath(workspace)} ${toolchains.map(subpath).join(' ')} ${subpath(scratch)})`,
       // Codex forbids only WRITING `.git`: a workspace nested in another repository must be able to
       // read that repository's `.git` (next build, git status). Writes stay denied (writeRules).
-      ...gitAncestors(workspace).map(dir => `(allow file-read* ${subpath(join(dir, '.git'))})`),
+      ...gitAncestors(workspace, home).map(dir => `(allow file-read* ${subpath(join(dir, '.git'))})`),
       // Tools such as rustup stat their home directory; metadata of the ancestors only, never contents.
       ...metadataOnly.map(dir => `(allow file-read-metadata ${subpath(dir)})`),
       ...toolchains.map(dir => `(allow file-read-metadata (path-ancestors ${quote(dir)}))`),

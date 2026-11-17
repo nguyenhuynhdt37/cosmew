@@ -47,11 +47,23 @@ describe('seatbelt profile', () => {
     expect(text).not.toContain('network-bind');
   });
 
-  test('.git of the workspace and of every parent is readable; writing .git stays denied', () => {
-    const text = profile({mode: 'workspace-write', network: false});
-    expect(text).toContain('(allow file-read* (subpath "/Users/dev/outer/.git"))');
-    expect(text).toContain('(allow file-read* (subpath "/Users/dev/.git"))');
-    expect(text).toContain('(deny file-write* (regex #"^/Users/dev/outer/app/(.*/)?\\.[gG][iI][tT](/|$)"))');
+  test('only the nearest enclosing .git is readable, never one in home; writing .git stays denied', () => {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-git-home-')));
+    clean.push(() => rmSync(home, {recursive: true, force: true}));
+    for (const dir of ['.git', 'a/.git', 'a/outer/.git', 'a/outer/app']) mkdirSync(join(home, dir), {recursive: true});
+    const sandbox = (workspace: string) =>
+      new SeatbeltSandbox({workspace, scratch: '/var/folders/x/T/fyn-exec-1', home, toolchains: []}).profile({
+        mode: 'workspace-write',
+        network: false,
+      });
+    const text = sandbox(join(home, 'a/outer/app'));
+    expect(text).toContain(`(allow file-read* (subpath "${home}/a/outer/.git"))`);
+    expect(text).not.toContain(`(subpath "${home}/a/.git")`);
+    expect(text).not.toContain(`(subpath "${home}/.git")`);
+    // A workspace whose nearest enclosing repository is the home directory gets no parent .git.
+    mkdirSync(join(home, 'b/app'), {recursive: true});
+    expect(sandbox(join(home, 'b/app'))).not.toContain(`(subpath "${home}/.git")`);
+    expect(text).toContain(`(deny file-write* (regex #"^${home}/a/outer/app/(.*/)?\\.[gG][iI][tT](/|$)"))`);
     // No rule ever denies reading .git (only secrets, Futryn state and the home directory are hidden).
     expect(text).not.toMatch(/deny file-read\*[^\n]*\\\.\[gG\]\[iI\]\[tT\]/);
   });
