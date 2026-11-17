@@ -167,11 +167,15 @@ export class LspManager {
   }
 
   /** Re-read the file from disk and sync it to the server. */
-  private syncFile(client: LspClient, spec: ServerSpec, file: ResolvedPath): {uri: string; text: string} {
+  private syncFile(
+    client: LspClient,
+    spec: ServerSpec,
+    file: ResolvedPath,
+  ): {uri: string; text: string; changed: boolean} {
     const {bytes} = this.options.workspace.readBytes(file, 8 * 1024 * 1024);
     const text = new TextDecoder().decode(bytes);
     const uri = pathToFileURL(file.absolute).href;
-    client.sync(uri, spec.languageId(extname(file.relative).toLowerCase()), text);
+    const changed = client.sync(uri, spec.languageId(extname(file.relative).toLowerCase()), text);
     if (this.options.canRead && !ignoredDirectory(this.options.workspace, dirname(file.relative))) {
       for (const [path, open] of this.watching) {
         if (
@@ -183,7 +187,7 @@ export class LspManager {
       this.watching.set(file.relative, {client, spec});
       this.startWatcher();
     }
-    return {uri, text};
+    return {uri, text, changed};
   }
 
   private startWatcher(): void {
@@ -279,8 +283,9 @@ export class LspManager {
       return undefined;
     }
     const since = client.seq;
-    const {uri, text} = this.syncFile(client, spec, file);
-    const after = await client.waitForDiagnostics(uri, since, signal);
+    const {uri, text, changed} = this.syncFile(client, spec, file);
+    const after =
+      (!changed ? client.knownDiagnostics(uri) : undefined) ?? (await client.waitForDiagnostics(uri, since, signal));
     if (!after) return undefined;
     const key = (d: LspDiagnostic) => JSON.stringify([d.message, d.source ?? '', d.code ?? '']);
     const old = new Map<string, number>();
