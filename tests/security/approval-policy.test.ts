@@ -227,7 +227,6 @@ async function chain(
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   const client = app.createFutrynClient(root);

@@ -27,7 +27,14 @@ import {
   type ThemeManifest,
 } from '@futryn/contracts';
 export {openPrivateDatabase} from './database';
-export {MigrationOutbox, REMOVED_RUNTIMES, REMOVED_RUNTIME_PROVIDER_IDS} from './runtime-removal';
+export {
+  MigrationOutbox,
+  REMOVED_RUNTIMES,
+  REMOVED_RUNTIME_PROVIDER_IDS,
+  REMOVED_CODEX_RUNTIMES,
+  REMOVED_CODEX_PROVIDER_IDS,
+  removeRuntimeProfiles,
+} from './runtime-removal';
 export {SqliteConversations} from './session-store';
 export {ToolAuditStore, type ToolAuditEntry} from './tool-audit';
 
@@ -159,5 +166,3 @@ export class FileCustomThemeStore {
     }
   }
 }
-export * from './runtime-profile';
-export * from './runtime-leases';

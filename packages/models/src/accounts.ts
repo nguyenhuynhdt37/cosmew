@@ -41,9 +41,7 @@ export class AccountManager {
       state.accounts.some(
         a =>
           a.alias === alias ||
-          ((credential.kind === 'keyring' || credential.kind === 'runtime') &&
-            (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') &&
-            a.credential.key === credential.key),
+          (credential.kind === 'keyring' && a.credential.kind === 'keyring' && a.credential.key === credential.key),
       )
     )
       throw new FutrynError('INVALID_INPUT');
@@ -55,11 +53,7 @@ export class AccountManager {
       this.store.update(s => {
         const provider = s.providers.find(p => p.id === providerId);
         if (!provider || s.accounts.some(a => a.alias === alias)) throw new FutrynError('INVALID_INPUT');
-        if (
-          (credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) ||
-          holdsCredential(provider) === (credential.kind === 'none')
-        )
-          throw new FutrynError('AUTH');
+        if (holdsCredential(provider) === (credential.kind === 'none')) throw new FutrynError('AUTH');
         s.accounts.push(account);
         if (!s.activeAccountId) s.activeAccountId = account.id;
       });
@@ -83,17 +77,10 @@ export class AccountManager {
     const current = this.get(id);
     const provider = this.store.read().providers.find(p => p.id === current.providerId)!;
     accountSchema.parse({...current, credential});
+    if (holdsCredential(provider) === (credential.kind === 'none')) throw new FutrynError('AUTH');
     if (
-      (credential.kind === 'runtime' ? provider.runtime !== credential.runtime : !!provider.runtime) ||
-      holdsCredential(provider) === (credential.kind === 'none')
-    )
-      throw new FutrynError('AUTH');
-    if (
-      (credential.kind === 'keyring' || credential.kind === 'runtime') &&
-      this.list().some(
-        a =>
-          (a.credential.kind === 'keyring' || a.credential.kind === 'runtime') && a.credential.key === credential.key,
-      )
+      credential.kind === 'keyring' &&
+      this.list().some(a => a.credential.kind === 'keyring' && a.credential.key === credential.key)
     )
       throw new FutrynError('INVALID_INPUT');
     await this.rejectDuplicate(current.providerId, credential, secret, current.id);
@@ -126,21 +113,7 @@ export class AccountManager {
   ): Promise<void> {
     const identity = async (ref: CredentialRef, supplied?: string): Promise<string | undefined> => {
       if (ref.kind === 'none') return undefined;
-      if (ref.kind !== 'runtime') return supplied ?? (await this.vault.get(ref));
-      const record = await this.vault.getRuntime?.(ref);
-      if (!record) return undefined;
-      try {
-        const files = JSON.parse(record).files;
-        if (ref.runtime === 'codex') {
-          const auth = JSON.parse(files['auth.json']);
-          if (typeof auth.tokens?.account_id === 'string' && auth.tokens.account_id)
-            return 'codex:' + auth.tokens.account_id;
-        }
-        // Exact snapshots also catch reused credentials when no stable identity is supplied.
-        return record;
-      } catch {
-        throw new FutrynError('AUTH');
-      }
+      return supplied ?? (await this.vault.get(ref));
     };
     const incoming = await identity(credential, secret);
     if (!incoming) return;

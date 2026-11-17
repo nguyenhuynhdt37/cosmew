@@ -14,6 +14,7 @@ import {
   commandGrantTarget,
 } from '@futryn/tools';
 import {runProcess} from '../../packages/tools/src/exec/process';
+import {waitFor} from '../process-fixtures/observe';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const fn of cleanup.splice(0).reverse()) fn();
@@ -296,13 +297,17 @@ osTest('macOS candidate cancellation and timeout kill ordinary child process gro
     expect(result.kind).toBe(cancelled ? 'cancelled' : 'timeout');
     const pid = Number(/CHILD:(\d+)/.exec(result.output)?.[1]);
     expect(pid).toBeGreaterThan(0);
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch {
-      alive = false;
-    }
-    expect(alive).toBe(false);
+    // Leader close and the host's child reaping are independent. Bound the observation,
+    // rather than treating a transient zombie returned by kill(pid, 0) as a surviving worker.
+    await waitFor(() => {
+      try {
+        process.kill(pid, 0);
+        return undefined;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+        return true;
+      }
+    });
   }
 });
 osTest(

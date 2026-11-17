@@ -49,28 +49,3 @@ test('a model that cannot call tools gets no tool list and toolsEnabled false, e
   expect(client.status()).toMatchObject({toolsEnabled: false, workspaceReadStatus: 'unavailable'});
   expect(client.availableTools()).toEqual([]);
 });
-
-test('Codex bridge reports tools only after consent; chat-only backend never lists tools', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'futryn-status-codex-'));
-  const app = startup(dir, {vault: memoryVault()});
-  cleanups.push(() => {
-    app.db.close();
-    rmSync(dir, {recursive: true, force: true});
-  });
-  app.registry.add(providerPresets.find(p => p.id === 'chatgpt')!);
-  const account = await app.accounts.add('chatgpt', 'codex', {
-    kind: 'runtime',
-    key: crypto.randomUUID(),
-    runtime: 'codex',
-  });
-  const client = app.createFutrynClient(dir);
-  client.addManualModel('gpt-5', account.id);
-  client.selectModel('gpt-5');
-  expect(client.status().executionBackend?.kind).toBe('chat-only');
-  expect(client.status().toolsEnabled).toBe(false);
-  expect(client.availableTools()).toEqual([]);
-  client.setToolsEnabled(true);
-  expect(client.status().executionBackend?.kind).toBe('codex-bridge');
-  expect(client.status().toolsEnabled).toBe(true);
-  expect(client.availableTools().length).toBeGreaterThan(0);
-});

@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync} from 'node:fs';
-import {join, resolve} from 'node:path';
+import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {CommandRuntime, CommandOutcome} from '@futryn/contracts';
 import {FutrynTuiApp, commandSummary, messagesToTranscript} from '@futryn/tui';
@@ -11,7 +11,7 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
-async function make(codex = false, enabled = true, real = false) {
+async function make(enabled = true, real = false) {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-exec-home-')),
     ws = mkdtempSync(join(tmpdir(), 'futryn-exec-project-'));
   cleanup.push(
@@ -70,35 +70,17 @@ async function make(codex = false, enabled = true, real = false) {
           },
         }
       : {}),
-    subscriptions: {
-      openURL: async () => {},
-      resolveCommand: r => ({
-        command: process.execPath,
-        prefix: [resolve('tests/subscription-fixtures/runtime.ts'), r, 'exec-command'],
-      }),
-    },
   });
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   const client = app.createFutrynClient(ws);
-  if (codex) {
-    const challenge = await client.beginProviderAuth('chatgpt', 'subscription-device');
-    await client.connectAccount({
-      providerId: 'chatgpt',
-      alias: 'fixture',
-      credential: {kind: 'keyring', key: crypto.randomUUID()},
-      authChallengeId: challenge.id,
-    });
-  } else {
-    server.set({toolCall: {name: 'exec_command', args: JSON.stringify({cmd: 'rg -n marker source.ts'})}});
-    app.registry.add(server.provider('chat', {id: 'commands', auth: 'none'}));
-    await app.accounts.add('commands', 'fixture', {kind: 'none'});
-    await client.discoverModels();
-    client.selectModel('fixture-model');
-  }
+  server.set({toolCall: {name: 'exec_command', args: JSON.stringify({cmd: 'rg -n marker source.ts'})}});
+  app.registry.add(server.provider('chat', {id: 'commands', auth: 'none'}));
+  await app.accounts.add('commands', 'fixture', {kind: 'none'});
+  await client.discoverModels();
+  client.selectModel('fixture-model');
   client.setToolsEnabled(true);
   const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
   await tui.initialize();
@@ -121,42 +103,37 @@ async function pending(c: Awaited<ReturnType<typeof make>>) {
   expect(c.client.listPendingPermissions()).toHaveLength(1);
   c.tui.advanceStartupGate();
 }
-for (const codex of [false, true])
-  test(`${codex ? 'Codex dynamic bridge' : 'direct API'} fixture: exact approval, command pairing, sanitized output and persisted resume`, async () => {
-    const c = await make(codex);
-    const turn = c.tui.submitPrompt('Locate marker with rg');
-    await pending(c);
-    expect(c.runs()).toBe(0);
-    const prompt = c.client.listPendingPermissions()[0]!;
-    expect(prompt.capability).toBe('process.execute');
-    expect(prompt.target).toBe('rg -n marker source.ts');
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('Command: rg -n marker source.ts');
-    await c.tui.handleKey('1');
-    await turn;
-    expect(c.runs()).toBe(1);
-    const answer = c.tui.getTranscript().at(-1)!;
-    expect(answer.toolResults?.[0]).toMatchObject({name: 'exec_command', status: 'ok', exitCode: 0});
-    expect(answer.toolResults?.[0]?.callId).toBe(answer.toolCalls?.[0]?.id);
-    expect(answer.toolResults?.[0]?.content).not.toContain('\x1b');
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');
-    const id = c.client.activeSession()!.id;
-    const saved = c.app.conversations.get(id)!;
-    expect(saved.messages.find(m => m.role === 'tool')?.content).toStartWith('Exit code: 0\nWall time:');
-    const resumed = c.app.createFutrynClient(c.ws);
-    resumed.resumeSession(id);
-    const transcript = messagesToTranscript(resumed.activeSession()!.messages, {idPrefix: 'resume'});
-    const item = transcript.at(-1)!;
-    expect(commandSummary(item.toolCalls![0]!, item.toolResults![0], {live: false}).state).toBe('ran');
-    if (!codex) {
-      const resultRequest = c.server.requests.find(r => r.body?.messages?.some((m: any) => m.role === 'tool'));
-      expect(resultRequest?.body.messages.find((m: any) => m.role === 'tool')?.tool_call_id).toBe(
-        answer.toolCalls![0]!.id,
-      );
-    }
-  });
+test('direct API fixture: exact approval, command pairing, sanitized output and persisted resume', async () => {
+  const c = await make();
+  const turn = c.tui.submitPrompt('Locate marker with rg');
+  await pending(c);
+  expect(c.runs()).toBe(0);
+  const prompt = c.client.listPendingPermissions()[0]!;
+  expect(prompt.capability).toBe('process.execute');
+  expect(prompt.target).toBe('rg -n marker source.ts');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Command: rg -n marker source.ts');
+  await c.tui.handleKey('1');
+  await turn;
+  expect(c.runs()).toBe(1);
+  const answer = c.tui.getTranscript().at(-1)!;
+  expect(answer.toolResults?.[0]).toMatchObject({name: 'exec_command', status: 'ok', exitCode: 0});
+  expect(answer.toolResults?.[0]?.callId).toBe(answer.toolCalls?.[0]?.id);
+  expect(answer.toolResults?.[0]?.content).not.toContain('\x1b');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');
+  const id = c.client.activeSession()!.id;
+  const saved = c.app.conversations.get(id)!;
+  expect(saved.messages.find(m => m.role === 'tool')?.content).toStartWith('Exit code: 0\nWall time:');
+  const resumed = c.app.createFutrynClient(c.ws);
+  resumed.resumeSession(id);
+  const transcript = messagesToTranscript(resumed.activeSession()!.messages, {idPrefix: 'resume'});
+  const item = transcript.at(-1)!;
+  expect(commandSummary(item.toolCalls![0]!, item.toolResults![0], {live: false}).state).toBe('ran');
+  const resultRequest = c.server.requests.find(r => r.body?.messages?.some((m: any) => m.role === 'tool'));
+  expect(resultRequest?.body.messages.find((m: any) => m.role === 'tool')?.tool_call_id).toBe(answer.toolCalls![0]!.id);
+});
 
 test('production FUTRYN keeps exec unadvertised and never executes an unsolicited command', async () => {
-  const c = await make(false, false);
+  const c = await make(false);
   await c.tui.submitPrompt('Run a command');
   expect(c.runs()).toBe(0);
   expect(c.client.listPendingPermissions()).toHaveLength(0);
@@ -167,7 +144,7 @@ test('production FUTRYN keeps exec unadvertised and never executes an unsolicite
 test.skipIf(process.platform !== 'darwin')(
   'research-only FUTRYN TUI acceptance: approved rg executes in actual Seatbelt without project mutation',
   async () => {
-    const c = await make(false, true, true);
+    const c = await make(true, true);
     const before = readFileSync(join(c.ws, 'source.ts'), 'utf8');
     const turn = c.tui.submitPrompt('Locate marker with rg');
     await pending(c);

@@ -76,7 +76,8 @@ export class ModelCatalog {
     return merged;
   }
   async discover(signal?: AbortSignal): Promise<{models: ModelInfo[]; stale: boolean; warning?: string}> {
-    if (this.transport.provider.catalog === 'manual')
+    const chatgpt = this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses';
+    if (this.transport.provider.catalog === 'manual' && !chatgpt)
       return {
         models: this.configured(),
         stale: false,
@@ -99,10 +100,11 @@ export class ModelCatalog {
                   : '?after_id=' + encodeURIComponent(cursor)
                 : '');
         const data = object(await this.transport.json(path, signal));
-        const items = kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
+        const items = chatgpt || kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
         if (!Array.isArray(items) || items.length > 10000) throw new FutrynError('PROTOCOL');
         for (const value of items) {
           const item = object(value);
+          if (chatgpt && item.visibility !== 'list') continue;
           // Gemini lists embedding and generation models together; only expose generateContent models.
           if (
             kind === 'gemini' &&
@@ -110,9 +112,14 @@ export class ModelCatalog {
             !item.supportedGenerationMethods.includes('generateContent')
           )
             continue;
-          const rawID =
-            kind === 'ollama' ? item.name : kind === 'gemini' ? String(item.name).replace(/^models\//, '') : item.id;
-          const model = normalizeModel(rawID, item.displayName ?? item.name ?? rawID);
+          const rawID = chatgpt
+            ? item.slug
+            : kind === 'ollama'
+              ? item.name
+              : kind === 'gemini'
+                ? String(item.name).replace(/^models\//, '')
+                : item.id;
+          const model = normalizeModel(rawID, chatgpt ? item.display_name : (item.displayName ?? item.name ?? rawID));
           // Only documented provider fields; do not guess limits from model IDs.
           if (kind === 'gemini') {
             if (Number.isInteger(item.inputTokenLimit) && Number(item.inputTokenLimit) > 0)
@@ -158,13 +165,10 @@ export class ModelCatalog {
         cursors.add(next);
         cursor = next;
       }
-      const merged = new Map(
-        this.configured()
-          .filter(m => m.source === 'manual')
-          .map(m => [m.id, m]),
-      );
+      const merged = new Map((chatgpt ? [] : this.configured()).filter(m => m.source === 'manual').map(m => [m.id, m]));
       for (const model of models) merged.set(model.id, model);
       const result = [...merged.values()];
+      if (chatgpt && !result.length) throw new FutrynError('NOT_FOUND');
       this.save(result);
       return {models: result, stale: false};
     } catch (error) {

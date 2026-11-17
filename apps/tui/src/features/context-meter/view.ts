@@ -20,10 +20,7 @@ export function renderContextIndicator(
   const full = `Context  ${used} / ${total}${display.total == null ? '' : ' tokens'}`;
   const label = full.length <= width ? full : `Context max ${total}`;
   const ratio = display.ratio;
-  const last = context.runtimeHiddenContext ? context.lastMeasured?.usedTokens : null;
-  const detailed = last == null ? 'local estimate' : `local estimate · last runtime ${compactTokens(last)}`;
-  const suffix =
-    ratio == null ? (label.length + detailed.length + 3 <= width ? detailed : 'local estimate') : `~${ratio}%`;
+  const suffix = ratio == null ? 'local estimate' : `~${ratio}%`;
   const barWidth = Math.min(12, width - label.length - suffix.length - 5);
   const filled = ratio == null ? 0 : Math.round((Math.max(0, Math.min(100, ratio)) / 100) * Math.max(0, barWidth));
   const color =

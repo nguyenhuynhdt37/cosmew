@@ -374,3 +374,61 @@ test('fallback connections remain pinned on real local sockets without re-resolv
   expect(attempts).toEqual(['1.1.1.1', '8.8.8.8']);
   expect(hosts).toEqual([`unresolvable.invalid:${server.port}`]);
 });
+
+test('DNS64/NAT64 64:ff9b::/96 answers embedding public IPv4 are skipped when public answers exist, while private or solo NAT64 fails closed', async () => {
+  const attempted: string[] = [];
+  const runtime = new WebFetchRuntime({
+    resolve: async () => [
+      {address: '64:ff9b::2a71:b06', family: 6},
+      {address: '64:ff9b::5dbc:8302', family: 6},
+      {address: '42.113.11.6', family: 4},
+      {address: '93.188.131.2', family: 4},
+    ],
+    request: async (_url, address) => {
+      attempted.push(address.address);
+      return {status: 200, headers: {'content-type': 'text/plain'}, body: Buffer.from('ok via public ipv4')};
+    },
+  });
+  const ok = await runtime.fetch('https://public.example/', {authorize: async () => true});
+  expect(ok.content).toContain('ok via public ipv4');
+  expect(attempted).toEqual(['42.113.11.6']);
+
+  let blockedAttempts = 0;
+  for (const answers of [
+    // Private embedded IPv4 inside NAT64 WKP (127.0.0.1 and 169.254.169.254)
+    [
+      {address: '64:ff9b::7f00:1', family: 6},
+      {address: '42.113.11.6', family: 4},
+    ],
+    [
+      {address: '64:ff9b::a9fe:a9fe', family: 6},
+      {address: '42.113.11.6', family: 4},
+    ],
+    [
+      {address: '64:ff9b::10.0.0.1', family: 6},
+      {address: '42.113.11.6', family: 4},
+    ],
+    // Local-use NAT64 prefix (RFC 8215 64:ff9b:1::/48)
+    [
+      {address: '64:ff9b:1::2a71:b06', family: 6},
+      {address: '42.113.11.6', family: 4},
+    ],
+    // Solo NAT64 without any direct public destination
+    [{address: '64:ff9b::2a71:b06', family: 6}],
+  ]) {
+    const denied = new WebFetchRuntime({
+      resolve: async () => answers,
+      request: async () => {
+        blockedAttempts++;
+        throw new Error('must not connect');
+      },
+    });
+    await expect(denied.fetch('https://public.example/', {authorize: async () => true})).rejects.toMatchObject({
+      code: 'POLICY',
+    });
+  }
+  await expect(runtime.fetch('https://[64:ff9b::2a71:b06]/', {authorize: async () => true})).rejects.toMatchObject({
+    code: 'POLICY',
+  });
+  expect(blockedAttempts).toBe(0);
+});

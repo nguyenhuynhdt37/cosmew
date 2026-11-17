@@ -2,7 +2,7 @@ import {Database} from 'bun:sqlite';
 import {chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync} from 'node:fs';
 import {join, resolve} from 'node:path';
 import {FutrynError} from '@futryn/contracts';
-import {migrateRemovedRuntimes} from './runtime-removal';
+import {migrateRemovedCodexRuntime, migrateRemovedRuntimes} from './runtime-removal';
 
 export function openPrivateDatabase(directory: string): Database {
   try {
@@ -23,7 +23,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 7) {
+    if (version > 8) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -69,7 +69,9 @@ export function openPrivateDatabase(directory: string): Database {
         conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);`);
       // v7 (ADR 0045): chat-only subscription runtimes are removed; their accounts are logged out.
       if (version < 7) migrateRemovedRuntimes(db);
-      db.exec('PRAGMA user_version=7;');
+      // v8 (ADR 0049): the Codex app-server runtime is removed; its accounts and leases are deleted.
+      if (version < 8) migrateRemovedCodexRuntime(db);
+      db.exec('PRAGMA user_version=8;');
     })();
     return db;
   } catch {

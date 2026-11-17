@@ -78,7 +78,6 @@ test.skipIf(process.platform === 'win32')(
       if (child) await child.exited;
       terminal?.close();
       await ctx.shutdownCommands();
-      await ctx.subscriptions.shutdown();
       ctx.db.close();
       server.server.stop(true);
       rmSync(dir, {recursive: true, force: true});

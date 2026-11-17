@@ -127,13 +127,22 @@ const chatUsage: ChatUsageConverter = usage => {
       outputTokens: {total: undefined, text: undefined, reasoning: undefined},
     };
   const raw = usage as Record<string, any>;
-  const prompt = raw.prompt_tokens ?? 0;
-  const completion = raw.completion_tokens ?? 0;
-  const cached = raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? 0;
-  const reasoning = raw.completion_tokens_details?.reasoning_tokens ?? 0;
+  const prompt = raw.prompt_tokens ?? undefined;
+  const completion = raw.completion_tokens ?? undefined;
+  const cached = raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? undefined;
+  const reasoning = raw.completion_tokens_details?.reasoning_tokens ?? undefined;
   return {
-    inputTokens: {total: prompt, noCache: prompt - cached, cacheRead: cached, cacheWrite: undefined},
-    outputTokens: {total: completion, text: Math.max(0, completion - reasoning), reasoning},
+    inputTokens: {
+      total: prompt,
+      noCache: prompt !== undefined && cached !== undefined ? prompt - cached : undefined,
+      cacheRead: cached,
+      cacheWrite: undefined,
+    },
+    outputTokens: {
+      total: completion,
+      text: completion !== undefined && reasoning !== undefined ? Math.max(0, completion - reasoning) : undefined,
+      reasoning,
+    },
     raw: usage,
   } as ReturnType<ChatUsageConverter>;
 };
@@ -149,11 +158,9 @@ const usage = (
 ): Usage => ({
   inputTokens: u.inputTokens ?? null,
   outputTokens: u.outputTokens ?? null,
-  ...((u.inputTokenDetails?.cacheReadTokens ?? 0) > 0 ? {cacheReadTokens: u.inputTokenDetails?.cacheReadTokens} : {}),
-  ...((u.inputTokenDetails?.cacheWriteTokens ?? 0) > 0
-    ? {cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens}
-    : {}),
-  ...((u.outputTokenDetails?.reasoningTokens ?? 0) > 0 ? {reasoningTokens: u.outputTokenDetails?.reasoningTokens} : {}),
+  ...(u.inputTokenDetails?.cacheReadTokens != null ? {cacheReadTokens: u.inputTokenDetails?.cacheReadTokens} : {}),
+  ...(u.inputTokenDetails?.cacheWriteTokens != null ? {cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens} : {}),
+  ...(u.outputTokenDetails?.reasoningTokens != null ? {reasoningTokens: u.outputTokenDetails?.reasoningTokens} : {}),
   ...(info?.pricing ? {pricingSource: info.metadataSource, pricingAt: info.metadataFetchedAt} : {}),
   costUSD:
     info?.pricing &&
@@ -307,10 +314,15 @@ export class ProviderAdapter implements ModelPort {
         replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
       }),
       ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
-      ...(request.reasoningEffort
+      ...(request.reasoningEffort || (p.auth === 'oauth' && p.protocol === 'responses')
         ? {
             providerOptions: {
-              openai: {reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true},
+              openai: {
+                ...(p.auth === 'oauth' && p.protocol === 'responses' ? {store: false} : {}),
+                ...(request.reasoningEffort
+                  ? {reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true}
+                  : {}),
+              },
             },
           }
         : {}),
@@ -419,6 +431,19 @@ export class ProviderAdapter implements ModelPort {
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string}> {
+    // ChatGPT plan inference requires stream=true and store=false, including validation probes.
+    if (this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses') {
+      let text = '';
+      const calls: ToolCall[] = [];
+      let completion: {usage: Usage; finishReason: string} | undefined;
+      for await (const event of this.stream(request, signal)) {
+        if (event.type === 'textDelta') text += event.text;
+        else if (event.type === 'toolCallComplete') calls.push(event.call);
+        else if (event.type === 'completed') completion = event;
+      }
+      if (!completion) throw new FutrynError('PROTOCOL');
+      return {text, calls, usage: completion.usage, finishReason: completion.finishReason};
+    }
     const options = await this.options(request, signal);
     try {
       const result = await generateText(options);

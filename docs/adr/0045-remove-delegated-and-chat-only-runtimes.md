@@ -1,5 +1,7 @@
 # ADR 0045 — Remove `delegated` and the chat-only subscription runtimes
 
+> **Cập nhật 2026-11-17:** Codex runtime (backend `codex-bridge`, fallback cho ChatGPT) đã bị bỏ hẳn; mọi provider chỉ được gọi qua API. Xem [ADR 0049](0049-remove-codex-runtime.md).
+
 Date: 2026-11-17. Status: implemented (contract 1.20, settings schema v7). Plan: `docs/delivery/auth-rework/plan.md`.
 
 ## Decision

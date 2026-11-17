@@ -14,13 +14,14 @@ import {
   rmSync,
   symlinkSync,
 } from 'node:fs';
-import {spawnSync} from 'node:child_process';
+import {spawn, spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {homedir, tmpdir} from 'node:os';
 import {NativeCommandRuntime, ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {SessionGrants} from '@futryn/security';
 import type {ToolResult} from '@futryn/contracts';
+import {observe, current, waitFor, dispose} from '../process-fixtures/observe';
 
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
 const clean: (() => void | Promise<void>)[] = [];
@@ -291,6 +292,73 @@ nativeTest(
   },
   30000,
 );
+
+nativeTest('retained cancellation kills a TERM-ignoring ordinary child after the shell exits', async () => {
+  const h = harness();
+  const token = crypto.randomUUID();
+  const running = await h.exec({
+    cmd: `/usr/bin/perl -e '$SIG{TERM}="IGNORE";open(F,">ready");close F;sleep 60' ${token} >/dev/null 2>&1 & echo LEADER:$$ CHILD:$!; wait`,
+    yield_time_ms: 250,
+  });
+  const id = sessionOf(running)!;
+  expect(id).toBeDefined();
+  await waitFor(() => existsSync(join(h.root, 'ready')) || undefined);
+  const pid = Number(/CHILD:(\d+)/.exec(running.content)?.[1]);
+  const child = observe().find(p => p.pid === pid)!;
+  expect(child).toBeDefined();
+  clean.push(() => dispose([child]));
+  const stopped = await h.stdin({session_id: id, signal: 'SIGTERM', yield_time_ms: 3000});
+  expect(stopped.code).toBe('CANCELLED');
+  await waitFor(() => !current(child) || undefined, 1000);
+  expect(stopped.content).toContain('Descendant termination: unconfirmed.');
+});
+
+nativeTest(
+  'retained shell sleep cancellation independently observes leader and child, preserving unrelated host process',
+  async () => {
+    const h = harness();
+    const unrelated = spawn('/bin/sleep', ['60']);
+    clean.push(() => {
+      unrelated.kill('SIGKILL');
+    });
+    const host = await waitFor(() => observe().find(p => p.pid === unrelated.pid));
+    const running = await h.exec({
+      cmd: 'echo session-start LEADER:$$; sleep 60 & echo CHILD:$!; wait; echo unexpected-finish',
+      yield_time_ms: 250,
+    });
+    const leaderPid = Number(/LEADER:(\d+)/.exec(running.content)?.[1]);
+    const childPid = Number(/CHILD:(\d+)/.exec(running.content)?.[1]);
+    const records = observe().filter(p => p.pid === leaderPid || p.pid === childPid);
+    expect(records.length).toBe(2);
+    expect(records.every(p => p.group === leaderPid)).toBe(true);
+    clean.push(() => dispose(records));
+    const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 3000});
+    expect(stopped.code).toBe('CANCELLED');
+    expect(stopped.content).not.toContain('unexpected-finish');
+    await waitFor(() => records.every(p => !current(p)) || undefined);
+    expect(current(host)).toBeDefined();
+    expect(stopped.content).toContain('Leader exit: exited.');
+    expect(stopped.content).toContain('Descendant termination: unconfirmed.');
+  },
+);
+
+nativeTest('retained cancellation keeps escaped setsid descendants explicitly unconfirmed', async () => {
+  const h = harness();
+  const running = await h.exec({
+    cmd: `/usr/bin/perl -MPOSIX -e '$|=1;$p=fork();if(!$p){POSIX::setsid();open(F,">detached-ready");close F;sleep 60;exit 0;}print qq(CHILD:$p\\n);sleep 60'; echo unexpected-finish`,
+    yield_time_ms: 250,
+  });
+  await waitFor(() => existsSync(join(h.root, 'detached-ready')) || undefined);
+  const pid = Number(/CHILD:(\d+)/.exec(running.content)?.[1]);
+  const escaped = observe().find(p => p.pid === pid)!;
+  expect(escaped).toBeDefined();
+  expect(escaped.group).toBe(pid);
+  clean.push(() => dispose([escaped]));
+  const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 3000});
+  expect(stopped.code).toBe('CANCELLED');
+  expect(current(escaped)).toBeDefined();
+  expect(stopped.content).toContain('Descendant termination: unconfirmed.');
+});
 
 nativeTest(
   'D 26-31: a real PTY: terminal identity, input, Ctrl-C in an interactive shell, resize and cleanup',

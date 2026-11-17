@@ -28,10 +28,9 @@ const safeMessages: Record<ErrorCode, string> = {
   POLICY: 'Selection or network policy denied the request. Explicitly configure/select the target.',
   STORAGE:
     'Private settings, session store or OS credential store unavailable. Check permissions; no plaintext fallback is used.',
-  UNSUPPORTED:
-    'Authentication or runtime protocol is unsupported. Check the provider method and supported runtime version.',
+  UNSUPPORTED: 'Authentication method or protocol is unsupported. Check the provider method and configuration.',
   RUNTIME_UNAVAILABLE:
-    'The official provider runtime is not installed or is not on PATH. Install the Codex CLI for the selected subscription, then retry.',
+    'A required local program (language server, MCP server or token command) is not available. Check that it is installed and on PATH, then retry.',
   STALLED: 'No safe progress after bounded recovery. Review the unfinished task and tool evidence before continuing.',
   CONTEXT_LIMIT:
     'The conversation plus the output reserve no longer fits the model context window. Critical user constraints and recent execution evidence cannot be safely compacted further. Reduce output reserve, explicitly narrow the task, or choose a larger context window.',
@@ -54,3 +53,16 @@ export class FutrynError extends Error {
 
 /** Compatibility alias for consumers before the Futryn rename. */
 export {FutrynError as HannesError};
+
+/** Observer notifications, not durable execution envelopes or permission grants. */
+export type InteractionEvent =
+  | {type: 'permission.requested'; request: import('./permissions').PermissionPromptRequest}
+  | {type: 'question.asked'; request: import('./tools').PendingQuestion};
+
+/** One JSON object per line from `fyn exec --json`; seq orders the entire run. */
+export type HeadlessEvent = {contractVersion: typeof import('./models').CONTRACT_VERSION; seq: number} & (
+  | import('./models').ModelEvent
+  | InteractionEvent
+  | {type: 'turn.completed'}
+  | {type: 'turn.failed'; error: {code: ErrorCode; message: string}}
+);

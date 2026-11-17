@@ -36,7 +36,6 @@ import {
   ProviderAdapter,
   ProviderRegistry,
   ProviderTransport,
-  SubscriptionAdapter,
   parseOpenRouterKeyLimits,
   providerPresets,
   reservedProviderIds,
@@ -47,7 +46,7 @@ import {
 import {
   FileCustomThemeStore,
   MigrationOutbox,
-  RuntimeLeases,
+  removeRuntimeProfiles,
   SqliteConversations,
   SqliteSettings,
   ToolAuditStore,
@@ -66,7 +65,6 @@ import {
   validateEndpoint,
 } from '@futryn/security';
 import {ChatGPTOAuth, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
-import {SubscriptionHost, type SubscriptionHostOptions} from '../subscriptions/host';
 import {grantLabel, toolPermissionRequest} from './approvals';
 import {HostConfigStore, TokenCommandRunner} from './host-config';
 import {CommandRuntimes, createCommandRuntime, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
@@ -139,7 +137,6 @@ export function startup(
   services: {
     vault?: CredentialVault;
     fetch?: typeof fetch;
-    subscriptions?: SubscriptionHostOptions;
     /** Test seams for the ChatGPT sign-in (issuer, browser opener, clock). */
     chatgpt?: ChatGPTOAuthOptions;
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
@@ -161,10 +158,23 @@ export function startup(
   const customThemes = new FileCustomThemeStore(directory);
   const vault = services.vault ?? new SecureVault(redactor);
   const oauth = new OpenRouterPKCE(redactor, services.fetch);
-  const chatgpt = new ChatGPTOAuth(redactor, {fetch: services.fetch, ...services.chatgpt});
-  // Credentials of accounts removed by a migration (ADR 0045) are deleted here, where the vault lives.
+  settings.update(state => {
+    state.chatgptHostID ??= crypto.randomUUID();
+  });
+  const chatgpt = new ChatGPTOAuth(redactor, {
+    fetch: services.fetch,
+    hostID: `urn:uuid:${settings.read().chatgptHostID!}`,
+    ...services.chatgpt,
+  });
+  // Credentials of accounts removed by a migration (ADR 0045, 0049) are deleted here, where the vault lives.
   // A failed deletion stays queued and is retried on the next start.
   const outbox = new MigrationOutbox(db);
+  // Leftover Codex runtime profiles (ADR 0049) may hold a copy of its auth.json; nothing uses them now.
+  try {
+    removeRuntimeProfiles(directory);
+  } catch {
+    /* retried on the next start */
+  }
   const migrationCleanup = (async () => {
     for (const row of outbox.pendingCredentials()) {
       try {
@@ -248,7 +258,6 @@ export function startup(
   const accounts = new AccountManager(settings, vault);
   const router = new ModelRouter(settings);
   const policy = new ConfiguredNetworkPolicy();
-  const subscriptions = new SubscriptionHost(directory, vault, settings, new RuntimeLeases(db), services.subscriptions);
 
   const transport = (account: Account) =>
     new ProviderTransport(
@@ -285,14 +294,10 @@ export function startup(
     return accounts.get(selected);
   };
 
-  /**
-   * Tools the model may see. Only direct APIs and the authorized Codex dynamic read bridge receive
-   * Futryn tools (ADR 0018); no runtime runs its own tools (ADR 0045).
-   */
+  /** Tools the model may see. Futryn runs every one of them; a provider only answers API requests (ADR 0049). */
   const modelTools = (account: Account, modelId: string, wiring: ConversationWiring): ToolPort | undefined => {
     const {tools} = wiring;
-    const runtime = registry.get(account.providerId).runtime;
-    if (!tools || (runtime && runtime !== 'codex')) return undefined;
+    if (!tools) return undefined;
     return {
       descriptors: () => {
         if (cachedModel(account, modelId)?.capabilities.tools === 'unsupported') return [];
@@ -302,18 +307,9 @@ export function startup(
     };
   };
 
-  /** The model port: a direct provider adapter, or the Codex subscription runtime. */
-  const modelPort = (account: Account, selection: Selection, info: ModelInfo, wiring: ConversationWiring) => {
-    const provider = registry.get(account.providerId);
-    if (!provider.runtime) return new ProviderAdapter(transport(account), selection.modelId, info);
-    const {workspaceRoot} = wiring;
-    return new SubscriptionAdapter(
-      selection.modelId,
-      (request, signal, executeTool) =>
-        subscriptions.stream(registry.get(account.providerId), account, request, signal, executeTool, workspaceRoot),
-      provider.runtime === 'codex',
-    );
-  };
+  /** The model port: always a direct provider API adapter. */
+  const modelPort = (account: Account, selection: Selection, info: ModelInfo) =>
+    new ProviderAdapter(transport(account), selection.modelId, info);
 
   const createConversationForSelection = (
     selection: Selection,
@@ -324,9 +320,7 @@ export function startup(
     if (account.status === 'logged-out') throw new FutrynError('AUTH');
     const info = cachedModel(account, selection.modelId);
     if (!info) throw new FutrynError('NOT_FOUND');
-    const isRuntime = !!registry.get(account.providerId).runtime;
-
-    const baseModel: ModelPort = modelPort(account, selection, info, wiring);
+    const baseModel: ModelPort = modelPort(account, selection, info);
     const prepare = (request: ModelRequest): ModelRequest => ({
       ...request,
       ...([request.instructions, wiring.modeInstructions?.()].filter(Boolean).length
@@ -334,8 +328,7 @@ export function startup(
         : {}),
     });
     const guidedModel: ModelPort = {
-      inlineTools: baseModel.inlineTools,
-      stream: (request, signal, executeTool) => baseModel.stream(prepare(request), signal, executeTool),
+      stream: (request, signal) => baseModel.stream(prepare(request), signal),
       generate: (request, signal) => baseModel.generate(prepare(request), signal),
     };
     return new Conversation(
@@ -344,7 +337,7 @@ export function startup(
       conversations,
       existingSession,
       modelTools(account, selection.modelId, wiring),
-      isRuntime ? undefined : () => catalog(account).markToolsUnsupported(selection.modelId),
+      () => catalog(account).markToolsUnsupported(selection.modelId),
       wiring.projectContext,
       // ADR 0030: the user's optional work budget and the model's reported context window.
       {
@@ -365,50 +358,14 @@ export function startup(
     return createConversationForSelection(record.selection, {id, messages: committedMessages(record)});
   };
 
-  const discoverModels = async (account: Account, signal?: AbortSignal) => {
-    const provider = registry.get(account.providerId);
-    if (!provider.runtime) return catalog(account).discover(signal);
-
-    // Runtimes may not report a context window; keep one observed earlier for the same model.
-    const observed = new Map(
-      catalog(account)
-        .cached()
-        .map(model => [model.id, model]),
-    );
-    const models = (await subscriptions.models(provider, account, signal)).map(model => {
-      const previous = observed.get(model.id);
-      const keepObserved =
-        model.contextLimit == null && previous?.metadataSource?.endsWith(':observed-context') && previous.contextLimit;
-      if (!keepObserved || !previous) return model;
-      return {
-        ...model,
-        contextLimit: previous.contextLimit,
-        metadataSource: previous.metadataSource,
-        metadataFetchedAt: previous.metadataFetchedAt,
-      };
-    });
-    settings.update(state => {
-      const fresh = state.accounts.find(a => a.id === account.id);
-      if (!fresh || fresh.status === 'logged-out' || fresh.authGeneration !== account.authGeneration) {
-        throw new FutrynError('POLICY');
-      }
-      state.catalogs = state.catalogs.filter(c => c.accountId !== account.id);
-      state.catalogs.push({
-        accountId: account.id,
-        providerFingerprint: JSON.stringify(provider),
-        fetchedAt: new Date().toISOString(),
-        models,
-      });
-    });
-    return {models, stale: false};
-  };
+  const discoverModels = (account: Account, signal?: AbortSignal) => catalog(account).discover(signal);
 
   const validateAccount = async (account: Account, signal?: AbortSignal, generate = false) => {
     const provider = registry.get(account.providerId);
     // OpenRouter's /models is public and cannot prove that an API key is valid; its /key endpoint can.
     const checksKey = provider.id === 'openrouter' && provider.baseURL === OPENROUTER_API;
     // Manual catalogs (no model list) can only be validated by generating.
-    const generates = generate || (provider.catalog === 'manual' && !provider.runtime);
+    const generates = generate || (provider.catalog === 'manual' && provider.auth !== 'oauth');
     try {
       if (checksKey) {
         const info = await transport(account).json('key', signal);
@@ -423,14 +380,13 @@ export function startup(
 
       const modelId = account.defaultModel ?? discovered.models[0]?.id;
       if (generates && !modelId) throw new FutrynError('NOT_FOUND');
-      if (generates && modelId) await generateProbe(account, provider, modelId, signal);
+      if (generates && modelId) await generateProbe(account, modelId, signal);
       if (signal?.aborted) throw new FutrynError('CANCELLED');
 
       accounts.validation(account.id, true, account);
       let validation = 'model-discovery';
       if (generates) validation = 'generation';
       else if (checksKey) validation = 'authenticated-key-and-model-discovery';
-      else if (provider.runtime) validation = 'subscription-runtime-model-discovery';
       return {
         accountId: account.id,
         providerId: provider.id,
@@ -448,17 +404,8 @@ export function startup(
   };
 
   /** A minimal, possibly billable generation that proves the account can use the model. */
-  const generateProbe = async (
-    account: Account,
-    provider: ReturnType<typeof registry.get>,
-    modelId: string,
-    signal?: AbortSignal,
-  ) => {
-    const adapter = provider.runtime
-      ? new SubscriptionAdapter(modelId, (request, turnSignal) =>
-          subscriptions.stream(provider, account, request, turnSignal),
-        )
-      : new ProviderAdapter(transport(account), modelId);
+  const generateProbe = async (account: Account, modelId: string, signal?: AbortSignal) => {
+    const adapter = new ProviderAdapter(transport(account), modelId);
     await adapter.generate(
       {
         requestId: crypto.randomUUID(),
@@ -811,27 +758,9 @@ export function startup(
       sanitizeText: text => terminalText(redactor.text(text)),
 
       // Providers and sign-in
-      listIntegrations: () =>
-        integrations.list().map(integration => ({
-          ...integration,
-          methods: integration.methods.map(method => {
-            const provider = integrations.get(method.providerId ?? integration.provider.id).provider;
-            if (!provider.runtime) return method;
-            const available = subscriptions.available(provider);
-            return {
-              ...method,
-              available,
-              diagnostic: available
-                ? undefined
-                : `Install the official ${provider.runtime} runtime on PATH, then retry. No credentials were read or imported.`,
-            };
-          }),
-        })),
-      beginProviderAuth: async (providerId, methodId, signal) => {
+      listIntegrations: () => integrations.list(),
+      beginProviderAuth: async (providerId, _methodId, signal) => {
         const integration = integrations.get(providerId);
-        if (integration?.provider.runtime) {
-          return subscriptions.begin(integration.provider, methodId === 'subscription-device', signal);
-        }
         if (integration?.provider.auth === 'oauth') return chatgpt.begin(signal);
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.begin();
@@ -841,15 +770,14 @@ export function startup(
         if (!integration?.methods.some(m => m.id === 'openrouter-oauth')) throw new FutrynError('UNSUPPORTED');
         return oauth.complete(challengeId, code, signal);
       },
-      providerAuthProgress: id => (chatgpt.has(id) ? chatgpt.progress(id) : subscriptions.progress(id)),
+      providerAuthProgress: id => {
+        if (!chatgpt.has(id)) throw new FutrynError('NOT_FOUND');
+        return chatgpt.progress(id);
+      },
       completeOAuthSignIn: (_providerId, id, signal) => chatgpt.complete(id, signal),
-      completeSubscriptionAuth: (providerId, id, signal) =>
-        subscriptions.complete(registry.get(providerId), id, signal),
-      discardSubscriptionCredential: ref => vault.delete(ref),
-      cancelProviderAuth: id => {
+      cancelProviderAuth: async id => {
         oauth.cancel(id);
         chatgpt.cancel(id);
-        return subscriptions.cancel(id);
       },
       listProviders: () => registry.list(),
       listProviderPresets: () => [...providerPresets],
@@ -875,12 +803,7 @@ export function startup(
         return accounts.get(target.id);
       },
       logoutAccount: async (idOrAlias, remove) => {
-        const target = accounts.get(idOrAlias);
-        try {
-          await accounts.logout(target.id, remove);
-        } finally {
-          await subscriptions.revoke(target);
-        }
+        await accounts.logout(accounts.get(idOrAlias).id, remove);
       },
       validateAccount,
       fetchAccountLimits: (account, signal) => {
@@ -983,7 +906,6 @@ export function startup(
     createFutrynClient,
     validateAccount,
     discoverModels,
-    subscriptions,
     hostConfig,
     addHostProvider,
     removeProvider,

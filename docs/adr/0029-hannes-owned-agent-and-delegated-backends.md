@@ -1,5 +1,7 @@
 # ADR 0029 — Hannes sở hữu agent; backend delegated chỉ khi opt-in
 
+> **Cập nhật 2026-11-17:** Codex runtime (backend `codex-bridge`, fallback cho ChatGPT) đã bị bỏ hẳn; mọi provider chỉ được gọi qua API. Xem [ADR 0049](0049-remove-codex-runtime.md).
+
 Accepted 2026-11-16 theo yêu cầu "Make Hannes a truly independent, multi-model Codex-style coding agent". Thay thế một phần [ADR 0027](0027-permission-modes-and-native-runtime-tools.md): tool native của runtime không còn bật tự động khi người dùng đồng ý cho dùng folder. Chế độ quyền và rule (ADR 0027/0028) giữ nguyên.
 
 ## Audit trước thay đổi (HEAD `3b6f89f`)

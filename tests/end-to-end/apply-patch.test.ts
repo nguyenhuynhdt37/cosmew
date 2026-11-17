@@ -36,7 +36,6 @@ async function make(protocol: 'chat' | 'anthropic' = 'chat', repeat = false) {
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   app.registry.add(server.provider(protocol, {id: 'patch-model', auth: 'none'}));

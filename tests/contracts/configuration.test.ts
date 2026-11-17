@@ -299,12 +299,8 @@ test('new and resumed sessions reset the permission mode while invalid resume le
   const dir = mkdtempSync(join(tmpdir(), 'futryn-session-mode-'));
   const app = startup(dir, {vault: memoryVault()});
   try {
-    app.registry.add(providerPresets.find(provider => provider.id === 'chatgpt')!);
-    const account = await app.accounts.add('chatgpt', 'mode-subscription', {
-      kind: 'runtime',
-      runtime: 'codex',
-      key: crypto.randomUUID(),
-    });
+    app.registry.add(providerPresets.find(provider => provider.id === 'ollama')!);
+    const account = await app.accounts.add('ollama', 'mode-local', {kind: 'none'});
     const client = app.createFutrynClient(dir);
     client.addManualModel('gpt-5', account.id);
     client.selectModel('gpt-5');
@@ -319,7 +315,6 @@ test('new and resumed sessions reset the permission mode while invalid resume le
     client.resumeSession(first.id);
     expect(client.permissionMode()).toBe('default');
   } finally {
-    await app.subscriptions.shutdown();
     app.db.close();
     rmSync(dir, {recursive: true, force: true});
   }

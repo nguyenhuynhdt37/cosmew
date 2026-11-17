@@ -107,11 +107,10 @@ const SUBSCRIPTION_HINTS = (name: string): Record<string, string> => ({
   INVALID_INPUT:
     'This sign-in may already belong to another profile. Use the existing profile or sign in with a different account.',
   POLICY: 'This account is busy or changed. Cancel the active request and retry.',
-  TRANSPORT: `${name} runtime connection failed. Restart FUTRYN and retry.`,
+  TRANSPORT: `${name} could not be reached. Check the network and retry.`,
 });
 
 const PROVIDER_HINTS: Record<string, string> = {
-  RUNTIME_UNAVAILABLE: 'Install the official Codex CLI on PATH for this subscription.',
   AUTH: 'Credential rejected or missing. Reconnect with a valid API key or environment variable.',
   FORBIDDEN: 'Access denied. Check API entitlement, billing and endpoint permissions.',
   STORAGE:
@@ -131,7 +130,7 @@ export function describeProviderError(client: FutrynClient, error: unknown, prov
   const provider =
     client.listProviders().find(p => p.id === providerId) ??
     client.listIntegrations().find(i => i.provider.id === providerId)?.provider;
-  if (provider?.runtime) {
+  if (provider?.auth === 'oauth') {
     const hint = SUBSCRIPTION_HINTS(provider.name)[code];
     if (hint) return `${code}: ${hint}`;
   }

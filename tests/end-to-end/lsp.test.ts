@@ -312,6 +312,50 @@ test.skipIf(process.env.FUTRYN_TEST_REAL_LSP !== '1')(
   30000,
 );
 
+test.skipIf(process.env.FUTRYN_TEST_REAL_LSP !== '1')(
+  'real TypeScript LSP uses nested Bun project config and retains genuine type errors',
+  async () => {
+    const repository = process.cwd();
+    // This directory is outside the repository tsconfig's include patterns, like generated UAT projects.
+    const root = realpathSync(mkdtempSync(join(repository, '.fyn-live-lsp-bun-')));
+    clean.push(() => rmSync(root, {recursive: true, force: true}));
+    writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({extends: '../tsconfig.json', include: ['a.ts']}));
+    const valid = [
+      "import {expect} from 'bun:test';",
+      "import {existsSync} from 'node:fs';",
+      'expect(existsSync(import.meta.dir)).toBe(true);',
+      'const result: number = Bun.spawnSync([process.execPath, "--version"]).exitCode;',
+      'export {result};',
+      '',
+    ].join('\n');
+    writeFileSync(join(root, 'a.ts'), valid + 'const invalid: number = "wrong";\n');
+    const candidates = SERVERS[0]!.commands(repository, repository);
+    expect(candidates.length).toBeGreaterThan(0);
+    const runtime = new NativeCommandRuntime({workspaceRoot: repository});
+    clean.push(() => runtime.shutdown());
+    expect(runtime.availability().ok).toBe(true);
+    const workspace = new WorkspaceRoot(root);
+    const manager = new LspManager({
+      workspace,
+      servers: [{...SERVERS[0]!, commands: () => candidates}],
+      launch: (argv, cwd) => runtime.spawnService!(argv, cwd),
+    });
+    clean.push(() => manager.shutdown());
+    const file = workspace.resolve('a.ts');
+    const first = await manager.newErrors(file, undefined);
+    expect(first).toBeDefined();
+    expect(first!.errors.map(d => d.code)).toEqual([2322]);
+    const before = manager.knownErrors(file);
+    expect(before).toHaveLength(1);
+    writeFileSync(join(root, 'a.ts'), valid);
+    const corrected = await manager.newErrors(file, before);
+    expect(corrected).toBeDefined();
+    expect(corrected!.errors).toEqual([]);
+    expect(manager.knownErrors(file)).toEqual([]);
+  },
+  30000,
+);
+
 test.skipIf(process.platform !== 'darwin')(
   'killing a helper also kills descendants that ignore TERM',
   async () => {

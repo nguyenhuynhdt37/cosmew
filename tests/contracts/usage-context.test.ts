@@ -4,7 +4,6 @@ import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {FutrynError, type ModelPort} from '@futryn/contracts';
-import {providerPresets} from '@futryn/models';
 import {Conversation} from '@futryn/core';
 import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
 import {acceptSlashSelection, parseSlashCommand, SLASH_COMMANDS} from '@futryn/sdk';
@@ -272,7 +271,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.close();
   const db = openPrivateDatabase(dir);
   cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(7);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(8);
   expect(
     (db.query('PRAGMA table_info(messages)').all() as {name: string}[]).some(column => column.name === 'parts'),
   ).toBe(true); // v3 tool parts
@@ -310,7 +309,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   }
   const future = directory();
   const invalid = new Database(join(future, 'provider-auth.sqlite'));
-  invalid.exec('PRAGMA user_version=8');
+  invalid.exec('PRAGMA user_version=9');
   invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });
@@ -929,37 +928,6 @@ test('signed-out switch target offers sign-in for the same profile and preserves
   await c.client.switchAccount(second.id, true);
   expect(c.client.activeSession()!.selection.accountId).toBe(second.id);
   expect(c.client.activeSession()!.messages.length).toBe(2);
-});
-
-test('ChatGPT profiles reject the same account identity even with refreshed tokens', async () => {
-  const c = await setup();
-  c.app.registry.add(providerPresets.find(p => p.id === 'chatgpt')!);
-  const records = new Map<string, string>();
-  c.vault.getRuntime = async ref => records.get(ref.key);
-  const ref = () => ({kind: 'runtime' as const, runtime: 'codex' as const, key: crypto.randomUUID()});
-  const first = ref(),
-    duplicate = ref(),
-    other = ref();
-  for (const [credential, id, token] of [
-    [first, 'same', 'old'],
-    [duplicate, 'same', 'new'],
-    [other, 'different', 'other'],
-  ] as const) {
-    records.set(
-      credential.key,
-      JSON.stringify({
-        version: 1,
-        files: {'auth.json': JSON.stringify({tokens: {account_id: id, access_token: token}})},
-      }),
-    );
-  }
-  const account = await c.app.accounts.add('chatgpt', 'chat-one', first);
-  await expect(c.app.accounts.add('chatgpt', 'chat-duplicate', duplicate)).rejects.toThrow(FutrynError);
-  const distinct = await c.app.accounts.add('chatgpt', 'chat-two', other);
-  await expect(c.app.accounts.reauthenticate(distinct.id, duplicate)).rejects.toThrow(FutrynError);
-  expect(c.app.accounts.get(distinct.id).status).toBe('unvalidated');
-  await c.app.accounts.reauthenticate(account.id, duplicate);
-  expect(c.app.accounts.get(account.id).credential).toEqual(duplicate);
 });
 
 test('late account discovery cannot overwrite a newer explicit selection', async () => {

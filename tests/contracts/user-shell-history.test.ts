@@ -187,7 +187,6 @@ test.skipIf(process.platform !== 'darwin')(
       expect(server.requests.filter(request => request.body?.stream)).toHaveLength(0);
     } finally {
       await app.shutdownCommands();
-      await app.subscriptions.shutdown();
       app.db.close();
       server.server.stop(true);
       rmSync(directory, {recursive: true, force: true});

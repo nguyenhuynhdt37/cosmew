@@ -57,7 +57,6 @@ test('typing long sessions does not reread durable history; session drafts and w
   } finally {
     await tui?.shutdown();
     await ctx.shutdownCommands();
-    await ctx.subscriptions.shutdown();
     ctx.db.close();
     server.server.stop(true);
     rmSync(dir, {recursive: true, force: true});

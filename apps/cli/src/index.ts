@@ -6,10 +6,11 @@ import {parseSlashCommand} from '@futryn/sdk';
 import {loadHostConfig, providerPresets, reservedProviderIds} from '@futryn/models';
 import {fetchModelsDev, terminalText} from '@futryn/security';
 import {reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
-import {loginSubscription} from './subscriptions/login';
+import {loginOAuth} from './subscriptions/login';
 import {loginWizard} from './auth-wizard';
 import {startup, type Application} from './bootstrap/startup';
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
+import {execCli} from './exec';
 
 // Suppress third-party raw warning output; diagnostics are normalized by Futryn.
 (globalThis as typeof globalThis & {AI_SDK_LOG_WARNINGS: boolean}).AI_SDK_LOG_WARNINGS = false;
@@ -26,7 +27,7 @@ const HELP = `Futryn (fyn) provider, authentication & TUI CLI
   login --provider <id> (alias of auth login)
   logout [--account <id-or-alias>] | status | doctor
   auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
-    [--method api-key|env|none|subscription-browser|subscription-device] [--model <manual-model-id>]
+    [--method api-key|env|none|oauth-browser] [--model <manual-model-id>]
   auth list | methods | status [--account <id-or-alias>] | logout --account <id-or-alias>
     login --account <existing-id-or-alias> reauthenticates and preserves its stable ID.
   accounts list | use <id-or-alias> | rename <id-or-alias> --alias <new> | remove <id-or-alias>
@@ -42,6 +43,8 @@ const HELP = `Futryn (fyn) provider, authentication & TUI CLI
   fyn tui
   fyn [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
   fyn run [--json] < message.txt
+  fyn exec <prompt|-> --cd|-C <dir> [--json] [--approval untrusted|on-request|never]
+    [--sandbox read-only|workspace-write] [--output-last-message|-o <file>] [--account <id>] [--model <id>]
 
 Options: --json, --help, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
@@ -53,8 +56,8 @@ Canonical TUI commands: /login (/connect), /logout, /model, /status,
   /clear, /compact, /help, /doctor, /exit. Unsupported backends report diagnostics.
 Start Futryn in any project: fyn (or futryn). From source: bun run fyn. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
-are automatic. Official subscription runtime: Codex (installed CLI and ChatGPT plan required).
-Claude subscription
+are automatic. ChatGPT signs in through the API (OAuth); Futryn runs every request itself,
+no external agent runtime is started. Claude subscription
 sign-in requires Anthropic approval. OpenRouter OAuth uses OpenRouter API credits.
 Local logout deletes FUTRYN credentials; remote revocation is provider-managed.
 `;
@@ -151,12 +154,7 @@ async function check(app: Application, account: Account, signal: AbortSignal, ge
 }
 
 async function login(app: Application, options: Options, signal: AbortSignal) {
-  if (
-    str(options, 'method') &&
-    !['env', 'api-key', 'none', 'subscription-browser', 'subscription-device', 'oauth-browser'].includes(
-      str(options, 'method')!,
-    )
-  ) {
+  if (str(options, 'method') && !['env', 'api-key', 'none', 'oauth-browser'].includes(str(options, 'method')!)) {
     throw new FutrynError('UNSUPPORTED');
   }
   const existing = str(options, 'account') ? app.accounts.get(str(options, 'account')!) : undefined;
@@ -186,21 +184,9 @@ async function login(app: Application, options: Options, signal: AbortSignal) {
     while (app.accounts.list().some(account => account.alias === alias))
       alias = `${provider.id.slice(0, 90)}-${suffix++}`;
   }
-  if (provider.runtime || provider.auth === 'oauth') {
-    if (
-      options['key-stdin'] ||
-      str(options, 'env') ||
-      (requestedMethod && !['subscription-browser', 'subscription-device', 'oauth-browser'].includes(requestedMethod))
-    )
-      fail();
-    const account = await loginSubscription(
-      app,
-      provider,
-      alias,
-      signal,
-      existing,
-      str(options, 'method') === 'subscription-device',
-    );
+  if (provider.auth === 'oauth') {
+    if (options['key-stdin'] || str(options, 'env') || (requestedMethod && requestedMethod !== 'oauth-browser')) fail();
+    const account = await loginOAuth(app, provider, alias, signal, existing);
     output(app, {accountId: account.id, alias: account.alias, status: account.status}, !!options.json);
     return account;
   }
@@ -694,6 +680,10 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
 }
 
 async function main() {
+  if (process.argv[2] === 'exec') {
+    process.exitCode = await execCli(process.argv.slice(3));
+    return;
+  }
   let parsed;
   try {
     parsed = parseArgs({
@@ -861,18 +851,14 @@ async function main() {
                 reason: 'Third-party subscription sign-in requires Anthropic approval; use API access.',
               },
             ],
-            note: 'Subscription methods use isolated official runtime profiles. Runtime prerequisites and account entitlements apply.',
+            note: 'Futryn calls provider APIs only; no external agent runtime is started. Account entitlements apply.',
           },
           !!options.json,
         );
       } else if (action === 'status') {
         const a = account();
         const present =
-          a.status !== 'logged-out' &&
-          (a.credential.kind === 'none' ||
-            (a.credential.kind === 'runtime'
-              ? !!(await app.vault.getRuntime?.(a.credential))
-              : !!(await app.vault.get(a.credential))));
+          a.status !== 'logged-out' && (a.credential.kind === 'none' || !!(await app.vault.get(a.credential)));
         output(
           app,
           {
@@ -948,7 +934,7 @@ async function main() {
           check: await progress('Diagnosing connection', () => check(app, a, controller.signal, !!options.generate)),
           fallback: 'disabled',
           tools: 'disabled',
-          subscriptionAuth: app.registry.get(a.providerId).runtime ?? 'api-key',
+          subscriptionAuth: app.registry.get(a.providerId).auth === 'oauth' ? 'oauth' : 'api-key',
         },
         !!options.json,
       );
@@ -971,11 +957,7 @@ async function main() {
     try {
       await app.shutdownCommands();
     } finally {
-      try {
-        await app.subscriptions.shutdown();
-      } finally {
-        app.db.close();
-      }
+      app.db.close();
     }
   }
 }

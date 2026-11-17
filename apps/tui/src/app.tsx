@@ -459,10 +459,7 @@ export class FutrynTuiApp {
       ...base,
       estimateTokens,
       measuredCurrentHistory: !this.contextDirty && !extra && base.measuredCurrentHistory,
-      estimatedPercent:
-        base.limitTokens && !base.runtimeHiddenContext
-          ? Math.round((estimateTokens / base.limitTokens) * 1000) / 10
-          : null,
+      estimatedPercent: base.limitTokens ? Math.round((estimateTokens / base.limitTokens) * 1000) / 10 : null,
     };
   }
 

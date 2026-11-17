@@ -1,5 +1,11 @@
 # Agent events và commands
 
+Current shared contract: **1.24**. [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
+the optional non-secret `Settings.chatgptHostID`.
+[ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
+report metadata/evidence and corrects usage aggregation; it adds no agent event or command.
+
 > PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
 
 **Thiết kế contract v1; Not implemented.** Public wire format dự kiến JSON-compatible; IDs là opaque strings, thời gian UTC RFC3339, số sequence là integer không âm an toàn hoặc decimal string nếu vượt giới hạn. Không truyền Error/function/SDK instances. Bảng này là schema mô tả, chưa có TypeScript declarations.
@@ -38,6 +44,33 @@ Error record: code, category(validation/auth/policy/provider/tool/storage/transp
 Versioning: thêm optional field/minor event phải có default và negotiation; đổi semantics/required field cần major, ADR và migration. Store append cùng state revision trong transaction; publisher sau commit. At-least-once delivery, consumer dedup eventId; không hứa exactly-once side effects. Replay durable events không gọi lại executor.
 
 Acceptance: duplicate Submit không tạo run thứ hai; concurrent terminal CAS thắng một; dropped deltas không phá durable replay; invalid schema bị chặn trước state mutation; restart không emit lại side effects. Xem [event flow](../architecture/event-flow.md).
+
+## Headless exec / SDK interactions (contract 1.24)
+
+[ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md) defines the implemented S1 slice.
+`client.onInteractionEvent(listener)` subscribes before `sendMessage` and returns an unsubscribe
+function. `InteractionEvent` is `{type: 'permission.requested' | 'question.asked', request}`
+(a discriminated union with `PermissionPromptRequest` or `PendingQuestion`). Each observer receives
+an isolated sanitized clone. A callback may resolve the request immediately using its id/scope;
+permission notifications run after the waiter is installed. Aborted/settled permissions are not
+announced as pending. Observer exceptions grant nothing. Existing `onReactiveEvent` consumers
+remain compatible and need no migration. `status().approvalPolicy` reports the current policy.
+UAT now subscribes to these events instead of polling the pending lists; pending-list APIs remain.
+
+`fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
+the top level, typed interaction events, then exactly one terminal `turn.completed` or
+`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.24"`, `seq`
+starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
+means the entire run succeeded. `responseDiscarded` invalidates the current provisional response;
+plain output / `-o` keep only the final response. This stream is not the future durable domain
+envelope table above, and it is not a Codex wire-format compatibility claim.
+
+Argument/startup diagnostics go to stderr. Exit codes: 0 completed; 1 failed/cancelled turn or
+output write; 2 missing explicit `--cd` consent or usable tool account/model; 64 invalid arguments
+or empty/oversized stdin. Without TTY the default approval policy is `never`; even explicitly
+selected interactive policies deny prompts immediately when no input UI is attached. Exec sets
+`setUserInputAvailable(false)`; SDK questions then return unavailable without waiting. Tools still
+use ToolDispatcher. No new execution authority, persistence schema, dependency or external agent.
 
 ## Implemented execution evidence (contract 1.12)
 

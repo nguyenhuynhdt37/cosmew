@@ -279,7 +279,7 @@ export function markResponse(item: TranscriptItem): ResponseMark {
 }
 /**
  * A retried or preempted response is void (ADR 0033): drop the text and reasoning it streamed after
- * `mark`, keep tool groups and runtime activity (completed calls stay real), and keep earlier output.
+ * `mark`, keep tool groups (completed calls stay real), and keep earlier output.
  */
 export function discardResponse(item: TranscriptItem, mark: ResponseMark): void {
   item.content = item.content.slice(0, mark.content);
@@ -290,7 +290,7 @@ export function discardResponse(item: TranscriptItem, mark: ResponseMark): void 
   // The part that was last at the mark may have grown since; cut it back to its marked length.
   if (boundary && (boundary.kind === 'text' || boundary.kind === 'reasoning'))
     boundary.text = boundary.text.slice(0, mark.lastText);
-  kept.push(...parts.slice(mark.parts).filter(part => part.kind === 'tools' || part.kind === 'activity'));
+  kept.push(...parts.slice(mark.parts).filter(part => part.kind === 'tools'));
   item.parts = kept.filter(part => !((part.kind === 'text' || part.kind === 'reasoning') && !part.text));
 }
 
@@ -301,18 +301,6 @@ export function appendToolPart(item: TranscriptItem, callId: string): void {
   if (last?.kind === 'tools' && !last.callIds.every(id => item.toolResults?.some(result => result.callId === id)))
     last.callIds.push(callId);
   else parts.push({kind: 'tools', callIds: [callId]});
-}
-
-/** A runtime activity update: same id updates in place, a new id gets its own timeline slot. */
-export function applyActivity(item: TranscriptItem, activity: import('@futryn/contracts').RuntimeActivity): void {
-  const list = (item.activities ??= []);
-  const index = list.findIndex(entry => entry.id === activity.id);
-  if (index >= 0) {
-    list[index] = activity;
-    return;
-  }
-  list.push(activity);
-  (item.parts ??= []).push({kind: 'activity', id: activity.id});
 }
 
 /** The timeline to draw: recorded parts, or the old flat layout for items without them. */

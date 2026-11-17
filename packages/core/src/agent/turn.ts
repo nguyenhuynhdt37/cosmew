@@ -20,7 +20,7 @@ import {compactHistory, useContextSnapshot} from '../context/compaction';
 import {budgetExhaustedNotice, explorationGuidance} from './guidance';
 import {artifactWork, observeResult, recoveryContext, taskForRequest} from './progress';
 import {ProgressQueue} from './progress-queue';
-import {TurnTools, stable, toolMessage, type InFlight} from './turn-tools';
+import {TurnTools, toolMessage, type InFlight} from './turn-tools';
 import {SAFETY_LIMITS, estimateTokens, type ActiveTurn, type TurnHost, type TurnRequest} from './turn-types';
 
 const RECOVERY_INSTRUCTION =
@@ -60,6 +60,12 @@ function combine(previous: Usage | null, next: Usage): Usage {
     inputTokens: add(previous.inputTokens, next.inputTokens),
     outputTokens: add(previous.outputTokens, next.outputTokens),
     costUSD: add(previous.costUSD, next.costUSD),
+    costEstimated: Boolean(previous.costEstimated || next.costEstimated),
+    // Missing counters mean unreported, not zero. Never present a partial sum as a total.
+    cacheReadTokens: add(previous.cacheReadTokens, next.cacheReadTokens),
+    cacheWriteTokens: add(previous.cacheWriteTokens, next.cacheWriteTokens),
+    reasoningTokens: add(previous.reasoningTokens, next.reasoningTokens),
+    premiumRequests: add(previous.premiumRequests, next.premiumRequests),
   };
 }
 
@@ -85,8 +91,6 @@ interface SampleResult {
   calls: ToolCall[];
   /** Codex InstantInterrupt: accepted steering stopped this response; its unfinished items are void. */
   preempted: boolean;
-  /** A bridge runtime already acted (inline tool or activity): its stream is never re-sampled. */
-  acted: boolean;
   streamError?: unknown;
   /** The caller stopped iterating while this response was being read. */
   closedByConsumer?: boolean;
@@ -155,7 +159,7 @@ export class TurnRun {
       usage: null,
       context: null,
     };
-    this.turn = {id: this.receipt.requestId, accepting: false, steerable: !host.model.inlineTools, pending: []};
+    this.turn = {id: this.receipt.requestId, accepting: false, pending: []};
     this.tools = new TurnTools({
       port: host.tools,
       budget: this.budget,
@@ -405,7 +409,7 @@ export class TurnRun {
    * is interleaved with model events; arriving steering may preempt the response.
    */
   private async *sample(prepared: PreparedRequest, requests: number): AsyncGenerator<ModelEvent, SampleResult> {
-    const {host, turn} = this;
+    const {host} = this;
     const result: SampleResult = {
       text: '',
       textBytes: 0,
@@ -414,7 +418,6 @@ export class TurnRun {
       reasoningText: '',
       calls: [],
       preempted: false,
-      acted: false,
     };
     const flights: InFlight[] = [];
     const usageBefore = this.receipt.usage; // totals of earlier requests
@@ -422,7 +425,7 @@ export class TurnRun {
     const stepId = crypto.randomUUID();
     // Preemption requests another model call, so it is off once a budget or the context window has
     // stopped tool use: then steering waits (deferred) instead of bypassing the stop.
-    const preemptable = turn.steerable && !this.stop;
+    const preemptable = !this.stop;
     // Aborting the request closes only the model stream; dispatched tools keep the turn signal.
     const requestAbort = new AbortController();
 
@@ -442,7 +445,6 @@ export class TurnRun {
               ...(prepared.instructions ? {instructions: prepared.instructions} : {}),
             },
             AbortSignal.any([this.signal, requestAbort.signal]),
-            host.model.inlineTools && host.tools ? this.inlineToolHandler(prepared, result) : undefined,
           )
           [Symbol.asyncIterator]();
         yield* this.readStream(iterator, requestAbort, preemptable, prepared, result, flights, usageBefore, stepId);
@@ -482,32 +484,6 @@ export class TurnRun {
       }
     }
     return result;
-  }
-
-  /** The bridge runtime owns its loop and asks Futryn to run each tool inline, through the same path. */
-  private inlineToolHandler(prepared: PreparedRequest, result: SampleResult) {
-    const inlineLimit =
-      this.budget.maxToolCalls !== undefined
-        ? Math.min(SAFETY_LIMITS.bridgeCallsPerTurn, this.budget.maxToolCalls + SAFETY_LIMITS.bridgeRefusalGrace)
-        : SAFETY_LIMITS.bridgeCallsPerTurn;
-    return async (call: ToolCall, toolSignal?: AbortSignal): Promise<ToolResult> => {
-      const {tools, signal} = this;
-      result.acted = true;
-      if (!prepared.available.some(d => d.name === call.name) || tools.inlineIds.has(call.id))
-        throw new FutrynError('POLICY');
-      // A runaway bridge loop is ended by a named internal safety limit.
-      if (tools.inlineIds.size >= inlineLimit) {
-        this.stop = 'safety_limit';
-        throw new FutrynError('POLICY');
-      }
-      tools.inlineIds.add(call.id);
-      tools.recordCall(call);
-      if (signal.aborted) throw new FutrynError('CANCELLED');
-      const toolResult = await tools.run(call, toolSignal ?? signal);
-      if (signal.aborted) throw new FutrynError('CANCELLED');
-      this.steps.push({role: 'assistant', content: '', toolCalls: [call]}, toolMessage(call, toolResult));
-      return toolResult;
-    };
   }
 
   /** Read events until the stream ends or is preempted; validate each event and act on it. */
@@ -593,13 +569,11 @@ export class TurnRun {
     stepId: string,
   ): ModelEvent | undefined {
     const {host, tools, receipt} = this;
-    const inline = !!host.model.inlineTools;
     if (this.signal.aborted) throw new FutrynError('CANCELLED');
     // toolOutputDelta is Futryn's own event: a provider stream cannot fabricate it.
     if (event.type === 'toolOutputDelta') throw new FutrynError('PROTOCOL');
     if (result.terminal) throw new FutrynError('PROTOCOL');
     if (event.type === 'textDelta' || event.type === 'toolCallComplete') this.rejectionCandidate = false;
-    if (event.type === 'toolResult' || event.type === 'activity') result.acted = true;
 
     if (event.type === 'textDelta') {
       result.text += event.text;
@@ -623,22 +597,14 @@ export class TurnRun {
       // A complete call (adapters emit it only once its arguments parsed) is dispatched now, while
       // the rest of the response streams. Incomplete argument deltas never reach here.
       if (!prepared.offerTools) throw new FutrynError('UNSUPPORTED');
-      const repeated =
-        result.calls.some(c => c.id === event.call.id) || (!inline && tools.journalCalls.has(event.call.id));
+      const repeated = result.calls.some(c => c.id === event.call.id) || tools.journalCalls.has(event.call.id);
       if (repeated) throw new FutrynError('PROTOCOL');
       tools.recordCall(event.call);
-      if (!inline) {
-        result.calls.push(event.call);
-        flights.push(tools.dispatch(event.call));
-      }
+      result.calls.push(event.call);
+      flights.push(tools.dispatch(event.call));
     }
-    // A runtime may only report results of calls Futryn itself ran inline, unchanged.
-    if (
-      event.type === 'toolResult' &&
-      (!inline || stable(tools.outcomes.get(event.result.callId)) !== stable(event.result))
-    ) {
-      throw new FutrynError('PROTOCOL');
-    }
+    // Only Futryn runs tools: a provider stream can never report a tool result.
+    if (event.type === 'toolResult') throw new FutrynError('PROTOCOL');
 
     if (event.type === 'completed') {
       result.terminal = event;
@@ -656,14 +622,13 @@ export class TurnRun {
   /**
    * Codex run_sampling_request + responses_retry: a retryable stream error re-samples with the
    * history recorded so far. Streamed text stays provisional (no `model.completed`), so it is
-   * discarded visibly, never committed; completed tools keep their results and never re-run. A
-   * bridge runtime that already acted owns side effects Futryn cannot reconcile: no retry.
+   * discarded visibly, never committed; completed tools keep their results and never re-run.
    */
   private async *prepareRetry(sample: SampleResult, attempt: number): AsyncGenerator<ModelEvent> {
     const error = sample.streamError;
     if (this.signal.aborted) throw new FutrynError('CANCELLED');
     const maxRetries = this.host.options.streamMaxRetries?.() ?? SAFETY_LIMITS.roundRetries;
-    const retryable = error instanceof FutrynError && error.retryable && !sample.acted && attempt < maxRetries;
+    const retryable = error instanceof FutrynError && error.retryable && attempt < maxRetries;
     if (!retryable || !(error instanceof FutrynError)) throw error;
     // Codex notify_stream_error("Reconnecting... n/max"): every retry is visible, with or without partial output.
     yield {type: 'responseDiscarded', reason: 'retry', attempt: attempt + 1, maxRetries};

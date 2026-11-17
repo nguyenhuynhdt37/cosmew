@@ -1,6 +1,58 @@
 # Subscription authentication and simplified login
 
-> **Update 2026-11-17 (ADR 0045-0048):** the Copilot CLI, Gemini CLI, Qwen Code and Grok Build runtimes and the `delegated` backend were removed; the sections below that describe them are historical evidence only. Current state: ChatGPT signs in through the direct API ([ADR 0047](../adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), live behavior Needs verification) with the Codex runtime as fallback; other providers use API keys or the host config ([ADR 0046](../adr/0046-host-provider-config.md)); DeepSeek: [ADR 0048](../adr/0048-deepseek-reasoning-replay.md).
+> **Update 2026-11-17 (ADR 0045-0048):** the Copilot CLI, Gemini CLI, Qwen Code and Grok Build runtimes and the `delegated` backend were removed; the sections below that describe them are historical evidence only. Current state: ChatGPT signs in only through the direct API ([ADR 0047](../adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), live sign-in, model discovery and one streamed generation verified on this host; see ADR 0050 below); the Codex runtime was removed too ([ADR 0049](../adr/0049-remove-codex-runtime.md)), so no external agent process remains; other providers use API keys or the host config ([ADR 0046](../adr/0046-host-provider-config.md)); DeepSeek: [ADR 0048](../adr/0048-deepseek-reasoning-replay.md).
+
+## ChatGPT API sign-in troubleshooting (2026-11-17)
+
+The browser callback waits for the code exchange, token-sharing scope check and ID-token verification.
+It reports identity verification only after those checks; API/model validation still finishes in Futryn.
+Failure pages identify the failed stage with fixed text and never echo callback parameters, provider
+response bodies or tokens. Token-exchange failures include the HTTP status and only an allowlisted
+standard OAuth error name; arbitrary provider error text is discarded. Authorization-code `invalid_grant`
+starts one fresh authorization with the issued client ID and the same persisted host ID; state, nonce
+and PKCE are regenerated. A second refusal fails. See [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md).
+A JWKS outage/HTTP denial is `TRANSPORT`, throttling is `RATE_LIMIT`, a timeout is `TIMEOUT`, and malformed key-discovery JSON is `PROTOCOL`; invalid signatures/claims remain `AUTH`.
+Cancelling also aborts the in-flight JWKS request and leaves no new account or credential.
+
+Local HTTP regression coverage: `tests/end-to-end/chatgpt-oauth.test.ts` exercises those failures,
+callback-page outcomes, cancellation, scope/nonce checks, refresh rotation and credential cleanup.
+These fixtures do not establish live ChatGPT compatibility or the cause of a particular user sign-in.
+If the TUI reports `AUTH`, keep the browser result and report the stage text; never share the callback URL.
+
+Public discovery checked 2026-11-17: [OpenAI OIDC metadata](https://auth.openai.com/.well-known/openid-configuration)
+advertises issuer `https://auth.openai.com`, RS256, and
+[`/.well-known/jwks.json`](https://auth.openai.com/.well-known/jwks.json); both returned HTTP 200.
+Source comparison: [OpenCode `chatgpt.ts` at 0ac0d7e](https://github.com/anomalyco/opencode/blob/0ac0d7e/packages/core/src/plugin/provider/chatgpt.ts).
+Neither public discovery check used user credentials; authenticated evidence is recorded separately below.
+
+Live sign-in diagnostic on this host (2026-11-17): a fresh, isolated Futryn OAuth attempt reached
+`POST https://auth.openai.com/api/accounts/oauth/token` and received **HTTP 400 / `invalid_grant`**.
+No model API request was sent. The temporary state and any account/vault entries were cleaned up;
+no authorization code, verifier, token or raw provider response was logged. This establishes the
+failure stage, not whether the provider rejected PKCE, redirect binding, code lifetime or another
+grant condition. The earlier callback's "Signed in" message was premature.
+
+A subsequent live attempt passed OAuth/keyring verification, then exposed **HTTP 400 / `model_not_found`**
+from `/v1/responses` for the old fixed default. The corrected implementation uses the account's
+`/v1/models` response (`models[].slug`, `display_name`, `visibility == "list"`) and requests inference
+with `store=false` and `stream=true`, including explicit generation probes, following
+[OpenAI Models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+(accessed 2026-11-17).
+
+Final isolated live check on this host (2026-11-17): token exchange HTTP 200; valid RS256 ID-token
+signature, issuer, audience, expiry, subject and nonce; granted direct scope; native keyring write/read;
+`GET /v1/models` HTTP 200; account status `valid`; `POST /v1/responses` HTTP 200 and the adapter's
+streaming generation probe completed successfully. Local state and keyring entries were deleted
+after the check. No private project content, credential values or raw responses were logged.
+The recovery branch was exercised against local HTTP fixtures; it was not needed in the final live
+attempt. Other accounts, live refresh/revocation, tools and broader capability acceptance remain
+**Needs verification**. No Product MVP completion is claimed.
+
+Final local verification: `bun test tests` **658 pass, 32 skip, 0 fail** (690 tests/86 files);
+the focused OAuth suite **17 pass**; `bun run typecheck` passed. Repository lint's TypeScript
+checks passed, but its formatting stage reported four pre-existing, unrelated UAT files:
+`uat-futryn/calculator.test.ts`, `uat-stress/cli.ts`, `uat-stress/ledger.test.ts`,
+`uat-stress/ledger.ts`. Formatting of the changed TypeScript files and `git diff --check` passed.
 
 
 2026-11-14. [ADR 0008](../adr/0008-subscription-runtime-auth.md) extends the authorized provider slice for official subscription transports. Implementation and deterministic verification are distinct from live subscription acceptance.

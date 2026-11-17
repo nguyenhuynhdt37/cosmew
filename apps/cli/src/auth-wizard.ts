@@ -1,6 +1,6 @@
 import {FutrynError, modelIdSchema, providerSchema, type Account, type Provider} from '@futryn/contracts';
 import {terminalText, validateEndpoint} from '@futryn/security';
-import {loginSubscription} from './subscriptions/login';
+import {loginOAuth} from './subscriptions/login';
 import type {Application} from './bootstrap/startup';
 import type {ChatInput} from './input';
 
@@ -134,11 +134,10 @@ export async function loginWizard(
         alias = `${provider.id.slice(0, 90)}-${suffix++}`;
     }
     manualModel =
-      provider.catalog === 'manual' && !provider.runtime
+      provider.catalog === 'manual' && provider.auth !== 'oauth'
         ? modelIdSchema.parse(await input.ask('Model ID', existing?.defaultModel))
         : undefined;
-    if (provider.runtime)
-      account = await loginSubscription(app, provider, alias, signal, existing, method === 'subscription-device');
+    if (provider.auth === 'oauth') account = await loginOAuth(app, provider, alias, signal, existing);
     else {
       const client = app.createFutrynClient();
       if (method === 'openrouter-oauth') {

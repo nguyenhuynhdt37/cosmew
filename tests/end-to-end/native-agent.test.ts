@@ -43,7 +43,6 @@ async function setup(protocol: 'chat' | 'anthropic', script: (v: ScriptedView) =
   });
   clean.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   app.registry.add(server.provider(protocol, {id: 'exec-fixture', auth: 'none'}));

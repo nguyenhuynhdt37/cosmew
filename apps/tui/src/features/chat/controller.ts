@@ -17,7 +17,6 @@ import {
 import {
   appendStreamPart,
   appendToolPart,
-  applyActivity,
   discardResponse,
   markResponse,
   messagesToTranscript,
@@ -301,13 +300,6 @@ export class ChatController {
           appendToolPart(assistantItem, event.call.id);
           if (this.verbose)
             assistantItem.expandedActivities = [...(assistantItem.expandedActivities ?? []), `tools:${event.call.id}`];
-        } else if (event.type === 'activity') {
-          assistantItem.awaitingModel = false;
-          applyActivity(assistantItem, event.activity);
-          if (this.verbose)
-            assistantItem.expandedActivities = [
-              ...new Set([...(assistantItem.expandedActivities ?? []), `activity:${event.activity.id}`]),
-            ];
         } else if (event.type === 'toolOutputDelta') {
           assistantItem.toolOutput ??= {};
           assistantItem.toolOutput[event.callId] = (
@@ -513,12 +505,7 @@ export class ChatController {
       for (const item of this.transcript) {
         this.layout.invalidate(item.id, false);
         item.reasoningExpanded = this.verbose;
-        item.expandedActivities = this.verbose
-          ? [
-              ...(item.toolCalls ?? []).map(call => `tools:${call.id}`),
-              ...(item.activities ?? []).map(activity => `activity:${activity.id}`),
-            ]
-          : [];
+        item.expandedActivities = this.verbose ? (item.toolCalls ?? []).map(call => `tools:${call.id}`) : [];
         item.collapsedActivities = [];
       }
       this.showReasoning = this.verbose;

@@ -8,9 +8,10 @@
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {parseArgs} from 'node:util';
-import type {PermissionPromptRequest, PlanState, UserAnswers} from '@futryn/contracts';
+import {CONTRACT_VERSION, type PermissionPromptRequest, type PlanState, type UserAnswers} from '@futryn/contracts';
 import {defaultStateDirectory} from '../../apps/cli/src/bootstrap/paths';
 import {startup, type Application} from '../../apps/cli/src/bootstrap/startup';
+import {collectTurnEvidence, type TurnEvidence} from './evidence';
 
 export interface AgentRunOptions {
   workspace: string;
@@ -23,10 +24,12 @@ export interface AgentRunOptions {
   app?: Application;
   log?: (line: string) => void;
   signal?: AbortSignal;
+  /** Compatibility option; interactions are now event-driven and this value is ignored. */
   pollMs?: number;
 }
 
 interface ToolCallRecord {
+  callId: string;
   name: string;
   target: string;
   status?: string;
@@ -56,8 +59,10 @@ interface TurnReport {
   planFinal: PlanState | null;
   error: string | null;
   durationMs: number;
+  evidence?: TurnEvidence;
 }
 export interface AgentRunReport {
+  contractVersion: string;
   workspace: string;
   approve: 'all' | 'none';
   status: unknown;
@@ -94,7 +99,6 @@ function shortTarget(input: unknown): string {
 export async function runAgent(options: AgentRunOptions): Promise<{report: AgentRunReport; exitCode: number}> {
   const approve = options.approve ?? 'all';
   const timeoutMs = options.turnTimeoutMs ?? 20 * 60_000;
-  const poll = options.pollMs ?? 100;
   const workspace = resolve(options.workspace);
   const app = options.app ?? startup(options.stateDir ?? defaultStateDirectory());
   const redact = (value: string) => app.redactor.text(value);
@@ -105,7 +109,15 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
   if (options.signal?.aborted) abortAll.abort();
 
   const turns: TurnReport[] = [];
-  let report: AgentRunReport = {workspace, approve, status: null, turns, usage: null, ok: false};
+  let report: AgentRunReport = {
+    contractVersion: CONTRACT_VERSION,
+    workspace,
+    approve,
+    status: null,
+    turns,
+    usage: null,
+    ok: false,
+  };
   try {
     const client = app.createFutrynClient(workspace);
     const snapshot = () => {
@@ -117,6 +129,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
         model: s.selection?.modelId ?? null,
         executionBackend: s.executionBackend,
         permissionMode: s.permissionMode,
+        approvalPolicy: s.approvalPolicy,
         sandbox: s.terminalRuntime,
         workspaceReadStatus: s.workspaceReadStatus,
         tools: client.availableTools(),
@@ -129,7 +142,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
       log('ERROR: no account/model selected. Run `hannes auth` / `hannes model use` first. Status:');
       log(JSON.stringify(snapshot(), null, 2));
       report = {...report, status: JSON.parse(redact(JSON.stringify(snapshot())))};
-      return {report, exitCode: 2};
+      return {report: JSON.parse(redact(JSON.stringify(report))), exitCode: 2};
     }
     client.setToolsEnabled(true);
     client.setUserInputAvailable(true);
@@ -140,7 +153,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
     for (const [index, prompt] of options.prompts.entries()) {
       if (abortAll.signal.aborted) break;
       const turn: TurnReport = {
-        prompt,
+        prompt: redact(prompt),
         finalText: '',
         toolCalls: [],
         permissions: [],
@@ -151,6 +164,10 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
       };
       turns.push(turn);
       const started = Date.now();
+      const auditAfter = (
+        app.db.query('SELECT COALESCE(MAX(rowid),0) AS position FROM tool_audit').get() as {position: number}
+      ).position;
+      let turnId = '';
       log(`--- turn ${index + 1}/${options.prompts.length}: ${clip(prompt, 120)}`);
       const controller = new AbortController();
       let timedOut = false;
@@ -160,7 +177,6 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
         timedOut = true;
         controller.abort();
       }, timeoutMs);
-      let running = true;
 
       const handlePermission = (p: PermissionPromptRequest) => {
         const decision = approve === 'all' ? 'once' : 'deny';
@@ -202,17 +218,13 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
           log(`answerQuestion failed: ${(e as Error).message}`);
         }
       };
-      const poller = (async () => {
-        while (running) {
-          for (const p of client.listPendingPermissions()) handlePermission(p);
-          for (const q of client.listPendingQuestions())
-            if (!seenQuestions.has(q.questionId)) {
-              seenQuestions.add(q.questionId);
-              handleQuestion(q.questionId, q.questions);
-            }
-          await Bun.sleep(poll);
+      const unsubscribe = client.onInteractionEvent(event => {
+        if (event.type === 'permission.requested') handlePermission(event.request);
+        else if (!seenQuestions.has(event.request.questionId)) {
+          seenQuestions.add(event.request.questionId);
+          handleQuestion(event.request.questionId, event.request.questions);
         }
-      })();
+      });
 
       const calls = new Map<string, ToolCallRecord>();
       let lastPlan = '';
@@ -222,6 +234,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
         for await (const event of client.sendMessage(prompt, {signal: controller.signal})) {
           switch (event.type) {
             case 'started':
+              turnId ||= event.requestId;
               responseStart = text.length;
               break;
             case 'textDelta':
@@ -234,7 +247,11 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
               );
               break;
             case 'toolCallComplete': {
-              const record: ToolCallRecord = {name: event.call.name, target: redact(shortTarget(event.call.input))};
+              const record: ToolCallRecord = {
+                callId: event.call.id,
+                name: event.call.name,
+                target: redact(shortTarget(event.call.input)),
+              };
               calls.set(event.call.id, record);
               turn.toolCalls.push(record);
               log(`tool call: ${record.name} ${record.target}`);
@@ -242,7 +259,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
             }
             case 'toolResult': {
               const r = event.result;
-              const record = calls.get(r.callId) ?? {name: r.name, target: ''};
+              const record = calls.get(r.callId) ?? {callId: r.callId, name: r.name, target: ''};
               if (!calls.has(r.callId)) turn.toolCalls.push(record);
               record.status = r.status;
               if (r.target) record.target = redact(r.target);
@@ -275,10 +292,14 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
       } finally {
         clearTimeout(timer);
         abortAll.signal.removeEventListener('abort', onAbort);
-        running = false;
-        await poller;
+        unsubscribe();
       }
       turn.planFinal = client.plan();
+      const sessionId = client.activeSession()?.id;
+      if (sessionId && turnId)
+        turn.evidence = JSON.parse(
+          redact(JSON.stringify(collectTurnEvidence(app, sessionId, turnId, turn.toolCalls, auditAfter))),
+        );
       turn.durationMs = Date.now() - started;
       log(`final text:\n${turn.finalText}`);
       if (turn.error) log(`ERROR: ${turn.error}`);
@@ -286,11 +307,10 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
     }
     report.usage = JSON.parse(redact(JSON.stringify(client.usage())));
     report.ok = turns.length === options.prompts.length && turns.every(t => !t.error);
-    return {report, exitCode: report.ok ? 0 : 1};
+    return {report: JSON.parse(redact(JSON.stringify(report))), exitCode: report.ok ? 0 : 1};
   } finally {
     if (!options.app) {
       await app.shutdownCommands();
-      await app.subscriptions.shutdown();
       app.db.close();
     }
   }

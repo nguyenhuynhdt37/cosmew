@@ -69,13 +69,13 @@ export class Conversation {
   /**
    * Codex `Session::steer_input`: queue user input against the active regular turn. The input is
    * journaled before acceptance is reported, and becomes model-visible before the next model request.
-   * Runtime-owned loops (inline bridge tools) are not steerable, and steering never changes policy.
+   * Steering never changes policy.
    */
   steer(content: string, expectedTurnId?: string): SteerOutcome {
     const turn = this.active;
     if (!turn?.accepting) return {accepted: false, reason: 'no_active_turn'};
     if (expectedTurnId !== undefined && expectedTurnId !== turn.id) return {accepted: false, reason: 'turn_mismatch'};
-    if (!turn.steerable || !this.store.recordExecution) return {accepted: false, reason: 'not_steerable'};
+    if (!this.store.recordExecution) return {accepted: false, reason: 'not_steerable'};
     let message: Message;
     try {
       message = messageSchema.parse({role: 'user', content: content.trim()});

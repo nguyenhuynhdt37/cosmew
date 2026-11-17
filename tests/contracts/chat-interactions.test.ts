@@ -71,7 +71,6 @@ test('chat clicks toggle tool details; wheel/page scrolling is bounded and long 
   } finally {
     await tui?.shutdown();
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
     server.server.stop(true);
     rmSync(dir, {recursive: true, force: true});

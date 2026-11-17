@@ -1,4 +1,6 @@
 import type {Database} from 'bun:sqlite';
+import {lstatSync, rmSync} from 'node:fs';
+import {join} from 'node:path';
 import {FutrynError, type CredentialRef} from '@futryn/contracts';
 
 /**
@@ -21,8 +23,44 @@ export function ensureMigrationTables(db: Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT NOT NULL);`);
 }
 
-/** Runs inside the schema transaction, on raw settings JSON before any schema parsing. */
+/**
+ * The Codex app-server runtime is removed too (ADR 0049): Futryn only calls provider APIs and owns the
+ * loop and every tool. Its `chatgpt` accounts (runtime credentials) are deleted; `chatgpt-api` stays.
+ */
+export const REMOVED_CODEX_RUNTIMES: readonly string[] = ['codex'];
+export const REMOVED_CODEX_PROVIDER_IDS: readonly string[] = ['chatgpt'];
+
+interface RemovalSpec {
+  runtimes: readonly string[];
+  providerIds: readonly string[];
+  notice: string;
+}
+
+const CHAT_ONLY_REMOVAL: RemovalSpec = {
+  runtimes: REMOVED_RUNTIMES,
+  providerIds: REMOVED_RUNTIME_PROVIDER_IDS,
+  notice: 'Removed chat-only subscription runtimes (Copilot CLI, Gemini CLI, Qwen Code, Grok Build)',
+};
+const CODEX_REMOVAL: RemovalSpec = {
+  runtimes: REMOVED_CODEX_RUNTIMES,
+  providerIds: REMOVED_CODEX_PROVIDER_IDS,
+  notice:
+    'Removed the Codex CLI runtime (ChatGPT subscription · Codex CLI); use "ChatGPT subscription · API" to sign in again',
+};
+
+/** v7 (ADR 0045). Runs inside the schema transaction, on raw settings JSON before any schema parsing. */
 export function migrateRemovedRuntimes(db: Database): void {
+  removeRuntimes(db, CHAT_ONLY_REMOVAL);
+}
+
+/** v8 (ADR 0049): the Codex runtime, its accounts and its process leases. */
+export function migrateRemovedCodexRuntime(db: Database): void {
+  db.exec('DROP TABLE IF EXISTS runtime_leases');
+  removeRuntimes(db, CODEX_REMOVAL);
+}
+
+function removeRuntimes(db: Database, spec: RemovalSpec): void {
+  const {runtimes, providerIds} = spec;
   ensureMigrationTables(db);
   const row = db.query('SELECT data FROM settings WHERE id=1').get() as {data: string} | null;
   if (!row) return;
@@ -35,13 +73,11 @@ export function migrateRemovedRuntimes(db: Database): void {
   const providers: any[] = Array.isArray(settings.providers) ? settings.providers : [];
   const accounts: any[] = Array.isArray(settings.accounts) ? settings.accounts : [];
   const removedProviderIds = new Set<string>(
-    providers
-      .filter(p => REMOVED_RUNTIMES.includes(p?.runtime) || REMOVED_RUNTIME_PROVIDER_IDS.includes(p?.id))
-      .map(p => p.id),
+    providers.filter(p => runtimes.includes(p?.runtime) || providerIds.includes(p?.id)).map(p => p.id),
   );
-  for (const id of REMOVED_RUNTIME_PROVIDER_IDS) removedProviderIds.add(id);
+  for (const id of providerIds) removedProviderIds.add(id);
   const removed = accounts.filter(
-    a => removedProviderIds.has(a?.providerId) || REMOVED_RUNTIMES.includes(a?.credential?.runtime),
+    a => removedProviderIds.has(a?.providerId) || runtimes.includes(a?.credential?.runtime),
   );
   if (!removedProviderIds.size || (!removed.length && !providers.some(p => removedProviderIds.has(p?.id)))) return;
 
@@ -79,9 +115,7 @@ export function migrateRemovedRuntimes(db: Database): void {
   db.query('UPDATE settings SET data=? WHERE id=1').run(JSON.stringify(settings));
   const names = removed.map(a => a.alias).filter(Boolean);
   db.query('INSERT INTO startup_notices(message) VALUES(?)').run(
-    `Removed chat-only subscription runtimes (Copilot CLI, Gemini CLI, Qwen Code, Grok Build)${
-      names.length ? `; signed out and deleted account(s): ${names.join(', ')}` : ''
-    }. ${
+    `${spec.notice}${names.length ? `; signed out and deleted account(s): ${names.join(', ')}` : ''}. ${
       replacement
         ? `Active account is now ${replacement.alias}.`
         : 'No usable account is left; use /login to connect one.'
@@ -103,8 +137,8 @@ export class MigrationOutbox {
       try {
         const {kind, key} = JSON.parse(row.credential);
         if (typeof key !== 'string' || !['keyring', 'runtime'].includes(kind)) throw new Error('not a reference');
-        // The vault addresses entries by key alone; the runtime tag only satisfies the reference type.
-        const credential: CredentialRef = kind === 'keyring' ? {kind, key} : {kind: 'runtime', key, runtime: 'codex'};
+        // The vault addresses entries by key alone, so a removed runtime's entry deletes as a keyring key.
+        const credential: CredentialRef = {kind: 'keyring', key};
         return [{id: row.id, credential}];
       } catch {
         // A row that is not a vault reference has nothing to delete.
@@ -133,4 +167,21 @@ export class MigrationOutbox {
       throw new FutrynError('STORAGE');
     }
   }
+}
+
+/**
+ * Codex runtime profiles (ADR 0049) lived in `<state>/runtime-tmp/profile-*` and could hold a copy of
+ * the runtime's auth.json after a crash. Removed at startup; a symlink is unlinked, never followed.
+ */
+export function removeRuntimeProfiles(stateDirectory: string): void {
+  const base = join(stateDirectory, 'runtime-tmp');
+  try {
+    if (lstatSync(base).isSymbolicLink()) {
+      rmSync(base, {force: true});
+      return;
+    }
+  } catch {
+    return;
+  }
+  rmSync(base, {recursive: true, force: true});
 }

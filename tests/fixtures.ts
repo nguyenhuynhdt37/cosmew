@@ -8,14 +8,8 @@ export const memoryVault = (): CredentialVault & {values: Map<string, string>} =
   async set(key, value) {
     this.values.set(key, value);
   },
-  async setRuntime(key, value) {
-    this.values.set(key, value);
-  },
-  async getRuntime(ref) {
-    return this.values.get(ref.key);
-  },
   async delete(ref) {
-    if (ref.kind === 'keyring' || ref.kind === 'runtime') this.values.delete(ref.key);
+    if (ref.kind === 'keyring') this.values.delete(ref.key);
   },
 });
 /** What a scripted fixture model sees: the request as it arrived on the wire, protocol-neutral. */
@@ -154,6 +148,7 @@ export function fixtureServer() {
   let tools = false;
   let includeUsage = true;
   let modelName = 'fixture-model';
+  let chatgpt = false;
   let pages = false;
   let streamDelay = 0;
   let invalidTool = false;
@@ -211,7 +206,20 @@ export function fixtureServer() {
           {status, headers: {'retry-after': '0'}},
         );
       if (malformed) return Response.json({unexpected: true});
+      if (
+        chatgpt &&
+        req.method === 'POST' &&
+        (body.stream !== true || body.store !== false || body.model !== modelName)
+      )
+        return Response.json({error: {code: 'invalid_request_error'}}, {status: 400});
       if (req.method === 'GET') {
+        if (chatgpt)
+          return Response.json({
+            models: [
+              {slug: modelName, display_name: 'Available ChatGPT model', visibility: 'list'},
+              {slug: 'hidden-model', display_name: 'Hidden model', visibility: 'hidden'},
+            ],
+          });
         if (path === '/api/tags') return Response.json({models: [{name: modelName}]});
         if (path.startsWith('/gemini'))
           return Response.json({
@@ -684,6 +692,7 @@ export function fixtureServer() {
       });
     },
     set(options: {
+      chatgpt?: boolean;
       cacheTokens?: number;
       reasoning?: boolean;
       status?: number;
@@ -715,6 +724,7 @@ export function fixtureServer() {
       tools = options.tools ?? tools;
       includeUsage = options.includeUsage ?? includeUsage;
       modelName = options.modelName ?? modelName;
+      chatgpt = options.chatgpt ?? chatgpt;
       pages = options.pages ?? pages;
       streamDelay = options.streamDelay ?? streamDelay;
       invalidTool = options.invalidTool ?? invalidTool;

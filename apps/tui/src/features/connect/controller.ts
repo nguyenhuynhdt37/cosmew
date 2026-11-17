@@ -387,11 +387,7 @@ export class ConnectFeature implements OverlayFeature, AccountWorkflow {
         let suffix = 2;
         while (accounts.some(account => account.alias === alias)) alias = `${baseAlias}-${suffix++}`;
         st.aliasDraft = st.accountId ? accounts.find(account => account.id === st.accountId)!.alias : alias;
-        if (
-          st.method === 'subscription-browser' ||
-          st.method === 'subscription-device' ||
-          st.method === 'oauth-browser'
-        ) {
+        if (st.method === 'oauth-browser') {
           this.startProviderSignIn(st);
         } else if (st.method === 'openrouter-oauth') {
           this.startProviderSignIn(st);

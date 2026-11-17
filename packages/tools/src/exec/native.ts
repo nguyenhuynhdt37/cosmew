@@ -495,7 +495,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       omittedBytes: stdout.omittedBytes + stderr.omittedBytes,
       durationMs: Date.now() - session.start,
       lifecycle: {
-        leader: session.spawnFailed ? 'not-started' : session.ended ? 'exited' : 'unconfirmed',
+        leader: session.spawnFailed ? 'not-started' : session.exitObserved ? 'exited' : 'unconfirmed',
         stopRequested: !!session.stop,
         output: session.outputClosed ? 'closed' : 'cut-off',
         descendants: session.spawnFailed ? 'not-started' : descendants,
@@ -688,6 +688,10 @@ function resetOutputWindow(session: NativeSession): void {
 /** Output held open by a descendant must not hold the result forever. */
 function onLeaderExit(session: NativeSession, code: number | null, signal: string | null): void {
   if (session.exitObserved) return;
+  // Complete requested group cleanup at the owned leader's first exit notification. Otherwise
+  // EOF can finish the session and cancel escalation while a TERM-ignoring child remains alive.
+  // Never retry a saved group ID after recording this observation (macOS still permits setsid escapes).
+  if (session.stop) signalGroup(session, 'SIGKILL');
   session.exitObserved = true;
   session.exitCode = code;
   session.signal = signal;
@@ -712,6 +716,7 @@ function outcomeKind(session: NativeSession): CommandOutcome['kind'] {
 }
 
 function signalGroup(session: NativeSession, signal: NodeJS.Signals): void {
+  if (session.exitObserved || session.spawnFailed) return;
   try {
     if (session.pid) process.kill(-session.pid, signal);
   } catch {

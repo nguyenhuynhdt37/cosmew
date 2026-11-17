@@ -1,13 +1,6 @@
 import {graphemes, textWidth} from '../../input/text';
 import {TranscriptLayout, type TranscriptViewportOptions, type TranscriptViewportResult} from './layout';
-import {
-  isFileChangeTool,
-  type BorderStyle,
-  type RuntimeActivity,
-  type ThemeTokens,
-  type ToolCall,
-  type ToolResult,
-} from '@futryn/contracts';
+import {isFileChangeTool, type BorderStyle, type ThemeTokens, type ToolCall, type ToolResult} from '@futryn/contracts';
 import type {RenderedBoxLine, StyledSpan} from '../../ui';
 import {
   commandSummary,
@@ -187,7 +180,6 @@ function renderTranscriptItem(options: {
 
     const callsById = new Map(item.toolCalls?.map(call => [call.id, call]));
     const resultsById = new Map(item.toolResults?.map(result => [result.callId, result]));
-    const activitiesById = new Map(item.activities?.map(activity => [activity.id, activity]));
     // Adjacent tool-only rounds read as one run of calls; the recorded timeline is untouched.
     const parts: TranscriptPart[] = [];
     for (const part of transcriptParts(item)) {
@@ -239,9 +231,6 @@ function renderTranscriptItem(options: {
             }),
           );
         });
-      } else if (part.kind === 'activity') {
-        const activity = activitiesById.get(part.id);
-        if (activity) lines.push(...renderActivity({item, activity, width: innerWidth, tokens, bg}));
       } else {
         const body = renderMarkdownBody({
           content: part.text,
@@ -295,8 +284,11 @@ function renderTranscriptItem(options: {
     if (item.durationMs !== undefined && item.durationMs > 0)
       metaParts.push(`Worked for ${(item.durationMs / 1000).toFixed(1)}s`);
     if (item.usage) {
-      const totalTok = (item.usage.inputTokens ?? 0) + (item.usage.outputTokens ?? 0);
-      if (totalTok > 0) metaParts.push(`${totalTok} tok`);
+      const count = (value: number | null | undefined) => (value == null ? '?' : String(value));
+      metaParts.push(`Turn total: ${count(item.usage.inputTokens)} in · ${count(item.usage.outputTokens)} out`);
+      if (item.usage.cacheReadTokens != null) metaParts.push(`${count(item.usage.cacheReadTokens)} cache read`);
+      if (item.usage.cacheWriteTokens != null) metaParts.push(`${count(item.usage.cacheWriteTokens)} cache write`);
+      if (item.usage.reasoningTokens != null) metaParts.push(`${count(item.usage.reasoningTokens)} reasoning`);
       if (item.usage.costUSD !== null && item.usage.costUSD !== undefined) {
         metaParts.push(
           `${item.usage.costEstimated ? '~' : ''}$${item.usage.costUSD.toFixed(item.usage.costUSD > 0 && item.usage.costUSD < 0.0001 ? 6 : 4)}${item.usage.costEstimated ? ' estimated' : ''}`,
@@ -304,7 +296,8 @@ function renderTranscriptItem(options: {
       }
     }
     if (!item.streaming && metaParts.length > 0)
-      lines.push({spans: [{text: `  ${metaParts.join(' · ')}`.slice(0, innerWidth), fg: tokens.foregroundSubtle, bg}]});
+      for (const text of wrapTextToWidth(metaParts.join(' · '), Math.max(1, innerWidth - 2)))
+        lines.push({spans: [{text: `  ${text}`, fg: tokens.foregroundSubtle, bg}]});
   }
 
   return lines;
@@ -559,76 +552,6 @@ function renderToolCall(options: {
           ? `Found ${count} ${count === 1 ? 'match' : 'matches'}`
           : `${count} lines`;
   return [...lines, ...outputRows(expanded ? `${summary}\n${result.content}` : summary, width, expanded, tokens, bg)];
-}
-
-/** A runtime's own tool (ADR 0027), drawn exactly like a Futryn call. */
-function renderActivity(options: {
-  item: TranscriptItem;
-  activity: RuntimeActivity;
-  width: number;
-  tokens: ThemeTokens;
-  bg: string;
-}): RenderedBoxLine[] {
-  const {item, activity, width, tokens, bg} = options;
-  const key = `activity:${activity.id}`;
-  const expanded = Boolean(item.expandedActivities?.includes(key));
-  const state =
-    activity.status === 'running'
-      ? item.streaming
-        ? 'running'
-        : 'muted'
-      : activity.status === 'completed'
-        ? 'ok'
-        : 'error';
-  // Runtime-reported work is labelled with its runtime: Futryn did not run it and holds no receipt for it.
-  const lines = callHeader(
-    `${activity.runtime ?? 'runtime'} · ${activity.name}`,
-    activity.label,
-    state,
-    width,
-    tokens,
-    bg,
-    {itemId: item.id, key},
-    expanded,
-  );
-  if (activity.status === 'denied')
-    lines.push({
-      spans: [
-        {text: '  ⎿  ', fg: tokens.foregroundSubtle, bg},
-        {text: 'Permission denied', fg: tokens.error, bg},
-      ],
-    });
-  else if (activity.output)
-    lines.push(
-      ...outputRows(
-        activity.output,
-        width,
-        expanded,
-        tokens,
-        bg,
-        activity.status === 'failed' ? tokens.error : tokens.foregroundMuted,
-      ),
-    );
-  else
-    lines.push({
-      spans: [
-        {text: '  ⎿  ', fg: tokens.foregroundSubtle, bg},
-        {
-          text:
-            activity.status === 'running'
-              ? item.streaming
-                ? 'Running…'
-                : 'Stopped'
-              : activity.status === 'failed'
-                ? 'Failed'
-                : 'Done',
-          fg: activity.status === 'failed' ? tokens.error : tokens.foregroundMuted,
-          bg,
-          italic: activity.status === 'running',
-        },
-      ],
-    });
-  return lines;
 }
 
 export function renderTranscriptViewport(options: TranscriptViewportOptions): TranscriptViewportResult {

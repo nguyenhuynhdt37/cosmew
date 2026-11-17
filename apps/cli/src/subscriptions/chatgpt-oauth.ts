@@ -24,11 +24,31 @@ const DEFAULT_ISSUER = 'https://auth.openai.com';
 const RESOURCE = 'https://api.openai.com/v1';
 const LOGIN_WINDOW_MS = 600_000;
 
+// Provider text is untrusted. Only standard OAuth error names may reach the callback page.
+const GRANT_ERRORS = new Set([
+  'invalid_request',
+  'invalid_client',
+  'invalid_grant',
+  'unauthorized_client',
+  'unsupported_grant_type',
+  'invalid_scope',
+  'access_denied',
+]);
+class OAuthGrantError extends FutrynError {
+  constructor(
+    readonly status: number,
+    readonly reason?: string,
+  ) {
+    super(status === 429 ? 'RATE_LIMIT' : status >= 500 ? 'TRANSPORT' : 'AUTH', status >= 500);
+  }
+}
+
 export interface ChatGPTOAuthOptions {
   issuer?: string;
   fetch?: typeof fetch;
   openURL?: (url: string) => Promise<void>;
   now?: () => number;
+  hostID?: string;
 }
 
 interface TokenRecord {
@@ -47,6 +67,10 @@ interface Login {
   redirect: string;
   timer: ReturnType<typeof setTimeout>;
   reject(error: unknown): void;
+  respond?(message: string, status: number): void;
+  clientID?: string;
+  recoveryUsed: boolean;
+  abort: AbortController;
 }
 
 const b64url = (bytes: ArrayBuffer | Uint8Array) => Buffer.from(bytes as ArrayBuffer).toString('base64url');
@@ -70,6 +94,7 @@ export class ChatGPTOAuth {
   private readonly fetchImpl: typeof fetch;
   private readonly openURL: (url: string) => Promise<void>;
   private readonly now: () => number;
+  private readonly hostID: string;
 
   constructor(
     private readonly redactor: Redactor,
@@ -79,13 +104,14 @@ export class ChatGPTOAuth {
     this.fetchImpl = options.fetch ?? fetch;
     this.openURL = options.openURL ?? openExternalURL;
     this.now = options.now ?? Date.now;
+    this.hostID = options.hostID ?? `urn:uuid:${crypto.randomUUID()}`;
   }
 
   private get tokenURL() {
     return `${this.issuer}/api/accounts/oauth/token`;
   }
 
-  async begin(signal?: AbortSignal): Promise<ProviderAuthChallenge> {
+  async begin(signal?: AbortSignal, clientID?: string): Promise<ProviderAuthChallenge> {
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     if (this.logins.size >= 4) throw new FutrynError('POLICY');
     const id = crypto.randomUUID();
@@ -127,17 +153,20 @@ export class ChatGPTOAuth {
           setTimeout(() => server.stop(), 0);
           return page('Sign-in failed. Return to Futryn and try again.', 400);
         }
-        resolve({code, clientID: url.searchParams.get('client_id') ?? undefined});
-        // Exactly one valid callback is accepted; the listener closes after this response is sent.
-        setTimeout(() => server.stop(), 0);
-        return page('Signed in. You can close this window and return to Futryn.');
+        // Keep the browser response pending until the code exchange and identity verification finish.
+        // Receiving an authorization code alone does not mean the sign-in succeeded.
+        return new Promise<Response>(respond => {
+          const login = this.logins.get(id)!;
+          login.respond = (message, status) => respond(page(message, status));
+          resolve({code, clientID: url.searchParams.get('client_id') ?? undefined});
+        });
       },
     });
     const redirect = `http://127.0.0.1:${server.port}/auth/callback`;
     const authorizationURL = `${this.issuer}/api/accounts/authorize?${new URLSearchParams({
-      client_id: REGISTRATION_CLIENT_ID,
-      agent_name_hint: AGENT_NAME,
-      ext_agent_host_id: `urn:uuid:${crypto.randomUUID()}`,
+      client_id: clientID ?? REGISTRATION_CLIENT_ID,
+      ...(clientID ? {} : {agent_name_hint: AGENT_NAME}),
+      ext_agent_host_id: this.hostID,
       response_type: 'code',
       redirect_uri: redirect,
       scope: `openid profile email offline_access resource.invoke ${TOKEN_SHARING_SCOPE}`,
@@ -155,6 +184,9 @@ export class ChatGPTOAuth {
       redirect,
       progress: {state: 'pending', authorizationURL, message: 'Complete ChatGPT sign-in in your browser.'},
       reject,
+      clientID,
+      recoveryUsed: clientID !== undefined,
+      abort: new AbortController(),
       timer: setTimeout(() => this.cancel(id), LOGIN_WINDOW_MS),
     };
     this.logins.set(id, login);
@@ -186,9 +218,11 @@ export class ChatGPTOAuth {
     const login = this.logins.get(id);
     if (!login) return;
     this.logins.delete(id);
+    login.abort.abort();
     clearTimeout(login.timer);
     login.progress.state = 'failed';
     login.reject(new FutrynError('CANCELLED'));
+    login.respond?.('Sign-in cancelled. Return to Futryn to start again.', 400);
     login.server.stop();
   }
 
@@ -196,15 +230,20 @@ export class ChatGPTOAuth {
   async complete(id: string, signal?: AbortSignal): Promise<string> {
     const login = this.logins.get(id);
     if (!login) throw new FutrynError('AUTH');
+    signal = AbortSignal.any([login.abort.signal, ...(signal ? [signal] : [])]);
     const abort = () => this.cancel(id);
     signal?.addEventListener('abort', abort, {once: true});
+    let failure = 'ChatGPT returned a missing or mismatched client ID. Return to Futryn and try signing in again.';
     try {
       if (signal?.aborted) throw new FutrynError('CANCELLED');
       const result = await login.received;
       if (signal?.aborted) throw new FutrynError('CANCELLED');
-      const clientID = result.clientID;
+      if (login.clientID && result.clientID && login.clientID !== result.clientID) throw new FutrynError('AUTH');
+      const clientID = login.clientID ?? result.clientID;
       if (!clientID) throw new FutrynError('PROTOCOL');
+      login.clientID = clientID;
       this.redactor.register(result.code);
+      failure = 'ChatGPT token exchange failed. Return to Futryn to check the connection or sign in again.';
       const tokens = await this.tokenRequest(
         {
           grant_type: 'authorization_code',
@@ -216,11 +255,46 @@ export class ChatGPTOAuth {
         },
         signal,
       );
+      failure = 'ChatGPT did not grant token sharing. Sign in again and allow token sharing, or use an OpenAI API key.';
       if (!tokens.scope?.split(' ').includes(TOKEN_SHARING_SCOPE)) throw new FutrynError('FORBIDDEN');
+      failure = 'ChatGPT returned a missing or invalid ID token. Return to Futryn and try signing in again.';
       if (!tokens.id_token) throw new FutrynError('PROTOCOL');
-      await this.verifyIDToken(tokens.id_token, clientID, login.nonce);
+      await this.verifyIDToken(tokens.id_token, clientID, login.nonce, signal);
+      login.respond?.('ChatGPT identity verified. Return to Futryn to finish checking API access.', 200);
+      login.respond = undefined;
       return JSON.stringify(this.record(tokens, clientID));
     } catch (error) {
+      // OpenAI's documented invalid_grant recovery: never resend the code. Reauthorize once with
+      // the issued client, fresh state/nonce/PKCE and the same host identity, within this login.
+      if (
+        error instanceof OAuthGrantError &&
+        error.reason === 'invalid_grant' &&
+        login.clientID &&
+        !login.recoveryUsed &&
+        !signal.aborted
+      ) {
+        login.respond?.(
+          'OpenAI refused the authorization code. A fresh ChatGPT sign-in is opening in your browser.',
+          400,
+        );
+        login.respond = undefined;
+        login.server.stop();
+        const next = await this.begin(signal, login.clientID);
+        login.progress = this.logins.get(next.id)!.progress;
+        login.progress.message = 'OpenAI refused the first code. Complete the fresh browser sign-in. Esc cancels.';
+        const reject = login.reject;
+        login.reject = error => {
+          reject(error);
+          this.cancel(next.id);
+        };
+        return await this.complete(next.id, signal);
+      }
+      if (error instanceof FutrynError && ['TRANSPORT', 'TIMEOUT', 'RATE_LIMIT'].includes(error.code))
+        failure = 'ChatGPT verification service is unavailable or rate limited. Check the connection and retry later.';
+      if (error instanceof OAuthGrantError)
+        failure = `OpenAI rejected the token exchange (HTTP ${error.status}${error.reason ? `, ${error.reason}` : ''}). Return to Futryn. No credentials were stored.`;
+      login.respond?.(signal?.aborted ? 'Sign-in cancelled. Return to Futryn to start again.' : failure, 400);
+      login.respond = undefined;
       if (signal?.aborted) throw new FutrynError('CANCELLED');
       throw error instanceof FutrynError ? error : new FutrynError('AUTH');
     } finally {
@@ -257,12 +331,34 @@ export class ChatGPTOAuth {
       throw new FutrynError(signal?.aborted ? 'CANCELLED' : 'TRANSPORT', !signal?.aborted);
     }
     if (!response.ok) {
-      await response.body?.cancel();
+      // Read only a bounded error body and expose an allowlisted error name, never its description.
+      let reason: string | undefined;
+      const reader = response.body?.getReader();
+      if (reader) {
+        try {
+          let size = 0;
+          let text = '';
+          const decoder = new TextDecoder();
+          for (;;) {
+            const next = await reader.read();
+            if (next.done) break;
+            size += next.value.byteLength;
+            if (size > 65536) break;
+            text += decoder.decode(next.value, {stream: true});
+          }
+          if (size <= 65536) {
+            const data = JSON.parse(text + decoder.decode());
+            const value = typeof data?.error === 'string' ? data.error : data?.error?.code;
+            if (GRANT_ERRORS.has(value)) reason = value;
+          }
+        } catch {
+          // The status remains useful even if the error body is absent or malformed.
+        } finally {
+          await reader.cancel().catch(() => {});
+        }
+      }
       // A refused grant (revoked, expired or reused refresh token) needs a new sign-in.
-      throw new FutrynError(
-        response.status === 429 ? 'RATE_LIMIT' : response.status >= 500 ? 'TRANSPORT' : 'AUTH',
-        response.status >= 500,
-      );
+      throw new OAuthGrantError(response.status, reason);
     }
     const text = await response.text();
     if (text.length > 65536) throw new FutrynError('PROTOCOL');
@@ -284,20 +380,41 @@ export class ChatGPTOAuth {
   }
 
   /** RS256 id_token: signature against the issuer's JWKS, issuer, audience, expiry, subject and nonce. */
-  private async verifyIDToken(token: string, clientID: string, nonce: string): Promise<void> {
+  private async verifyIDToken(token: string, clientID: string, nonce: string, signal?: AbortSignal): Promise<void> {
+    // Key discovery is a network operation, not a credential check. Preserve its failure category
+    // so outages do not send the user through repeated sign-ins, and honour cancellation throughout.
+    const combined = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15_000)]);
+    let jwks: {keys?: (JsonWebKey & {kid?: string})[]};
+    try {
+      const response = await this.fetchImpl(`${this.issuer}/.well-known/jwks.json`, {
+        redirect: 'error',
+        credentials: 'omit',
+        signal: combined,
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw new FutrynError(response.status === 429 ? 'RATE_LIMIT' : 'TRANSPORT', true);
+      }
+      const text = await response.text();
+      if (text.length > 65536) throw new FutrynError('PROTOCOL');
+      try {
+        jwks = JSON.parse(text);
+        if (!jwks || !Array.isArray(jwks.keys)) throw new Error('shape');
+      } catch {
+        throw new FutrynError('PROTOCOL');
+      }
+    } catch (error) {
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
+      if (error instanceof FutrynError) throw error;
+      throw new FutrynError(combined.aborted ? 'TIMEOUT' : 'TRANSPORT', true);
+    }
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
     try {
       const [head, body, signature] = token.split('.');
       if (!head || !body || !signature) throw new Error('shape');
       const header = JSON.parse(Buffer.from(head, 'base64url').toString());
       const claims = JSON.parse(Buffer.from(body, 'base64url').toString());
       if (header.alg !== 'RS256') throw new Error('alg');
-      const response = await this.fetchImpl(`${this.issuer}/.well-known/jwks.json`, {
-        redirect: 'error',
-        credentials: 'omit',
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) throw new Error('jwks');
-      const jwks = (await response.json()) as {keys?: (JsonWebKey & {kid?: string})[]};
       const jwk = jwks.keys?.find(key => key.kid === header.kid && key.kty === 'RSA');
       if (!jwk) throw new Error('kid');
       const key = await crypto.subtle.importKey('jwk', jwk, {name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256'}, false, [
@@ -321,7 +438,9 @@ export class ChatGPTOAuth {
         claims.nonce !== nonce
       )
         throw new Error('claims');
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
     } catch {
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
       throw new FutrynError('AUTH');
     }
   }

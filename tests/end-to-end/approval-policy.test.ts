@@ -41,7 +41,6 @@ async function make(
   const app = startup(home, {vault: memoryVault(), commands: runtime});
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   app.registry.add(server.provider('chat', {id: 'policy-model', auth: 'none'}));

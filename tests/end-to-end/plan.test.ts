@@ -51,7 +51,6 @@ async function open(
     if (closed) return;
     closed = true;
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   };
   cleanup.push(close);

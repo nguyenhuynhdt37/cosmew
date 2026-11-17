@@ -20,10 +20,6 @@ import type {ContextCompactor} from '../context/compaction';
  * a user-configured budget runs out, or the context window is full.
  */
 export const SAFETY_LIMITS = {
-  /** Tool calls a bridge runtime that owns its own loop (Codex app-server) may make in one turn. */
-  bridgeCallsPerTurn: 256,
-  /** Refused attempts allowed past a user tool-call budget before a bridge turn fails closed. */
-  bridgeRefusalGrace: 4,
   /** Retries of a model request whose stream failed (Codex DEFAULT_STREAM_MAX_RETRIES). */
   roundRetries: GENERATION_LIMITS.streamMaxRetries,
   /** Context window assumed when the model does not report one (conservative). */
@@ -62,7 +58,6 @@ export interface PendingInput {
 export interface ActiveTurn {
   id: string;
   accepting: boolean;
-  steerable: boolean;
   pending: PendingInput[];
   /** Set while a model response streams; arriving steering calls it to preempt the response. */
   wake?: () => void;

@@ -24,7 +24,6 @@ async function make(script: (view: ScriptedView) => ScriptedReply) {
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
   });
   app.registry.add(server.provider('chat', {id: 'edit-model', auth: 'none'}));

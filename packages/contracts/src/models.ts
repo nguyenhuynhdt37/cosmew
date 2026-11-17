@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.20' as const;
+export const CONTRACT_VERSION = '1.24' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -15,8 +15,6 @@ export const modelIdSchema = z
   .min(1)
   .max(200)
   .regex(/^[\w~./:@+-]+$/);
-export const subscriptionRuntimeSchema = z.enum(['codex']);
-export type SubscriptionRuntime = z.infer<typeof subscriptionRuntimeSchema>;
 export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
 export const envNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/);
 /** HTTP header name (RFC 9110 token); credentials never travel in static headers (ADR 0046). */
@@ -34,12 +32,11 @@ export const providerSchema = z.strictObject({
   auth: z.enum(['api-key', 'none', 'command', 'oauth']),
   catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
   metadataVersion: z.literal(1),
-  /** Metadata requests and runtime handshakes. Model streams use `streamIdleTimeoutMs`. */
+  /** Metadata requests. Model streams use `streamIdleTimeoutMs`. */
   timeoutMs: z.number().int().min(100).max(300000).default(60000),
   /** Silence allowed in a model stream (Codex stream_idle_timeout_ms); default GENERATION_LIMITS. Contract 1.17. */
   streamIdleTimeoutMs: z.number().int().min(100).max(3_600_000).optional(),
   streamUsage: z.boolean().optional(),
-  runtime: subscriptionRuntimeSchema.optional(),
   family: idSchema.optional(),
   /** Declared in the user-level host config (~/.futryn/config.toml), the source of truth for it. Contract 1.20. */
   source: z.literal('config').optional(),
@@ -81,8 +78,7 @@ export type Provider = z.infer<typeof providerSchema>;
 
 /** Registry metadata is introduced in contract 1.1; no credential bytes cross this boundary. */
 export interface AuthMethod {
-  id:
-    'api-key' | 'env' | 'none' | 'openrouter-oauth' | 'oauth-browser' | 'subscription-browser' | 'subscription-device';
+  id: 'api-key' | 'env' | 'none' | 'openrouter-oauth' | 'oauth-browser';
   name: string;
   description: string;
   providerId?: string;
@@ -116,7 +112,6 @@ export const credentialRefSchema = z.discriminatedUnion('kind', [
   z.strictObject({kind: z.literal('keyring'), key: z.string().uuid()}),
   z.strictObject({kind: z.literal('env'), name: z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/)}),
   z.strictObject({kind: z.literal('none')}),
-  z.strictObject({kind: z.literal('runtime'), key: z.string().uuid(), runtime: subscriptionRuntimeSchema}),
 ]);
 export type CredentialRef = z.infer<typeof credentialRefSchema>;
 export const accountSchema = z.strictObject({
@@ -237,8 +232,6 @@ export type ModelEvent =
   | {type: 'toolResult'; result: import('./tools').ToolResult}
   /** Steering input accepted during the turn was delivered to model-visible history before the next request. */
   | {type: 'steered'; steerId: string; content: string}
-  /** A runtime's own tool (ADR 0027): display only, never a Futryn tool call or result. Same `id` updates in place. */
-  | {type: 'activity'; activity: RuntimeActivity}
   /**
    * `endTurn: false` is a provider statement that the turn is not over (Codex `Completed { end_turn }`;
    * Anthropic `pause_turn`). Absent means the provider exposed no such signal.
@@ -248,22 +241,9 @@ export type ModelEvent =
   | {type: 'responseDiscarded'; reason: 'retry' | 'preempted'; attempt?: number; maxRetries?: number}
   /** Accepted steering the turn could not deliver (budget, context or interruption); it opens the next turn. */
   | {type: 'inputDeferred'; steerIds: string[]; reason: string};
-export interface RuntimeActivity {
-  id: string;
-  /** The runtime that reported it; always shown, so it is never mistaken for a Futryn tool. */
-  runtime?: string;
-  /** Claude-style tool label: Bash, Read, Update, Search, List, Web or the runtime's own name. */
-  name: string;
-  /** Command, path or query; already redacted and clipped. */
-  label: string;
-  status: 'running' | 'completed' | 'failed' | 'denied';
-  /** First lines of output the runtime reported, when it reported any. */
-  output?: string;
-}
-export type InlineToolExecutor = (call: ToolCall, signal?: AbortSignal) => Promise<import('./tools').ToolResult>;
+/** A provider API adapter: Futryn sends the request and reads the response; it owns the loop and tools. */
 export interface ModelPort {
-  readonly inlineTools?: boolean;
-  stream(request: ModelRequest, signal?: AbortSignal, executeTool?: InlineToolExecutor): AsyncIterable<ModelEvent>;
+  stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;
   generate(
     request: ModelRequest,
     signal?: AbortSignal,
@@ -273,8 +253,6 @@ export interface CredentialVault {
   get(ref: CredentialRef): Promise<string | undefined>;
   set(key: string, secret: string): Promise<void>;
   delete(ref: CredentialRef): Promise<void>;
-  setRuntime?(key: string, payload: string): Promise<void>;
-  getRuntime?(ref: Extract<CredentialRef, {kind: 'runtime'}>): Promise<string | undefined>;
 }
 export interface NetworkPolicy {
   authorize(provider: Provider, account: Account): void;
@@ -462,6 +440,8 @@ export const defaultAppearance = (): AppearanceConfig => appearanceSchema.parse(
 export const settingsSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
+    /** Stable local ChatGPT OAuth host identity, without credentials (ADR 0050). */
+    chatgptHostID: z.string().uuid().optional(),
     providers: z.array(providerSchema).max(100),
     accounts: z.array(accountSchema).max(200),
     activeAccountId: z.string().uuid().nullable(),
@@ -486,24 +466,13 @@ export const settingsSchema = z
       !unique(settings.catalogs.map(c => c.accountId))
     )
       ctx.addIssue({code: 'custom', message: 'Duplicate identity'});
-    const keys = settings.accounts.flatMap(a =>
-      a.credential.kind === 'keyring' || a.credential.kind === 'runtime' ? [a.credential.key] : [],
-    );
+    const keys = settings.accounts.flatMap(a => (a.credential.kind === 'keyring' ? [a.credential.key] : []));
     if (
       !unique(keys) ||
       settings.accounts.some(a => !settings.providers.some(p => p.id === a.providerId)) ||
       settings.catalogs.some(c => !settings.accounts.some(a => a.id === c.accountId))
     )
       ctx.addIssue({code: 'custom', message: 'Invalid identity reference'});
-    if (
-      settings.accounts.some(account => {
-        const provider = settings.providers.find(p => p.id === account.providerId);
-        return provider?.runtime
-          ? account.credential.kind !== 'runtime' || account.credential.runtime !== provider.runtime
-          : account.credential.kind === 'runtime';
-      })
-    )
-      ctx.addIssue({code: 'custom', message: 'Runtime credential does not match provider'});
     if (
       (settings.activeAccountId && !validAccount(settings.activeAccountId)) ||
       (settings.selection && !validAccount(settings.selection.accountId)) ||
@@ -527,45 +496,23 @@ export interface SettingsStore {
 }
 
 /**
- * Who runs the coding agent for the active selection (ADR 0029). `hannes`: the selected model only
- * decides; Futryn owns the loop and runs every project tool. `codex-bridge`: the Codex app-server owns
- * the model loop but every project tool is a Futryn tool. `chat-only`: no project tools at all.
- * A runtime never runs its own tools (ADR 0045 removed delegation).
+ * Who runs the coding agent (ADR 0029, 0049). Futryn always owns the loop and every project tool;
+ * a provider only answers API requests. `chat-only`: no folder consent, so no project tools.
  */
-export type ExecutionBackendKind = 'hannes' | 'codex-bridge' | 'chat-only';
+export type ExecutionBackendKind = 'hannes' | 'chat-only';
 export interface ExecutionBackend {
   kind: ExecutionBackendKind;
-  loopOwner: 'hannes' | 'runtime';
-  toolOwner: 'hannes' | 'runtime' | 'none';
-  runtime?: SubscriptionRuntime;
+  loopOwner: 'hannes';
+  toolOwner: 'hannes' | 'none';
   label: string;
 }
-export function executionBackendFor(
-  provider: Pick<Provider, 'runtime'>,
-  options: {toolsEnabled: boolean},
-): ExecutionBackend {
-  if (!provider.runtime)
-    return options.toolsEnabled
-      ? {kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes', label: 'Futryn agent · Futryn tools'}
-      : {
-          kind: 'chat-only',
-          loopOwner: 'hannes',
-          toolOwner: 'none',
-          label: 'Futryn agent · tools off (no folder consent)',
-        };
-  if (options.toolsEnabled && provider.runtime === 'codex')
-    return {
-      kind: 'codex-bridge',
-      loopOwner: 'runtime',
-      toolOwner: 'hannes',
-      runtime: 'codex',
-      label: 'Codex loop · Futryn tools',
-    };
-  return {
-    kind: 'chat-only',
-    loopOwner: 'runtime',
-    toolOwner: 'none',
-    runtime: provider.runtime,
-    label: `${provider.runtime} chat only · no project tools`,
-  };
+export function executionBackendFor(options: {toolsEnabled: boolean}): ExecutionBackend {
+  return options.toolsEnabled
+    ? {kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes', label: 'Futryn agent · Futryn tools'}
+    : {
+        kind: 'chat-only',
+        loopOwner: 'hannes',
+        toolOwner: 'none',
+        label: 'Futryn agent · tools off (no folder consent)',
+      };
 }

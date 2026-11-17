@@ -85,24 +85,25 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
         return ['No usage yet.', 'Send a message or resume a conversation.', '', ...limits];
       const quota = usage.last?.usage?.quota?.[0];
       return [
-        field('Input', short(usage.inputTokens)),
-        field('Output', short(usage.outputTokens)),
+        field('Input total', short(usage.inputTokens)),
+        field('Output total', short(usage.outputTokens)),
         ...(usage.costUSD != null
           ? [field('Est. cost', money(usage.costUSD))]
           : [
               field(
-                status.activeProvider?.runtime ? 'Billing' : 'Est. cost',
-                status.activeProvider?.runtime ? 'Subscription' : '—',
+                status.activeProvider?.auth === 'oauth' ? 'Billing' : 'Est. cost',
+                status.activeProvider?.auth === 'oauth' ? 'Subscription' : '—',
               ),
             ]),
         ...(usage.premiumRequests != null ? [field('Premium units', short(usage.premiumRequests))] : []),
         '',
         field('Last turn', tokens(usage.last?.usage?.inputTokens, usage.last?.usage?.outputTokens)),
+        'All requests; input may repeat. Context: /context.',
         field('Reported', `${usage.reportedTurns} / ${usage.turns + usage.historicalTurns} turns`),
         ...(quota
           ? [
               field(
-                status.activeProvider?.runtime ? 'Plan usage' : 'Rate limit',
+                status.activeProvider?.auth === 'oauth' ? 'Plan usage' : 'Rate limit',
                 quota.unlimited ? 'Unlimited' : quota.usedPercent == null ? '—' : `${short(quota.usedPercent)}% used`,
               ),
             ]
@@ -147,9 +148,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
           ? []
           : ['', `${'━'.repeat(filled)}${'─'.repeat(16 - filled)}  ${display.measured ? '' : '~'}${ratio}%`]),
         '',
-        context.runtimeHiddenContext
-          ? 'Local history only; runtime adds hidden context.'
-          : 'Estimate includes chat history and draft.',
+        'Estimate includes chat history and draft.',
         'Last reported is a historical snapshot, not the next request.',
       ];
     }
@@ -193,6 +192,8 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
   }
   const usageRows = [
     'SESSION USAGE · local observations, not account billing',
+    'Totals sum all model requests, including repeated input across tool rounds.',
+    'These totals are not context occupancy; /context shows the current window.',
     `Coverage: ${usage.reportedTurns}/${usage.turns + usage.historicalTurns} turns with input/output counts`,
     `Unknown or historical turns: ${usage.unknownTurns}`,
     `Input subtotal: ${count(usage.inputTokens)} · Output subtotal: ${count(usage.outputTokens)}`,
@@ -224,7 +225,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       model =>
         `${model.modelId}: ${model.turns} turns · in ${count(model.inputTokens)} · out ${count(model.outputTokens)} · estimated ${money(model.costUSD)}`,
     ),
-    ...(status.activeProvider?.runtime
+    ...(status.activeProvider?.auth === 'oauth'
       ? ['', 'Subscription access: API list prices do not represent your subscription bill.']
       : []),
     '',
@@ -239,15 +240,9 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Current local history + draft: ~${count(context.estimateTokens)} tokens (${context.messages} messages)`,
     `Method: ${context.estimateMethod}`,
     context.estimatedPercent == null
-      ? 'Context percentage: unavailable for the full runtime request.'
+      ? 'Context percentage: unavailable (the model reports no context window).'
       : `Estimated occupancy: ~${context.estimatedPercent}% (not a provider measurement)`,
     'Local estimate excludes provider framing and hidden instructions.',
-    ...(context.runtimeHiddenContext
-      ? [
-          'Runtime may add hidden instructions, conversation wrappers and internal context.',
-          'Output reserve is not exposed by this runtime; a model ceiling is not a configured reserve.',
-        ]
-      : []),
     `Metadata source: ${context.metadataSource ?? 'Unavailable'}`,
     `Metadata observed: ${context.metadataAt ?? 'Unknown'}`,
     '',
@@ -284,7 +279,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     `Sandbox: ${status.terminalRuntime.sandbox} · Network escalation: ${status.terminalRuntime.escalation}`,
     ...status.terminalRuntime.limitations,
     `Provider: ${status.activeProvider?.name ?? 'None'} · Account: ${status.activeAccount?.alias ?? 'None'}`,
-    `Authentication: ${status.activeProvider?.runtime ?? status.activeAccount?.credential.kind ?? 'None'}`,
+    `Authentication: ${status.activeProvider?.auth === 'oauth' ? 'oauth' : (status.activeAccount?.credential.kind ?? 'None')}`,
     `Model: ${status.selection?.modelId ?? 'None'}`,
     `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Futryn permissions' : status.workspaceReadStatus}`,
     `Session: ${status.activeSessionId ?? 'None'} · Messages: ${status.messageCount}`,

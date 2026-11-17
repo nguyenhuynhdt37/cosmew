@@ -59,6 +59,49 @@ export function isPublicAddress(input: string): boolean {
   return true;
 }
 
+function parseIpv6Hextets(ip: string): number[] | null {
+  if (isIP(ip) !== 6 || ip.includes('%')) return null;
+  let normalized = ip.toLowerCase();
+  const lastColon = normalized.lastIndexOf(':');
+  if (normalized.includes('.')) {
+    const tail = normalized.slice(lastColon + 1);
+    if (isIP(tail) !== 4) return null;
+    const octets = tail.split('.').map(Number);
+    const high = ((octets[0]! << 8) | octets[1]!).toString(16);
+    const low = ((octets[2]! << 8) | octets[3]!).toString(16);
+    normalized = `${normalized.slice(0, lastColon + 1)}${high}:${low}`;
+  }
+  const halves = normalized.split('::');
+  if (halves.length > 2) return null;
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = halves.length === 2 ? 8 - (left.length + right.length) : 0;
+  if (missing < 0 || (halves.length === 1 && left.length !== 8)) return null;
+  const groups = [...left, ...Array<string>(missing).fill('0'), ...right];
+  if (groups.length !== 8) return null;
+  return groups.map(group => parseInt(group, 16));
+}
+
+/** True only for RFC 6052 Well-Known Prefix 64:ff9b::/96 wrapping a public IPv4 address. */
+function isPublicNat64Synthesized(address: ResolvedAddress): boolean {
+  if (address.family !== 6 || isIP(address.address) !== 6) return false;
+  const hextets = parseIpv6Hextets(address.address);
+  if (
+    !hextets ||
+    hextets[0] !== 0x0064 ||
+    hextets[1] !== 0xff9b ||
+    hextets[2] !== 0 ||
+    hextets[3] !== 0 ||
+    hextets[4] !== 0 ||
+    hextets[5] !== 0
+  )
+    return false;
+  const h6 = hextets[6]!;
+  const h7 = hextets[7]!;
+  const embeddedIpv4 = `${(h6 >> 8) & 0xff}.${h6 & 0xff}.${(h7 >> 8) & 0xff}.${h7 & 0xff}`;
+  return isPublicAddress(embeddedIpv4);
+}
+
 /** URL parser also catches normalized numeric loopback spellings (2130706433, hex, octal). */
 export function parseFetchUrl(input: string): URL {
   if (/[\u0000-\u0020\u007f]/.test(input)) throw new FutrynError('POLICY');
@@ -215,14 +258,22 @@ export class WebFetchRuntime {
         if (signal.aborted) throw new FutrynError('CANCELLED');
         if (!(await abortable(options.authorize(url.href, signal), signal))) throw new FutrynError('POLICY');
         const host = url.hostname.replace(/^\[|\]$/g, '');
-        const addresses = isIP(host)
+        const resolved = isIP(host)
           ? [{address: host, family: isIP(host)}]
           : await abortable(this.transport.resolve(host), signal);
         if (
-          !addresses.length ||
-          addresses.some(address => !isPublicAddress(address.address) || isIP(address.address) !== address.family)
+          !resolved.length ||
+          resolved.some(
+            address =>
+              isIP(address.address) !== address.family ||
+              (!isPublicAddress(address.address) && (isIP(host) !== 0 || !isPublicNat64Synthesized(address))),
+          )
         )
           throw new FutrynError('POLICY');
+        // Skip synthesized DNS64/NAT64 (64:ff9b::/96) answers only when they embed public IPv4
+        // and direct public answers are present, without opening transition IPv6 destinations.
+        const addresses = resolved.filter(address => isPublicAddress(address.address));
+        if (!addresses.length) throw new FutrynError('POLICY');
         // Validate the whole answer set once, then pin each connection attempt to that set.
         // No new DNS lookup or cross-origin/auth change is allowed during address fallback.
         let response: WebResponse | undefined;

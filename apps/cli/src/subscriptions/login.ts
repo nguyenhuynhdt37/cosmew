@@ -1,26 +1,18 @@
 import {FutrynError, type Account, type Provider} from '@futryn/contracts';
 import type {Application} from '../bootstrap/startup';
 
-/** Shared line/administration subscription UX. Prints public authorization
- * instructions only; the official runtime and OS vault own secret material. */
-export async function loginSubscription(
+/** Browser sign-in (ChatGPT OAuth + PKCE, ADR 0047) for the CLI. Prints public authorization
+ * instructions only; tokens go to the OS keyring. */
+export async function loginOAuth(
   app: Application,
   provider: Provider,
   alias: string,
   signal: AbortSignal,
   existing?: Account,
-  device = false,
 ): Promise<Account> {
+  if (provider.auth !== 'oauth') throw new FutrynError('UNSUPPORTED');
   const client = app.createFutrynClient();
-  const methodId =
-    provider.auth === 'oauth' ? 'oauth-browser' : device ? 'subscription-device' : 'subscription-browser';
-  const integration = client.listIntegrations().find(i => i.provider.id === provider.id);
-  const method = integration?.methods.find(m => m.id === methodId);
-  if (method?.available === false) {
-    process.stderr.write((method.diagnostic ?? 'Install the official runtime.') + '\n');
-    throw new FutrynError('RUNTIME_UNAVAILABLE');
-  }
-  const challenge = await client.beginProviderAuth(provider.id, methodId);
+  const challenge = await client.beginProviderAuth(provider.id, 'oauth-browser');
   let previous = '';
   const display = () => {
     try {

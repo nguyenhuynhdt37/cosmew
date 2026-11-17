@@ -19,6 +19,7 @@ import {
   type CredentialRef,
   type Message,
   type ModelEvent,
+  type InteractionEvent,
   type ModelInfo,
   type PartialAppearanceConfig,
   type PermissionPromptRequest,
@@ -141,8 +142,6 @@ export interface FutrynBackendPorts {
   completeProviderAuth?(providerId: string, challengeId: string, code: string, signal?: AbortSignal): Promise<string>;
   cancelProviderAuth?(challengeId: string): void | Promise<void>;
   providerAuthProgress?(challengeId: string): ProviderAuthProgress;
-  completeSubscriptionAuth?(providerId: string, challengeId: string, signal?: AbortSignal): Promise<CredentialRef>;
-  discardSubscriptionCredential?(ref: CredentialRef): Promise<void>;
   listProviders(): Provider[];
   listProviderPresets(): Provider[];
   addProvider(provider: Provider): Provider;
@@ -247,6 +246,7 @@ export class FutrynClient {
   private eventSeq = 0;
   private latestEvent: ReactiveAgentEvent = {seq: 0, kind: 'idle', timestamp: Date.now()};
   private readonly eventListeners = new Set<(event: ReactiveAgentEvent) => void>();
+  private readonly interactionListeners = new Set<(event: InteractionEvent) => void>();
   private readonly permissions = new Map<string, PermissionPromptRequest>();
   private readonly sessionGrants = new Set<string>();
   private readonly permissionWaiters = new Map<string, (resolution: PermissionPromptResolution) => void>();
@@ -624,6 +624,8 @@ export class FutrynClient {
         },
       });
       this.notify('question.asked', questions.map(q => q.header).join(', '));
+      const request = this.questions.get(questionId)?.request;
+      if (request) this.emitInteraction({type: 'question.asked', request});
     });
   }
 
@@ -720,6 +722,22 @@ export class FutrynClient {
     return () => this.eventListeners.delete(listener);
   }
 
+  /** Subscribe before sending. Permission callbacks may resolve immediately; observers grant nothing. */
+  onInteractionEvent(listener: (event: InteractionEvent) => void): () => void {
+    this.interactionListeners.add(listener);
+    return () => this.interactionListeners.delete(listener);
+  }
+
+  private emitInteraction(event: InteractionEvent): void {
+    for (const listener of this.interactionListeners) {
+      try {
+        listener(structuredClone(event));
+      } catch {
+        // Observer failure must not change authorization or interrupt other observers.
+      }
+    }
+  }
+
   private effectiveTerminalRuntime(): TerminalRuntimeReport {
     const unavailable: TerminalRuntimeReport = {
       label: 'Unavailable',
@@ -757,20 +775,17 @@ export class FutrynClient {
       }
     }
     const usage = (this.statusUsage ??= this.usage());
-    const executionBackend = activeProvider
-      ? executionBackendFor(activeProvider, {toolsEnabled: this.toolsAllowed})
-      : null;
+    const executionBackend = activeProvider ? executionBackendFor({toolsEnabled: this.toolsAllowed}) : null;
     const workspaceReadStatus = !this.toolsAllowed
       ? 'disabled'
-      : !activeModel ||
-          (executionBackend?.kind !== 'hannes' && executionBackend?.kind !== 'codex-bridge') ||
-          activeModel.capabilities.tools === 'unsupported'
+      : !activeModel || executionBackend?.kind !== 'hannes' || activeModel.capabilities.tools === 'unsupported'
         ? 'unavailable'
         : 'read-only';
     return {
       workspace: this.ports.workspace,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
+      approvalPolicy: APPROVAL_POLICY_FOR_MODE[this.permissionModeValue],
       executionBackend,
       /** Futryn tools reach the model: folder consent AND a backend that runs them AND a capable model. */
       toolsEnabled: workspaceReadStatus === 'read-only',
@@ -849,21 +864,10 @@ export class FutrynClient {
     }
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     let account: Account | undefined;
-    let runtimeCredential: CredentialRef | undefined;
     try {
       let credential = input.credential;
       let secret = input.secret;
-      if (input.authChallengeId && this.ports.listProviders().find(p => p.id === input.providerId)?.runtime) {
-        if (!this.ports.completeSubscriptionAuth) throw new FutrynError('UNSUPPORTED');
-        credential = runtimeCredential = await this.ports.completeSubscriptionAuth(
-          input.providerId,
-          input.authChallengeId,
-          signal,
-        );
-      } else if (
-        input.authChallengeId &&
-        this.ports.listProviders().find(p => p.id === input.providerId)?.auth === 'oauth'
-      ) {
+      if (input.authChallengeId && this.ports.listProviders().find(p => p.id === input.providerId)?.auth === 'oauth') {
         if (!this.ports.completeOAuthSignIn || input.credential.kind !== 'keyring')
           throw new FutrynError('UNSUPPORTED');
         secret = await this.ports.completeOAuthSignIn(input.providerId, input.authChallengeId, signal);
@@ -912,7 +916,6 @@ export class FutrynClient {
       // A failed or cancelled login cannot leave a usable credential behind.
       // Failed cleanup is surfaced so the account remains retryable via /logout.
       if (account) await this.ports.logoutAccount(account.id, !input.reauthenticateAccountId);
-      else if (runtimeCredential) await this.ports.discardSubscriptionCredential?.(runtimeCredential);
       if (account && this.currentSession?.selection.accountId === account.id) {
         this.clearSessionAuthorization();
         this.currentSession = null;
@@ -1374,8 +1377,8 @@ export class FutrynClient {
   }
 
   /**
-   * Limits for every connected account, from what is already known: the last live fetch, or the
-   * plan snapshot a subscription runtime attached to its latest reply. Sends no request.
+   * Limits for every connected account, from what is already known: the last live fetch or the
+   * plan snapshot attached to the latest reply. Sends no request.
    */
   limits(): AccountLimits[] {
     const providers = new Map(this.ports.listProviders().map(p => [p.id, p]));
@@ -1485,7 +1488,6 @@ export class FutrynClient {
     const instructionBytes = this.projectContext()?.usedBytes ?? 0;
     const messageCount = components.length + (instructionBytes ? 1 : 0);
     const estimate = messageCount ? Math.ceil((bytes + instructionBytes) / 4) + messageCount * 16 + 64 : 0;
-    const runtime = !!status.activeProvider?.runtime;
     const latest = this.usage().last;
     const observation = record?.turns?.findLast(turn => turn.context && turn.context.source !== 'estimate');
     const last = observation?.context ?? null;
@@ -1495,10 +1497,9 @@ export class FutrynClient {
       estimateTokens: estimate,
       estimateMethod: 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
       limitTokens: limit,
-      outputReserve: runtime ? null : reserve,
+      outputReserve: reserve,
       outputLimit: status.activeModel?.outputLimit ?? null,
-      runtimeHiddenContext: runtime,
-      estimatedPercent: limit && !runtime ? Math.round((estimate / limit) * 1000) / 10 : null,
+      estimatedPercent: limit ? Math.round((estimate / limit) * 1000) / 10 : null,
       measuredCurrentHistory:
         observation?.requestId === latest?.requestId &&
         !requestDraft.trim() &&
@@ -1752,7 +1753,13 @@ export class FutrynClient {
     });
     this.permissions.set(req.approvalId, req);
     if (req.status === 'pending') {
-      this.emitReactiveEvent('permission', `${req.action} → ${req.target}`);
+      // Defer notification until requestPermission has installed its waiter. A subscriber may
+      // synchronously resolve the request (headless consumers have no polling timer).
+      queueMicrotask(() => {
+        if (req.status !== 'pending') return;
+        this.emitReactiveEvent('permission', `${req.action} → ${req.target}`);
+        if (req.status === 'pending') this.emitInteraction({type: 'permission.requested', request: req});
+      });
     }
     return req;
   }

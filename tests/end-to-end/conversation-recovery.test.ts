@@ -28,7 +28,6 @@ async function environment(protocol: 'chat' | 'anthropic') {
     client = app.createFutrynClient(root);
   cleanup.push(async () => {
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
     server.server.stop(true);
     rmSync(home, {recursive: true, force: true});
@@ -80,7 +79,6 @@ async function environment(protocol: 'chat' | 'anthropic') {
   const restart = async () => {
     const id = client.activeSession()!.id;
     await app.shutdownCommands();
-    await app.subscriptions.shutdown();
     app.db.close();
     app = startup(home, {vault: memoryVault()});
     client = app.createFutrynClient(root);

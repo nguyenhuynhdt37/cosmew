@@ -1,3 +1,5 @@
+> **Superseded (2026-11-17):** Codex app-server runtime đã bị bỏ hẳn; xem [ADR 0049](0049-remove-codex-runtime.md).
+
 > **Ghi chú ADR 0029 (2026-11-16):** đây là backend `codex-bridge`: Codex app-server giữ vòng lặp model, mọi tool dự án là tool của Hannes. Đây không phải vòng lặp do Hannes sở hữu như với API trực tiếp.
 
 # ADR 0018: Codex subscription read-only tool bridge

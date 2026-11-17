@@ -1,6 +1,5 @@
 export {
   appendStreamPart,
-  applyActivity,
   discardResponse,
   markResponse,
   commandSummary,

@@ -81,45 +81,22 @@ export const providerPresets: readonly Provider[] = [
   },
   {
     // ADR 0047: "Sign in with ChatGPT" token sharing; Futryn runs the agent loop (backend `hannes`).
-    // The model list is the one OpenCode 0ac0d7e ships for this sign-in; correct it with /model or models add.
+    // Discover the selected account's model slugs from the ChatGPT /models response.
     id: 'chatgpt-api',
     name: 'ChatGPT subscription · API',
     protocol: 'responses',
     baseURL: 'https://api.openai.com/v1',
     auth: 'oauth',
-    catalog: 'manual',
+    catalog: 'openai',
     metadataVersion: 1,
     timeoutMs: 60000,
     family: 'openai',
     requestEncoding: 'zstd',
-    models: [
-      'gpt-5.5',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
-      'gpt-6-sol',
-      'gpt-6-luna',
-      'gpt-6-astra',
-      'gpt-6.1-sol',
-      'gpt-6.1-terra',
-    ],
-  },
-  {
-    id: 'chatgpt',
-    name: 'ChatGPT subscription · Codex CLI (fallback)',
-    protocol: 'responses',
-    baseURL: 'https://chatgpt.com',
-    auth: 'api-key',
-    catalog: 'manual',
-    metadataVersion: 1,
-    timeoutMs: 300000,
-    runtime: 'codex',
-    family: 'openai',
   },
 ];
 /** Built-in sign-in providers whose ids a host config may not redefine. */
 export const reservedProviderIds: ReadonlySet<string> = new Set(
-  providerPresets.filter(p => p.runtime || p.auth === 'oauth').map(p => p.id),
+  providerPresets.filter(p => p.auth === 'oauth').map(p => p.id),
 );
 export class ProviderRegistry {
   constructor(private readonly store: SettingsStore) {}
@@ -158,22 +135,6 @@ export class ProviderRegistry {
  * loading or delegated authentication is enabled by this metadata registry. */
 export class AuthMethodRegistry {
   methods(provider: Provider): import('@futryn/contracts').AuthMethod[] {
-    if (provider.runtime)
-      return [
-        {
-          id: 'subscription-browser',
-          name: 'Sign in with ChatGPT via Codex CLI (fallback)',
-          description: 'Official runtime browser/device sign-in. Credentials isolated per FUTRYN account.',
-          autoComplete: true,
-        },
-        {
-          id: 'subscription-device' as const,
-          name: 'Sign in with device code',
-          description: 'Official Codex device-code flow.',
-          autoComplete: true,
-          advanced: true,
-        },
-      ];
     if (provider.auth === 'oauth')
       return [
         {

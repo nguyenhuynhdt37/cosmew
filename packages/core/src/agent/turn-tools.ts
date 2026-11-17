@@ -89,8 +89,6 @@ export class TurnTools {
   readonly outcomes = new Map<string, ToolResult>();
   /** Call ids already written to the journal. */
   readonly journalCalls = new Set<string>();
-  /** Calls a bridge runtime executed inline (it owns its loop). */
-  readonly inlineIds = new Set<string>();
   /** Write calls that may have changed files; an interrupted turn keeps them in history. */
   readonly appliedSteps: Message[] = [];
   /** Successful read results by tool + arguments, to spot rereads of unchanged content. */

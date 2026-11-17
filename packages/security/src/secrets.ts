@@ -54,13 +54,11 @@ export class SecureVault implements CredentialVault {
     try {
       const ref = credentialRefSchema.parse(reference);
       const secret =
-        ref.kind === 'runtime'
+        ref.kind === 'none'
           ? undefined
-          : ref.kind === 'none'
-            ? undefined
-            : ref.kind === 'env'
-              ? this.environment[ref.name]
-              : ((await (await this.entry(ref.key)).getPassword()) ?? undefined);
+          : ref.kind === 'env'
+            ? this.environment[ref.name]
+            : ((await (await this.entry(ref.key)).getPassword()) ?? undefined);
       if (secret && (secret.length > 8192 || /[\x00-\x20\x7f]/.test(secret))) throw new FutrynError('AUTH');
       if (secret) this.redactor.register(secret);
       return secret;
@@ -79,48 +77,9 @@ export class SecureVault implements CredentialVault {
       throw new FutrynError('STORAGE');
     }
   }
-  async setRuntime(key: string, payload: string): Promise<void> {
-    if (Buffer.byteLength(payload) > 65536) throw new FutrynError('INVALID_INPUT');
-    try {
-      credentialRefSchema.parse({kind: 'keyring', key});
-      const data = JSON.parse(payload);
-      if (data.version !== 1 || typeof data.files !== 'object') throw new FutrynError('INVALID_INPUT');
-      this.registerRuntimeSecrets(data);
-      await (await this.entry(key)).setPassword(payload);
-    } catch (error) {
-      if (error instanceof FutrynError) throw error;
-      throw new FutrynError('STORAGE');
-    }
-  }
-  private registerRuntimeSecrets(value: unknown): void {
-    if (typeof value === 'string') {
-      // Tokens and keys are long opaque strings. Short labels in the same files ("chatgpt",
-      // "User", plan names) are not secrets, and registering them blanked ordinary words on screen.
-      if (value.length >= 12 && !/\s/.test(value)) this.redactor.register(value);
-      // Whole credential documents (Copilot prefixes comment lines) are parsed for nested tokens.
-      try {
-        this.registerRuntimeSecrets(JSON.parse(value.replace(/^(?:\/\/[^\n]*\n)*/, '')));
-      } catch {
-        /* opaque string */
-      }
-    } else if (value && typeof value === 'object') for (const v of Object.values(value)) this.registerRuntimeSecrets(v);
-  }
-  async getRuntime(ref: Extract<CredentialRef, {kind: 'runtime'}>): Promise<string | undefined> {
-    try {
-      credentialRefSchema.parse(ref);
-      const payload = (await (await this.entry(ref.key)).getPassword()) ?? undefined;
-      if (payload) {
-        if (Buffer.byteLength(payload) > 65536) throw new FutrynError('STORAGE');
-        this.registerRuntimeSecrets(JSON.parse(payload));
-      }
-      return payload;
-    } catch {
-      throw new FutrynError('STORAGE');
-    }
-  }
   async delete(ref: CredentialRef): Promise<void> {
     try {
-      if (ref.kind === 'keyring' || ref.kind === 'runtime') await (await this.entry(ref.key)).deleteCredential();
+      if (ref.kind === 'keyring') await (await this.entry(ref.key)).deleteCredential();
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -137,28 +96,16 @@ export function redactModel(
   redactor: Redactor,
 ): import('@futryn/contracts').ModelPort {
   return {
-    inlineTools: model.inlineTools,
-    async *stream(request, signal, executeTool) {
+    async *stream(request, signal) {
       const filter = redactor.stream();
       const reasoning = redactor.stream();
-      for await (const event of model.stream(request, signal, executeTool)) {
+      for await (const event of model.stream(request, signal)) {
         if (event.type === 'textDelta') {
           const text = filter.push(event.text);
           if (text) yield {type: 'textDelta', text: terminalText(text)};
         } else if (event.type === 'reasoningDelta') {
           const text = reasoning.push(event.text);
           if (text) yield {type: 'reasoningDelta', text: terminalText(text)};
-        } else if (event.type === 'activity') {
-          const clean = (value: string, max: number) => terminalText(redactor.text(value)).slice(0, max);
-          yield {
-            type: 'activity',
-            activity: {
-              ...event.activity,
-              name: clean(event.activity.name, 40),
-              label: clean(event.activity.label, 400),
-              ...(event.activity.output !== undefined ? {output: clean(event.activity.output, 4000)} : {}),
-            },
-          };
         } else if (event.type === 'completed') {
           const summary = reasoning.finish();
           if (summary) yield {type: 'reasoningDelta', text: terminalText(summary)};

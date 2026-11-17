@@ -17,17 +17,35 @@ const b64 = (value: object | Uint8Array) =>
   Buffer.from(value instanceof Uint8Array ? value : JSON.stringify(value)).toString('base64url');
 
 /** A fake auth.openai.com: authorize is "visited" by the test's openURL, token/JWKS are served here. */
-async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatus?: number} = {}) {
+async function issuer(
+  options: {
+    scope?: string;
+    badNonce?: boolean;
+    refreshStatus?: number;
+    tokenError?: string;
+    invalidGrantOnce?: boolean;
+    jwksStatus?: number;
+    jwksBody?: string;
+    jwksWait?: Promise<void>;
+    onJwks?: () => void;
+  } = {},
+) {
   const pair = await crypto.subtle.generateKey(
     {name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256'},
     true,
     ['sign', 'verify'],
   );
   const jwk = {...(await crypto.subtle.exportKey('jwk', pair.publicKey)), kid: 'k1', alg: 'RS256', use: 'sig'};
-  const seen: {authorize?: URLSearchParams; tokens: URLSearchParams[]; issued: number} = {tokens: [], issued: 0};
+  const seen: {
+    authorize?: URLSearchParams;
+    authorizations: URLSearchParams[];
+    tokens: URLSearchParams[];
+    issued: number;
+  } = {authorizations: [], tokens: [], issued: 0};
   let nonce = '';
   let challenge = '';
   let clientID = '';
+  let authorizationCode = 'code-1';
   const sign = async (claims: object) => {
     const head = b64({alg: 'RS256', kid: 'k1', typ: 'JWT'});
     const body = b64(claims);
@@ -44,10 +62,19 @@ async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatu
     port: 0,
     async fetch(request): Promise<Response> {
       const url = new URL(request.url);
-      if (url.pathname === '/.well-known/jwks.json') return Response.json({keys: [jwk]});
+      if (url.pathname === '/.well-known/jwks.json') {
+        options.onJwks?.();
+        await options.jwksWait;
+        if (options.jwksStatus) return new Response('upstream-private-detail', {status: options.jwksStatus});
+        if (options.jwksBody) return new Response(options.jwksBody);
+        return Response.json({keys: [jwk]});
+      }
       if (url.pathname === '/api/accounts/oauth/token') {
         const form = new URLSearchParams(await request.text());
         seen.tokens.push(form);
+        if (options.invalidGrantOnce && seen.tokens.length === 1)
+          return Response.json({error: 'invalid_grant'}, {status: 400});
+        if (options.tokenError) return Response.json({error: options.tokenError}, {status: 400});
         if (form.get('grant_type') === 'refresh_token') {
           if (options.refreshStatus) return new Response('{"error":"invalid_grant"}', {status: options.refreshStatus});
           seen.issued++;
@@ -61,7 +88,7 @@ async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatu
         const digest = createHash('sha256')
           .update(form.get('code_verifier') ?? '')
           .digest('base64url');
-        if (digest !== challenge || form.get('client_id') !== clientID || form.get('code') !== 'code-1')
+        if (digest !== challenge || form.get('client_id') !== clientID || form.get('code') !== authorizationCode)
           return new Response('{"error":"invalid_grant"}', {status: 400});
         const now = Math.floor(Date.now() / 1000);
         seen.issued++;
@@ -87,25 +114,29 @@ async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatu
   const url = `http://127.0.0.1:${port}`;
   /** What the browser does: validates the authorization request, then follows the redirect. */
   const browser =
-    (callback: {state?: (real: string) => string; code?: string; error?: string} = {}) =>
+    (callback: {state?: (real: string) => string; code?: string; error?: string; clientID?: string} = {}) =>
     async (target: string) => {
       const auth = new URL(target);
       expect(auth.origin + auth.pathname).toBe(`${url}/api/accounts/authorize`);
       seen.authorize = auth.searchParams;
+      seen.authorizations.push(auth.searchParams);
       nonce = auth.searchParams.get('nonce')!;
       challenge = auth.searchParams.get('code_challenge')!;
       clientID = 'client-issued-by-openai';
+      authorizationCode = `code-${seen.authorizations.length}`;
       const redirect = new URL(auth.searchParams.get('redirect_uri')!);
       if (callback.error) {
         redirect.searchParams.set('error', callback.error);
         redirect.searchParams.set('state', auth.searchParams.get('state')!);
       } else {
-        redirect.searchParams.set('code', callback.code ?? 'code-1');
+        redirect.searchParams.set('code', callback.code ?? authorizationCode);
         redirect.searchParams.set(
           'state',
           callback.state ? callback.state(auth.searchParams.get('state')!) : auth.searchParams.get('state')!,
         );
-        redirect.searchParams.set('client_id', clientID);
+        if (auth.searchParams.get('client_id') === 'dynamic_agent_client')
+          redirect.searchParams.set('client_id', clientID);
+        if (callback.clientID) redirect.searchParams.set('client_id', callback.clientID);
       }
       void fetch(redirect).catch(() => {});
     };
@@ -114,7 +145,7 @@ async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatu
 
 async function setup(auth: Awaited<ReturnType<typeof issuer>>, open: (url: string) => Promise<void>) {
   const api = fixtureServer();
-  api.set({script: () => ({text: 'hello from api'})});
+  api.set({chatgpt: true, modelName: 'available-model', script: () => ({text: 'hello from api'})});
   const home = mkdtempSync(join(tmpdir(), 'futryn-chatgpt-'));
   const clock = {now: Date.now()};
   const vault = memoryVault();
@@ -128,8 +159,10 @@ async function setup(auth: Awaited<ReturnType<typeof issuer>>, open: (url: strin
   const preset = providerPresets.find(p => p.id === 'chatgpt-api')!;
   app.registry.add({...preset, baseURL: `${api.url}/v1`});
   const client = app.createFutrynClient(home);
+  let lastChallenge = '';
   const signIn = async (signal?: AbortSignal) => {
     const challenge = await client.beginProviderAuth('chatgpt-api', 'oauth-browser');
+    lastChallenge = challenge.id;
     expect(challenge.autoComplete).toBe(true);
     return client.connectAccount(
       {
@@ -137,12 +170,11 @@ async function setup(auth: Awaited<ReturnType<typeof issuer>>, open: (url: strin
         alias: 'chatgpt',
         credential: {kind: 'keyring', key: crypto.randomUUID()},
         authChallengeId: challenge.id,
-        manualModelId: 'gpt-5.5',
       },
       signal,
     );
   };
-  return {app, client, api, vault, clock, signIn};
+  return {app, client, api, vault, clock, signIn, lastChallenge: () => lastChallenge};
 }
 
 test('ChatGPT API sign-in: dynamic client, PKCE, scope, verified id_token, tokens only in the keyring, then model requests', async () => {
@@ -156,6 +188,7 @@ test('ChatGPT API sign-in: dynamic client, PKCE, scope, verified id_token, token
   expect(auth.seen.authorize!.get('resource')).toBe('https://api.openai.com/v1');
   expect(auth.seen.authorize!.get('redirect_uri')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/auth\/callback$/);
   expect(account.status).toBe('valid');
+  expect(c.client.cachedModels(account.id).map(model => model.id)).toEqual(['available-model']);
   expect(c.client.status().executionBackend).toMatchObject({kind: 'chat-only'});
   c.client.setToolsEnabled(true);
   expect(c.client.status().executionBackend).toMatchObject({kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes'});
@@ -163,12 +196,28 @@ test('ChatGPT API sign-in: dynamic client, PKCE, scope, verified id_token, token
   expect([...c.vault.values.values()].some(v => v.includes('access-1') && v.includes('refresh-1'))).toBe(true);
   expect(JSON.stringify(c.app.settings.read())).not.toContain('access-1');
   expect(JSON.stringify(c.app.settings.read())).not.toContain('refresh-1');
-  c.client.selectModel('gpt-5.5');
+  c.client.selectModel('available-model');
   let text = '';
   for await (const event of c.client.sendMessage('hi')) if (event.type === 'textDelta') text += event.text;
   expect(text).toBe('hello from api');
   expect(c.api.requests.at(-1)!.authorization).toBe('Bearer access-1');
+  await c.client.diagnose(undefined, true);
+  expect(c.api.requests.at(-1)!.body).toMatchObject({model: 'available-model', stream: true, store: false});
   expect(c.app.redactor.text('x access-1 y refresh-1')).not.toMatch(/access-1|refresh-1/);
+});
+
+test('saved manual ChatGPT presets discover the account catalog and validate using streaming inference', async () => {
+  const auth = await issuer();
+  const c = await setup(auth, auth.browser());
+  c.app.settings.update(state => {
+    const provider = state.providers.find(p => p.id === 'chatgpt-api')!;
+    provider.catalog = 'manual';
+    provider.models = ['obsolete-fallback-model'];
+  });
+  const account = await c.signIn();
+  expect(c.client.cachedModels(account.id).map(model => model.id)).toEqual(['available-model']);
+  await c.client.diagnose(undefined, true);
+  expect(c.api.requests.at(-1)!.body).toMatchObject({model: 'available-model', stream: true, store: false});
 });
 
 test('failed sign-ins leave no account, no vault entry and close the callback listener', async () => {
@@ -200,6 +249,151 @@ test('failed sign-ins leave no account, no vault entry and close the callback li
   }
 });
 
+test('a JWKS outage or malformed response does not blame the user credentials', async () => {
+  for (const [options, code] of [
+    [{jwksStatus: 503}, 'TRANSPORT'],
+    [{jwksStatus: 403}, 'TRANSPORT'],
+    [{jwksStatus: 429}, 'RATE_LIMIT'],
+    [{jwksBody: '<html>upstream-private-detail</html>'}, 'PROTOCOL'],
+  ] as const) {
+    const auth = await issuer(options);
+    const c = await setup(auth, auth.browser());
+    await expect(c.signIn()).rejects.toMatchObject({code});
+    expect(c.app.accounts.list()).toHaveLength(0);
+    expect(c.vault.values.size).toBe(0);
+  }
+});
+
+test('invalid_grant recovers once with the issued client and a fresh PKCE authorization on the same host', async () => {
+  const auth = await issuer({invalidGrantOnce: true});
+  const c = await setup(auth, auth.browser());
+  const account = await c.signIn();
+  expect(account.status).toBe('valid');
+  expect(auth.seen.authorizations).toHaveLength(2);
+  const [first, next] = auth.seen.authorizations;
+  expect(first!.get('client_id')).toBe('dynamic_agent_client');
+  expect(next!.get('client_id')).toBe('client-issued-by-openai');
+  expect(next!.has('agent_name_hint')).toBe(false);
+  expect(next!.get('ext_agent_host_id')).toBe(first!.get('ext_agent_host_id'));
+  for (const key of ['state', 'nonce', 'code_challenge']) expect(next!.get(key)).not.toBe(first!.get(key));
+  expect(auth.seen.tokens).toHaveLength(2);
+  expect(auth.seen.tokens[1]!.get('code')).not.toBe(auth.seen.tokens[0]!.get('code'));
+  expect(auth.seen.tokens[1]!.get('client_id')).toBe('client-issued-by-openai');
+});
+
+test('the OAuth host identity survives application restart', () => {
+  const home = mkdtempSync(join(tmpdir(), 'futryn-oauth-host-'));
+  cleanup.push(() => rmSync(home, {recursive: true, force: true}));
+  const first = startup(home, {vault: memoryVault()});
+  const host = first.settings.read().chatgptHostID;
+  first.db.close();
+  const next = startup(home, {vault: memoryVault()});
+  cleanup.push(() => next.db.close());
+  expect(host).toBeDefined();
+  expect(next.settings.read().chatgptHostID).toBe(host);
+});
+
+test('recovery rejects a different callback client before exchanging its code', async () => {
+  const auth = await issuer({invalidGrantOnce: true});
+  let calls = 0;
+  const c = await setup(auth, async url => {
+    await auth.browser(++calls === 1 ? {} : {clientID: 'different-client'})(url);
+  });
+  await expect(c.signIn()).rejects.toMatchObject({code: 'AUTH'});
+  expect(auth.seen.tokens).toHaveLength(1);
+  expect(c.vault.values.size).toBe(0);
+  expect(c.app.accounts.list()).toHaveLength(0);
+});
+
+test('cancelling the original challenge also cancels its recovery authorization', async () => {
+  const auth = await issuer({invalidGrantOnce: true});
+  let second!: () => void;
+  const opened = new Promise<void>(resolve => (second = resolve));
+  let calls = 0;
+  let redirect = '';
+  const c = await setup(auth, async url => {
+    if (++calls === 1) await auth.browser()(url);
+    else {
+      redirect = new URL(url).searchParams.get('redirect_uri')!;
+      second();
+    }
+  });
+  const pending = c.signIn();
+  void pending.catch(() => {});
+  await opened;
+  await c.client.cancelProviderAuth(c.lastChallenge());
+  await expect(pending).rejects.toMatchObject({code: 'CANCELLED'});
+  await expect(fetch(redirect, {signal: AbortSignal.timeout(1000)})).rejects.toBeDefined();
+  expect(c.vault.values.size).toBe(0);
+});
+
+test('the callback page waits for token verification and reports its failure without provider data', async () => {
+  const auth = await issuer({badNonce: true});
+  let callback!: Promise<Response>;
+  const c = await setup(auth, async target => {
+    // Prime the issuer but capture the callback ourselves so its visible result is tested.
+    const redirect = new URL(target).searchParams.get('redirect_uri')!;
+    const state = new URL(target).searchParams.get('state')!;
+    await auth.browser({state: () => 'wrong-state'})(target);
+    callback = fetch(`${redirect}?state=${state}&code=code-1&client_id=client-issued-by-openai`);
+  });
+  await expect(c.signIn()).rejects.toMatchObject({code: 'AUTH'});
+  const response = await callback;
+  expect(response.status).toBe(400);
+  const page = await response.text();
+  expect(page).toContain('ID token');
+  expect(page).not.toMatch(/Signed in\.|access-1|refresh-1|code-1|upstream-private-detail/);
+});
+
+test('a refused authorization grant reports the safe OAuth reason without reflecting arbitrary provider text', async () => {
+  for (const reason of ['invalid_grant', 'private-provider-secret']) {
+    const auth = await issuer({tokenError: reason});
+    let callback!: Promise<Response>;
+    const c = await setup(auth, async target => {
+      await auth.browser({state: () => 'wrong-state'})(target);
+      const url = new URL(new URL(target).searchParams.get('redirect_uri')!);
+      url.searchParams.set('state', new URL(target).searchParams.get('state')!);
+      url.searchParams.set('code', 'code-1');
+      url.searchParams.set('client_id', 'client-issued-by-openai');
+      callback = fetch(url);
+    });
+    await expect(c.signIn()).rejects.toMatchObject({code: 'AUTH'});
+    const response = await callback;
+    expect(response.status).toBe(400);
+    const page = await response.text();
+    expect(page).toContain('HTTP 400');
+    if (reason === 'invalid_grant') expect(page).toContain('invalid_grant');
+    expect(auth.seen.tokens).toHaveLength(reason === 'invalid_grant' ? 2 : 1);
+    expect(page).not.toMatch(/private-provider-secret|code-1|access-1|refresh-1/);
+    expect(c.vault.values.size).toBe(0);
+    expect(c.app.accounts.list()).toHaveLength(0);
+  }
+});
+
+test('cancellation interrupts an in-flight JWKS request and leaves no credentials', async () => {
+  let started!: () => void;
+  let release!: () => void;
+  const requested = new Promise<void>(resolve => (started = resolve));
+  const wait = new Promise<void>(resolve => (release = resolve));
+  const auth = await issuer({onJwks: started, jwksWait: wait});
+  const c = await setup(auth, auth.browser());
+  const controller = new AbortController();
+  const pending = c.signIn(controller.signal);
+  void pending.catch(() => {});
+  try {
+    await requested;
+    controller.abort();
+    // Do not release the server: completion must come from aborting the HTTP request.
+    await expect(Promise.race([pending, Bun.sleep(1000).then(() => 'still waiting')])).rejects.toMatchObject({
+      code: 'CANCELLED',
+    });
+    expect(c.app.accounts.list()).toHaveLength(0);
+    expect(c.vault.values.size).toBe(0);
+  } finally {
+    release();
+  }
+});
+
 test('cancelling a pending sign-in removes everything and stops the listener', async () => {
   const auth = await issuer();
   let redirect = '';
@@ -221,7 +415,7 @@ test('an expiring access token refreshes once (single flight), rotates the store
   const auth = await issuer();
   const c = await setup(auth, async url => auth.browser()(url));
   await c.signIn();
-  c.client.selectModel('gpt-5.5');
+  c.client.selectModel('available-model');
   c.clock.now += 3600_000; // the access token is now past its expiry
   const run = async () => {
     let text = '';
@@ -245,7 +439,7 @@ test('a refused refresh or a 401 from the API asks for a new sign-in (AUTH), nev
   const refused = await issuer({refreshStatus: 400});
   const c = await setup(refused, async url => refused.browser()(url));
   await c.signIn();
-  c.client.selectModel('gpt-5.5');
+  c.client.selectModel('available-model');
   c.clock.now += 3600_000;
   await expect(
     (async () => {
@@ -259,7 +453,7 @@ test('a refused refresh or a 401 from the API asks for a new sign-in (AUTH), nev
   const auth = await issuer();
   const d = await setup(auth, async url => auth.browser()(url));
   await d.signIn();
-  d.client.selectModel('gpt-5.5');
+  d.client.selectModel('available-model');
   d.api.set({status: 401});
   await expect(
     (async () => {

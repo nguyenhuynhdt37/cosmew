@@ -257,3 +257,83 @@ test('estimated cost guard rejects unknown/unaffordable models before network an
   expect(response.usage.costEstimated).toBe(true);
   x.db.close();
 });
+
+test('chat HTTP usage preserves explicit zero breakdowns without inventing missing counters', async () => {
+  const x = setup();
+  let reported: Record<string, unknown> = {};
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      const body = (await request.json()) as {stream?: boolean};
+      const base = {id: 'usage-fixture', object: 'chat.completion', created: 1234567890, model: 'fixture-model'};
+      if (!body.stream)
+        return Response.json({
+          ...base,
+          choices: [{index: 0, message: {role: 'assistant', content: 'Done'}, finish_reason: 'stop'}],
+          usage: reported,
+        });
+      return new Response(
+        [
+          {
+            ...base,
+            object: 'chat.completion.chunk',
+            choices: [{index: 0, delta: {role: 'assistant', content: 'Done'}, finish_reason: null}],
+          },
+          {...base, object: 'chat.completion.chunk', choices: [{index: 0, delta: {}, finish_reason: 'stop'}]},
+          {...base, object: 'chat.completion.chunk', choices: [], usage: reported},
+        ]
+          .map(value => `data: ${JSON.stringify(value)}\n\n`)
+          .join('') + 'data: [DONE]\n\n',
+        {headers: {'content-type': 'text/event-stream'}},
+      );
+    },
+  });
+  try {
+    const transport = new ProviderTransport(
+      {...x.provider, baseURL: `http://127.0.0.1:${server.port}/v1`},
+      x.account,
+      x.vault,
+      new ConfiguredNetworkPolicy(),
+    );
+    const adapter = new ProviderAdapter(transport, x.request.modelId);
+    for (const stream of [false, true]) {
+      const read = async () =>
+        stream
+          ? (await Array.fromAsync(adapter.stream(x.request))).find(event => event.type === 'completed')!.usage
+          : (await adapter.generate(x.request)).usage;
+      reported = {
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        prompt_tokens_details: {cached_tokens: 0},
+        completion_tokens_details: {reasoning_tokens: 0},
+      };
+      expect(await read()).toMatchObject({inputTokens: 4, outputTokens: 2, cacheReadTokens: 0, reasoningTokens: 0});
+      reported = {prompt_tokens: 4, completion_tokens: 2, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 4};
+      expect((await read()).cacheReadTokens).toBe(0);
+      reported = {prompt_tokens: 4, completion_tokens: 2};
+      const missing = await read();
+      expect(missing.cacheReadTokens).toBeUndefined();
+      expect(missing.cacheWriteTokens).toBeUndefined();
+      expect(missing.reasoningTokens).toBeUndefined();
+      reported = {};
+      expect(await read()).toMatchObject({inputTokens: null, outputTokens: null});
+    }
+  } finally {
+    server.stop(true);
+    x.db.close();
+  }
+});
+
+test('Responses HTTP usage retains explicitly reported zero cache reads', async () => {
+  const x = setup('responses');
+  try {
+    x.f.set({cacheTokens: 0});
+    const adapter = new ProviderAdapter(x.transport, x.request.modelId);
+    expect((await adapter.generate(x.request)).usage.cacheReadTokens).toBe(0);
+    const events = await Array.fromAsync(adapter.stream(x.request));
+    expect(events.find(event => event.type === 'completed')!.usage.cacheReadTokens).toBe(0);
+  } finally {
+    x.db.close();
+  }
+});
