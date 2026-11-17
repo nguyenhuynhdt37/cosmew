@@ -223,3 +223,154 @@ test('real HTTP transport cancels oversized and aborted streams without waiting 
   const signal = AbortSignal.timeout(20);
   await expect(requestPinned(new URL(`http://fixture.invalid:${server.port}/slow`), address, signal)).rejects.toThrow();
 });
+
+test('public IPv6 transport failure falls back only to the already validated IPv4 answer', async () => {
+  const attempted: string[] = [];
+  let resolutions = 0;
+  const authorized: string[] = [];
+  const runtime = new WebFetchRuntime({
+    resolve: async () => {
+      resolutions++;
+      return [
+        {address: '2606:4700:4700::1111', family: 6},
+        {address: '1.1.1.1', family: 4},
+      ];
+    },
+    request: async (_url, address) => {
+      attempted.push(address.address);
+      if (address.family === 6) throw Object.assign(new Error('unreachable'), {code: 'ECONNREFUSED'});
+      return {status: 200, headers: {'content-type': 'text/plain'}, body: Buffer.from('reachable through IPv4')};
+    },
+  });
+  const result = await runtime.fetch('https://public.example/', {
+    authorize: async url => {
+      authorized.push(url);
+      return true;
+    },
+  });
+  expect(result.content).toContain('reachable through IPv4');
+  expect(attempted).toEqual(['2606:4700:4700::1111', '1.1.1.1']);
+  expect(resolutions).toBe(1);
+  expect(authorized).toEqual(['https://public.example/']);
+});
+
+test('address fallback never tries a private later answer or repeats a response/error at application level', async () => {
+  let attempts = 0;
+  const mixed = new WebFetchRuntime({
+    resolve: async () => [
+      {address: '2606:4700:4700::1111', family: 6},
+      {address: '127.0.0.1', family: 4},
+    ],
+    request: async () => {
+      attempts++;
+      throw new Error('no connection permitted');
+    },
+  });
+  await expect(mixed.fetch('https://public.example/', {authorize: async () => true})).rejects.toMatchObject({
+    code: 'POLICY',
+  });
+  expect(attempts).toBe(0);
+  const responseFailure = new WebFetchRuntime({
+    resolve: async () => [
+      {address: '2606:4700:4700::1111', family: 6},
+      {address: '1.1.1.1', family: 4},
+    ],
+    request: async () => {
+      attempts++;
+      return {status: 403, headers: {}, body: new Uint8Array()};
+    },
+  });
+  await expect(responseFailure.fetch('https://public.example/', {authorize: async () => true})).rejects.toMatchObject({
+    code: 'TRANSPORT',
+  });
+  expect(attempts).toBe(1);
+});
+
+test('a black-holed first connection gets a bounded slice so validated IPv4 fits the total deadline', async () => {
+  const tried: string[] = [];
+  const budgets: number[] = [];
+  const runtime = new WebFetchRuntime({
+    resolve: async () => [
+      {address: '2606:4700:4700::1111', family: 6},
+      {address: '1.1.1.1', family: 4},
+    ],
+    request: async (_url, address, _signal, budget?: number) => {
+      tried.push(address.address);
+      expect(budget).toBeGreaterThan(0);
+      expect(budget).toBeLessThanOrEqual(50);
+      budgets.push(budget!);
+      if (address.family === 6) {
+        await Bun.sleep(budget!);
+        throw Object.assign(new Error('connect timed out'), {code: 'ETIMEDOUT'});
+      }
+      return {status: 200, headers: {'content-type': 'text/plain'}, body: Buffer.from('fallback')};
+    },
+  });
+  expect(
+    (await runtime.fetch('https://public.example/', {timeout: 0.1, authorize: async () => true})).content,
+  ).toContain('fallback');
+  expect(tried).toHaveLength(2);
+  expect(budgets).toHaveLength(2);
+});
+
+test('cancellation while trying the first address stops all later address attempts', async () => {
+  const controller = new AbortController();
+  let attempts = 0;
+  const runtime = new WebFetchRuntime({
+    resolve: async () => [
+      {address: '2606:4700:4700::1111', family: 6},
+      {address: '1.1.1.1', family: 4},
+    ],
+    request: async (_url, _address, signal) => {
+      attempts++;
+      queueMicrotask(() => controller.abort());
+      return await new Promise((_resolve, reject) =>
+        signal.addEventListener('abort', () => reject(new Error('cancelled')), {once: true}),
+      );
+    },
+  });
+  await expect(
+    runtime.fetch('https://public.example/', {signal: controller.signal, authorize: async () => true}),
+  ).rejects.toMatchObject({code: 'CANCELLED'});
+  expect(attempts).toBe(1);
+});
+
+test('fallback connections remain pinned on real local sockets without re-resolving the URL hostname', async () => {
+  const hosts: string[] = [];
+  const attempts: string[] = [];
+  let resolutions = 0;
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(request) {
+      hosts.push(request.headers.get('host') ?? '');
+      return new Response('real pinned fallback');
+    },
+  });
+  cleanup.push(() => server.stop(true));
+  const runtime = new WebFetchRuntime({
+    resolve: async () => {
+      resolutions++;
+      return [
+        {address: '1.1.1.1', family: 4},
+        {address: '8.8.8.8', family: 4},
+      ];
+    },
+    request: (url, address, signal, budget) => {
+      attempts.push(address.address);
+      // Fixture-only adapter maps validated public test identities to two actual loopback sockets.
+      return requestPinned(
+        url,
+        {address: address.address === '1.1.1.1' ? '127.0.0.2' : '127.0.0.1', family: 4},
+        signal,
+        budget,
+      );
+    },
+  });
+  expect(
+    (await runtime.fetch(`http://unresolvable.invalid:${server.port}/`, {authorize: async () => true})).content,
+  ).toContain('real pinned fallback');
+  expect(resolutions).toBe(1);
+  expect(attempts).toEqual(['1.1.1.1', '8.8.8.8']);
+  expect(hosts).toEqual([`unresolvable.invalid:${server.port}`]);
+});

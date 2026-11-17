@@ -18,7 +18,7 @@ export interface WebResponse {
 }
 export interface WebTransport {
   resolve(host: string): Promise<ResolvedAddress[]>;
-  request(url: URL, address: ResolvedAddress, signal: AbortSignal): Promise<WebResponse>;
+  request(url: URL, address: ResolvedAddress, signal: AbortSignal, connectTimeoutMs?: number): Promise<WebResponse>;
 }
 export interface FetchOptions {
   format?: 'markdown' | 'text' | 'html';
@@ -83,17 +83,46 @@ export function parseFetchUrl(input: string): URL {
   return url;
 }
 
+/** Only failures before response headers may try another already-approved DNS address. */
+class AddressConnectionFailure extends FutrynError {
+  constructor() {
+    super('TRANSPORT');
+  }
+}
+const CONNECTION_ERRORS = new Set([
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'EAFNOSUPPORT',
+  'ENETDOWN',
+  'ETIMEDOUT',
+  'ECONNRESET',
+]);
+function canTryNextAddress(error: unknown): boolean {
+  return (
+    error instanceof AddressConnectionFailure ||
+    (!!error && typeof error === 'object' && 'code' in error && CONNECTION_ERRORS.has(String(error.code)))
+  );
+}
+
 /**
  * One network attempt: DNS has already been checked; lookup is pinned to that exact result and
  * never resolves again. URL hostname still supplies HTTP Host and TLS SNI/certificate validation.
  * No proxy/env configuration, cookies, authentication, redirects or decompression are inherited.
  */
-export function requestPinned(url: URL, address: ResolvedAddress, signal: AbortSignal): Promise<WebResponse> {
+export function requestPinned(
+  url: URL,
+  address: ResolvedAddress,
+  signal: AbortSignal,
+  connectTimeoutMs = 2000,
+): Promise<WebResponse> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
       reject(new FutrynError('CANCELLED'));
       return;
     }
+    let receivedHeaders = false;
+    let connectTimer: ReturnType<typeof setTimeout> | undefined;
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
       url,
       {
@@ -116,6 +145,8 @@ export function requestPinned(url: URL, address: ResolvedAddress, signal: AbortS
         }) as never,
       },
       response => {
+        receivedHeaders = true;
+        if (connectTimer) clearTimeout(connectTimer);
         const status = response.statusCode ?? 0;
         // Redirect bodies do not matter and could be endless. Do not read them.
         if ([301, 302, 303, 307, 308].includes(status)) {
@@ -146,7 +177,22 @@ export function requestPinned(url: URL, address: ResolvedAddress, signal: AbortS
         response.on('aborted', () => reject(new FutrynError('TRANSPORT')));
       },
     );
-    request.on('error', () => reject(new FutrynError(signal.aborted ? 'CANCELLED' : 'TRANSPORT')));
+    request.on('error', (error: NodeJS.ErrnoException) => {
+      if (connectTimer) clearTimeout(connectTimer);
+      reject(
+        signal.aborted
+          ? new FutrynError('CANCELLED')
+          : !receivedHeaders && CONNECTION_ERRORS.has(error.code ?? '')
+            ? new AddressConnectionFailure()
+            : new FutrynError('TRANSPORT'),
+      );
+    });
+    // A black-holed first family cannot consume the entire operation deadline before IPv4.
+    connectTimer = setTimeout(
+      () => request.destroy(Object.assign(new Error('Connection deadline'), {code: 'ETIMEDOUT'})),
+      Math.max(1, Math.ceil(connectTimeoutMs)),
+    );
+    connectTimer.unref?.();
     request.end();
   });
 }
@@ -160,6 +206,7 @@ export class WebFetchRuntime {
   async fetch(input: string, options: FetchOptions): Promise<{content: string; url: string; mime: string}> {
     const timeout = options.timeout ?? 30;
     if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 120) throw new FutrynError('INVALID_INPUT');
+    const end = Date.now() + Math.ceil(timeout * 1000);
     const deadline = AbortSignal.timeout(Math.max(1, Math.ceil(timeout * 1000)));
     const signal = AbortSignal.any([deadline, ...(options.signal ? [options.signal] : [])]);
     try {
@@ -171,10 +218,32 @@ export class WebFetchRuntime {
         const addresses = isIP(host)
           ? [{address: host, family: isIP(host)}]
           : await abortable(this.transport.resolve(host), signal);
-        if (!addresses.length || addresses.some(address => !isPublicAddress(address.address)))
+        if (
+          !addresses.length ||
+          addresses.some(address => !isPublicAddress(address.address) || isIP(address.address) !== address.family)
+        )
           throw new FutrynError('POLICY');
-        // All answers must be public; the first is pinned to the actual socket (DNS rebinding safe).
-        const response = await abortable(this.transport.request(url, addresses[0]!, signal), signal);
+        // Validate the whole answer set once, then pin each connection attempt to that set.
+        // No new DNS lookup or cross-origin/auth change is allowed during address fallback.
+        let response: WebResponse | undefined;
+        for (let index = 0; index < addresses.length; index++) {
+          signal.throwIfAborted();
+          try {
+            response = await abortable(
+              this.transport.request(
+                url,
+                addresses[index]!,
+                signal,
+                Math.max(1, Math.min(2000, Math.floor((end - Date.now()) / (addresses.length - index)))),
+              ),
+              signal,
+            );
+            break;
+          } catch (error) {
+            if (signal.aborted || index === addresses.length - 1 || !canTryNextAddress(error)) throw error;
+          }
+        }
+        if (!response) throw new FutrynError('TRANSPORT');
         if ([301, 302, 303, 307, 308].includes(response.status)) {
           if (redirects >= MAX_WEB_REDIRECTS) throw new FutrynError('PROTOCOL');
           const location = response.headers.location;
