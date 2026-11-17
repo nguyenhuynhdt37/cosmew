@@ -221,3 +221,36 @@ native('a PATH-exposed cargo root still cannot reveal its credentials or config'
     expect(out.output).not.toContain('CARGO_SECRET');
   }
 });
+
+native('cargo secrets are denied for roots outside home, via CARGO_HOME and via a PATH bin directory', async () => {
+  const s = paths();
+  const {home} = fakeRustHome(s.base);
+  const outside = join(s.base, 'opt-cargo');
+  mkdirSync(join(outside, 'bin'), {recursive: true});
+  writeFileSync(join(outside, 'bin', 'cargo'), '#!/bin/sh\necho fake-cargo\n', {mode: 0o755});
+  for (const name of ['credentials', 'credentials.toml', 'config', 'config.toml'])
+    writeFileSync(join(outside, name), 'CARGO_SECRET_' + name);
+  const saved = process.env.CARGO_HOME;
+  try {
+    for (const viaEnv of [false, true]) {
+      if (viaEnv) process.env.CARGO_HOME = outside;
+      else delete process.env.CARGO_HOME;
+      const runtime = new NativeCommandRuntime({
+        workspaceRoot: s.root,
+        home,
+        hostPath: viaEnv ? '/usr/bin:/bin' : `${join(outside, 'bin')}:/usr/bin:/bin`,
+      });
+      clean.push(() => runtime.shutdown());
+      expect(runtime.availability().ok).toBe(true);
+      if (!viaEnv) expect((await sh(runtime, 'cargo')).output).toContain('fake-cargo');
+      for (const name of ['credentials', 'credentials.toml', 'config', 'config.toml']) {
+        const out = await sh(runtime, `cat ${outside}/${name}`);
+        expect(out.exitCode).not.toBe(0);
+        expect(out.output).not.toContain('CARGO_SECRET');
+      }
+    }
+  } finally {
+    if (saved === undefined) delete process.env.CARGO_HOME;
+    else process.env.CARGO_HOME = saved;
+  }
+});

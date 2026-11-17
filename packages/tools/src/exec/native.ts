@@ -814,7 +814,7 @@ function rustToolchainDirectories(
   return {rustupHome, cargoHome, readable};
 }
 
-/** Cargo registry tokens and config, for `~/.cargo`, `$CARGO_HOME` and any exposed directory that holds cargo. */
+/** Cargo registry tokens and config, for `~/.cargo`, `$CARGO_HOME` and any PATH directory that holds cargo, wherever it lives. */
 function cargoSecretFiles(directories: string[], home: string): string[] {
   const roots = new Set([join(home, '.cargo'), realPath(join(home, '.cargo'))]);
   if (process.env.CARGO_HOME) roots.add(realPath(process.env.CARGO_HOME));
@@ -823,7 +823,7 @@ function cargoSecretFiles(directories: string[], home: string): string[] {
   const files = [...roots].flatMap(root =>
     ['credentials', 'credentials.toml', 'config', 'config.toml'].map(name => join(root, name)),
   );
-  return [...new Set(files.flatMap(file => [file, realPath(file)]))].filter(file => file.startsWith(home + '/'));
+  return [...new Set(files.flatMap(file => [file, realPath(file)]))];
 }
 
 function realPath(path: string): string {
