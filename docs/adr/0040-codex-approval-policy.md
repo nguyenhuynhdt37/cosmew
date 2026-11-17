@@ -29,7 +29,9 @@ Under `never` an `ask` project rule is refused instead of shown (Codex `prompt_i
 
 **request_permissions** `{reason?, permissions: {network?: {enabled}, file_system?: {write?: string[]}}}` — Codex's schema, not the plan's draft shape, so models trained on Codex call it correctly. It always asks; `never` refuses it. "Allow once" grants for the rest of the running turn (bound to the client's turn id), "for session" until the session ends or grants are revoked. A network grant turns later `exec_command` calls that ask for network into ordinary command decisions (dangerous commands still ask); a write grant makes writes under those project-relative paths ordinary edits when the sandbox is read-only. Read access and paths outside the project are refused without a prompt (no access outside the approved workspace exists).
 
-**stdin**: plain input inside the launch sandbox is an ordinary request (`on-request` allows, as Codex `stdin_approval.rs`); retained network and sandbox drift still ask.
+**stdin**: plain input inside the launch sandbox is an ordinary request (`on-request` allows, as Codex `stdin_approval.rs`); retained network and sandbox drift still ask. Input to a session whose program is a shell, or cannot be identified, is a command line and gets the exec_command gate: dangerous input asks (`never` refuses), unverifiable input asks, and a "session" answer for ordinary input never covers it (the grant is then bound to the exact text). Known non-shell REPLs (python, node, psql, …) keep plain-input semantics.
+
+**Security review fixes (2026-11-17):** every argument word that is not literal (`$(…)`, `"$F"`, `-r${X}f`, `$'…'`) makes the command unverifiable instead of being dropped; for `sh/bash/zsh/dash/ksh`, any short-option cluster containing `c` (`-ec`, `-xc`, `-o x -c`) selects command-string mode and the script is analyzed, also behind `sudo`/`env`; positional arguments after the script (`bash -c '"$@"' _ rm -rf /`) are checked as a command and make the line unverifiable; a missing or unparseable script is unverifiable.
 
 ## Consequences
 

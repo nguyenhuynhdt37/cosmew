@@ -26,7 +26,7 @@ export type PreparedTool = {
       /** Effective sandbox of a launch; stdin carries its session's launch sandbox instead. */
       sandbox?: CommandSandbox;
       justification?: string;
-      stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox};
+      stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox; sessionCommand?: string};
       /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
       grantCommand?: string;
       /** Tree-sitter classification (ADR 0040), computed once at authorization. */

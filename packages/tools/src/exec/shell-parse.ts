@@ -55,7 +55,8 @@ export function shellParserReady(): boolean {
 
 /** Longest script handed to the parser; a longer one is unverified. */
 const MAX_SCRIPT_CHARS = 64 * 1024;
-const SHELLS = new Set(['bash', 'sh', 'zsh']);
+/** Redirections inside a command node: their targets do not change which program runs. */
+const REDIRECTS = new Set(['file_redirect', 'heredoc_redirect', 'herestring_redirect']);
 const DYNAMIC = new Set(['command_substitution', 'process_substitution']);
 
 /**
@@ -125,7 +126,6 @@ export function analyzeShell(script: string): ShellAnalysis | null {
       if (node.type === 'command') {
         const words: string[] = [];
         let named = false;
-        let dynamicScript = false;
         for (const child of node.namedChildren) {
           if (!child) continue;
           if (child.type === 'command_name') {
@@ -141,16 +141,11 @@ export function analyzeShell(script: string): ShellAnalysis | null {
           } else if (named) {
             const word = literal(child);
             if (word !== null) words.push(word);
-            // `bash -c "$SCRIPT"`: the nested script is not literal, so it cannot be checked.
-            else if (
-              words.length === 2 &&
-              SHELLS.has(words[0]!.split('/').at(-1)!) &&
-              (words[1] === '-c' || words[1] === '-lc')
-            )
-              dynamicScript = true;
+            // A word whose runtime value is not its spelling (`$(echo -rf)`, `"$F"`, `-r${X}f`)
+            // could be anything, so the command is unverifiable; it is never silently dropped.
+            else if (!REDIRECTS.has(child.type)) uncertain = true;
           }
         }
-        if (dynamicScript) uncertain = true;
         if (named) {
           const program = words[0]!.split('/').at(-1);
           if (program === 'eval') uncertain = true;
@@ -164,4 +159,42 @@ export function analyzeShell(script: string): ShellAnalysis | null {
   } finally {
     tree.delete();
   }
+}
+
+/** Interactive programs whose input is not a shell command line. */
+const NON_SHELL_PROGRAMS = new Set([
+  'python',
+  'python3',
+  'node',
+  'bun',
+  'deno',
+  'irb',
+  'ruby',
+  'ghci',
+  'psql',
+  'sqlite3',
+  'mysql',
+  'redis-cli',
+  'less',
+  'more',
+  'man',
+  'vi',
+  'vim',
+  'nvim',
+  'nano',
+  'top',
+  'htop',
+]);
+
+/**
+ * Whether input to a session launched with `command` must be judged as a shell command line:
+ * true for shells and for anything Futryn cannot identify (fail closed), false only for a known
+ * non-shell interactive program as the last command of a verifiable launch line.
+ */
+export function inputIsShellCommand(command: string | undefined): boolean {
+  if (command === undefined) return true;
+  const analysis = analyzeShell(command);
+  if (!analysis || analysis.uncertain) return true;
+  const program = analysis.commands.at(-1)?.[0]?.split('/').at(-1);
+  return !program || !NON_SHELL_PROGRAMS.has(program);
 }

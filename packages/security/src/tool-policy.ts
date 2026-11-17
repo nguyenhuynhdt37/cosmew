@@ -172,6 +172,8 @@ export function evaluateStdin(input: {
   launch: ExecSandbox;
   current: ExecSandbox;
   escalation?: SandboxEscalation;
+  /** Classification of the input when the session runs a shell (or an unknown program). */
+  classification?: {dangerous: string | null; uncertain: boolean};
 }): PermissionDecision {
   if (input.chars.includes('\u0000')) return {effect: 'deny', reason: 'invalid-input'};
   if (!input.chars && !input.interrupt) return {effect: 'allow', reason: 'stdin-poll'};
@@ -182,6 +184,11 @@ export function evaluateStdin(input: {
   if (input.launch.network && input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
   if (input.launch.network) return {effect: 'ask', reason: 'stdin-retained-escalation'};
   if (input.launch.mode !== input.current.mode) return {effect: 'ask', reason: 'stdin-policy-drift'};
+  // Input to a shell is a command line: it gets the same dangerous/unverified gate as exec_command
+  // (a forced rm typed into bash must not run where the same exec_command would ask). A caller that
+  // could not classify a shell's input passes `uncertain`.
+  if (input.classification?.dangerous) return {effect: 'ask', reason: 'dangerous-command'};
+  if (input.classification?.uncertain) return {effect: 'ask', reason: 'unverified-command'};
   // Plain input inside the launch sandbox: the approval policy answers (ADR 0040). Codex
   // (`stdin_approval.rs`, pinned 090be4df) reviews only retained agent grants and policy drift;
   // `untrusted` still asks, because input to a shell or REPL is a new command.

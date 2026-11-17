@@ -26,6 +26,8 @@ beforeAll(async () => {
 });
 
 const classify = (script: string) => classifyCommand(analyzeShell(script), analyzeShell);
+const SHELL_SESSION = '00000000-0000-4000-8000-000000000001';
+const PYTHON_SESSION = '00000000-0000-4000-8000-000000000002';
 
 describe('tree-sitter classification', () => {
   test('Codex forced-rm variants are dangerous, through wrappers and nested scripts', () => {
@@ -194,6 +196,20 @@ async function chain(options: {sandboxMode?: 'read-only' | 'workspace-write'} = 
     }),
     run: async request => {
       ran.push(request.command);
+      return {kind: 'exited', exitCode: 0, signal: null, output: '', omittedBytes: 0, durationMs: 1};
+    },
+    // Two owned sessions: an interactive shell and a Python REPL.
+    session: id =>
+      id === SHELL_SESSION || id === PYTHON_SESSION
+        ? {
+            cwd: root,
+            command: id === SHELL_SESSION ? 'bash' : 'python3 -i',
+            tty: true,
+            sandbox: {mode: 'workspace-write', network: false},
+          }
+        : undefined,
+    writeStdin: async (_id, chars) => {
+      ran.push(`stdin:${chars}`);
       return {kind: 'exited', exitCode: 0, signal: null, output: '', omittedBytes: 0, durationMs: 1};
     },
   };
@@ -394,5 +410,58 @@ describe('request_permissions', () => {
       (await c.attempt('request_permissions', {permissions: {file_system: {write: ['.git']}}}, 'session')).status,
     ).toBe('ok');
     expect((await c.attempt('write', {path: '.git/config', content: 'x'})).outcome).toBe('refused');
+  });
+});
+
+/** Regressions from the W1 security review (parser differential, stdin bypass). */
+describe('security review regressions', () => {
+  test('non-literal argument words are never dropped silently: the command is unverified', () => {
+    for (const script of ['rm $(echo -rf) /', 'rm "$F" x', 'rm -r${X}f /', 'ls "$HOME"', "rm $'-rf' /"])
+      expect({script, uncertain: classify(script).uncertain}).toEqual({script, uncertain: true});
+  });
+
+  test('every shell command-string form is analyzed, including positional arguments', () => {
+    for (const script of [
+      "bash -ec 'rm -rf /'",
+      "sh -xc 'rm -rf /'",
+      "dash -c 'rm -rf /'",
+      "zsh -o errexit -c 'rm -rf /'",
+      `bash -c '"$@"' _ rm -rf /`,
+      "env FOO=1 bash -lc 'rm -fr /tmp/x'",
+    ])
+      expect({script, dangerous: classify(script).dangerous}).toEqual({script, dangerous: 'forced-rm'});
+    for (const script of ["bash -c 'echo hi' _ a b", 'bash -c', `sudo bash -c "$X"`, "bash -ec 'echo $(id)'"])
+      expect({script, uncertain: classify(script).uncertain}).toEqual({script, uncertain: true});
+    // Safe forms stay ordinary.
+    for (const script of ["bash -c 'npm test'", "sh -ec 'ls -la'", 'bash script.sh', "bash -c 'echo hi' bash"])
+      expect({script, ...classify(script)}).toEqual({script, dangerous: null, uncertain: false});
+  });
+
+  test('on-request: input to a shell session gets the exec_command gate; plain input and REPL input do not prompt', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('auto');
+    const stdin = (session: string, chars: string) => c.attempt('write_stdin', {session_id: session, chars});
+    expect((await stdin(SHELL_SESSION, 'ls\n')).outcome).toBe('ran');
+    expect((await stdin(SHELL_SESSION, 'rm -rf /tmp/x\n')).outcome).toBe('prompt');
+    expect((await stdin(SHELL_SESSION, 'rm "$F" /tmp/x\n')).outcome).toBe('prompt');
+    expect((await stdin(PYTHON_SESSION, 'print(1)\n')).outcome).toBe('ran');
+    // Polls and interrupts stay transport.
+    expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: ''})).outcome).toBe('ran');
+    expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, signal: 'SIGINT'})).outcome).toBe('ran');
+    expect(c.ran).not.toContain('stdin:rm -rf /tmp/x\n');
+    // never refuses dangerous input without a prompt.
+    c.client.setPermissionMode('bypassPermissions');
+    expect(await stdin(SHELL_SESSION, 'rm -rf /tmp/x\n')).toMatchObject({outcome: 'refused', prompts: 0});
+  });
+
+  test('untrusted: a session grant for ordinary input does not cover dangerous input', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('default');
+    const first = await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: 'ls\n'}, 'session');
+    expect(first).toMatchObject({prompts: 1, status: 'ok'});
+    expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: 'pwd\n'})).outcome).toBe('ran');
+    expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: 'rm -rf /tmp/x\n'})).outcome).toBe(
+      'prompt',
+    );
   });
 });

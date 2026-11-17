@@ -32,8 +32,59 @@ export type ShellParser = (script: string) => ShellAnalysis | null;
 
 export type DangerousCommandMatch = 'forced-rm' | 'other';
 
-const SHELLS = new Set(['bash', 'sh', 'zsh']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh']);
 const basename = (word: string) => word.split('/').filter(Boolean).at(-1) ?? '';
+
+/**
+ * `bash -ec 'script' $0 args…` → the script and its positional arguments. Any short-option cluster
+ * containing `c` selects command-string mode (`-c`, `-lc`, `-ec`, `-xc`); the command string is the
+ * first operand after the options. Null when `argv` is not a shell in command-string mode.
+ */
+export function shellCommandString(argv: string[]): {script: string | undefined; positional: string[]} | null {
+  if (!SHELLS.has(argv[0] === undefined ? '' : basename(argv[0]))) return null;
+  let commandMode = false;
+  let index = 1;
+  while (index < argv.length) {
+    const arg = argv[index]!;
+    if (arg === '--' || arg === '-') {
+      index++;
+      break;
+    }
+    if (!/^[-+]/.test(arg)) break;
+    if (!arg.startsWith('--')) {
+      if (arg.slice(1).includes('c')) commandMode = true;
+      // `-o option` / `+o option` / `-O shopt` consume the next word.
+      if (/^[-+][^-]*[oO]$/.test(arg)) index++;
+    }
+    index++;
+  }
+  if (!commandMode) return null;
+  return {script: argv[index], positional: argv.slice(index + 1)};
+}
+
+/** Strip Codex's transparent wrappers (`sudo`, `env [-i] [NAME=v] [--]`) to the command they run. */
+function unwrap(argv: string[], depth = 0): string[] {
+  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return argv;
+  const name = argv[0] === undefined ? '' : basename(argv[0]);
+  if (name === 'sudo') return unwrap(argv.slice(1), depth + 1);
+  if (name === 'env') return unwrap(argv.slice(envCommandIndex(argv)), depth + 1);
+  return argv;
+}
+
+function envCommandIndex(argv: string[]): number {
+  let index = 1;
+  while (index < argv.length) {
+    const arg = argv[index]!;
+    if (arg === '--') return index + 1;
+    const eq = arg.indexOf('=');
+    if (arg === '-i' || arg === '--ignore-environment' || (eq > 0 && !arg.startsWith('-'))) {
+      index++;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
 
 function rmForces(args: string[]): boolean {
   for (const arg of args) {
@@ -50,31 +101,22 @@ export function dangerousCommandMatch(argv: string[], parse: ShellParser, depth 
   const name = argv[0] === undefined ? '' : basename(argv[0]);
   if (name === 'rm' && rmForces(argv.slice(1))) return 'forced-rm';
   if (name === 'sudo') return dangerousCommandMatch(argv.slice(1), parse, depth + 1);
-  if (name === 'env') {
-    let index = 1;
-    while (index < argv.length) {
-      const arg = argv[index]!;
-      if (arg === '--') {
-        index++;
-        break;
-      }
-      const eq = arg.indexOf('=');
-      if (arg === '-i' || arg === '--ignore-environment' || (eq > 0 && !arg.startsWith('-'))) {
-        index++;
-        continue;
-      }
-      break;
-    }
-    return dangerousCommandMatch(argv.slice(index), parse, depth + 1);
-  }
+  if (name === 'env') return dangerousCommandMatch(argv.slice(envCommandIndex(argv)), parse, depth + 1);
   if (name === 'trap') {
     const action = argv[1] === '--' ? argv[2] : argv[1];
     if (action === undefined || action.startsWith('-')) return null;
     return dangerousScript(action, parse, depth + 1);
   }
-  // `bash -lc "script"`: every literal command inside the script is checked.
-  if (SHELLS.has(name) && argv.length === 3 && (argv[1] === '-c' || argv[1] === '-lc'))
-    return dangerousScript(argv[2]!, parse, depth + 1);
+  // `bash -lc "script"`, `sh -ec …`: every literal command inside the script is checked, and the
+  // positional arguments too (`bash -c '"$@"' _ rm -rf /` runs them).
+  const shell = shellCommandString(argv);
+  if (shell) {
+    const inScript = shell.script === undefined ? null : dangerousScript(shell.script, parse, depth + 1);
+    return (
+      inScript ??
+      (shell.positional.length > 1 ? dangerousCommandMatch(shell.positional.slice(1), parse, depth + 1) : null)
+    );
+  }
   return null;
 }
 
@@ -104,14 +146,20 @@ export function classifyCommand(analysis: ShellAnalysis | null, parse: ShellPars
     const dangerous = dangerousCommandMatch(command, parse);
     if (dangerous) return {dangerous, uncertain: analysis.uncertain};
   }
-  // A nested `bash -c` script that is itself unverifiable makes the whole line uncertain.
-  const nestedUncertain = analysis.commands.some(command => {
-    const name = command[0] === undefined ? '' : basename(command[0]);
-    if (!SHELLS.has(name) || !(command[1] === '-c' || command[1] === '-lc')) return false;
-    const nested = command[2] === undefined ? null : parse(command[2]);
-    return !nested || nested.uncertain;
-  });
-  return {dangerous: null, uncertain: analysis.uncertain || nestedUncertain};
+  return {dangerous: null, uncertain: analysis.uncertain || analysis.commands.some(c => nestedUncertain(c, parse, 0))};
+}
+
+/**
+ * A shell in command-string mode (also behind sudo/env) whose script is missing, unparseable or
+ * itself unverifiable, or that receives positional arguments the script may run, is uncertain.
+ */
+function nestedUncertain(command: string[], parse: ShellParser, depth: number): boolean {
+  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return true;
+  const shell = shellCommandString(unwrap(command));
+  if (!shell) return false;
+  if (shell.script === undefined || shell.positional.length > 1) return true;
+  const nested = parse(shell.script);
+  return !nested || nested.uncertain || nested.commands.some(c => nestedUncertain(c, parse, depth + 1));
 }
 
 /** Permission kind for a policy reason, so every tool shares one approval table. */
