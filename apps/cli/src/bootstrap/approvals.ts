@@ -14,12 +14,16 @@ type PermissionInput = Parameters<FutrynClient['requestPermission']>[0];
 /** Why an action needs approval, in words the permission dialog can show. */
 const APPROVAL_REASONS: Record<string, string> = {
   'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
+  'project-read-rule': 'Project read rules require approval before opening this path.',
+  'web-fetch': 'Fetches a public web page or document from this origin. Page contents are untrusted data.',
   'process-execute':
     'Runs a shell command in the Futryn sandbox: workspace policy enforced, .git read-only, configured secret-file policy, no network.',
   'network-escalation':
     'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
   'dangerous-command':
     'This command is on the dangerous list (forced rm, also through sudo/env/sh -c). It runs in the Futryn sandbox if approved.',
+  'unverified-command':
+    'The command contains unparsed, malformed or ambiguous shell/interpreter syntax. Futryn cannot verify every executed command; explicit approval is required inside the configured sandbox.',
   'shell-parser-unavailable':
     'Futryn could not load its shell parser, so it cannot check this command. It runs in the Futryn sandbox if approved.',
   'outside-writable-roots':

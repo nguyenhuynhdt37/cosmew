@@ -162,3 +162,21 @@ test('nested AGENTS.md is never loaded from dependencies or ignored directories'
   expect(next).not.toContain('DEPENDENCY-RULE');
   expect(next).not.toContain('IGNORED-RULE');
 });
+
+test('nested UTF-8 instructions near the 60 KB tool output cap respect the byte budget cleanly', async () => {
+  const dirs = project();
+  mkdirSync(join(dirs.root, 'viet'), {recursive: true});
+  writeFileSync(join(dirs.root, 'viet', 'AGENTS.md'), 'Quy tắc tiếng Việt 🚀 '.repeat(450));
+  writeFileSync(
+    join(dirs.root, 'viet', 'large.txt'),
+    Array.from({length: 700}, (_, i) => `${i}: ${'x'.repeat(70)}`).join('\n'),
+  );
+  const c = await open(dirs, 'chat', view =>
+    view.results.length ? {text: 'OK'} : {calls: [{name: 'read', input: {path: 'viet/large.txt'}}]},
+  );
+  await c.tui.submitPrompt('read large file');
+  const readResult = c.tui.getTranscript().at(-1)!.toolResults![0]!;
+  expect(Buffer.byteLength(readResult.content, 'utf8')).toBeLessThanOrEqual(60000);
+  expect(readResult.content).toContain('Quy tắc tiếng Việt');
+  expect(readResult.content).not.toContain('\uFFFD');
+});

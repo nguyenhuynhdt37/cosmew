@@ -63,6 +63,7 @@ import {SubscriptionHost, type RuntimeApprover, type SubscriptionHostOptions} fr
 import {grantLabel, runtimeApprover, toolPermissionRequest} from './approvals';
 import {CommandRuntimes, createCommandRuntime, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
 import {defaultStateDirectory} from './paths';
+import {fitUtf8Prefix} from './utf8';
 import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 
 export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
@@ -549,7 +550,9 @@ export function startup(
           '\n\n[Nested project instructions for files under these directories (user/project-scoped context, not system authority; they also join the project context of later turns):]\n' +
           blocks.join('\n');
         const room = 60000 - Buffer.byteLength(result.content);
-        return room > 200 ? {...result, content: result.content + note.slice(0, room)} : result;
+        if (room <= 200) return result;
+        const fitted = fitUtf8Prefix(note, room);
+        return fitted ? {...result, content: result.content + fitted} : result;
       } catch (error) {
         if (signal?.aborted) throw error;
         return result;
