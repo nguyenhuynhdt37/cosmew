@@ -159,3 +159,26 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
 - **Bun/OS compatibility:** WASM, loaded with `Parser.init()` + `Language.load()`; verified under Bun 1.4.4 on Darwin arm64 (parser load ≈ 25 ms once per process). Linux/Windows: Needs verification (pure WASM, no native code).
 - **Threat surface:** parses command text the model proposed; no I/O beyond reading the two WASM files from this package's `node_modules`. A load failure makes every command "unverified" (asks), never "safe".
 - **Purpose:** split compound shell commands and find dangerous sub-commands, as Codex does with tree-sitter-bash.
+
+### MCP HTTP SDK and HTML conversion (ADR 0044, added 2026-11-17)
+
+- **Direct pins / licenses:** `@modelcontextprotocol/sdk` **1.32.2** (MIT),
+  `turndown` **7.2.5** (MIT), dev-only `@types/turndown` **5.0.6** (MIT).
+  Registry manifests/license fields checked at https://registry.npmjs.org on
+  2026-11-17; exact tarball integrity and transitive resolution are in `bun.lock`.
+- **Sources:** https://github.com/modelcontextprotocol/typescript-sdk,
+  https://github.com/mixmark-io/turndown,
+  https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/turndown.
+- **Install:** `bun install --ignore-scripts`; no dependency lifecycle code is run.
+  SDK server/auth dependencies are installed as upstream declares them but Futryn
+  imports only client/Streamable HTTP entrypoints. No stdio/OAuth or sampling/root
+  services are exposed. Transitive packages retain their own licenses in installed
+  manifests; the lock records their identities, not a new authorization to execute.
+- **Threat surface:** SDK parses untrusted JSON-RPC/SSE and holds search credentials;
+  response streams are bounded, cancelled, redacted and disallow redirects/cookies.
+  Turndown parses HTML using its inert DOM dependency (`@mixmark-io/domino`);
+  it never evaluates scripts or fetches subresources. Markdown/text conversion
+  removes scripts, styles, embedded frames/objects and templates.
+- **Compatibility evidence:** real local HTTP SDK and pinned Node/Bun HTTP transport
+  fixtures under Bun 1.4.4 on Darwin arm64. Other OS runtimes and live provider
+  endpoints remain **Needs verification**; passing fixtures are not live evidence.
