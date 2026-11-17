@@ -121,7 +121,8 @@ export class HostConfigStore {
  * logged, and handed to the redactor so it cannot reach output or storage.
  */
 export class TokenCommandRunner {
-  private readonly cache = new Map<string, {token: string; at: number}>();
+  /** One entry per provider, valid only for the exact destination and command it was fetched for. */
+  private readonly cache = new Map<string, {fingerprint: string; token: string; at: number}>();
   constructor(
     private readonly commands: (providerId: string) => TokenCommand | undefined,
     private readonly redact: (token: string) => void,
@@ -132,11 +133,22 @@ export class TokenCommandRunner {
   async token(provider: Provider, signal?: AbortSignal): Promise<string | undefined> {
     const command = this.commands(provider.id);
     if (!command) return undefined;
+    // A token is bound to {id, base_url, command, args, env_key}: if the config changes any of them the
+    // cached token is never sent to the new destination and the command runs again.
+    const fingerprint = new Bun.CryptoHasher('sha256')
+      .update(JSON.stringify([provider.id, provider.baseURL, command.command, command.args, provider.envKey ?? null]))
+      .digest('hex');
     const cached = this.cache.get(provider.id);
-    if (cached && command.refreshIntervalMs > 0 && this.now() - cached.at < command.refreshIntervalMs)
+    if (
+      cached &&
+      cached.fingerprint === fingerprint &&
+      command.refreshIntervalMs > 0 &&
+      this.now() - cached.at < command.refreshIntervalMs
+    )
       return cached.token;
+    this.cache.delete(provider.id);
     const token = await this.run(command, signal);
-    this.cache.set(provider.id, {token, at: this.now()});
+    this.cache.set(provider.id, {fingerprint, token, at: this.now()});
     return token;
   }
 

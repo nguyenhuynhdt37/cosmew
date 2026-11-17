@@ -352,3 +352,78 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
   expect(text).toContain('requires_auth = false');
   expect(text).toContain('X-Org = "GW1_ORG"');
 });
+
+test('a cached command token is bound to its destination: changed base_url, command or removal never reuses it', async () => {
+  const {TokenCommandRunner} = await import('../../apps/cli/src/bootstrap/host-config');
+  const {providerSchema} = await import('@futryn/contracts');
+  const base = {
+    id: 'cmd',
+    name: 'cmd',
+    protocol: 'chat',
+    baseURL: 'https://a.example/v1',
+    auth: 'command',
+    catalog: 'openai',
+    metadataVersion: 1,
+    timeoutMs: 1000,
+  };
+  const provider = (overrides = {}) => providerSchema.parse({...base, ...overrides});
+  const log = mkdtempSync(join(tmpdir(), 'futryn-token-bind-'));
+  cleanup.push(() => rmSync(log, {recursive: true, force: true}));
+  const script = join(log, 'counter.ts');
+  writeFileSync(
+    script,
+    `import {appendFileSync, readFileSync, existsSync} from 'node:fs';
+const file = process.argv[2]!;
+appendFileSync(file, 'x');
+console.log('token-' + readFileSync(file, 'utf8').length + '-' + process.argv[3]);`,
+  );
+  let command = {
+    command: process.execPath,
+    args: [script, join(log, 'runs'), 'one'],
+    timeoutMs: 5000,
+    refreshIntervalMs: 600000,
+  };
+  const runner = new TokenCommandRunner(
+    () => command,
+    () => {},
+  );
+  expect(await runner.token(provider())).toBe('token-1-one');
+  expect(await runner.token(provider())).toBe('token-1-one'); // same destination: cached
+  // New base_url: the command runs again; the old token is not handed to the new host.
+  expect(await runner.token(provider({baseURL: 'https://evil.example/v1'}))).toBe('token-2-one');
+  // New command arguments: runs again.
+  command = {...command, args: [script, join(log, 'runs'), 'two']};
+  expect(await runner.token(provider({baseURL: 'https://evil.example/v1'}))).toBe('token-3-two');
+  // Explicit invalidation (provider removed or replaced) forgets the token.
+  runner.invalidate('cmd');
+  expect(await runner.token(provider({baseURL: 'https://evil.example/v1'}))).toBe('token-4-two');
+
+  // End to end: replacing the provider in the same running app sends a fresh token to the new host.
+  const a = fixtureServer();
+  const b = fixtureServer();
+  cleanup.push(() => b.server.stop(true));
+  const {dir} = home(
+    url =>
+      `[model_providers.cmd]\nbase_url = "${url}/v1"\n[model_providers.cmd.auth]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(script)}, ${JSON.stringify(join(log, 'runs2'))}, "e2e"]\nrefresh_interval_ms = 600000\n`,
+    a,
+  );
+  const app = open(dir);
+  await app.accounts.add('cmd', 'c', {kind: 'none'});
+  await app.createFutrynClient(dir).discoverModels();
+  expect(a.requests.at(-1)!.authorization).toBe('Bearer token-1-e2e');
+  await app.accounts.logout(app.accounts.get('c').id, true);
+  app.removeProvider('cmd');
+  app.addHostProvider({
+    provider: providerSchema.parse({...base, baseURL: `${b.url}/v1`}),
+    tokenCommand: {
+      command: process.execPath,
+      args: [script, join(log, 'runs2'), 'e2e'],
+      timeoutMs: 5000,
+      refreshIntervalMs: 600000,
+    },
+  });
+  await app.accounts.add('cmd', 'c2', {kind: 'none'});
+  await app.createFutrynClient(dir).discoverModels();
+  expect(b.requests.at(-1)!.authorization).toBe('Bearer token-2-e2e');
+  expect(JSON.stringify(b.requests)).not.toContain('token-1-e2e');
+});

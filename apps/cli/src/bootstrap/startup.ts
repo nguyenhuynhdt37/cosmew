@@ -178,10 +178,16 @@ export function startup(
     for (const variable of Object.values(provider.envHttpHeaders ?? {}))
       if (process.env[variable]) redactor.register(process.env[variable]!);
   };
+  const tokens = new TokenCommandRunner(
+    id => hostEntries.get(id)?.tokenCommand,
+    token => redactor.register(token),
+  );
   /** Make the settings match the config file: its providers replace same-id entries; removed ones go unless accounts use them. */
   const syncHostProviders = () => {
     const loaded = hostConfig.load();
     if (loaded.usable) {
+      // Any provider that is gone or changed forgets its cached token (it is also bound to its destination).
+      for (const id of hostEntries.keys()) tokens.invalidate(id);
       hostEntries.clear();
       for (const entry of loaded.providers) {
         hostEntries.set(entry.provider.id, entry);
@@ -232,11 +238,8 @@ export function startup(
     }
     registry.remove(id);
     hostEntries.delete(id);
+    tokens.invalidate(id);
   };
-  const tokens = new TokenCommandRunner(
-    id => hostEntries.get(id)?.tokenCommand,
-    token => redactor.register(token),
-  );
   const integrations = new IntegrationRegistry(registry);
   const accounts = new AccountManager(settings, vault);
   const router = new ModelRouter(settings);
