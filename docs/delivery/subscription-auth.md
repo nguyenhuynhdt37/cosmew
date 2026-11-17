@@ -1,5 +1,8 @@
 # Subscription authentication and simplified login
 
+> **Update 2026-11-17 (ADR 0045-0048):** the Copilot CLI, Gemini CLI, Qwen Code and Grok Build runtimes and the `delegated` backend were removed; the sections below that describe them are historical evidence only. Current state: ChatGPT signs in through the direct API ([ADR 0047](../adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), live behavior Needs verification) with the Codex runtime as fallback; other providers use API keys or the host config ([ADR 0046](../adr/0046-host-provider-config.md)); DeepSeek: [ADR 0048](../adr/0048-deepseek-reasoning-replay.md).
+
+
 2026-11-14. [ADR 0008](../adr/0008-subscription-runtime-auth.md) extends the authorized provider slice for official subscription transports. Implementation and deterministic verification are distinct from live subscription acceptance.
 
 ## Login UX

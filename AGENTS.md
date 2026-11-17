@@ -28,3 +28,4 @@ Chuẩn là Codex (pinned `090be4df0724cdef5758e6a0934ba557af8b6bbe`, `protocol/
 - Dependency mới: ghi tên/version/license vào `docs/delivery/dependency-catalog.md` khi thêm.
 - Viết test có ý nghĩa (invariants, quyền, cancellation, lỗi); không dùng mock success để chứng minh tương thích OS/live. Cập nhật docs cùng thay đổi.
 - Dẫn chứng upstream ghi URL/path, ngày, revision; chưa xác minh thì ghi "Needs verification". Không tuyên bố "Product MVP complete" khi chưa nghiệm thu thật.
+- Đăng nhập/provider (ADR 0045–0048): mọi model chạy agent loop và tool của Futryn; không còn backend `delegated` hay runtime Copilot/Gemini/Qwen/Grok. Provider tuỳ chỉnh khai báo ở `~/.futryn/config.toml` `[model_providers.<id>]` (chỉ cấp người dùng, không token dạng chữ). ChatGPT API thuần và DeepSeek cần xác minh live ("Needs verification").
