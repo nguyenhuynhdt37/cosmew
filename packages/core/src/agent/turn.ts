@@ -440,6 +440,8 @@ export class TurnRun {
       selection: host.selection,
       visible: input,
       window: this.window,
+      maxOutputTokens: this.maxOutputTokens,
+      maxEstimatedCostUSD: this.request.maxEstimatedCostUSD,
       signal: this.signal,
     });
     // Billed whether or not it helps: count it in this turn's (and so the session's) usage.

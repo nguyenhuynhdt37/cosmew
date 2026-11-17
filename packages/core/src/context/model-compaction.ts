@@ -58,6 +58,9 @@ export async function summarizeWithModel(input: {
   instructions?: string;
   /** Usable window in tokens; the summarizer request must fit inside it. */
   window: number;
+  /** The turn's own request caps, so a compaction call is bounded like any other request. */
+  maxOutputTokens?: number;
+  maxEstimatedCostUSD?: number;
   signal?: AbortSignal;
 }): Promise<SummaryResult> {
   const {model, selection, visible, window, signal} = input;
@@ -83,7 +86,14 @@ export async function summarizeWithModel(input: {
   let usage: Usage | null = null;
   let finish: string | undefined;
   for await (const event of model.stream(
-    {requestId: crypto.randomUUID(), modelId: selection.modelId, messages, tools: []},
+    {
+      requestId: crypto.randomUUID(),
+      modelId: selection.modelId,
+      messages,
+      tools: [],
+      ...(input.maxOutputTokens !== undefined ? {maxOutputTokens: input.maxOutputTokens} : {}),
+      ...(input.maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD: input.maxEstimatedCostUSD} : {}),
+    },
     signal,
   )) {
     signal?.throwIfAborted();

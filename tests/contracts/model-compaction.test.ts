@@ -338,3 +338,24 @@ test('/compact is a canonical slash command with an optional argument and a tran
     'model summary failed',
   );
 });
+
+test('the compaction call carries the turn cost and output caps', async () => {
+  const {summarizeWithModel} = await import('../../packages/core/src/context/model-compaction');
+  const seen: ModelRequest[] = [];
+  const model = {
+    async *stream(request: ModelRequest) {
+      seen.push(request);
+      yield {type: 'textDelta', text: 'summary'} as ModelEvent;
+      yield {type: 'completed', finishReason: 'stop', usage: null} as unknown as ModelEvent;
+    },
+  };
+  await summarizeWithModel({
+    model: model as never,
+    selection: {accountId: 'a', modelId: 'm'} as never,
+    visible: [{role: 'user', content: 'hello'}] as never,
+    window: 100_000,
+    maxOutputTokens: 512,
+    maxEstimatedCostUSD: 0.25,
+  });
+  expect(seen[0]).toMatchObject({maxOutputTokens: 512, maxEstimatedCostUSD: 0.25, tools: []});
+});
