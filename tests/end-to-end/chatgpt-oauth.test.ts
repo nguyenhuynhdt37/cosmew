@@ -96,8 +96,10 @@ async function issuer(options: {scope?: string; badNonce?: boolean; refreshStatu
       challenge = auth.searchParams.get('code_challenge')!;
       clientID = 'client-issued-by-openai';
       const redirect = new URL(auth.searchParams.get('redirect_uri')!);
-      if (callback.error) redirect.searchParams.set('error', callback.error);
-      else {
+      if (callback.error) {
+        redirect.searchParams.set('error', callback.error);
+        redirect.searchParams.set('state', auth.searchParams.get('state')!);
+      } else {
         redirect.searchParams.set('code', callback.code ?? 'code-1');
         redirect.searchParams.set(
           'state',
@@ -175,7 +177,6 @@ test('failed sign-ins leave no account, no vault entry and close the callback li
     Parameters<typeof issuer>[0],
     Parameters<ReturnType<Awaited<ReturnType<typeof issuer>>['browser']>>[0] extends never ? never : any,
   ][] = [
-    ['wrong state', {}, {state: () => 'forged'}],
     ['provider error', {}, {error: 'access_denied'}],
     ['no token-sharing scope', {scope: 'openid offline_access'}, {}],
     ['id_token nonce mismatch', {badNonce: true}, {}],
@@ -267,4 +268,72 @@ test('a refused refresh or a 401 from the API asks for a new sign-in (AUTH), nev
       }
     })(),
   ).rejects.toMatchObject({code: 'AUTH'});
+});
+
+/** The browser is held back: the test sends each callback itself. */
+async function manual() {
+  const auth = await issuer();
+  let target!: URL;
+  let release!: () => void;
+  const opened = new Promise<void>(resolve => (release = resolve));
+  const c = await setup(auth, async url => {
+    target = new URL(url);
+    release();
+  });
+  const pending = c.signIn();
+  pending.catch(() => {}); // awaited later; avoid an unhandled-rejection race
+  await opened;
+  const redirect = new URL(target.searchParams.get('redirect_uri')!);
+  const state = target.searchParams.get('state')!;
+  const callback = (params: Record<string, string>) => {
+    const url = new URL(redirect);
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+    return fetch(url, {signal: AbortSignal.timeout(2000)});
+  };
+  return {auth, c, pending, state, callback, target};
+}
+/** Complete the issuer-side bookkeeping the fake browser normally does (nonce, challenge, client). */
+async function primeIssuer(m: Awaited<ReturnType<typeof manual>>) {
+  await m.auth
+    .browser()(m.target.href)
+    .catch(() => {});
+}
+
+test('a request with a wrong or missing state cannot abort the pending sign-in; the right callback still succeeds', async () => {
+  const m = await manual();
+  // Hostile local requests: wrong state, no state, error with wrong state.
+  for (const params of [{state: 'forged', code: 'x'}, {code: 'x'}, {state: 'forged', error: 'access_denied'}] as Record<
+    string,
+    string
+  >[]) {
+    const response = await m.callback(params);
+    expect(response.status).toBe(400);
+  }
+  expect(m.c.app.accounts.list()).toHaveLength(0);
+  // The login is still pending: a correct callback (sent through the fake browser) completes it.
+  m.auth.seen.authorize = undefined;
+  await primeIssuer(m);
+  const account = await m.pending;
+  expect(account.status).toBe('valid');
+  expect([...m.c.vault.values.values()].some(v => v.includes('access-1'))).toBe(true);
+});
+
+test('a state-valid error callback fails the sign-in, and a second valid callback is ignored', async () => {
+  const m = await manual();
+  const denied = await m.callback({state: m.state, error: 'access_denied'});
+  expect(denied.status).toBe(400);
+  await expect(m.pending).rejects.toMatchObject({code: 'AUTH'});
+  expect(m.c.app.accounts.list()).toHaveLength(0);
+  expect(m.c.vault.values.size).toBe(0);
+  // The listener is closed: nothing answers any more.
+  await expect(m.callback({state: m.state, code: 'code-1', client_id: 'x'})).rejects.toBeDefined();
+});
+
+test('only one valid callback is accepted: the replay after success is refused or unreachable', async () => {
+  const m = await manual();
+  await primeIssuer(m);
+  const account = await m.pending;
+  expect(account.status).toBe('valid');
+  await expect(m.callback({state: m.state, code: 'code-2', client_id: 'other'})).rejects.toBeDefined();
+  expect(m.auth.seen.tokens.filter(t => t.get('grant_type') === 'authorization_code')).toHaveLength(1);
 });

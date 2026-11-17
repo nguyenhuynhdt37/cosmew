@@ -1,4 +1,5 @@
 import {spawn} from 'node:child_process';
+import {timingSafeEqual} from 'node:crypto';
 import {
   FutrynError,
   type Account,
@@ -99,6 +100,7 @@ export class ChatGPTOAuth {
       reject = no;
     });
     void received.catch(() => {});
+    let settled = false;
     const page = (message: string, status = 200) =>
       new Response(`<!doctype html><meta charset="utf-8"><title>Futryn</title><p>${message}</p>`, {
         status,
@@ -110,13 +112,24 @@ export class ChatGPTOAuth {
       fetch: request => {
         const url = new URL(request.url);
         if (url.pathname !== '/auth/callback') return new Response('Not found', {status: 404});
+        // Only a request carrying this login's state may decide it; anything else (another local
+        // process, a web page) gets 400 and cannot abort or complete the pending sign-in.
+        const given = Buffer.from(url.searchParams.get('state') ?? '');
+        const expected = Buffer.from(state);
+        if (given.length !== expected.length || !timingSafeEqual(given, expected))
+          return page('This request does not belong to the pending sign-in.', 400);
+        if (settled) return page('This sign-in was already answered.', 409);
+        settled = true;
         const error = url.searchParams.get('error');
         const code = url.searchParams.get('code');
-        if (error || !code || url.searchParams.get('state') !== state) {
+        if (error || !code) {
           reject(new FutrynError('AUTH'));
+          setTimeout(() => server.stop(), 0);
           return page('Sign-in failed. Return to Futryn and try again.', 400);
         }
         resolve({code, clientID: url.searchParams.get('client_id') ?? undefined});
+        // Exactly one valid callback is accepted; the listener closes after this response is sent.
+        setTimeout(() => server.stop(), 0);
         return page('Signed in. You can close this window and return to Futryn.');
       },
     });
@@ -176,7 +189,7 @@ export class ChatGPTOAuth {
     clearTimeout(login.timer);
     login.progress.state = 'failed';
     login.reject(new FutrynError('CANCELLED'));
-    login.server.stop(true);
+    login.server.stop();
   }
 
   /** Waits for the browser callback, exchanges the code and returns the vault secret (a token record). */
