@@ -443,6 +443,7 @@ export class TurnRun {
               reasoningEffort: this.request.reasoningEffort,
               tools: prepared.tools,
               ...(prepared.instructions ? {instructions: prepared.instructions} : {}),
+              cacheKey: host.id,
             },
             AbortSignal.any([this.signal, requestAbort.signal]),
           )

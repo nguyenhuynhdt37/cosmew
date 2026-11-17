@@ -125,6 +125,13 @@ export function evaluateExec(
   const location = evaluateRead(workdirRelative === '.' ? '.' : workdirRelative + '/', workdirAbsolute, context);
   if (location.effect === 'deny') return location;
   const sandbox = context.sandbox;
+  // Codex `SandboxPermissions::RequireEscalated` (ADR 0053): running without the sandbox is always
+  // a decision for the user (`untrusted`/`on-request`) and refused under `never`. No allow rule,
+  // session grant or granted network permission can stand in for it.
+  if (sandbox?.unsandboxed) {
+    if (context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
+    return {effect: 'ask', reason: 'unsandboxed-escalation'};
+  }
   if (sandbox) {
     // A request may not loosen the configured mode (Codex: per-command overrides go through
     // additional permissions, and `never` forbids every escalation).
@@ -133,8 +140,10 @@ export function evaluateExec(
     if (sandbox.network && context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
     if (sandbox.network && !context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
   }
-  // ADR 0040: the session's approval policy answers these asks (Codex exec_policy.rs).
-  // Missing classification means the parser never ran: fail closed (asks; refused under never).
+  // ADR 0053 (Codex exec_policy.rs `render_decision_for_unmatched_command`): the session's approval
+  // policy answers these asks. Only commands on the dangerous list stay forbidden under `never`;
+  // a command the parser cannot verify still runs inside the sandbox under `on-request`/`never`
+  // and asks under `untrusted`, because the sandbox, not the parse, is the boundary.
   const classification = context.classification ?? {dangerous: null, parserUnavailable: true};
   if (classification.parserUnavailable) return {effect: 'ask', reason: 'shell-parser-unavailable'};
   if (classification.dangerous === 'other') return {effect: 'ask', reason: 'unverified-command'};
@@ -146,6 +155,8 @@ export type SandboxEscalation = 'on-request' | 'never';
 export interface ExecSandbox {
   mode: 'read-only' | 'workspace-write';
   network: boolean;
+  /** The one-off approved escalation to no sandbox (ADR 0053). */
+  unsandboxed?: boolean;
 }
 export interface ExecPolicyContext extends ReadPolicyContext {
   /** Effective sandbox requested for this command. */
@@ -153,7 +164,7 @@ export interface ExecPolicyContext extends ReadPolicyContext {
   /** Mode configured for the session; requests cannot exceed it. */
   configuredMode?: ExecSandbox['mode'];
   escalation?: SandboxEscalation;
-  /** Codex-style classification (ADR 0040). Missing means the parser never ran: fail closed. */
+  /** Codex-style classification (ADR 0040); an unparsed command is judged by the approval policy, not refused. */
   classification?: {dangerous: string | null; parserUnavailable?: boolean};
   /** The user granted network for this turn or session through `request_permissions`. */
   networkGranted?: boolean;
@@ -162,10 +173,11 @@ export interface ExecPolicyContext extends ReadPolicyContext {
 /**
  * Terminal input review, ported from Codex `unified_exec/stdin_approval.rs` (pinned 75fc67e8).
  * Input never widens a session's authority: the process keeps its launch sandbox. Polls and an
- * interrupt are transport, not new commands. Non-empty input always asks (stricter than Codex);
- * drift is named in the reason; a session that can no longer satisfy a
- * stricter current policy is refused ("start a new terminal"), because approval cannot retrofit
- * restrictions onto a running process.
+ * interrupt are transport, not new commands. Non-empty input is an `stdin` approval kind: it runs
+ * under `on-request`/`never` (the session is sandboxed) and asks under `untrusted` (ADR 0053).
+ * Drift is named in the reason; a session that can no longer satisfy a stricter current policy
+ * is refused ("start a new terminal"), because approval cannot retrofit restrictions onto a
+ * running process.
  */
 export function evaluateStdin(input: {
   chars: string;
@@ -184,11 +196,8 @@ export function evaluateStdin(input: {
   if (input.launch.network && input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
   if (input.launch.network) return {effect: 'ask', reason: 'stdin-retained-escalation'};
   if (input.launch.mode !== input.current.mode) return {effect: 'ask', reason: 'stdin-policy-drift'};
-  // Futryn deviation from Codex (ADR 0034, kept by ADR 0040 after two security reviews): input to a
-  // shell, REPL, pager or editor can run anything, and classifying typed input is unsound (input
-  // split across writes, line editing, history expansion, programs that spawn shells). So every
-  // non-empty input asks under `untrusted` and `on-request` and is refused under `never`, whatever
-  // the program. A "session" answer covers input to that one session only.
+  // The session keeps its launch sandbox, so what typed input does stays inside it. The approval
+  // policy decides: `untrusted` asks, `on-request`/`never` let it through (decideApproval).
   return {effect: 'ask', reason: 'stdin-input-approval-required'};
 }
 

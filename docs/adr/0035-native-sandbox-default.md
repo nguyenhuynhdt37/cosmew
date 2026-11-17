@@ -36,3 +36,7 @@ Accepted 2026-11-16 on the user's explicit decision ("l√†m native support all h·
 | `container-mounts.ts` | Docker mount plan and masks |
 | `container-protocol.ts` | Supervisor frame reader and created-container policy check |
 | `container-supervisor.js` | Trusted PID1 script run inside the container |
+
+## Update 2026-11-17
+
+[ADR 0053](0053-codex-sandbox-and-approval-alignment.md) aligns the profile with Codex: `.git` is readable (workspace and parents) and still not writable; localhost bind/connect is allowed, external network still needs approval; FSEvents is allowed; tool caches live in the per-session scratch directory. "No unsandboxed fallback" above still holds: a failing sandbox never runs unsandboxed. The only unsandboxed run is a single command the user approved after `sandbox_permissions: "require_escalated"`.

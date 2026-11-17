@@ -6,11 +6,14 @@ export interface CommandOutputChunk {
 /**
  * Effective sandbox for one command (ADR 0034, Codex `SandboxPolicy` subset). `read-only` and
  * `workspace-write` are enforced by the runtime's mount namespace, never by parsing the command.
- * `network` is an explicitly approved additional permission; unsandboxed execution does not exist.
+ * `network` is an explicitly approved additional permission. `unsandboxed` (ADR 0053, Codex
+ * `SandboxPermissions::RequireEscalated`) runs that one command with no OS sandbox; it exists only
+ * after the user approved exactly that command, and a runtime that cannot do it refuses.
  */
 export interface CommandSandbox {
   mode: 'read-only' | 'workspace-write';
   network: boolean;
+  unsandboxed?: boolean;
 }
 
 /** One command to run in the sandbox. `cwd` is canonical and already inside the workspace. */
@@ -63,6 +66,8 @@ export interface CommandRuntimeCapabilities {
   modes: CommandSandbox['mode'][];
   network: boolean;
   tty: boolean;
+  /** The runtime can run an explicitly approved command without its sandbox (ADR 0053). */
+  unsandboxed?: boolean;
   shells: NonNullable<CommandRequest['shell']>[];
   /** Tools available inside the sandbox image, for the model-facing description. */
   tools: string[];

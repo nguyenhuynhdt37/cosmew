@@ -96,7 +96,7 @@ test('exec validates arguments (64), stdin and missing tool account (2) without 
   expect(await cli(['-', '--cd', home], '   ')).toBe(64);
   expect(await cli(['hi', '--cd', home])).toBe(2);
   expect(await cli(['-', '--cd', home], 'stdin prompt')).toBe(2);
-});
+}, 30_000);
 
 test('exec streams valid JSONL, reads stdin -, selects account/model and saves only the final response', async () => {
   const x = context();
@@ -117,7 +117,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.24', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.25', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');

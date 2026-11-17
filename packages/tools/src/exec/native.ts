@@ -44,9 +44,9 @@ const OUTPUT_DRAIN_MS = 1000;
 /** A PTY master keeps delivering output briefly after the leader exits. */
 const PTY_DRAIN_MS = 100;
 /** SIGTERM first, then SIGKILL after this grace period. */
-const KILL_GRACE_MS = 500;
+const KILL_GRACE_MS = 2000;
 /** Give up waiting for a stopped process after this long and report the outcome as unconfirmed. */
-const STOP_TIMEOUT_MS = 2500;
+const STOP_TIMEOUT_MS = 4000;
 
 const READ_ONLY: CommandSandbox = {mode: 'read-only', network: false};
 
@@ -108,7 +108,7 @@ interface NativeSession {
   spawnFailed?: boolean;
   /** The process did not end within STOP_TIMEOUT_MS after SIGKILL. */
   unconfirmed?: boolean;
-  stop?: 'cancelled' | 'timeout';
+  stop?: 'cancelled' | 'timeout' | 'signalled';
   lease?: ReturnType<typeof setTimeout>;
   releaseAbort?: () => void;
   pid?: number;
@@ -158,7 +158,8 @@ export class NativeCommandRuntime implements CommandRuntime {
     this.canonicalWorkspaceRoot = resolvedWorkspace;
     this.canonicalStateDirectory = options.stateDirectory ? realPath(resolve(options.stateDirectory)) : undefined;
 
-    this.scratch = mkdtempSync(join(tmpdir(), 'fyn-exec-'));
+    // Canonical: Seatbelt matches real paths, and macOS temp directories live behind the /var symlink.
+    this.scratch = realpathSync.native(mkdtempSync(join(tmpdir(), 'fyn-exec-')));
     mkdirSync(join(this.scratch, 'home'));
     mkdirSync(join(this.scratch, 'tmp'));
 
@@ -193,6 +194,7 @@ export class NativeCommandRuntime implements CommandRuntime {
         toolchains,
         secrets: secretPatterns(),
         denied: this.deniedFiles,
+        loopback: false,
         metadataOnly: this.rustupHome ? [this.rustupHome] : [],
       });
     } else if (os === 'linux' && findExecutable('bwrap', this.path)) {
@@ -230,7 +232,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       toolchains,
       this.deniedFiles,
       options.hideSecrets === true,
-      'v2',
+      'v3',
     ];
     this.id =
       `native-${this.sandbox?.name ?? 'none'}:` +
@@ -238,7 +240,14 @@ export class NativeCommandRuntime implements CommandRuntime {
   }
 
   capabilities(): CommandRuntimeCapabilities {
-    return {modes: ['read-only', 'workspace-write'], network: true, tty: true, shells: ['bash', 'sh'], tools: []};
+    return {
+      modes: ['read-only', 'workspace-write'],
+      network: true,
+      tty: true,
+      unsandboxed: true,
+      shells: ['bash', 'sh'],
+      tools: [],
+    };
   }
 
   /**
@@ -324,6 +333,29 @@ export class NativeCommandRuntime implements CommandRuntime {
     );
   }
 
+  /**
+   * Tool caches and config live in the session's private scratch directory, which the profile makes
+   * writable (Codex lets commands write TMPDIR). The real home is hidden, so npm, yarn, pnpm, pip
+   * and XDG-aware tools would otherwise fail with EPERM. No secret and no real path is exposed.
+   */
+  private cacheEnv(): Record<string, string> {
+    const tmp = join(this.scratch, 'tmp');
+    const home = join(this.scratch, 'home');
+    return {
+      BUN_INSTALL_CACHE_DIR: join(tmp, 'bun-cache'),
+      npm_config_cache: join(tmp, 'npm-cache'),
+      npm_config_store_dir: join(tmp, 'pnpm-store'),
+      YARN_CACHE_FOLDER: join(tmp, 'yarn-cache'),
+      PIP_CACHE_DIR: join(tmp, 'pip-cache'),
+      GOCACHE: join(tmp, 'go-build'),
+      COREPACK_HOME: join(tmp, 'corepack'),
+      XDG_CACHE_HOME: join(tmp, 'xdg-cache'),
+      XDG_CONFIG_HOME: join(home, '.config'),
+      XDG_DATA_HOME: join(home, '.local', 'share'),
+      XDG_STATE_HOME: join(home, '.local', 'state'),
+    };
+  }
+
   private env(tty: boolean): Record<string, string> {
     return {
       ...EXEC_ENV,
@@ -331,7 +363,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       PATH: this.path,
       HOME: join(this.scratch, 'home'),
       TMPDIR: join(this.scratch, 'tmp'),
-      BUN_INSTALL_CACHE_DIR: join(this.scratch, 'tmp', 'bun-cache'),
+      ...this.cacheEnv(),
       ...(this.rustupHome ? {RUSTUP_HOME: this.rustupHome} : {}),
       ...(this.cargoHome ? {CARGO_HOME: this.cargoHome} : {}),
     };
@@ -351,7 +383,10 @@ export class NativeCommandRuntime implements CommandRuntime {
     if (this.workspaceRetargeted()) throw new FutrynError('POLICY');
 
     const sandbox = request.sandbox ?? READ_ONLY;
-    const argv = this.sandbox!.wrap(shellArgv(request), sandbox, cwd.absolute);
+    // Only an explicit, user-approved escalation (ADR 0053) skips the sandbox, and only for this
+    // command. A sandbox that fails to start is reported; it is never replaced by this path.
+    const argv =
+      sandbox.unsandboxed === true ? shellArgv(request) : this.sandbox!.wrap(shellArgv(request), sandbox, cwd.absolute);
     const session = createSession(request, sandbox);
 
     try {
@@ -425,7 +460,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   }
 
   /** Stop the whole process group (pipes: detached group; PTY: its session), escalating to SIGKILL. */
-  private async stop(session: NativeSession, reason: 'cancelled' | 'timeout'): Promise<void> {
+  private async stop(session: NativeSession, reason: 'cancelled' | 'timeout' | 'signalled'): Promise<void> {
     if (session.ended || session.stop) return session.done;
     session.stop = reason;
 
@@ -545,7 +580,7 @@ export class NativeCommandRuntime implements CommandRuntime {
     session.observer = onOutput;
     try {
       signal?.throwIfAborted();
-      if (interrupt === 'SIGTERM') await this.stop(session, 'cancelled');
+      if (interrupt === 'SIGTERM') await this.stop(session, 'signalled');
       else if (interrupt === 'SIGINT' || (!session.tty && chars === '\u0003')) interruptForeground(session);
       else if (chars && !session.ended) sendInput(session, chars);
       return await this.collect(session, yieldTimeMs, signal);
@@ -711,6 +746,8 @@ function outcomeKind(session: NativeSession): CommandOutcome['kind'] {
   if (session.spawnFailed) return 'spawn-failed';
   if (session.unconfirmed) return 'unconfirmed';
   if (session.stop === 'timeout') return 'timeout';
+  // A model-requested SIGTERM is a normal, completed request: report how the process ended.
+  if (session.stop === 'signalled') return 'exited';
   if (session.stop === 'cancelled') return 'cancelled';
   return 'exited';
 }

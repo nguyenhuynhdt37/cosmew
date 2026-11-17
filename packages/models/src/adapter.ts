@@ -305,6 +305,19 @@ export class ProviderAdapter implements ModelPort {
     const controller = new AbortController();
     const abortSignal = AbortSignal.any([controller.signal, ...(signal ? [signal] : []), idle.signal]);
     controller.signal.addEventListener('abort', idle.stop, {once: true});
+    // OpenAI prompt caching (Responses API `prompt_cache_key`): a stable per-conversation value so the
+    // provider routes every round of one session to the same cache. It is a hash, never the raw id.
+    // Needs verification: xAI `x-grok-conv-id` is not sent until its documentation is cited.
+    const openaiOptions =
+      p.protocol === 'responses'
+        ? {
+            ...(p.auth === 'oauth' ? {store: false} : {}),
+            ...(request.cacheKey ? {promptCacheKey: promptCacheKey(request.cacheKey)} : {}),
+            ...(request.reasoningEffort
+              ? {reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true}
+              : {}),
+          }
+        : undefined;
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
@@ -314,18 +327,7 @@ export class ProviderAdapter implements ModelPort {
         replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
       }),
       ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
-      ...(request.reasoningEffort || (p.auth === 'oauth' && p.protocol === 'responses')
-        ? {
-            providerOptions: {
-              openai: {
-                ...(p.auth === 'oauth' && p.protocol === 'responses' ? {store: false} : {}),
-                ...(request.reasoningEffort
-                  ? {reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true}
-                  : {}),
-              },
-            },
-          }
-        : {}),
+      ...(openaiOptions ? {providerOptions: {openai: openaiOptions}} : {}),
       maxRetries: 0,
       abortSignal,
       tools: request.tools.length ? tools : undefined,
@@ -469,4 +471,15 @@ export class ProviderAdapter implements ModelPort {
       options.controller.abort();
     }
   }
+}
+
+/** Stable, non-reversible per-conversation cache key (`prompt_cache_key`). */
+export function promptCacheKey(conversationId: string): string {
+  return (
+    'futryn-' +
+    new Bun.CryptoHasher('sha256')
+      .update('futryn-prompt-cache:' + conversationId)
+      .digest('hex')
+      .slice(0, 32)
+  );
 }

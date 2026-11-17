@@ -34,6 +34,8 @@ interface ToolCallRecord {
   target: string;
   status?: string;
   code?: string;
+  /** Failed calls only: the redacted result text the model saw, one line, at most 300 chars. */
+  error?: string;
   exitCode?: number | null;
   durationMs?: number;
 }
@@ -264,6 +266,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
               record.status = r.status;
               if (r.target) record.target = redact(r.target);
               if (r.code !== undefined) record.code = r.code;
+              if (r.status !== 'ok') record.error = clip(redact(r.content), 300);
               if (r.exitCode !== undefined) record.exitCode = r.exitCode;
               if (r.durationMs !== undefined) record.durationMs = r.durationMs;
               log(

@@ -337,3 +337,41 @@ test('Responses HTTP usage retains explicitly reported zero cache reads', async 
     x.db.close();
   }
 });
+
+test('F5: Responses sends a hashed prompt_cache_key, stable per session and different across sessions', async () => {
+  const x = setup('responses');
+  try {
+    const adapter = new ProviderAdapter(x.transport, x.request.modelId);
+    const sent = async (cacheKey: string | undefined) => {
+      const before = x.f.requests.length;
+      await Array.fromAsync(
+        adapter.stream({...x.request, requestId: crypto.randomUUID(), ...(cacheKey ? {cacheKey} : {})}),
+      );
+      const bodies = x.f.requests.slice(before).map(r => r.body as Record<string, unknown>);
+      return bodies.at(-1)!.prompt_cache_key as string | undefined;
+    };
+    const a1 = await sent('session-A');
+    const a2 = await sent('session-A');
+    const b = await sent('session-B');
+    expect(a1).toMatch(/^futryn-[0-9a-f]{32}$/);
+    expect(a2).toBe(a1);
+    expect(b).toMatch(/^futryn-[0-9a-f]{32}$/);
+    expect(b).not.toBe(a1);
+    expect(a1).not.toContain('session-A');
+    expect(await sent(undefined)).toBeUndefined();
+  } finally {
+    x.db.close();
+  }
+});
+
+test('F5: chat protocol never receives prompt_cache_key', async () => {
+  const x = setup('chat');
+  try {
+    const adapter = new ProviderAdapter(x.transport, x.request.modelId);
+    const before = x.f.requests.length;
+    await Array.fromAsync(adapter.stream({...x.request, cacheKey: 'session-A'}));
+    expect(JSON.stringify(x.f.requests.slice(before).map(r => r.body))).not.toContain('cache_key');
+  } finally {
+    x.db.close();
+  }
+});

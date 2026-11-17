@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.24' as const;
+export const CONTRACT_VERSION = '1.25' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -217,6 +217,11 @@ export const requestSchema = z.strictObject({
    * provider's system/developer channel; it is not stored with the conversation.
    */
   instructions: z.string().min(1).max(8000).optional(),
+  /**
+   * Opaque conversation identifier for provider prompt caching. Adapters hash it before it leaves
+   * the process; it is never a secret and carries no user text.
+   */
+  cacheKey: z.string().min(1).max(200).optional(),
 });
 export type ModelRequest = z.infer<typeof requestSchema>;
 export type Usage = z.infer<typeof import('./telemetry').usageSchema>;

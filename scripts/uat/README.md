@@ -43,6 +43,7 @@ bun scripts/uat/agent-run.ts --workspace <thư-mục> --prompts <file.txt> --rep
 - Thư mục trạng thái giống CLI: `FUTRYN_HOME`/`HANNES_HOME`, mặc định `~/.futryn` (dùng lại `~/.hannes` nếu có). Cần đã chọn account và model.
 - Timeout mỗi lượt mặc định 20 phút (huỷ bằng AbortSignal). Ctrl+C huỷ gọn. Mã thoát 0 chỉ khi mọi lượt hoàn tất không lỗi.
 - Báo cáo JSON: từng lượt (prompt, finalText, toolCalls, permissions, questions, planFinal, error, durationMs), usage và status. Mọi đầu ra đi qua redactor.
+  Call lỗi/bị từ chối (`status` khác `ok`) có thêm `toolCalls[].error`: text kết quả tool mà model nhìn thấy (đã redact, gộp một dòng, tối đa 300 ký tự) để chẩn đoán nguyên nhân như `INVALID_INPUT`; call `ok` không có trường này. `evidence` vẫn không chứa input/path/nội dung.
 - Contract 1.23 thêm `contractVersion`, `toolCalls[].callId` và `turns[].evidence` nếu đã xác định được session/turn.
   Evidence đối chiếu journal với audit SQLite: call/intent/result, thứ tự requested/decided/completed,
   outcome và scope hash. `decision: deny` vẫn là bằng chứng dispatcher đã từ chối; hash không phải quyền.

@@ -86,6 +86,23 @@ describe.each(backends)('grep (%s backend)', (_name, ripgrep) => {
     expect(second.content.split('\n')[0]).toBe('src/b.py');
   });
 
+  test('F10: path may be a single file, still read-authorized and never a secret or ignored file', async () => {
+    const {root} = workspace();
+    const grep = dispatcher(root, ripgrep);
+    const one = await grep({pattern: 'needle', path: 'src/a.ts'});
+    expect(one.status).toBe('ok');
+    expect(one.content).toContain('src/a.ts:2:const needle = 1;');
+    expect(one.content).not.toContain('b.py');
+    const globbed = await grep({pattern: 'needle', path: 'src/a.ts', glob: '**/*.py'});
+    expect(globbed.content).toContain('src/a.ts:2:');
+    const secret = await grep({pattern: 'NEEDLE', path: '.env'});
+    expect(secret.content).not.toContain('secret-value');
+    const outside = await grep({pattern: 'needle', path: 'src/link.ts'});
+    expect(outside.status).not.toBe('ok');
+    expect(outside.content).not.toContain('export const');
+    expect((await grep({pattern: 'needle', path: 'src/missing.ts'})).status).toBe('error');
+  });
+
   test('multiline patterns span lines', async () => {
     const {root} = workspace();
     const result = await dispatcher(root, ripgrep)({pattern: 'needle = 1;\\nthree', multiline: true});

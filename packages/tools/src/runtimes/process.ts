@@ -6,7 +6,12 @@ import {formatOutcome} from '../exec/command';
  * The model-facing result of a command launch or of input to an owned session. It reports only
  * what was observed: an unconfirmed outcome is never presented as success.
  */
-export function commandOutcomeResult(outcome: CommandOutcome, timeoutMs: number, target: string): ToolOutput {
+export function commandOutcomeResult(
+  outcome: CommandOutcome,
+  timeoutMs: number,
+  target: string,
+  canEscalate = false,
+): ToolOutput {
   const durationMs = outcome.durationMs;
   if (outcome.kind === 'unconfirmed') {
     return {
@@ -27,7 +32,7 @@ export function commandOutcomeResult(outcome: CommandOutcome, timeoutMs: number,
     };
   }
 
-  const {content, truncated} = formatOutcome(outcome, timeoutMs);
+  const {content, truncated} = formatOutcome(outcome, timeoutMs, canEscalate);
   const common = {content, target, truncated: truncated || undefined, durationMs};
   switch (outcome.kind) {
     case 'running':
@@ -37,7 +42,7 @@ export function commandOutcomeResult(outcome: CommandOutcome, timeoutMs: number,
     case 'timeout':
       return {status: 'error', code: 'TIMEOUT', ...common};
   }
-  // Codex SandboxErr::Denied: reported as a denial, never retried here (there is no unsandboxed retry).
+  // Codex SandboxErr::Denied: reported as a denial; the model may ask to retry with escalation, nothing retries by itself.
   if (outcome.sandboxDenied) return {status: 'error', code: 'SANDBOX_DENIED', exitCode: outcome.exitCode, ...common};
   return {status: 'ok', exitCode: outcome.exitCode, ...common};
 }
@@ -47,9 +52,10 @@ export async function runCommand(
   request: CommandRequest,
   target: string,
   signal?: AbortSignal,
+  canEscalate = false,
 ): Promise<ToolOutput> {
   try {
-    return commandOutcomeResult(await runtime.run(request, signal), request.timeoutMs, target);
+    return commandOutcomeResult(await runtime.run(request, signal), request.timeoutMs, target, canEscalate);
   } catch (error) {
     // Launch refusals are truthful results, not generic tool failures; nothing ran in either case.
     if (error instanceof FutrynError && error.code === 'BUDGET') {

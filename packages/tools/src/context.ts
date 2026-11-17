@@ -27,6 +27,8 @@ export interface ApprovalRequest {
   diffPreview?: string;
   /** The command asks for network access beyond the default sandbox (ADR 0034). */
   network?: boolean;
+  /** The command asks to run once WITHOUT the sandbox (`require_escalated`, ADR 0053). */
+  unsandboxed?: boolean;
   /** Commands: parsed sub-commands for project rules, null when the script is unparsed (ADR 0040). */
   commands?: string[] | null;
   /** Model-supplied, user-facing reason for additional permissions. */

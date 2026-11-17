@@ -47,8 +47,11 @@ All project-rule changes revoke dispatcher/prompt session grant caches. Adding
 deny/ask or removing allow additionally denies and settles unresolved prompts;
 old dialogs cannot revive approval after a restriction. Adding allow preserves
 the legitimate “don’t ask again” prompt and unrelated pending requests.
-Nonempty terminal input always asks (and `never` refuses), including shells,
-REPLs, editors and pagers; polling/interrupt remain transport operations.
+Nonempty terminal input follows the approval policy like a command (ADR 0053):
+`untrusted` asks, `on-request`/`never` let it through, because the session keeps its
+launch sandbox; polling/interrupt remain transport operations. `exec_command` may
+send `sandbox_permissions: "require_escalated"` with a justification: the user is
+asked (`never` refuses) and an approved command runs once without the sandbox.
 
 `agent.state` (`update_plan`) and `user.input` (`request_user_input`) touch no
 workspace/process/network and are audited without an execution approval. Plan and

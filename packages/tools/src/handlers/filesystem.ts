@@ -112,11 +112,12 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
         const parsed = grepInput.safeParse(args);
         if (!parsed.success) return invalid('grep');
         const file = options.workspace.resolve(parsed.data.path ?? '.');
-        if (file.kind !== 'directory')
+        // A single file is searchable like ripgrep/Claude Code; its content read is still authorized per file.
+        if (file.kind !== 'directory' && file.kind !== 'file')
           return {
             status: 'error',
             code: 'NOT_A_DIRECTORY',
-            content: `${file.relative} is not a directory.`,
+            content: `${file.relative} is not a directory or file.`,
             target: file.relative,
           };
         return {

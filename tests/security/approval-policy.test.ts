@@ -2,7 +2,13 @@ import {afterEach, beforeAll, describe, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {decideApproval, permissionModeDecision, type CommandRuntime, type PermissionMode} from '@futryn/contracts';
+import {
+  decideApproval,
+  permissionModeDecision,
+  type CommandRequest,
+  type CommandRuntime,
+  type PermissionMode,
+} from '@futryn/contracts';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
 import {ToolDispatcher, NativeCommandRuntime} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
@@ -139,7 +145,7 @@ describe('dangerous-command heuristic (best effort, not a boundary)', () => {
     expect(dangerousCommandMatch(at(9), shellParsers)).toBe('other');
   });
 
-  test('exec policy reasons: dangerous and unverified ask, plain asks only under untrusted; no parser fails closed', () => {
+  test('exec policy reasons: dangerous and unverified are named; the approval policy decides whether they ask; no parser is named too', () => {
     const ctx = {
       sandbox: {mode: 'workspace-write' as const, network: false},
       configuredMode: 'workspace-write' as const,
@@ -168,7 +174,8 @@ describe('approval table', () => {
       network: ['ask', 'ask', 'deny'],
       escalation: ['ask', 'ask', 'deny'],
       edit: ['ask', 'allow', 'allow'],
-      stdin: ['ask', 'ask', 'deny'],
+      // ADR 0053: terminal input runs inside its launch sandbox, so it follows `execute`.
+      stdin: ['ask', 'allow', 'allow'],
       secret: ['ask', 'ask', 'deny'],
       read: ['allow', 'allow', 'allow'],
     } as const;
@@ -203,7 +210,7 @@ describe('approval table', () => {
     expect(approvalPolicyFromEnv({FUTRYN_APPROVAL_POLICY: 'yolo'})).toBe('untrusted');
   });
 
-  test('non-empty stdin always needs approval; retained network and drift escalate', () => {
+  test('non-empty stdin is named for the approval table (untrusted asks); retained network escalates', () => {
     const ws = {mode: 'workspace-write' as const, network: false};
     expect(evaluateStdin({chars: 'y\n', interrupt: false, tty: true, launch: ws, current: ws}).reason).toBe(
       'stdin-input-approval-required',
@@ -232,6 +239,7 @@ async function chain(
   const client = app.createFutrynClient(root);
   client.setToolsEnabled(true);
   const ran: string[] = [];
+  const launches: CommandRequest[] = [];
   const runtime: CommandRuntime = options.runtimeFactory?.(root) ?? {
     id: 'policy-fixture',
     label: 'fixture',
@@ -240,11 +248,13 @@ async function chain(
       modes: ['read-only', 'workspace-write'],
       network: true,
       tty: false,
+      unsandboxed: true,
       shells: ['bash'],
       tools: [],
     }),
     run: async request => {
       ran.push(request.command);
+      launches.push(request);
       return {kind: 'exited', exitCode: 0, signal: null, output: '', omittedBytes: 0, durationMs: 1};
     },
     // Two owned sessions: an interactive shell and a pager (which can spawn a shell with !).
@@ -280,9 +290,16 @@ async function chain(
     name: string,
     input: unknown,
     answer: 'deny' | 'once' | 'session' = 'deny',
-  ): Promise<{outcome: 'ran' | 'prompt' | 'refused'; status: string; prompts: number; content: string}> {
+  ): Promise<{
+    outcome: 'ran' | 'prompt' | 'refused';
+    status: string;
+    prompts: number;
+    prompt?: {action: string; reason: string};
+    content: string;
+  }> {
     let settled = false;
     let prompts = 0;
+    let prompt: {action: string; reason: string} | undefined;
     const pending = dispatcher.invoke({id: crypto.randomUUID(), name, input}).finally(() => (settled = true));
     const end = Date.now() + 3000;
     while (!settled && Date.now() < end) {
@@ -290,6 +307,7 @@ async function chain(
       if (waiting.length) {
         prompts++;
         const request = waiting[0]!;
+        prompt = {action: request.action, reason: request.reason};
         if (answer === 'deny') client.dismissPermissionDialog(request.approvalId);
         else client.resolvePermission(request.approvalId, request.scopeHash, answer);
       }
@@ -300,10 +318,11 @@ async function chain(
       outcome: prompts ? 'prompt' : result.status === 'ok' ? 'ran' : 'refused',
       status: result.status,
       prompts,
+      prompt,
       content: result.content,
     };
   }
-  return {client, dispatcher, grants, root, ran, attempt, setTurn: (id: string | undefined) => (turn = id)};
+  return {client, dispatcher, grants, root, ran, launches, attempt, setTurn: (id: string | undefined) => (turn = id)};
 }
 
 const exec = (cmd: string, network = false) =>
@@ -327,8 +346,10 @@ describe('policy matrix through the production permission chain', () => {
     'ls -la': ['prompt', 'ran', 'ran'],
     'rm -rf build': ['prompt', 'prompt', 'refused'],
     'npm test && rm -rf build': ['prompt', 'prompt', 'refused'],
-    // Hardened fail-closed: unparsed/ambiguous scripts require explicit approval (refused under never).
-    'echo $(id)': ['prompt', 'prompt', 'refused'],
+    // ADR 0053 (Codex): an unparsed script runs in the sandbox under on-request/never; untrusted asks.
+    'echo $(id)': ['prompt', 'ran', 'ran'],
+    'ls -la && node -v && (command -v pnpm || true)': ['prompt', 'ran', 'ran'],
+    'find . -name "*.ts" \\( -path ./a -o -path ./b \\) | head': ['prompt', 'ran', 'ran'],
     'curl https://example.com': ['prompt', 'prompt', 'refused'],
   };
   for (const [index, [mode, policy]] of modes.entries())
@@ -391,6 +412,74 @@ describe('policy matrix through the production permission chain', () => {
     c.client.setPermissionMode('bypassPermissions');
     expect((await c.attempt('write', {path: 'a.md', content: 'x'})).outcome).toBe('refused');
     expect(existsSync(join(c.root, 'a.md'))).toBe(false);
+  });
+});
+
+const escalate = (cmd: string) => ({
+  cmd,
+  sandbox_permissions: 'require_escalated',
+  justification: 'needs the real home',
+});
+
+describe('escalation to no sandbox (require_escalated, ADR 0053)', () => {
+  test('on-request asks with a prompt that says there is no sandbox, then runs that one command unsandboxed', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('auto');
+    const first = await c.attempt('exec_command', escalate('npm i -g tool'), 'session');
+    expect(first.outcome).toBe('prompt');
+    expect(first.prompt!.action).toContain('WITHOUT SANDBOX');
+    expect(first.prompt!.reason).toContain('WITHOUT THE SANDBOX');
+    expect(first.prompt!.reason).toContain('needs the real home');
+    expect(c.launches.map(r => r.sandbox)).toEqual([{mode: 'workspace-write', network: false, unsandboxed: true}]);
+    // "For session" is not a standing grant: the same escalation asks again, and a plain run stays sandboxed.
+    expect((await c.attempt('exec_command', escalate('npm i -g tool'), 'once')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', exec('npm i -g tool'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)!.sandbox!.unsandboxed).toBeUndefined();
+  });
+
+  test('untrusted asks too; denying runs nothing', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('default');
+    const denied = await c.attempt('exec_command', escalate('ls'));
+    expect(denied).toMatchObject({outcome: 'prompt', status: 'denied'});
+    expect(c.ran).toEqual([]);
+  });
+
+  test('never refuses without asking and nothing runs', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('bypassPermissions');
+    const refused = await c.attempt('exec_command', escalate('ls'));
+    expect(refused).toMatchObject({outcome: 'refused', prompts: 0});
+    expect(c.ran).toEqual([]);
+  });
+
+  test('deny and ask rules still win; an allow rule never pre-approves an escalation', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('auto');
+    c.client.addPermissionRule('deny', 'Bash(rm:*)');
+    c.client.addPermissionRule('allow', 'Bash(ls:*)');
+    expect((await c.attempt('exec_command', escalate('rm file'), 'once')).outcome).toBe('refused');
+    expect((await c.attempt('exec_command', escalate('ls'), 'once')).outcome).toBe('prompt');
+    expect(c.ran).toEqual(['ls']);
+    expect(c.launches[0]!.sandbox!.unsandboxed).toBe(true);
+  });
+
+  test('a runtime that cannot run unsandboxed (Docker) refuses; nothing runs', async () => {
+    const c = await chain({
+      runtimeFactory: () => ({
+        id: 'no-escalation',
+        label: 'fixture',
+        availability: () => ({ok: true}),
+        capabilities: () => ({modes: ['workspace-write'], network: true, tty: false, shells: ['bash'], tools: []}),
+        run: async () => {
+          throw new Error('must not run');
+        },
+      }),
+    });
+    c.client.setPermissionMode('auto');
+    const refused = await c.attempt('exec_command', escalate('ls'), 'once');
+    expect(refused.status).toBe('error');
+    expect(refused.content).toContain('without its sandbox');
   });
 });
 
@@ -502,7 +591,8 @@ describe('security review regressions', () => {
       dangerous: 'other',
     });
     const c = await chain();
-    c.client.setPermissionMode('auto');
+    // untrusted: the policy asks for everything an allow rule does not answer, and it answers none of these.
+    c.client.setPermissionMode('default');
     c.client.addPermissionRule('allow', 'Bash(rm:*)');
     for (const script of ['timeout --foo 1 rm -rf x', 'sudo -nu root rm -rf x', `bash -c '"$@"' _ rm -rf /`])
       expect({script, outcome: (await c.attempt('exec_command', exec(script))).outcome}).toEqual({
@@ -520,13 +610,16 @@ describe('security review regressions', () => {
     expect((await c.attempt('exec_command', exec('git push origin "$BRANCH"'))).outcome).toBe('prompt');
   });
 
-  test('on-request: unparsed/ambiguous scripts fail closed (prompt); plain commands run in sandbox; dangerous ask', async () => {
+  test('on-request: unparsed scripts run in the sandbox like any command (Codex); parsed dangerous commands ask', async () => {
     const c = await chain();
     c.client.setPermissionMode('auto');
     expect((await c.attempt('exec_command', exec('echo ok && pwd'))).outcome).toBe('ran');
-    expect((await c.attempt('exec_command', exec('echo $(date) > stamp.txt'))).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', exec('echo $(date) > stamp.txt'))).outcome).toBe('ran');
     expect((await c.attempt('exec_command', exec('npm test && rm -rf build'))).outcome).toBe('prompt');
-    expect((await c.attempt('exec_command', exec('rm $(echo -rf) build'))).outcome).toBe('prompt');
+    // Detection is a heuristic; the sandbox is the boundary (ADR 0053).
+    expect((await c.attempt('exec_command', exec('rm $(echo -rf) build'))).outcome).toBe('ran');
+    c.client.setPermissionMode('default');
+    expect((await c.attempt('exec_command', exec('echo $(date) > stamp.txt'))).outcome).toBe('prompt');
   });
 
   test('a -c script is unwrapped only for a bare or system shell, never a planted ./bash', async () => {
@@ -556,12 +649,12 @@ describe('security review regressions', () => {
     expect(c.ran).toEqual(['npm test']);
   });
 
-  test('stdin: any non-empty input asks under untrusted and on-request and is refused under never', async () => {
+  test('stdin: non-empty input asks under untrusted and runs in the launch sandbox under on-request and never', async () => {
     const inputs = ['ls\n', 'rm -r', 'f ~\n', '\u001b[A\n', '!!\n', '\u0010\n', 'q', 'x'];
     for (const [mode, expected] of [
       ['default', 'prompt'],
-      ['auto', 'prompt'],
-      ['bypassPermissions', 'refused'],
+      ['auto', 'ran'],
+      ['bypassPermissions', 'ran'],
     ] as const) {
       const c = await chain();
       c.client.setPermissionMode(mode);
@@ -570,17 +663,19 @@ describe('security review regressions', () => {
           const result = await c.attempt('write_stdin', {session_id: session, chars});
           expect({mode, chars, outcome: result.outcome}).toEqual({mode, chars, outcome: expected});
         }
-      // Nothing reached a session: every prompt was denied, and never refused outright.
-      expect(c.ran.filter(entry => entry.startsWith('stdin:') && entry !== 'stdin:')).toEqual([]);
+      // Untrusted prompts were all denied, so nothing reached a session; the others delivered every input.
+      expect(c.ran.filter(entry => entry.startsWith('stdin:') && entry !== 'stdin:')).toHaveLength(
+        expected === 'ran' ? inputs.length * 2 : 0,
+      );
       // Polls and interrupts are transport: no prompt under any policy.
       expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: ''})).outcome).toBe('ran');
       expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, signal: 'SIGINT'})).outcome).toBe('ran');
     }
   });
 
-  test('stdin: a "session" answer covers later input to that session only', async () => {
+  test('stdin: under untrusted a "session" answer covers later input to that session only', async () => {
     const c = await chain();
-    c.client.setPermissionMode('auto');
+    c.client.setPermissionMode('default');
     expect(await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: 'ls\n'}, 'session')).toMatchObject({
       prompts: 1,
       status: 'ok',
@@ -590,8 +685,8 @@ describe('security review regressions', () => {
   });
 });
 
-describe('approved hardening: unparsed and ambiguous shell syntax fails closed', () => {
-  test('opaque, malformed and uninspected interpreter invocations cannot become ordinary auto-allowed commands', () => {
+describe('unparsed and ambiguous shell syntax is judged by the approval policy and the sandbox', () => {
+  test('opaque, malformed and uninspected interpreter invocations are flagged so rules and untrusted treat them as unverified', () => {
     for (const script of [
       'rm $(printf -- -f) protected.txt',
       'cmd=rm; $cmd -f protected.txt',
@@ -611,24 +706,25 @@ describe('approved hardening: unparsed and ambiguous shell syntax fails closed',
     expect(classify('printf marker | wc -c').dangerous).toBeNull();
   });
   test.skipIf(process.platform !== 'darwin')(
-    'real sandboxed executables do not run opaque or ambiguous commands before on-request approval',
+    'real sandbox: untrusted asks before an opaque script; on-request runs it, still confined to the workspace',
     async () => {
       const c = await chain({runtimeFactory: root => new NativeCommandRuntime({workspaceRoot: root})});
-      c.client.setPermissionMode('auto');
-      writeFileSync(join(c.root, 'protected.txt'), 'keep');
-      for (const script of [
-        'rm $(printf -- -f) protected.txt',
-        "bash -ec 'printf marker > probe.txt'",
-        "sh -c 'printf marker > probe.txt' extra",
-      ]) {
-        const result = await c.attempt('exec_command', exec(script));
-        expect(result.outcome).toBe('prompt');
-        expect(readFileSync(join(c.root, 'protected.txt'), 'utf8')).toBe('keep');
+      c.client.setPermissionMode('default');
+      for (const script of ["bash -ec 'printf marker > probe.txt'", "sh -c 'printf marker > probe.txt' extra"]) {
+        expect((await c.attempt('exec_command', exec(script))).outcome).toBe('prompt');
         expect(existsSync(join(c.root, 'probe.txt'))).toBe(false);
       }
+      c.client.setPermissionMode('auto');
+      const outside = join(tmpdir(), `futryn-outside-${crypto.randomUUID()}`);
+      const run = await c.attempt('exec_command', exec(`bash -ec 'printf marker > probe.txt; printf x > ${outside}'`));
+      // It ran without asking; the write outside the workspace is what the sandbox refused.
+      expect(run.prompts).toBe(0);
+      expect(run.content).toContain('sandbox likely denied');
+      expect(readFileSync(join(c.root, 'probe.txt'), 'utf8')).toBe('marker');
+      expect(existsSync(outside)).toBe(false);
       c.client.setPermissionMode('bypassPermissions');
-      expect((await c.attempt('exec_command', exec('printf marker > probe.txt'))).outcome).toBe('refused');
-      expect(existsSync(join(c.root, 'probe.txt'))).toBe(false);
+      expect((await c.attempt('exec_command', exec('printf more >> probe.txt'))).outcome).toBe('ran');
+      expect(readFileSync(join(c.root, 'probe.txt'), 'utf8')).toBe('markermore');
     },
   );
 });

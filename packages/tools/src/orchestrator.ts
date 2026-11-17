@@ -575,10 +575,13 @@ export class ToolOrchestrator {
     }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);
-    const sandbox = prepared.sandbox
-      ? `${runtime.label} · ${prepared.sandbox.mode}${prepared.sandbox.network ? ' + network' : ''}`
-      : runtime.label;
-    return this.permission(
+    const unsandboxed = prepared.sandbox?.unsandboxed === true;
+    const sandbox = unsandboxed
+      ? 'NO SANDBOX'
+      : prepared.sandbox
+        ? `${runtime.label} · ${prepared.sandbox.mode}${prepared.sandbox.network ? ' + network' : ''}`
+        : runtime.label;
+    const authorization = await this.permission(
       decision,
       {
         tool: prepared.toolName ?? 'exec_command',
@@ -586,10 +589,12 @@ export class ToolOrchestrator {
         target: command,
         workdir: file.relative,
         sandbox,
-        scopeKey: grant,
+        // An escalation is never remembered: its prompt scope is unique to this one call.
+        scopeKey: unsandboxed ? `${grant}\0${crypto.randomUUID()}` : grant,
         reason: decision.reason,
         // A request_permissions network grant turns the launch into an ordinary command decision.
         ...(prepared.sandbox?.network && decision.reason === 'network-escalation' ? {network: true} : {}),
+        ...(unsandboxed ? {unsandboxed: true} : {}),
         ...(prepared.justification ? {justification: this.options.redact(prepared.justification)} : {}),
         ...(prepared.classification
           ? {commands: prepared.classification.commands?.map(commandText) ?? null}
@@ -602,10 +607,20 @@ export class ToolOrchestrator {
       audit,
       decision.reason === 'stdin-policy-tightened'
         ? 'This terminal was launched with broader permissions than the current sandbox allows; start a new command instead. Nothing was sent.'
-        : `Command denied by policy (${decision.reason}). Nothing was run.`,
-      'The user denied running this command. Nothing was run.',
+        : decision.reason === 'escalation-forbidden' && unsandboxed
+          ? 'Running a command without the sandbox is not allowed under the "never" approval policy. Nothing was run. Work inside the sandbox or ask the user to change the approval policy.'
+          : `Command denied by policy (${decision.reason}). Nothing was run.`,
+      unsandboxed
+        ? 'The user denied running this command without the sandbox. Nothing was run.'
+        : 'The user denied running this command. Nothing was run.',
       signal,
     );
+    // An escalation covers this one command: a "session" answer never becomes a reusable grant.
+    if (unsandboxed && authorization.viaSession) {
+      this.options.grants.revoke('process.execute', grant);
+      return {...authorization, viaSession: false};
+    }
+    return authorization;
   }
 
   private revalidateCommand(

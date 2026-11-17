@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.24**. [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.25** (1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -59,7 +59,7 @@ UAT now subscribes to these events instead of polling the pending lists; pending
 
 `fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
 the top level, typed interaction events, then exactly one terminal `turn.completed` or
-`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.24"`, `seq`
+`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.25"`, `seq`
 starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
 means the entire run succeeded. `responseDiscarded` invalidates the current provisional response;
 plain output / `-o` keep only the final response. This stream is not the future durable domain

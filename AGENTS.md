@@ -8,15 +8,15 @@ Futryn là coding agent ngang Codex, Claude Code và OpenCode. Được phép tr
 
 Chuẩn là Codex (pinned `090be4df0724cdef5758e6a0934ba557af8b6bbe`, `protocol/src/config_types.rs` `SandboxMode`, `protocol/src/protocol.rs` `AskForApproval`, `core/src/safety.rs`).
 
-- **Sandbox** (`FUTRYN_SANDBOX_MODE`): `read-only`, `workspace-write` (mặc định), `danger-full-access`. macOS Seatbelt, Linux bubblewrap, Docker khi `FUTRYN_COMMAND_BACKEND=docker`. Không mạng trừ khi được duyệt; `.git` và state của Futryn không ghi được.
+- **Sandbox** (`FUTRYN_SANDBOX_MODE`): `read-only`, `workspace-write` (mặc định), `danger-full-access`. macOS Seatbelt, Linux bubblewrap, Docker khi `FUTRYN_COMMAND_BACKEND=docker`. Chỉ localhost (bind/connect), mạng ngoài chỉ khi được duyệt; `.git` đọc được nhưng không ghi được, state của Futryn bị chặn (ADR 0053).
 - **Duyệt** (approval policy): `untrusted` (hỏi mọi thứ trừ lệnh an toàn đã biết), `on-request` (mặc định: model tự yêu cầu khi cần vượt sandbox), `never` (không hỏi; vượt sandbox thì thất bại và báo lại model).
-- Ghi file trong vùng được ghi của sandbox được tự duyệt như Codex `assess_patch_safety`; ngoài vùng đó hoặc ở `untrusted` thì hỏi. Lệnh chạy trong sandbox; cần mạng hoặc vượt sandbox thì hỏi.
+- Ghi file trong vùng được ghi của sandbox được tự duyệt như Codex `assess_patch_safety`; ngoài vùng đó hoặc ở `untrusted` thì hỏi. `on-request`/`never` chạy mọi lệnh trong sandbox không bị coi là nguy hiểm (kể cả script không parse được và input `write_stdin`); `untrusted` hỏi. Mạng ngoài và `sandbox_permissions: "require_escalated"` (chạy đúng một lệnh không sandbox) thì hỏi, `never` từ chối (ADR 0053).
 - Thứ tự quyết định: deny > ask > allow. Grant gắn đúng capability/target/command/cwd/sandbox và chỉ sống trong phiên.
 
 ## Bất biến kỹ thuật (giữ nguyên)
 
 - Mọi tool call đi qua `ToolDispatcher`: validate → chuẩn hoá path trong workspace → policy → duyệt khi cần → revalidate → audit → chạy → redact. Không có đường gọi vòng.
-- Sandbox lỗi thì không chạy, không fallback sang không-sandbox (trừ khi user chọn `danger-full-access`).
+- Sandbox lỗi thì không chạy, không tự fallback sang không-sandbox. Chạy không sandbox chỉ xảy ra khi model yêu cầu `require_escalated` và user duyệt đúng lệnh đó một lần (`never`: từ chối).
 - Đọc dữ liệu repository (Git config, project config, file) là dữ liệu không tin cậy: không để nó chạy chương trình (fsmonitor, hooks, filters, LSP server…) ngoài sandbox.
 - Core điều phối qua ports; security quyết định quyền; workspace kiểm soát filesystem; persistence sở hữu durable writes; adapters chỉ chuyển đổi.
 - Không commit credentials, prompt chứa bí mật hay output nhạy cảm. Log và kết quả phải redact/bounded.

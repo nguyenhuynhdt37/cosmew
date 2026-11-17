@@ -67,6 +67,12 @@ for (const approve of ['all', 'none'] as const) {
       ['read', 'ok'],
       ['write', approve === 'all' ? 'ok' : 'denied'],
     ]);
+    // F11: failed calls keep a bounded, redacted message so causes can be diagnosed; successes carry none.
+    expect(turn.toolCalls[0]!.error).toBeUndefined();
+    if (approve !== 'all') expect(turn.toolCalls[1]).toMatchObject({status: 'denied', code: 'DENIED'});
+    expect(turn.toolCalls[1]!.error === undefined).toBe(approve === 'all');
+    expect(turn.toolCalls[1]!.error ?? '').not.toContain(privateMarker);
+    expect(turn.toolCalls.every(c => (c.error ?? '').length <= 300)).toBe(true);
     expect(turn.permissions).toHaveLength(1);
     expect(turn.permissions[0]).toMatchObject({
       capability: 'fs.write',

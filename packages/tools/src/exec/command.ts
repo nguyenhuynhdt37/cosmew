@@ -64,7 +64,7 @@ export const shellOf = (value: string | undefined) => (value === undefined ? ('b
 export const execDescriptor = {
   name: 'exec_command',
   description:
-    'Runs a command in the Futryn sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: in workspace-write mode file changes are real and visible to other tools and git; .git is read-only, secret files appear empty, Futryn state is hidden, and nothing outside the project is visible. Network is off unless you set sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification; the user approves it. Unsandboxed execution does not exist. The session approval policy decides prompts: by default (on-request) ordinary commands run in the sandbox without asking, while dangerous commands (e.g. forced rm), commands Futryn cannot verify (substitutions, eval) and network access ask the user.',
+    'Runs a command in the Futryn sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: in workspace-write mode file changes are real and visible to other tools and git; .git is readable but never writable, Futryn state is hidden, and files outside the project are not visible. Only localhost can be reached; external network is off unless you set sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification (the user approves it). If a command legitimately needs more than the sandbox gives, set sandbox_permissions "require_escalated" with a justification: the user is asked and, if approved, that one command runs WITHOUT the sandbox. Use it only after a sandboxed attempt failed because of the sandbox. The session approval policy decides prompts: by default (on-request) commands run in the sandbox without asking, while dangerous commands (e.g. forced rm), network access and escalation ask the user; under never they are refused.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -94,9 +94,9 @@ export const execDescriptor = {
       },
       sandbox_permissions: {
         type: 'string',
-        enum: ['use_default', 'with_additional_permissions'],
+        enum: ['use_default', 'with_additional_permissions', 'require_escalated'],
         description:
-          'Per-command sandbox override. Defaults to use_default; use with_additional_permissions with additional_permissions and a justification.',
+          'Per-command sandbox override. Defaults to use_default. with_additional_permissions (with additional_permissions and a justification) adds network. require_escalated (with a justification) asks the user to run this one command without the sandbox.',
       },
       additional_permissions: {
         type: 'object',
@@ -111,7 +111,10 @@ export const execDescriptor = {
         additionalProperties: false,
         description: 'Additional sandboxed access for this command; only network is supported.',
       },
-      justification: {type: 'string', description: 'User-facing reason for additional permissions; omit otherwise.'},
+      justification: {
+        type: 'string',
+        description: 'User-facing reason for additional permissions or escalation; omit otherwise.',
+      },
     },
     required: ['cmd'],
     additionalProperties: false,
@@ -120,7 +123,11 @@ export const execDescriptor = {
 };
 
 /** Model-facing text: a small header with the facts, then the cleaned output. */
-export function formatOutcome(outcome: CommandOutcome, timeoutMs: number): {content: string; truncated: boolean} {
+export function formatOutcome(
+  outcome: CommandOutcome,
+  timeoutMs: number,
+  canEscalate = false,
+): {content: string; truncated: boolean} {
   const output = plainTerminalText(outcome.output);
   const truncated = outcome.omittedBytes > 0 || outcome.lifecycle?.output === 'cut-off';
   const head = [
@@ -143,7 +150,9 @@ export function formatOutcome(outcome: CommandOutcome, timeoutMs: number): {cont
             : `Exit code: ${outcome.exitCode}`,
     ...(outcome.sandboxDenied
       ? [
-          'The sandbox likely denied this operation (protected path, read-only mode, or no network). Nothing was retried; do not repeat it unchanged.',
+          canEscalate
+            ? 'The sandbox likely denied this operation (protected path, read-only mode, or no network). Nothing was retried. If it needs network, retry with sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification. If it needs access the sandbox never gives, you may retry the same command with sandbox_permissions "require_escalated" and a justification: the user is asked first and, if approved, it runs once WITHOUT the sandbox. Do not repeat it unchanged.'
+            : 'The sandbox likely denied this operation (protected path, read-only mode, or no network). Nothing was retried; do not repeat it unchanged.',
         ]
       : []),
     `Wall time: ${(outcome.durationMs / 1000).toFixed(2)} s`,

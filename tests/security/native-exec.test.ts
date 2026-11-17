@@ -202,9 +202,11 @@ nativeTest(
     expect((await h.exec({cmd: 'touch RAN', ...network})).status).toBe('denied');
     expect(existsSync(join(h.root, 'RAN'))).toBe(false);
     expect(h.prompts.at(-1)!.network).toBe(true);
-    expect((await h.exec({cmd: 'touch RAN', sandbox_permissions: 'require_escalated', justification: 'x'})).code).toBe(
-      'UNSUPPORTED',
-    );
+    // Escalation to no sandbox (ADR 0053) is a user decision: denied means nothing runs.
+    const refused = await h.exec({cmd: 'touch RAN', sandbox_permissions: 'require_escalated', justification: 'x'});
+    expect(refused.status).toBe('denied');
+    expect(h.prompts.at(-1)!.unsandboxed).toBe(true);
+    expect(existsSync(join(h.root, 'RAN'))).toBe(false);
     h.setAnswer('once');
     const allowed = await h.exec({
       cmd: 'bun -e \'const r=await fetch("https://example.com");console.log("STATUS",r.status)\'',
@@ -308,10 +310,41 @@ nativeTest('retained cancellation kills a TERM-ignoring ordinary child after the
   expect(child).toBeDefined();
   clean.push(() => dispose([child]));
   const stopped = await h.stdin({session_id: id, signal: 'SIGTERM', yield_time_ms: 3000});
-  expect(stopped.code).toBe('CANCELLED');
+  expect(stopped.status).toBe('ok');
   await waitFor(() => !current(child) || undefined, 1000);
   expect(stopped.content).toContain('Descendant termination: unconfirmed.');
 });
+
+nativeTest('F9: write_stdin SIGTERM ends a long-running session promptly with a normal result', async () => {
+  const h = harness();
+  const running = await h.exec({cmd: 'echo SERVING; exec sleep 600', yield_time_ms: 500});
+  const started = Date.now();
+  const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 5000});
+  expect(Date.now() - started).toBeLessThan(3000);
+  expect(stopped.status).toBe('ok');
+  expect(stopped.code).toBeUndefined();
+  expect(stopped.content).not.toContain('Running session');
+  expect(stopped.content).toContain('signal SIGTERM');
+});
+
+nativeTest(
+  'F9: write_stdin SIGTERM escalates to SIGKILL after the grace period for a TERM-ignoring leader',
+  async () => {
+    const h = harness();
+    const running = await h.exec({
+      cmd: `exec /usr/bin/perl -e '$SIG{TERM}="IGNORE";open(F,">ready");close F;sleep 600'`,
+      yield_time_ms: 250,
+    });
+    await waitFor(() => existsSync(join(h.root, 'ready')) || undefined);
+    const started = Date.now();
+    const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 10_000});
+    const elapsed = Date.now() - started;
+    expect(elapsed).toBeGreaterThanOrEqual(1500);
+    expect(elapsed).toBeLessThan(6000);
+    expect(stopped.status).toBe('ok');
+    expect(stopped.content).toContain('signal SIGKILL');
+  },
+);
 
 nativeTest(
   'retained shell sleep cancellation independently observes leader and child, preserving unrelated host process',
@@ -333,7 +366,7 @@ nativeTest(
     expect(records.every(p => p.group === leaderPid)).toBe(true);
     clean.push(() => dispose(records));
     const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 3000});
-    expect(stopped.code).toBe('CANCELLED');
+    expect(stopped.status).toBe('ok');
     expect(stopped.content).not.toContain('unexpected-finish');
     await waitFor(() => records.every(p => !current(p)) || undefined);
     expect(current(host)).toBeDefined();
@@ -355,7 +388,7 @@ nativeTest('retained cancellation keeps escaped setsid descendants explicitly un
   expect(escaped.group).toBe(pid);
   clean.push(() => dispose([escaped]));
   const stopped = await h.stdin({session_id: sessionOf(running)!, signal: 'SIGTERM', yield_time_ms: 3000});
-  expect(stopped.code).toBe('CANCELLED');
+  expect(stopped.status).toBe('ok');
   expect(current(escaped)).toBeDefined();
   expect(stopped.content).toContain('Descendant termination: unconfirmed.');
 });
@@ -371,7 +404,7 @@ nativeTest(
     expect(sized.content).toContain('40 120');
     h.runtime.resize(id, 100, 30);
     expect((await h.stdin({session_id: id, chars: 'x\n', yield_time_ms: 800})).content).toContain('30 100');
-    expect((await h.stdin({session_id: id, signal: 'SIGTERM', yield_time_ms: 2000})).code).toBe('CANCELLED');
+    expect((await h.stdin({session_id: id, signal: 'SIGTERM', yield_time_ms: 2000})).status).toBe('ok');
     const shell = await h.exec({cmd: 'PS1="fyn$ " bash --norc --noprofile -i', tty: true, yield_time_ms: 1000});
     const sid = sessionOf(shell)!;
     await h.stdin({session_id: sid, chars: 'sleep 30\n', yield_time_ms: 500});

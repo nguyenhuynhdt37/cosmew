@@ -31,3 +31,16 @@ Agent báo cáo trung thực (không bịa build/HTTP thành công).
 ## Kết luận
 
 Agent loop, tool, ghi file, lint/typecheck/test chạy được thật trên ChatGPT direct API. Chưa đạt "làm trọn project" vì F1–F2 (không build/không chạy server được trong sandbox mà không có đường leo quyền). Sửa F1–F5 (mỗi lỗi một phiên `fix`) rồi chạy lại S0, trước hoặc song song S1 khác file.
+
+## Trạng thái sửa (2026-11-17, ADR 0053)
+
+Quyết định của user: theo Codex đúng nghĩa, bỏ các kiểm soát chặt hơn Codex. Đã sửa trong code + test (chưa chạy lại S0 live):
+
+| # | Sửa |
+|---|---|
+| F1 | Seatbelt cho phép bind/listen/connect localhost (3 rule `allow_local_binding` của Codex); mạng ngoài vẫn cần duyệt. Linux bubblewrap chưa đổi (Needs verification). |
+| F2 | `require_escalated` + `justification`: hỏi user (prompt ghi rõ KHÔNG sandbox), duyệt thì chạy đúng lệnh đó một lần; `never` từ chối; kết quả `SANDBOX_DENIED` gợi ý model dùng `require_escalated`/mạng. |
+| F3 | Cho đọc `.git` của workspace và các thư mục cha; ghi vẫn bị chặn. |
+| F4 | Cache công cụ (`npm_config_cache`, `XDG_*`, `YARN_CACHE_FOLDER`, ...) trong thư mục scratch của phiên; scratch được `realpath` (trước đây quy tắc ghi không khớp do symlink `/var`). |
+| F6 | `on-request`/`never` chạy lệnh không parse được và input `write_stdin` trong sandbox; `untrusted` vẫn hỏi; lệnh nguy hiểm vẫn hỏi/bị cấm. |
+| F7 | Thêm Mach service `com.apple.FSEvents` (Node recursive watch: `EMFILE` khi thiếu, chạy khi có). Turbopack thật chưa chạy lại. |

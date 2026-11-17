@@ -202,7 +202,9 @@ export async function ripgrepSearch(options: {
     options.workspace,
     parseHits(stdout, options.query.mode),
     options.stateDirectory,
-    options.query.glob ? {glob: options.query.glob, base: options.base.relative} : undefined,
+    options.query.glob && options.base.kind !== 'file'
+      ? {glob: options.query.glob, base: options.base.relative}
+      : undefined,
     options.readPolicy,
   );
   return {files, skippedSecret, cut};

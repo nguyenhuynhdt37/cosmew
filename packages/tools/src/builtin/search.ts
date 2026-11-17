@@ -159,6 +159,12 @@ export function candidateFiles(
   pattern: string | undefined,
   deadline: number,
 ): {files: string[]; incomplete: boolean} {
+  // A single file is its own candidate list (the glob is relative to a directory and does not apply).
+  if (base.kind === 'file')
+    return {
+      files: base.relative === '.git' || base.relative.startsWith('.git/') ? [] : [base.relative],
+      incomplete: false,
+    };
   const listing = listWorkspaceFiles(workspace, {deadline});
   const prefix = base.relative === '.' ? '' : base.relative + '/';
   const glob = pattern ? new Bun.Glob(pattern) : null;

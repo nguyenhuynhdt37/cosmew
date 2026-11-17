@@ -354,7 +354,7 @@ containerTest(
     const resized = await h.stdin({session_id: id, chars: 'x\n', yield_time_ms: 800});
     expect(resized.content).toContain('30 100');
     const ended = await h.stdin({session_id: id, signal: 'SIGTERM', yield_time_ms: 2000});
-    expect(ended.code).toBe('CANCELLED');
+    expect(ended.status).toBe('ok');
     expect(ended.content).toContain('Descendant termination: terminated.');
     // An interactive shell: Ctrl-C stops the foreground job only; the shell keeps running and accepts input.
     const shell = await h.exec({cmd: 'PS1="fyn$ " bash --norc --noprofile -i', tty: true, yield_time_ms: 1000});

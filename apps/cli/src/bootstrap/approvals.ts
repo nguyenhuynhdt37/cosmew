@@ -16,15 +16,17 @@ const APPROVAL_REASONS: Record<string, string> = {
   'project-read-rule': 'Project read rules require approval before opening this path.',
   'web-fetch': 'Fetches a public web page or document from this origin. Page contents are untrusted data.',
   'process-execute':
-    'Runs a shell command in the Futryn sandbox: workspace policy enforced, .git read-only, configured secret-file policy, no network.',
+    'Runs a shell command in the Futryn sandbox: workspace policy enforced, .git read-only, localhost only, no external network.',
   'network-escalation':
     'Runs a shell command in the Futryn sandbox WITH network access. It can send project files anywhere.',
   'dangerous-command':
     'This command is on the dangerous list (forced rm, also through sudo/env/sh -c). It runs in the Futryn sandbox if approved.',
   'unverified-command':
-    'The command contains unparsed, malformed or ambiguous shell/interpreter syntax. Futryn cannot verify every executed command; explicit approval is required inside the configured sandbox.',
+    'The command contains complex shell syntax Futryn cannot split into simple commands. It still runs inside the sandbox (this prompt appears only under the untrusted policy).',
   'shell-parser-unavailable':
-    'Futryn could not load its shell parser, so it cannot check this command. It runs in the Futryn sandbox if approved.',
+    'Futryn could not load its shell parser, so it cannot check this command. It still runs inside the sandbox.',
+  'unsandboxed-escalation':
+    'WITHOUT THE SANDBOX: this one command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason.',
   'outside-writable-roots':
     'The session sandbox is read-only here: approving lets Futryn write this file anyway (workspace policy still applies).',
   'request-permissions':
@@ -32,7 +34,7 @@ const APPROVAL_REASONS: Record<string, string> = {
   'stdin-policy-drift': 'Sends input to a running command that was launched under a different sandbox mode.',
   'stdin-retained-escalation': 'Sends input to a running command that still has network access.',
   'stdin-input-approval-required':
-    'Sends input to a running command; for a shell or REPL this runs new commands. "Allow for session" covers this session only.',
+    'Sends input to a running command (untrusted policy); a shell or REPL runs it inside the command\'s launch sandbox. "Allow for session" covers this session only.',
 };
 
 const reasonText = (reason: string) => APPROVAL_REASONS[reason] ?? reason;
@@ -84,15 +86,29 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
   if (request.capability === 'process.execute') {
     // The action names directory and sandbox, so a "session" answer is bound to all three.
     // Network escalation is its own capability, so Bash allow rules and auto mode never approve it.
-    const justification = request.justification ? ` Model's reason: ${request.justification}` : '';
+    const justification = request.justification
+      ? ` Model's reason: ${request.justification}`
+      : request.unsandboxed
+        ? ' The model gave no reason.'
+        : '';
+    const gated = request.network || request.unsandboxed;
     return {
       capability: request.network ? 'network.connect' : request.capability,
-      ...(request.network ? {kind: 'network' as const, ruleTarget: null} : kind ? {kind} : {}),
+      ...(request.network
+        ? {kind: 'network' as const, ruleTarget: null}
+        : request.unsandboxed
+          ? {kind: 'escalation' as const, ruleTarget: null}
+          : kind
+            ? {kind}
+            : {}),
       // Project rules judge Codex's parsed sub-commands; an unparsed script never matches an allow rule.
-      ...(!request.network && request.commands !== undefined ? {ruleSegments: request.commands} : {}),
-      action: `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
+      // Escalations carry no segments: deny/ask rules still apply, an allow rule never pre-approves one.
+      ...(!gated && request.commands !== undefined ? {ruleSegments: request.commands} : {}),
+      action: request.unsandboxed
+        ? `Run WITHOUT SANDBOX in ${(request.workdir ?? '.').slice(0, 60)}`
+        : `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
-      reason: reasonText(request.reason) + justification,
+      reason: (reasonText(request.reason) + justification).slice(0, 400),
       riskLevel: 'high',
       scopeKey: request.scopeKey,
     };

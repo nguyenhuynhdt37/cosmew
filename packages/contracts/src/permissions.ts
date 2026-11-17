@@ -43,7 +43,7 @@ export type PermissionPromptResolution = z.infer<typeof permissionPromptResoluti
  *   edits apply without a prompt; dangerous commands, network and other sandbox
  *   escalations, and secret reads prompt.
  * - bypassPermissions → `never`: nothing prompts; what would prompt runs in the sandbox when that
- *   is safe (ordinary and unparsed commands) or is refused (dangerous commands, escalations, secrets).
+ *   is safe (ordinary, unparsed commands and terminal input) or is refused (dangerous commands, escalations, secrets).
  * - plan: read-only; edits and commands are refused, secret reads still prompt.
  * The mode answers only what policy left as `ask`; deny rules (outside workspace, `.git`, Futryn
  * state) never change.
@@ -73,8 +73,8 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
  * What a permission request is about, as far as the approval policy is concerned:
  * - `execute`: an ordinary command inside the configured sandbox;
  * - `dangerous`: a command on Codex's dangerous list (`rm` with force, also through sudo/env/trap/`sh -c`);
- * - `stdin`: non-empty input to a running command. It always asks (`never` refuses): what a running
- *   program does with typed input cannot be verified (ADR 0040, stricter than Codex);
+ * - `stdin`: non-empty input to a running command. It follows `execute` (ADR 0053): the session
+ *   runs inside its launch sandbox, so `untrusted` asks and `on-request`/`never` allow;
  * - `network` / `escalation`: anything beyond the sandbox (network, writes outside writable roots,
  *   `request_permissions`).
  */
@@ -99,6 +99,7 @@ export function decideApproval(
     case 'edit':
       return policy === 'untrusted' && !options.autoApproveEdits ? 'ask' : 'allow';
     case 'execute':
+    case 'stdin':
       return policy === 'untrusted' ? 'ask' : 'allow';
     default:
       return policy === 'never' ? 'deny' : 'ask';

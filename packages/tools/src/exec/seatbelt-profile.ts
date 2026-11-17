@@ -1,4 +1,4 @@
-import {join} from 'node:path';
+import {dirname, join} from 'node:path';
 import type {CommandSandbox} from '@futryn/contracts';
 import {SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES} from '@futryn/security';
 import type {NativeSandbox} from './native-sandbox';
@@ -30,6 +30,8 @@ export interface SeatbeltOptions {
   secrets?: SecretPatterns;
   /** Exact files that are never readable or writable, even inside an exposed toolchain directory. */
   denied?: string[];
+  /** Localhost bind/connect without network approval (default true); helper services turn it off. */
+  loopback?: boolean;
   /** Directories whose entries may be stat-ed (existence/type) but never opened or listed. */
   metadataOnly?: string[];
 }
@@ -109,8 +111,14 @@ const SYSCTL_PREFIXES = [
   'net.routetable.',
 ];
 
-/** Mach services every command may use (Codex base + preferences policy, plus dirhelper for temp dirs). */
+/**
+ * Mach services every command may use (Codex base + preferences policy, plus dirhelper for temp
+ * dirs). `com.apple.FSEvents` is not in Codex's pinned policy; file watchers (Turbopack, Vite,
+ * watchman) die with "unable to start FSEvent stream" without it. The service reports file-system
+ * events of paths the process may already read; it grants no read or write itself (ADR 0053).
+ */
 const BASE_MACH_SERVICES = [
+  'com.apple.FSEvents',
   'com.apple.system.opendirectoryd.libinfo',
   'com.apple.bsd.dirhelper',
   'com.apple.PowerManagement.control',
@@ -130,6 +138,13 @@ const NETWORK_MACH_SERVICES = [
   'com.apple.SystemConfiguration.configd',
   'com.apple.dnssd.service',
 ];
+
+/** Every ancestor directory of `path` below the file-system root, nearest first, excluding `path`. */
+function gitAncestors(path: string): string[] {
+  const result: string[] = [];
+  for (let dir = dirname(path); dir !== dirname(dir); dir = dirname(dir)) result.push(dir);
+  return result;
+}
 
 const globalNames = (services: string[]) => services.map(name => `(global-name ${quote(name)})`).join(' ');
 
@@ -198,6 +213,9 @@ export class SeatbeltSandbox implements NativeSandbox {
       `(deny file-read* (subpath "/Users") ${subpath(home)} (subpath "/Volumes"))`,
       `(allow file-read-metadata (literal "/Users") (path-ancestors ${quote(workspace)}))`,
       `(allow file-read* ${subpath(workspace)} ${toolchains.map(subpath).join(' ')} ${subpath(scratch)})`,
+      // Codex forbids only WRITING `.git`: a workspace nested in another repository must be able to
+      // read that repository's `.git` (next build, git status). Writes stay denied (writeRules).
+      ...gitAncestors(workspace).map(dir => `(allow file-read* ${subpath(join(dir, '.git'))})`),
       // Tools such as rustup stat their home directory; metadata of the ancestors only, never contents.
       ...metadataOnly.map(dir => `(allow file-read-metadata ${subpath(dir)})`),
       ...toolchains.map(dir => `(allow file-read-metadata (path-ancestors ${quote(dir)}))`),
@@ -239,8 +257,22 @@ export class SeatbeltSandbox implements NativeSandbox {
     return rules;
   }
 
+  /**
+   * Without approval only the local machine is reachable: binding any local address (a dev server
+   * listens on 0.0.0.0 by default) and traffic to and from localhost, exactly the three rules Codex
+   * emits for `allow_local_binding` (`sandboxing/src/seatbelt.rs`, pinned 090be4df). Inbound is
+   * limited to localhost, so a bound port is not reachable from other hosts. External network still
+   * needs the approved `network` permission.
+   */
   private networkRules(sandbox: CommandSandbox): string[] {
-    if (!sandbox.network) return ['(deny network*)'];
+    if (!sandbox.network && this.options.loopback === false) return ['(deny network*)'];
+    if (!sandbox.network)
+      return [
+        '(deny network*)',
+        '(allow network-bind (local ip "*:*"))',
+        '(allow network-inbound (local ip "localhost:*"))',
+        '(allow network-outbound (remote ip "localhost:*"))',
+      ];
     return [
       '(allow network*)',
       '(allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))',

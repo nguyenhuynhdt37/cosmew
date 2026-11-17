@@ -1,5 +1,5 @@
 import type {CommandRequest, CommandRuntime, CommandSandbox} from '@futryn/contracts';
-import {effectiveSandboxMode, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {effectiveSandboxMode, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
 import {EXEC_LIMITS, clampYield, execDescriptor, execInput, shellOf, type ExecInput} from '../exec/command';
 import {runCommand} from '../runtimes/process';
 import type {ToolHandler} from './types';
@@ -7,7 +7,7 @@ import type {ToolHandler} from './types';
 const refuse = (code: string, content: string): ToolOutput => ({status: 'error', code, content});
 
 /** Capabilities assumed for runtimes that predate ADR 0034: pipes only, bash, no network. */
-const LEGACY_CAPABILITIES = {network: false, tty: false, shells: ['bash'] as ('bash' | 'sh')[]};
+const LEGACY_CAPABILITIES = {network: false, tty: false, unsandboxed: false, shells: ['bash'] as ('bash' | 'sh')[]};
 
 /**
  * Codex `exec_command` preparation (handlers/unified_exec/preparation.rs, pinned 75fc67e8) under
@@ -37,11 +37,13 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       const permissionError = checkPermissionRequest(input);
       if (permissionError) return permissionError;
       const network = input.sandbox_permissions === 'with_additional_permissions';
+      const escalated = input.sandbox_permissions === 'require_escalated';
 
       const mode = effectiveSandboxMode(options, runtime);
       if (!mode)
         return refuse('SANDBOX_UNAVAILABLE', 'This runtime cannot enforce the configured sandbox. Nothing was run.');
-      const sandbox: CommandSandbox = {mode, network};
+      // `unsandboxed` means this one command only; the orchestrator asks the user before it can run.
+      const sandbox: CommandSandbox = {mode, network, ...(escalated ? {unsandboxed: true} : {})};
 
       const shell = shellOf(input.shell);
       const capabilityError = checkCapabilities(runtime, input, shell, sandbox);
@@ -59,6 +61,8 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       const sessions = !!runtime.writeStdin;
       const label = options.redact(`${file.relative === '.' ? '' : file.relative + ': '}${input.cmd}`).slice(0, 1024);
       const request = buildRequest(input, file.absolute, sandbox, shell!, sessions);
+      // A sandbox failure may be retried unsandboxed only when the user can still be asked (Codex).
+      const canEscalate = !escalated && sandboxConfig(options).escalation !== 'never';
       // The approval scope binds everything that changes authority or lifetime, not just the text.
       const executionKey = JSON.stringify({
         timeoutMs: request.timeoutMs,
@@ -81,18 +85,22 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
         shell: shell!,
         sandbox,
         ...(input.justification ? {justification: input.justification} : {}),
-        execute: (signal, onOutput) => runCommand(runtime, {...request, onOutput}, label, signal),
+        execute: (signal, onOutput) => runCommand(runtime, {...request, onOutput}, label, signal, canEscalate),
       };
     },
   };
 }
 
-/** Escalation is explicit and narrow: only network, with a justification. There is no unsandboxed mode. */
+/**
+ * Escalation is explicit and narrow (ADR 0053, Codex `SandboxPermissions`): `require_escalated`
+ * runs this one command without the sandbox after the user approves it; network alone goes through
+ * `with_additional_permissions`. Nothing here grants anything; the dispatcher asks.
+ */
 function checkPermissionRequest(input: ExecInput): ToolOutput | undefined {
-  if (input.sandbox_permissions === 'require_escalated') {
+  if (input.sandbox_permissions === 'require_escalated' && input.additional_permissions) {
     return refuse(
-      'UNSUPPORTED',
-      'Unsandboxed execution is not available in Futryn. Nothing was run. Request network with sandbox_permissions "with_additional_permissions", or edit files with apply_patch.',
+      'INVALID_INPUT',
+      'additional_permissions requires sandbox_permissions "with_additional_permissions"; require_escalated takes only a justification. Nothing was run.',
     );
   }
   if (input.prefix_rule) {
@@ -144,6 +152,8 @@ function checkCapabilities(
   }
   if (input.tty && !capabilities.tty)
     return refuse('UNSUPPORTED', 'This runtime cannot allocate a PTY; omit tty. Nothing was run.');
+  if (sandbox.unsandboxed && !capabilities.unsandboxed)
+    return refuse('UNSUPPORTED', 'This runtime cannot run a command without its sandbox. Nothing was run.');
   if (sandbox.network && !capabilities.network)
     return refuse('UNSUPPORTED', 'This runtime cannot grant network access. Nothing was run.');
   if (input.tty && !runtime.writeStdin)
