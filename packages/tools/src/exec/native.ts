@@ -1,8 +1,18 @@
 import {createHash, randomUUID} from 'node:crypto';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync} from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {homedir, tmpdir} from 'node:os';
-import {delimiter, dirname, isAbsolute, join, relative} from 'node:path';
+import {delimiter, dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {
   FutrynError,
   type CommandOutcome,
@@ -122,6 +132,14 @@ export class NativeCommandRuntime implements CommandRuntime {
   /** Private directory with the command's HOME and TMPDIR; removed on shutdown. */
   private readonly scratch: string;
   private readonly path: string;
+  private readonly configuredWorkspaceRoot: string;
+  private readonly canonicalWorkspaceRoot: string;
+  private readonly canonicalStateDirectory: string | undefined;
+  private readonly rustupHome: string | undefined;
+  private readonly cargoHome: string | undefined;
+  /** Registry credentials and cargo config: never readable, whatever else a toolchain directory exposes. */
+  private readonly deniedFiles: string[];
+  private readonly invalidWorkspaceReason: string | undefined;
   private proven?: RuntimeAvailability;
   private closed = false;
 
@@ -130,6 +148,15 @@ export class NativeCommandRuntime implements CommandRuntime {
   constructor(private readonly options: NativeRuntimeOptions) {
     const os = options.platform ?? process.platform;
     const home = realPath(options.home ?? homedir());
+    this.configuredWorkspaceRoot = resolve(options.workspaceRoot);
+    let resolvedWorkspace = this.configuredWorkspaceRoot;
+    try {
+      resolvedWorkspace = realpathSync.native(this.configuredWorkspaceRoot);
+    } catch {
+      this.invalidWorkspaceReason = 'Workspace root does not exist or cannot be resolved.';
+    }
+    this.canonicalWorkspaceRoot = resolvedWorkspace;
+    this.canonicalStateDirectory = options.stateDirectory ? realPath(resolve(options.stateDirectory)) : undefined;
 
     this.scratch = mkdtempSync(join(tmpdir(), 'fyn-exec-'));
     mkdirSync(join(this.scratch, 'home'));
@@ -141,38 +168,46 @@ export class NativeCommandRuntime implements CommandRuntime {
       ),
     ];
     this.path = [...new Set([...pathDirectories, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])].join(':');
-    const toolchains = toolchainDirectories(pathDirectories, home);
+    const rustup = rustToolchainDirectories(pathDirectories, this.path, home, this.scratch);
+    this.rustupHome = rustup.rustupHome;
+    this.cargoHome = rustup.cargoHome;
+    const toolchains = [...new Set([...toolchainDirectories(pathDirectories, home), ...rustup.readable])];
+    this.deniedFiles = cargoSecretFiles([...pathDirectories, ...toolchains], home);
 
     if (os === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
       this.sandbox = new SeatbeltSandbox({
-        workspace: options.workspaceRoot,
-        state: options.stateDirectory,
+        workspace: this.canonicalWorkspaceRoot,
+        state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
         toolchains,
         secrets: options.hideSecrets ? secretPatterns() : undefined,
+        denied: this.deniedFiles,
+        metadataOnly: this.rustupHome ? [this.rustupHome] : [],
       });
       this.serviceSandbox = new SeatbeltSandbox({
-        workspace: options.workspaceRoot,
-        state: options.stateDirectory,
+        workspace: this.canonicalWorkspaceRoot,
+        state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
         toolchains,
         secrets: secretPatterns(),
+        denied: this.deniedFiles,
+        metadataOnly: this.rustupHome ? [this.rustupHome] : [],
       });
     } else if (os === 'linux' && findExecutable('bwrap', this.path)) {
       this.sandbox = new BubblewrapSandbox({
         bwrap: findExecutable('bwrap', this.path)!,
-        workspace: options.workspaceRoot,
-        state: options.stateDirectory,
+        workspace: this.canonicalWorkspaceRoot,
+        state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
         hideSecrets: options.hideSecrets === true,
       });
       this.serviceSandbox = new BubblewrapSandbox({
         bwrap: findExecutable('bwrap', this.path)!,
-        workspace: options.workspaceRoot,
-        state: options.stateDirectory,
+        workspace: this.canonicalWorkspaceRoot,
+        state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
         hideSecrets: true,
@@ -189,12 +224,13 @@ export class NativeCommandRuntime implements CommandRuntime {
           : 'no sandbox';
     // Approvals are bound to this id, so any change of the effective policy invalidates them.
     const policy = [
-      options.workspaceRoot,
-      options.stateDirectory,
+      this.canonicalWorkspaceRoot,
+      this.canonicalStateDirectory,
       this.path,
       toolchains,
+      this.deniedFiles,
       options.hideSecrets === true,
-      'v1',
+      'v2',
     ];
     this.id =
       `native-${this.sandbox?.name ?? 'none'}:` +
@@ -210,9 +246,21 @@ export class NativeCommandRuntime implements CommandRuntime {
    * secret read, a `.git` write, a write outside, a home listing, signalling an outside process and
    * launching an app through LaunchServices all fail.
    */
+  private workspaceRetargeted(): boolean {
+    if (this.invalidWorkspaceReason) return true;
+    try {
+      return realpathSync.native(this.configuredWorkspaceRoot) !== this.canonicalWorkspaceRoot;
+    } catch {
+      return true;
+    }
+  }
+
   availability(): RuntimeAvailability {
     if (this.closed) return {ok: false, reason: 'Command runtime is closed.'};
+    if (this.invalidWorkspaceReason) return {ok: false, reason: this.invalidWorkspaceReason};
     if (!this.sandbox) return {ok: false, reason: this.unavailableReason!};
+    if (this.workspaceRetargeted())
+      return {ok: false, reason: 'The configured workspace path changed after runtime initialization.'};
     if (this.proven) return this.proven;
 
     const probe = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-probe-')));
@@ -284,6 +332,8 @@ export class NativeCommandRuntime implements CommandRuntime {
       HOME: join(this.scratch, 'home'),
       TMPDIR: join(this.scratch, 'tmp'),
       BUN_INSTALL_CACHE_DIR: join(this.scratch, 'tmp', 'bun-cache'),
+      ...(this.rustupHome ? {RUSTUP_HOME: this.rustupHome} : {}),
+      ...(this.cargoHome ? {CARGO_HOME: this.cargoHome} : {}),
     };
   }
 
@@ -293,11 +343,12 @@ export class NativeCommandRuntime implements CommandRuntime {
     if (this.sessions.size >= NATIVE_LIMITS.maxSessions) throw new FutrynError('BUDGET');
     validateRequest(request);
 
-    const workspace = new WorkspaceRoot(this.options.workspaceRoot);
+    const workspace = new WorkspaceRoot(this.canonicalWorkspaceRoot);
     const cwd = workspace.resolve(request.cwd);
     if (cwd.kind !== 'directory') throw new FutrynError('POLICY');
     const relativeCwd = relative(workspace.root, cwd.absolute);
     if (relativeCwd.startsWith('..') || isAbsolute(relativeCwd)) throw new FutrynError('POLICY');
+    if (this.workspaceRetargeted()) throw new FutrynError('POLICY');
 
     const sandbox = request.sandbox ?? READ_ONLY;
     const argv = this.sandbox!.wrap(shellArgv(request), sandbox, cwd.absolute);
@@ -513,9 +564,9 @@ export class NativeCommandRuntime implements CommandRuntime {
    */
   spawnService(argv: string[], cwd: string): ServiceProcess {
     if (!this.availability().ok || !argv.length) throw new FutrynError('UNSUPPORTED');
-    const workspace = new WorkspaceRoot(this.options.workspaceRoot);
+    const workspace = new WorkspaceRoot(this.canonicalWorkspaceRoot);
     const directory = workspace.resolve(cwd);
-    if (directory.kind !== 'directory') throw new FutrynError('POLICY');
+    if (directory.kind !== 'directory' || this.workspaceRetargeted()) throw new FutrynError('POLICY');
     // Keep a trusted leader until its group is killed; its PID cannot be reused before cleanup.
     // Descendants that create a new session remain unconfirmed on macOS.
     const supervised = ['/bin/sh', '-c', `trap 'kill -KILL 0' EXIT; "$@"; exit "$?"`, 'futryn-service', ...argv];
@@ -712,10 +763,75 @@ function shellArgv(request: CommandRequest): string[] {
   return ['/bin/bash', ...(request.login ? ['--login'] : ['--noprofile', '--norc']), '-c', request.command];
 }
 
-/** Toolchains installed under home (bun, nvm, cargo…): each PATH directory below home and its parent. */
+/**
+ * Toolchains installed under home (bun, nvm…): each PATH directory below home and its parent. The
+ * Rust homes are handled by `rustToolchainDirectories`, which never exposes all of `~/.cargo`.
+ */
 function toolchainDirectories(pathDirectories: string[], home: string): string[] {
+  const rustHomes = new Set([realPath(join(home, '.cargo')), realPath(join(home, '.rustup'))]);
   const candidates = pathDirectories.flatMap(dir => [dir, dirname(dir)]).map(realPath);
-  return [...new Set(candidates.filter(dir => dir.startsWith(home + '/')))];
+  return [...new Set(candidates.filter(dir => dir.startsWith(home + '/') && !rustHomes.has(dir)))];
+}
+
+/**
+ * rustup shims need only the toolchains and `settings.toml` of `~/.rustup` plus `~/.cargo/bin` and
+ * `~/.cargo/registry`, all read-only. `CARGO_HOME` points at a private scratch directory that links
+ * just `bin` and `registry`, so `~/.cargo/credentials*` and `~/.cargo/config*` never exist for the command.
+ */
+function rustToolchainDirectories(
+  pathDirectories: string[],
+  path: string,
+  home: string,
+  scratch: string,
+): {rustupHome?: string; cargoHome?: string; readable: string[]} {
+  const under = (dir: string) => dir.startsWith(home + '/');
+  const rustupShim =
+    findExecutable('rustup', path) !== undefined ||
+    pathDirectories.some(dir => under(realPath(dir)) && existsSync(join(dir, 'rustup')));
+  if (!rustupShim) return {readable: []};
+  const rustup = realPath(join(home, '.rustup'));
+  const cargo = realPath(join(home, '.cargo'));
+  const readable: string[] = [];
+  let rustupHome: string | undefined;
+  if (existsSync(rustup) && under(rustup)) {
+    rustupHome = rustup;
+    for (const name of ['toolchains', 'settings.toml'])
+      if (existsSync(join(rustup, name))) readable.push(realPath(join(rustup, name)));
+  }
+  let cargoHome: string | undefined;
+  if (existsSync(cargo) && under(cargo)) {
+    cargoHome = join(scratch, 'cargo');
+    mkdirSync(cargoHome);
+    for (const name of ['bin', 'registry']) {
+      const source = join(cargo, name);
+      if (!existsSync(source)) continue;
+      const target = realPath(source);
+      if (!under(target)) continue;
+      symlinkSync(target, join(cargoHome, name));
+      readable.push(target);
+    }
+  }
+  return {rustupHome, cargoHome, readable};
+}
+
+/** Cargo registry tokens and config, for `~/.cargo`, `$CARGO_HOME` and any exposed directory that holds cargo. */
+function cargoSecretFiles(directories: string[], home: string): string[] {
+  const roots = new Set([join(home, '.cargo'), realPath(join(home, '.cargo'))]);
+  if (process.env.CARGO_HOME) roots.add(realPath(process.env.CARGO_HOME));
+  for (const dir of directories)
+    if (existsSync(join(dir, 'cargo')) || existsSync(join(dir, 'rustup'))) roots.add(realPath(dirname(dir)));
+  const files = [...roots].flatMap(root =>
+    ['credentials', 'credentials.toml', 'config', 'config.toml'].map(name => join(root, name)),
+  );
+  return [...new Set(files.flatMap(file => [file, realPath(file)]))].filter(file => file.startsWith(home + '/'));
+}
+
+function realPath(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
 }
 
 function unavailableReason(os: NodeJS.Platform): string {
@@ -734,14 +850,6 @@ function findExecutable(name: string, path: string): string | undefined {
     }
   }
   return undefined;
-}
-
-function realPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));

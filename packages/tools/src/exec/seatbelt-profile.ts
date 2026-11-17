@@ -28,6 +28,10 @@ export interface SeatbeltOptions {
   toolchains: string[];
   /** When set, secret-named project files are hidden too. */
   secrets?: SecretPatterns;
+  /** Exact files that are never readable or writable, even inside an exposed toolchain directory. */
+  denied?: string[];
+  /** Directories whose entries may be stat-ed (existence/type) but never opened or listed. */
+  metadataOnly?: string[];
 }
 
 const escapeRegex = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -188,12 +192,15 @@ export class SeatbeltSandbox implements NativeSandbox {
 
   /** Read the system broadly, but not user directories except the workspace and toolchains. */
   private readRules(): string[] {
-    const {workspace, home, toolchains, scratch} = this.options;
+    const {workspace, home, toolchains, scratch, metadataOnly = []} = this.options;
     return [
       '(allow file-read*)',
       `(deny file-read* (subpath "/Users") ${subpath(home)} (subpath "/Volumes"))`,
       `(allow file-read-metadata (literal "/Users") (path-ancestors ${quote(workspace)}))`,
       `(allow file-read* ${subpath(workspace)} ${toolchains.map(subpath).join(' ')} ${subpath(scratch)})`,
+      // Tools such as rustup stat their home directory; metadata of the ancestors only, never contents.
+      ...metadataOnly.map(dir => `(allow file-read-metadata ${subpath(dir)})`),
+      ...toolchains.map(dir => `(allow file-read-metadata (path-ancestors ${quote(dir)}))`),
     ];
   }
 
@@ -215,12 +222,14 @@ export class SeatbeltSandbox implements NativeSandbox {
    * because git cannot run without it (as in Codex); URL credentials are redacted from output instead.
    */
   private protectedPathRules(): string[] {
-    const {workspace, state, secrets} = this.options;
+    const {workspace, state, secrets, denied} = this.options;
     const ws = escapeRegex(workspace);
     const rules = [
       `(deny file-read* file-write* (regex #"^${ws}/(.*/)?\\.(futryn|hannes)(/|$)") (regex #"^${ws}/(.*/)?\\.(futryn|hannes)-patch-"))`,
     ];
     if (state) rules.push(`(deny file-read* file-write* ${subpath(state)})`);
+    if (denied?.length)
+      rules.push(`(deny file-read* file-write* ${denied.map(path => `(literal ${quote(path)})`).join(' ')})`);
     if (secrets) {
       // Inside the project only: system files such as /etc/ssl/cert.pem stay readable.
       const names = secrets.deny.map(r => `(regex #"${r}")`).join(' ');
