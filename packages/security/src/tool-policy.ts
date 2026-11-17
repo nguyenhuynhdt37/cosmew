@@ -137,6 +137,7 @@ export function evaluateExec(
   // Missing classification means the parser never ran: fail closed (asks; refused under never).
   const classification = context.classification ?? {dangerous: null, parserUnavailable: true};
   if (classification.parserUnavailable) return {effect: 'ask', reason: 'shell-parser-unavailable'};
+  if (classification.dangerous === 'other') return {effect: 'ask', reason: 'unverified-command'};
   if (classification.dangerous) return {effect: 'ask', reason: 'dangerous-command'};
   return {effect: 'ask', reason: 'process-execute'};
 }

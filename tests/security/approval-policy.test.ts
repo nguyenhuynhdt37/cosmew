@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {decideApproval, permissionModeDecision, type CommandRuntime, type PermissionMode} from '@futryn/contracts';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
+import {ToolDispatcher, NativeCommandRuntime} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {toolPermissionRequest} from '../../apps/cli/src/bootstrap/approvals';
@@ -87,11 +87,12 @@ describe('Codex allowlist parser (try_parse_word_only_commands_sequence)', () =>
     expect(classify("bash -lc 'ls && pwd'").commands).toEqual([['ls'], ['pwd']]);
     expect(classify("zsh -c 'npm test'").commands).toEqual([['npm', 'test']]);
     expect(classify("bash -lc 'echo $(id)'").commands).toBeNull();
-    expect(classify("bash -ec 'ls'").commands).toEqual([['bash', '-ec', 'ls']]);
+    // Uninspected shell flags such as -ec stay opaque and fail closed (hardening over bare Codex).
+    expect(classify("bash -ec 'ls'")).toMatchObject({commands: null, dangerous: 'other'});
   });
 });
 
-/** Codex `is_dangerous_command.rs` test vectors. */
+/** Codex `is_dangerous_command.rs` test vectors + hardening extensions. */
 describe('dangerous-command heuristic (best effort, not a boundary)', () => {
   test('Codex forced-rm variants are dangerous, parsed or opaque', () => {
     for (const script of [
@@ -102,7 +103,11 @@ describe('dangerous-command heuristic (best effort, not a boundary)', () => {
       'rm --force /tmp/example',
       'rm /tmp/example -f',
       'sudo rm -rf /tmp/example',
+      'sudo -u root rm -rf /tmp/example',
       'env TARGET=/tmp/example rm -rf /tmp/example',
+      'env -u PATH rm -rf /tmp/example',
+      'nohup rm -rf /tmp/example',
+      'timeout -k 2 5 rm -rf /tmp/example',
       'npm test && rm -rf build',
       'printf x | rm -rf /tmp/example',
       'if test -d /tmp/example; then rm --force /tmp/example; fi',
@@ -113,18 +118,19 @@ describe('dangerous-command heuristic (best effort, not a boundary)', () => {
       "trap 'rm -rf /tmp/example' EXIT",
     ])
       expect({script, dangerous: classify(script).dangerous}).toEqual({script, dangerous: 'forced-rm'});
+    expect(classify('rm -rf /tmp/example ; (')).toMatchObject({commands: null, dangerous: 'other'});
   });
 
-  test('non-forced or non-literal rm is not dangerous (Codex)', () => {
+  test('non-forced or non-literal rm is not forced-rm; unparsed scripts fail closed as other', () => {
     for (const script of [
       'rm -r /tmp/example',
       'rm -- -f',
       "echo 'rm -rf /tmp/example'",
-      'cmd=rm; $cmd -rf /tmp/example',
       'env TARGET=/tmp/example rm -r /tmp/example',
       "trap 'echo rm -rf /tmp/example' EXIT",
     ])
       expect({script, dangerous: classify(script).dangerous}).toEqual({script, dangerous: null});
+    expect(classify('cmd=rm; $cmd -rf /tmp/example')).toMatchObject({commands: null, dangerous: 'other'});
   });
 
   test('more than 8 nested wrappers fail closed', () => {
@@ -133,14 +139,14 @@ describe('dangerous-command heuristic (best effort, not a boundary)', () => {
     expect(dangerousCommandMatch(at(9), shellParsers)).toBe('other');
   });
 
-  test('exec policy reasons: dangerous asks, everything else is the policy’s; no parser fails closed', () => {
+  test('exec policy reasons: dangerous and unverified ask, plain asks only under untrusted; no parser fails closed', () => {
     const ctx = {
       sandbox: {mode: 'workspace-write' as const, network: false},
       configuredMode: 'workspace-write' as const,
     };
     expect(evaluateExec('ls', '.', '/ws', {...ctx, classification: classify('ls')}).reason).toBe('process-execute');
     expect(evaluateExec('echo $(id)', '.', '/ws', {...ctx, classification: classify('echo $(id)')}).reason).toBe(
-      'process-execute',
+      'unverified-command',
     );
     expect(evaluateExec('rm -rf x', '.', '/ws', {...ctx, classification: classify('rm -rf x')}).reason).toBe(
       'dangerous-command',
@@ -209,7 +215,9 @@ describe('approval table', () => {
 });
 
 /** The production chain: dispatcher → toolPermissionRequest → FutrynClient.requestPermission (rules, mode). */
-async function chain(options: {sandboxMode?: 'read-only' | 'workspace-write'} = {}) {
+async function chain(
+  options: {sandboxMode?: 'read-only' | 'workspace-write'; runtimeFactory?: (root: string) => CommandRuntime} = {},
+) {
   const home = mkdtempSync(join(tmpdir(), 'futryn-policy-home-'));
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'futryn-policy-ws-')));
   cleanup.push(
@@ -225,7 +233,7 @@ async function chain(options: {sandboxMode?: 'read-only' | 'workspace-write'} = 
   const client = app.createFutrynClient(root);
   client.setToolsEnabled(true);
   const ran: string[] = [];
-  const runtime: CommandRuntime = {
+  const runtime: CommandRuntime = options.runtimeFactory?.(root) ?? {
     id: 'policy-fixture',
     label: 'fixture',
     availability: () => ({ok: true}),
@@ -255,6 +263,7 @@ async function chain(options: {sandboxMode?: 'read-only' | 'workspace-write'} = 
       return {kind: 'exited', exitCode: 0, signal: null, output: '', omittedBytes: 0, durationMs: 1};
     },
   };
+  if (options.runtimeFactory) cleanup.push(() => runtime.shutdown?.());
   let turn: string | undefined;
   const grants = new SessionGrants();
   const dispatcher = new ToolDispatcher({
@@ -319,8 +328,8 @@ describe('policy matrix through the production permission chain', () => {
     'ls -la': ['prompt', 'ran', 'ran'],
     'rm -rf build': ['prompt', 'prompt', 'refused'],
     'npm test && rm -rf build': ['prompt', 'prompt', 'refused'],
-    // Unparsed (Codex: one opaque command): runs in the sandbox unless the policy is untrusted.
-    'echo $(id)': ['prompt', 'ran', 'ran'],
+    // Hardened fail-closed: unparsed/ambiguous scripts require explicit approval (refused under never).
+    'echo $(id)': ['prompt', 'prompt', 'refused'],
     'curl https://example.com': ['prompt', 'prompt', 'refused'],
   };
   for (const [index, [mode, policy]] of modes.entries())
@@ -485,20 +494,17 @@ describe('security review regressions', () => {
     expect(c.ran).toEqual([]);
   });
 
-  test('wrapper options: plain words parse (Codex allowlist) and are judged as the wrapper command', async () => {
-    // Codex's allowlist parses these (plain words); its heuristic looks through sudo/env only, so
-    // the forced rm behind `timeout --foo` or `sudo -nu` is not detected (accepted Codex parity).
+  test('wrapper options: unknown wrapper options or extra shell operands fail closed as unverified', async () => {
     for (const script of ['timeout --foo 1 rm -rf x', 'sudo -nu root rm -rf x'])
-      expect({script, ...classify(script)}).toMatchObject({script, commands: [script.split(' ')], dangerous: null});
-    // `bash -c` with extra operands is not Codex's `[shell, -c, script]` form: one plain command.
+      expect({script, ...classify(script)}).toMatchObject({script, commands: null, dangerous: 'other'});
+    // `bash -c` with extra operands is not `[shell, -c, script]`: ambiguous wrapper fails closed.
     expect(classify(`bash -c '"$@"' _ rm -rf /`)).toMatchObject({
-      commands: [['bash', '-c', '"$@"', '_', 'rm', '-rf', '/']],
-      dangerous: null,
+      commands: null,
+      dangerous: 'other',
     });
     const c = await chain();
-    c.client.setPermissionMode('default');
+    c.client.setPermissionMode('auto');
     c.client.addPermissionRule('allow', 'Bash(rm:*)');
-    // An allow rule for `rm` never covers `timeout …`/`sudo …`: untrusted asks.
     for (const script of ['timeout --foo 1 rm -rf x', 'sudo -nu root rm -rf x', `bash -c '"$@"' _ rm -rf /`])
       expect({script, outcome: (await c.attempt('exec_command', exec(script))).outcome}).toEqual({
         script,
@@ -515,13 +521,13 @@ describe('security review regressions', () => {
     expect((await c.attempt('exec_command', exec('git push origin "$BRANCH"'))).outcome).toBe('prompt');
   });
 
-  test('on-request: unparsed non-dangerous scripts run in the sandbox (Codex); parsed dangerous ones ask', async () => {
+  test('on-request: unparsed/ambiguous scripts fail closed (prompt); plain commands run in sandbox; dangerous ask', async () => {
     const c = await chain();
     c.client.setPermissionMode('auto');
-    expect((await c.attempt('exec_command', exec('echo $(date) > stamp.txt'))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', exec('echo ok && pwd'))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', exec('echo $(date) > stamp.txt'))).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', exec('npm test && rm -rf build'))).outcome).toBe('prompt');
-    // Accepted Codex parity: a forced rm the literal extractor cannot see runs sandboxed.
-    expect((await c.attempt('exec_command', exec('rm $(echo -rf) build'))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', exec('rm $(echo -rf) build'))).outcome).toBe('prompt');
   });
 
   test('a -c script is unwrapped only for a bare or system shell, never a planted ./bash', async () => {
@@ -583,4 +589,47 @@ describe('security review regressions', () => {
     expect((await c.attempt('write_stdin', {session_id: SHELL_SESSION, chars: 'pwd\n'})).outcome).toBe('ran');
     expect((await c.attempt('write_stdin', {session_id: PAGER_SESSION, chars: 'q'})).outcome).toBe('prompt');
   });
+});
+
+describe('approved hardening: unparsed and ambiguous shell syntax fails closed', () => {
+  test('opaque, malformed and uninspected interpreter invocations cannot become ordinary auto-allowed commands', () => {
+    for (const script of [
+      'rm $(printf -- -f) protected.txt',
+      'cmd=rm; $cmd -f protected.txt',
+      'printf marker > probe.txt',
+      'printf marker; (',
+      "bash -ec 'printf marker > probe.txt'",
+      "sh -c 'printf marker > probe.txt' extra",
+      "bash --rcfile project.rc -c 'printf marker'",
+    ]) {
+      const classified = classify(script);
+      expect({script, checked: classified.dangerous !== null || classified.parserUnavailable === true}).toEqual({
+        script,
+        checked: true,
+      });
+    }
+    expect(classify('printf marker').dangerous).toBeNull();
+    expect(classify('printf marker | wc -c').dangerous).toBeNull();
+  });
+  test.skipIf(process.platform !== 'darwin')(
+    'real sandboxed executables do not run opaque or ambiguous commands before on-request approval',
+    async () => {
+      const c = await chain({runtimeFactory: root => new NativeCommandRuntime({workspaceRoot: root})});
+      c.client.setPermissionMode('auto');
+      writeFileSync(join(c.root, 'protected.txt'), 'keep');
+      for (const script of [
+        'rm $(printf -- -f) protected.txt',
+        "bash -ec 'printf marker > probe.txt'",
+        "sh -c 'printf marker > probe.txt' extra",
+      ]) {
+        const result = await c.attempt('exec_command', exec(script));
+        expect(result.outcome).toBe('prompt');
+        expect(readFileSync(join(c.root, 'protected.txt'), 'utf8')).toBe('keep');
+        expect(existsSync(join(c.root, 'probe.txt'))).toBe(false);
+      }
+      c.client.setPermissionMode('bypassPermissions');
+      expect((await c.attempt('exec_command', exec('printf marker > probe.txt'))).outcome).toBe('refused');
+      expect(existsSync(join(c.root, 'probe.txt'))).toBe(false);
+    },
+  );
 });

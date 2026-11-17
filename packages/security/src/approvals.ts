@@ -54,24 +54,9 @@ export function dangerousCommandMatch(argv: string[], parsers: ShellParsers, dep
   if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH) return 'other';
   const name = argv[0] === undefined ? '' : basename(argv[0]);
   if (name === 'rm' && rmForces(argv.slice(1))) return 'forced-rm';
-  if (name === 'sudo') return dangerousCommandMatch(argv.slice(1), parsers, depth + 1);
-  if (name === 'env') {
-    let index = 1;
-    while (index < argv.length) {
-      const arg = argv[index]!;
-      if (arg === '--') {
-        index++;
-        break;
-      }
-      const eq = arg.indexOf('=');
-      if (arg === '-i' || arg === '--ignore-environment' || (eq > 0 && !arg.startsWith('-'))) {
-        index++;
-        continue;
-      }
-      break;
-    }
-    return dangerousCommandMatch(argv.slice(index), parsers, depth + 1);
-  }
+  const wrapped = unwrapPlainWrapper(argv);
+  if (wrapped === null) return 'other';
+  if (wrapped !== undefined) return wrapped.length ? dangerousCommandMatch(wrapped, parsers, depth + 1) : null;
   if (name === 'trap') {
     const action = argv[1] === '--' ? argv[2] : argv[1];
     if (action === undefined || action.startsWith('-')) return null;
@@ -128,6 +113,118 @@ export interface CommandClassification {
   parserUnavailable?: boolean;
 }
 
+/** A single allowlisted wrapper grammar shared by inspection and ambiguity checks. */
+function unwrapPlainWrapper(argv: string[]): string[] | null | undefined {
+  const name = basename(argv[0] ?? '');
+  let offset: number | undefined;
+  if (name === 'sudo') {
+    offset = 1;
+    while (offset < argv.length) {
+      const word = argv[offset]!;
+      if (word === '--') {
+        offset++;
+        break;
+      }
+      if (word === '-u' || word === '-g') {
+        if (!argv[offset + 1]) return null;
+        offset += 2;
+        continue;
+      }
+      if (word.startsWith('-')) return null;
+      break;
+    }
+  } else if (name === 'nohup' || name === 'exec' || name === 'command') {
+    if (name === 'command' && (argv[1] === '-v' || argv[1] === '-V')) return [];
+    offset = argv[1] === '--' ? 2 : 1;
+    if (argv[offset]?.startsWith('-')) return null;
+  } else if (name === 'env') {
+    offset = 1;
+    while (offset < argv.length) {
+      const word = argv[offset]!;
+      if (word === '--') {
+        offset++;
+        break;
+      }
+      if (word === '-u') {
+        if (!argv[offset + 1]) return null;
+        offset += 2;
+        continue;
+      }
+      if (
+        word === '-i' ||
+        word === '--ignore-environment' ||
+        word.startsWith('--unset=') ||
+        /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)
+      ) {
+        offset++;
+        continue;
+      }
+      if (word.startsWith('-')) return null;
+      break;
+    }
+  } else if (name === 'nice') {
+    offset = 1;
+    if (argv[offset] === '-n') {
+      if (!/^[+-]?\d+$/.test(argv[offset + 1] ?? '')) return null;
+      offset += 2;
+    } else if (argv[offset]?.startsWith('-')) return null;
+  } else if (name === 'timeout') {
+    offset = 1;
+    while (offset < argv.length) {
+      const word = argv[offset]!;
+      if (word === '--') {
+        offset++;
+        break;
+      }
+      if (word === '--foreground' || word === '--preserve-status') {
+        offset++;
+        continue;
+      }
+      if (word === '-k' || word === '-s' || word === '--kill-after' || word === '--signal') {
+        if (!argv[offset + 1]) return null;
+        offset += 2;
+        continue;
+      }
+      if (word.startsWith('-')) return null;
+      break;
+    }
+    if (!/^\d+(?:\.\d+)?[smhd]?$/.test(argv[offset] ?? '')) return null;
+    offset++;
+  }
+  return offset === undefined ? undefined : offset < argv.length ? argv.slice(offset) : null;
+}
+
+const SHELL_PROGRAMS = new Set(['bash', 'zsh', 'sh', 'dash', 'ksh', 'fish']);
+/** Unknown wrapper/interpreter forms must not be mistaken for a checked plain command. */
+function ambiguousCommand(
+  argv: string[],
+  parsers: ShellParsers,
+  workspaceRoot: string | undefined,
+  depth = 0,
+): boolean {
+  if (depth > MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH || !argv.length) return true;
+  const name = basename(argv[0]!);
+  if (SHELL_PROGRAMS.has(name)) {
+    if (!trustedShell(argv[0]!, workspaceRoot)) return true;
+    const script = extractShellScript(argv);
+    if (script === null) return true;
+    const nested = parsers.plain(script);
+    return !nested || nested.some(command => ambiguousCommand(command, parsers, workspaceRoot, depth + 1));
+  }
+  if (['eval', 'source', '.', 'xargs'].includes(name)) return true;
+  if (name === 'trap') {
+    const action = argv[1] === '--' ? argv[2] : argv[1];
+    if (action === undefined || action.startsWith('-')) return true;
+    const parsed = parsers.plain(action);
+    return !parsed || parsed.some(command => ambiguousCommand(command, parsers, workspaceRoot, depth + 1));
+  }
+  const wrapped = unwrapPlainWrapper(argv);
+  return (
+    wrapped === null ||
+    (wrapped !== undefined && wrapped.length > 0 && ambiguousCommand(wrapped, parsers, workspaceRoot, depth + 1))
+  );
+}
+
 /**
  * Classify the script `exec_command` runs as `<shell> -c <script>`. A plain script is split into
  * sub-commands; a single `bash|zsh|sh -c|-lc <script>` sub-command is unwrapped the same way, as
@@ -148,10 +245,12 @@ export function classifyCommand(
     // Codex parses `bash -lc <script>` only when the script is plain; otherwise it stays opaque.
     if (inner !== null) commands = parsers.plain(inner);
   }
-  if (commands && !commands.length) commands = null;
+  if (commands && (!commands.length || commands.some(command => ambiguousCommand(command, parsers, workspaceRoot))))
+    commands = null;
   const judged = commands ?? [[shell, '-c', script]];
   let dangerous: DangerousCommandMatch | null = null;
   for (const command of judged) dangerous ??= dangerousCommandMatch(command, parsers);
+  if (commands === null && !dangerous) dangerous = 'other';
   return {commands, dangerous};
 }
 
@@ -167,6 +266,7 @@ export const APPROVAL_KIND_FOR_REASON: Record<string, PermissionKind> = {
   'outside-writable-roots': 'escalation',
   'process-execute': 'execute',
   'dangerous-command': 'dangerous',
+  'unverified-command': 'dangerous',
   'shell-parser-unavailable': 'dangerous',
   'network-escalation': 'network',
   'stdin-input-approval-required': 'stdin',
