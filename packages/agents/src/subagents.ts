@@ -17,7 +17,6 @@ import {
   type SubagentParentLimits,
   type SubagentWorktree,
   type SubagentWorktreePort,
-  combineUsage,
   type SubagentToolOutcome,
   type ConversationStore,
   type HostAgentsConfig,
@@ -38,6 +37,8 @@ import {
 import {
   exceedsAgentDepth,
   inheritChildLimits,
+  parentCapsExceeded,
+  reserveForChildren,
   nextAgentDepth,
   normalizeAgentsConfig,
   resolveSubagentModelAndEffort,
@@ -475,7 +476,7 @@ export class SubagentManager implements SubagentExecutionPort {
         };
     }
 
-    const inherited = inheritChildLimits(parent.limits, this.runningChildrenUsage(parent.sessionId), cfg);
+    const inherited = inheritChildLimits(parent.limits, this.reservedForChildren(parent.sessionId), cfg);
     if (!inherited.ok) {
       return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message, target: description};
     }
@@ -529,7 +530,10 @@ export class SubagentManager implements SubagentExecutionPort {
       const finalUsage = storedUsage ?? latestUsage;
       if (finalUsage) {
         latestUsage = finalUsage;
-        this.deps.addParentUsage(finalUsage);
+        this.foldChildUsage(agentId ? this.scheduler.getTask(agentId) : undefined, finalUsage, true);
+      } else if (agentId) {
+        const own = this.scheduler.getTask(agentId);
+        if (own) own.reservation = undefined;
       }
     };
 
@@ -602,6 +606,7 @@ export class SubagentManager implements SubagentExecutionPort {
         toolCount: 0,
         usage: null,
         steps: [],
+        reservation: inherited.limits,
         abortController: childAbort,
         inbox: [],
         waiters: 0,
@@ -765,13 +770,27 @@ export class SubagentManager implements SubagentExecutionPort {
     }
   }
 
-  /** Usage of this parent's children that are still running (not yet folded into the parent's receipt). */
-  private runningChildrenUsage(parentId: string): Usage | null {
-    let total: Usage | null = null;
-    for (const task of this.scheduler.listTasks(parentId)) {
-      if (task.status === 'running' && task.usage) total = combineUsage(total, task.usage);
+  /** Limits promised to this parent's running children (reserved at spawn, released when they finish). */
+  private reservedForChildren(parentId: string) {
+    return reserveForChildren(
+      this.scheduler
+        .listTasks(parentId)
+        .filter(task => task.status === 'running' && !!task.reservation)
+        .map(task => ({limits: task.reservation, usage: task.usage})),
+    );
+  }
+
+  /** Folds a finished turn's usage into the parent, releases its reservation and stops siblings if the aggregate overran. */
+  private foldChildUsage(task: ActiveSubagentTask | undefined, usage: Usage, release: boolean): void {
+    this.deps.addParentUsage(usage);
+    if (task && release) task.reservation = undefined;
+    const parent = this.deps.getParentState();
+    if (!parent.limits || !parentCapsExceeded(parent.limits)) return;
+    for (const sibling of this.scheduler.listTasks(task?.parentConversationId)) {
+      if (sibling === task || sibling.status !== 'running') continue;
+      sibling.cancelReason ??= 'parent';
+      sibling.abortController.abort();
     }
-    return total;
   }
 
   /** Deletes an unchanged worktree or keeps one with changes; returns the note for the child's result. */
@@ -944,8 +963,8 @@ export class SubagentManager implements SubagentExecutionPort {
           const finalUsage = storedUsage ?? latestUsage;
           if (finalUsage) {
             task.usage = finalUsage;
-            this.deps.addParentUsage(finalUsage);
-          }
+            this.foldChildUsage(task, finalUsage, !continues);
+          } else if (!continues) task.reservation = undefined;
           if (summary && status === 'completed') task.steps.push({kind: 'text', text: summary.slice(0, 4000)});
           task.status = status;
           task.finishedAt = Date.now();
@@ -1096,7 +1115,7 @@ export class SubagentManager implements SubagentExecutionPort {
     );
     if (!found)
       return {status: 'error', code: 'INVALID_INPUT', content: 'The model of this subagent is no longer available.'};
-    const inherited = inheritChildLimits(parent.limits, this.runningChildrenUsage(owned.parentId), cfg);
+    const inherited = inheritChildLimits(parent.limits, this.reservedForChildren(owned.parentId), cfg);
     if (!inherited.ok) return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message};
     const slot = this.scheduler.tryReserveSlot();
     if (!slot.ok)
@@ -1145,6 +1164,7 @@ export class SubagentManager implements SubagentExecutionPort {
         ...(record.isolation ? {isolation: record.isolation} : {}),
       };
       task2.status = 'running';
+      task2.reservation = inherited.limits;
       task2.background = true;
       task2.parentTurnId = parent.turnId ?? null;
       task2.cancelReason = undefined;

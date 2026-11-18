@@ -1,6 +1,16 @@
 /** S5c: isolated worktrees use real Git; the child's sandbox can write only its worktree (never the main checkout or `.git`). */
 import {afterEach, expect, test} from 'bun:test';
-import {existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -130,4 +140,46 @@ native('a child sandbox rooted at the worktree writes there but not to the main 
   expect(existsSync(join(info.gitCommonDir, 'escape'))).toBe(false);
   expect(result.output).toContain('made.txt'); // git status works: the Git directory is readable
   worktrees.remove(info);
+});
+
+test('worktree creation does not run repository smudge/process filter drivers', () => {
+  const root = tmp('fyn-wt-filter-');
+  const marker = join(tmp('fyn-wt-marker-'), 'ran');
+  git(root, 'init', '-q', '-b', 'main');
+  writeFileSync(join(root, '.gitattributes'), '*.txt filter=evil\n');
+  writeFileSync(join(root, 'a.txt'), 'base\n');
+  git(root, 'add', '.');
+  git(root, 'commit', '-q', '-m', 'init');
+  git(root, 'config', 'filter.evil.smudge', `touch ${marker}; cat`);
+  git(root, 'config', 'filter.evil.process', `touch ${marker}`);
+  git(root, 'config', 'filter.evil.required', 'true');
+  const worktrees = new GitWorktrees({workspaceRoot: root, baseDirectory: tmp('fyn-wt-base-f-')});
+  const info = worktrees.create(ID);
+  expect(readFileSync(join(info.path, 'a.txt'), 'utf8')).toBe('base\n');
+  expect(existsSync(marker)).toBe(false);
+  worktrees.remove(info);
+});
+
+test('a symlinked or loosely-permissioned worktree base directory is refused', () => {
+  const {root} = repository();
+  const holder = tmp('fyn-wt-holder-');
+  const target = tmp('fyn-wt-target-');
+  const link = join(holder, 'base-link');
+  symlinkSync(target, link);
+  expect(() => new GitWorktrees({workspaceRoot: root, baseDirectory: link}).create(ID)).toThrow(WorktreeError);
+  expect(existsSync(join(target, 'x'))).toBe(false);
+
+  const loose = join(holder, 'loose');
+  mkdirSync(loose, {mode: 0o755});
+  chmodSync(loose, 0o755);
+  expect(() => new GitWorktrees({workspaceRoot: root, baseDirectory: loose}).create(ID)).toThrow(WorktreeError);
+
+  // A pre-created per-repository directory that is a symlink is refused too.
+  const base = tmp('fyn-wt-base-s-');
+  const first = new GitWorktrees({workspaceRoot: root, baseDirectory: base});
+  first.remove(first.create(ID));
+  const entry = join(base, require('node:fs').readdirSync(base)[0]);
+  rmSync(entry, {recursive: true, force: true});
+  symlinkSync(target, entry);
+  expect(() => first.create(ID)).toThrow(WorktreeError);
 });

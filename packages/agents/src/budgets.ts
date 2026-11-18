@@ -155,26 +155,70 @@ export function accumulateSubagentUsage(current: Usage | null, child: Usage | nu
 const tokensOf = (usage: Usage | null | undefined): number =>
   usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : 0;
 
+/** Budget already promised to still-running children (their granted limits, not just what they reported). */
+export interface ChildReservation {
+  tokens: number;
+  outputTokens: number;
+  /** Reserved against `budget.maxCostUSD`. */
+  budgetCostUSD: number;
+  /** Reserved against `maxEstimatedCostUSD`. */
+  capCostUSD: number;
+}
+
+export const NO_RESERVATION: ChildReservation = {tokens: 0, outputTokens: 0, budgetCostUSD: 0, capCostUSD: 0};
+
+/**
+ * Sums the reservations of running children: for each dimension the larger of the limit the child was granted
+ * and what it has reported so far (a child may overshoot a per-request cap slightly).
+ */
+export function reserveForChildren(
+  running: Array<{limits?: SubagentChildLimits; usage: Usage | null}>,
+): ChildReservation {
+  const total = {...NO_RESERVATION};
+  for (const child of running) {
+    const used = child.usage;
+    const cost = used?.costUSD ?? 0;
+    total.tokens += Math.max(child.limits?.budget.maxTokens ?? 0, tokensOf(used));
+    total.outputTokens += Math.max(child.limits?.maxOutputTokens ?? 0, used?.outputTokens ?? 0);
+    total.budgetCostUSD += Math.max(child.limits?.budget.maxCostUSD ?? 0, cost);
+    total.capCostUSD += Math.max(child.limits?.maxEstimatedCostUSD ?? 0, cost);
+  }
+  return total;
+}
+
+/** Whether the parent's own caps are already exceeded (used to stop siblings once an aggregate overruns). */
+export function parentCapsExceeded(parent: SubagentParentLimits | undefined): boolean {
+  if (!parent) return false;
+  const spent = parent.usage;
+  const cost = spent?.costUSD ?? 0;
+  return (
+    (parent.budget.maxTokens !== undefined && tokensOf(spent) >= parent.budget.maxTokens) ||
+    (parent.budget.maxCostUSD !== undefined && cost >= parent.budget.maxCostUSD) ||
+    (parent.maxOutputTokens !== undefined && (spent?.outputTokens ?? 0) >= parent.maxOutputTokens) ||
+    (parent.maxEstimatedCostUSD !== undefined && cost >= parent.maxEstimatedCostUSD)
+  );
+}
+
 /**
  * What a child may spend (S5c security fix). It inherits the parent turn's caps minus what the parent and
- * the children still running (not yet folded into the parent's receipt) used: `maxOutputTokens` and
+ * the budget reserved for children still running (their granted limits; released when they finish) used: `maxOutputTokens` and
  * `maxEstimatedCostUSD` become the child's per-request caps, the user's work budget (tokens, cost, time)
  * shrinks to the remainder, and the optional `[agents] max_child_*` ceilings apply on top. A parent whose cap
  * is already spent gets a refusal instead of a child.
  */
 export function inheritChildLimits(
   parent: SubagentParentLimits | undefined,
-  runningChildrenUsage: Usage | null,
+  reserved: ChildReservation,
   config: HostAgentsConfig,
 ): {ok: true; limits: SubagentChildLimits} | {ok: false; message: string} {
   const budget: TurnBudget = {...(parent?.budget ?? {})};
   let maxOutputTokens = parent?.maxOutputTokens;
   let maxEstimatedCostUSD = parent?.maxEstimatedCostUSD;
   if (parent) {
-    const spent = runningChildrenUsage ? combineUsage(parent.usage, runningChildrenUsage) : parent.usage;
-    const spentTokens = tokensOf(spent);
-    const spentOutput = spent?.outputTokens ?? 0;
-    const spentCost = spent?.costUSD ?? 0;
+    const spentTokens = tokensOf(parent.usage) + reserved.tokens;
+    const spentOutput = (parent.usage?.outputTokens ?? 0) + reserved.outputTokens;
+    const spentBudgetCost = (parent.usage?.costUSD ?? 0) + reserved.budgetCostUSD;
+    const spentCapCost = (parent.usage?.costUSD ?? 0) + reserved.capCostUSD;
     const exhausted = (what: string) => ({
       ok: false as const,
       message: `The parent turn's ${what} is already used up (including subagents), so no new subagent was started. Finish the work yourself or ask the user to raise the limit.`,
@@ -185,7 +229,7 @@ export function inheritChildLimits(
       budget.maxTokens = left;
     }
     if (budget.maxCostUSD !== undefined) {
-      const left = budget.maxCostUSD - spentCost;
+      const left = budget.maxCostUSD - spentBudgetCost;
       if (left <= 0) return exhausted('cost budget');
       budget.maxCostUSD = left;
     }
@@ -200,7 +244,7 @@ export function inheritChildLimits(
       maxOutputTokens = left;
     }
     if (maxEstimatedCostUSD !== undefined) {
-      const left = maxEstimatedCostUSD - spentCost;
+      const left = maxEstimatedCostUSD - spentCapCost;
       if (left <= 0) return exhausted('estimated cost cap');
       maxEstimatedCostUSD = left;
     }

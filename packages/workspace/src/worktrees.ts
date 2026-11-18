@@ -1,7 +1,7 @@
-import {existsSync, mkdirSync, realpathSync, rmSync} from 'node:fs';
+import {existsSync, lstatSync, mkdirSync, realpathSync, rmSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
-import {join, resolve} from 'node:path';
+import {dirname, join, resolve} from 'node:path';
 import {FutrynError} from '@futryn/contracts';
 
 /**
@@ -58,7 +58,12 @@ export interface WorktreeFinish {
 
 export interface GitWorktreesOptions {
   workspaceRoot: string;
-  /** Parent of the per-repository worktree directories; defaults to the OS temp directory. */
+  /**
+   * Parent of the per-repository worktree directories. The host passes a directory under Futryn's per-user
+   * state (`~/.futryn-worktrees`, a sibling of the state directory because policy denies the state directory to children); the fallback is a per-user directory in the OS temp directory, never a
+   * shared fixed path. Every component created or used must be a real directory owned by the current user
+   * with mode 0700 (symlinks and other owners are refused).
+   */
   baseDirectory?: string;
 }
 
@@ -68,7 +73,31 @@ export class GitWorktrees {
 
   constructor(options: GitWorktreesOptions) {
     this.workspaceRoot = resolve(options.workspaceRoot);
-    this.baseDirectory = resolve(options.baseDirectory ?? join(tmpdir(), 'futryn-worktrees'));
+    this.baseDirectory = resolve(
+      options.baseDirectory ?? join(tmpdir(), `futryn-worktrees-${process.getuid?.() ?? 'user'}`),
+    );
+  }
+
+  /** Creates `directory` (and missing parents) as 0700 and verifies each created/own component with lstat. */
+  private ensurePrivateDirectory(directory: string, ownedFrom: string): void {
+    const chain: string[] = [];
+    for (let current = directory; ; current = dirname(current)) {
+      chain.unshift(current);
+      if (current === ownedFrom || dirname(current) === current) break;
+    }
+    mkdirSync(dirname(chain[0]!), {recursive: true, mode: 0o700});
+    const uid = process.getuid?.();
+    for (const part of chain) {
+      let info = lstatSync(part, {throwIfNoEntry: false});
+      if (!info) {
+        mkdirSync(part, {mode: 0o700});
+        info = lstatSync(part);
+      }
+      if (!info.isDirectory() || info.isSymbolicLink()) throw new WorktreeError('create-failed');
+      if (process.platform === 'win32') continue;
+      if (uid !== undefined && info.uid !== uid) throw new WorktreeError('create-failed');
+      if ((info.mode & 0o077) !== 0) throw new WorktreeError('create-failed');
+    }
   }
 
   private git(cwd: string, args: string[], overrides: string[] = []) {
@@ -97,17 +126,19 @@ export class GitWorktrees {
       '--null',
       '--name-only',
       '--get-regexp',
-      '^filter\\..*\\.(clean|process)$',
+      '^filter\\..*\\.(clean|smudge|process)$',
     ]);
     const drivers = new Set(
       config.stdout
         .split('\0')
         .filter(Boolean)
-        .map(key => key.replace(/\.(clean|process)$/, '')),
+        .map(key => key.replace(/\.(clean|smudge|process)$/, '')),
     );
     return [...drivers].flatMap(driver => [
       '-c',
       `${driver}.clean=`,
+      '-c',
+      `${driver}.smudge=`,
       '-c',
       `${driver}.process=`,
       '-c',
@@ -142,8 +173,14 @@ export class GitWorktrees {
     const head = this.git(this.workspaceRoot, ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']);
     if (head.status !== 0) throw new WorktreeError('no-commit');
     const base = head.stdout.trim();
-    mkdirSync(where.parent, {recursive: true, mode: 0o700});
-    const added = this.git(where.repositoryRoot, ['worktree', 'add', '--quiet', '-b', where.branch, where.path, base]);
+    this.ensurePrivateDirectory(where.parent, this.baseDirectory);
+    // `worktree add` checks files out, which would run repository smudge/process filters: disable every
+    // configured driver (plus the clean side) for the checkout.
+    const added = this.git(
+      where.repositoryRoot,
+      ['worktree', 'add', '--quiet', '-b', where.branch, where.path, base],
+      this.filterOverrides(where.repositoryRoot),
+    );
     if (added.status !== 0) throw new WorktreeError('create-failed');
     return {
       path: realpathSync.native(where.path),

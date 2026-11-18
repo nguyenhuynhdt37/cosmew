@@ -3,7 +3,14 @@ import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import type {HostAgentsConfig, ModelInfo, SubagentParentLimits, SubagentWorktreePort} from '@futryn/contracts';
-import {SubagentManager, inheritChildLimits, normalizeAgentsConfig, type ChildRunContext} from '@futryn/agents';
+import {
+  SubagentManager,
+  inheritChildLimits,
+  reserveForChildren,
+  NO_RESERVATION,
+  normalizeAgentsConfig,
+  type ChildRunContext,
+} from '@futryn/agents';
 import {loadHostAgents} from '@futryn/models';
 import {SqliteConversations, openPrivateDatabase} from '@futryn/persistence';
 
@@ -27,7 +34,11 @@ test('inheritChildLimits: child gets the parent caps minus parent and running-si
     usage: usage(2000, 300, 0.5),
     elapsedMs: 10_000,
   };
-  const result = inheritChildLimits(parent, usage(1000, 200, 0.25), baseConfig());
+  const result = inheritChildLimits(
+    parent,
+    {tokens: 1200, outputTokens: 200, budgetCostUSD: 0.25, capCostUSD: 0.25},
+    baseConfig(),
+  );
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   expect(result.limits.maxOutputTokens).toBe(500); // 1000 - (300 + 200)
@@ -37,14 +48,14 @@ test('inheritChildLimits: child gets the parent caps minus parent and running-si
 
   // Each cap on its own refuses once spent.
   const spent = (patch: Partial<SubagentParentLimits>, used = usage(0, 0)) =>
-    inheritChildLimits({budget: {}, usage: used, elapsedMs: 0, ...patch}, null, baseConfig());
+    inheritChildLimits({budget: {}, usage: used, elapsedMs: 0, ...patch}, NO_RESERVATION, baseConfig());
   expect(spent({maxOutputTokens: 100}, usage(10, 100)).ok).toBe(false);
   expect(spent({budget: {maxTokens: 100}}, usage(60, 40)).ok).toBe(false);
   expect(spent({budget: {maxCostUSD: 1}}, usage(1, 1, 1)).ok).toBe(false);
   expect(spent({maxEstimatedCostUSD: 1}, usage(1, 1, 1.5)).ok).toBe(false);
   expect(spent({budget: {maxDurationMs: 5000}, elapsedMs: 5000}).ok).toBe(false);
   // No caps at all: nothing is invented.
-  expect(inheritChildLimits(undefined, null, baseConfig())).toEqual({ok: true, limits: {budget: {}}});
+  expect(inheritChildLimits(undefined, NO_RESERVATION, baseConfig())).toEqual({ok: true, limits: {budget: {}}});
 });
 
 test('[agents] max_child_* ceilings apply on top of the inherited remainder', () => {
@@ -60,10 +71,44 @@ test('[agents] max_child_* ceilings apply on top of the inherited remainder', ()
   const config = normalizeAgentsConfig(loaded);
   const limits = inheritChildLimits(
     {budget: {maxTokens: 3000, maxDurationMs: 90_000}, usage: null, elapsedMs: 0},
-    null,
+    NO_RESERVATION,
     config,
   );
   expect(limits.ok && limits.limits.budget).toEqual({maxTokens: 3000, maxDurationMs: 30_000, maxCostUSD: 0.5});
+});
+
+test('parallel children cannot together exceed the parent cap; a finished child releases its unused reservation', () => {
+  const parent: SubagentParentLimits = {
+    maxEstimatedCostUSD: 1,
+    maxOutputTokens: 1000,
+    budget: {maxTokens: 10_000, maxCostUSD: 1},
+    usage: null,
+    elapsedMs: 0,
+  };
+  // Child A takes the whole remainder as its grant; B finds nothing left to promise.
+  const a = inheritChildLimits(parent, NO_RESERVATION, baseConfig());
+  expect(a.ok).toBe(true);
+  if (!a.ok) return;
+  const reserved = reserveForChildren([{limits: a.limits, usage: null}]);
+  expect(reserved).toMatchObject({tokens: 10_000, outputTokens: 1000, capCostUSD: 1});
+  expect(inheritChildLimits(parent, reserved, baseConfig()).ok).toBe(false);
+  // A smaller grant leaves the rest to a sibling, and the sum of grants never exceeds the cap.
+  const noOutputCap = {...parent, maxOutputTokens: undefined, maxEstimatedCostUSD: undefined};
+  const small = inheritChildLimits(
+    noOutputCap,
+    NO_RESERVATION,
+    normalizeAgentsConfig({maxChildTokens: 4000, maxChildCostUSD: 0.4}),
+  );
+  if (!small.ok) throw new Error('expected grant');
+  const b = inheritChildLimits(noOutputCap, reserveForChildren([{limits: small.limits, usage: null}]), baseConfig());
+  if (!b.ok) throw new Error('expected grant');
+  expect((small.limits.budget.maxTokens ?? 0) + (b.limits.budget.maxTokens ?? 0)).toBeLessThanOrEqual(10_000);
+  expect((small.limits.budget.maxCostUSD ?? 0) + (b.limits.budget.maxCostUSD ?? 0)).toBeLessThanOrEqual(1 + 1e-9);
+  // Released (child finished, usage folded into the parent): only what it actually spent counts.
+  const folded = inheritChildLimits({...parent, usage: usage(100, 50, 0.1)}, NO_RESERVATION, baseConfig());
+  expect(folded.ok && folded.limits.maxEstimatedCostUSD).toBeCloseTo(0.9);
+  // A running child that overshoots its grant reserves what it used.
+  expect(reserveForChildren([{limits: small.limits, usage: usage(9000, 10, 0.9)}]).tokens).toBe(9010);
 });
 
 function manager(options: {
@@ -161,6 +206,28 @@ test('running siblings count against the cap before they finish', async () => {
   m.subagents.scheduler.getTask(id)!.usage = usage(500, 400);
   expect((await spawn(m, {prompt: 'second'})).code).toBe('AGENT_BUDGET_EXHAUSTED');
   release();
+});
+
+test('parallel children cannot together exceed the parent cap; the reservation is released when the child finishes', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => (release = resolve));
+  const m = manager({
+    limits: () => ({maxEstimatedCostUSD: 1, budget: {maxTokens: 1000, maxCostUSD: 1}, usage: null, elapsedMs: 0}),
+    run: async context => {
+      if (context.prompt === 'first') await gate;
+      return 'ok';
+    },
+  });
+  const first = m.subagents.run('call-a', {agent_type: 'explore', description: 'a', prompt: 'first', background: true});
+  const id = JSON.parse((await first).content).id as string;
+  // The first child was granted the whole remainder, so a parallel sibling gets nothing.
+  expect(m.contexts[0]!.limits.budget.maxTokens).toBe(1000);
+  expect((await spawn(m, {prompt: 'second'})).code).toBe('AGENT_BUDGET_EXHAUSTED');
+  expect(m.contexts).toHaveLength(1);
+  release();
+  await m.subagents.scheduler.getTask(id)!.done;
+  // Finished: its reservation is released (usage was folded into the parent, which reports none here).
+  expect((await spawn(m, {prompt: 'third'})).status).toBe('ok');
 });
 
 test('per-type model defaults and per-call model/effort override', async () => {

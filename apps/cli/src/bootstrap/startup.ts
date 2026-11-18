@@ -2,7 +2,7 @@ import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {pathToFileURL} from 'node:url';
-import {dirname, join, resolve} from 'node:path';
+import {basename, dirname, join, resolve} from 'node:path';
 import {
   FULL_ACCESS_WARNING,
   FutrynError,
@@ -692,7 +692,12 @@ export function startup(
     };
 
     // Isolated children (`isolation: "worktree"`, S5c): host-created Git worktrees, one per child id.
-    const gitWorktrees = new GitWorktrees({workspaceRoot});
+    // Per-user, 0700, next to (not inside) the state directory: reads and patches inside the state directory are
+    // denied by policy, and the child must be able to use its worktree.
+    const gitWorktrees = new GitWorktrees({
+      workspaceRoot,
+      baseDirectory: join(dirname(stateDirectory), `${basename(stateDirectory)}-worktrees`),
+    });
     const worktreeInfos = new Map<string, WorktreeInfo>();
     const worktreePort: SubagentWorktreePort = {
       acquire: agentId => {

@@ -1,5 +1,6 @@
 import {
   DEFAULT_AGENT_MAX_THREADS,
+  type SubagentChildLimits,
   type SubagentStatus,
   type SubagentTranscriptStep,
   type SubagentType,
@@ -39,6 +40,8 @@ export interface ActiveSubagentTask {
   errorCode?: string;
   /** Called whenever the child's status changes (turn started/finished). */
   listeners: Set<() => void>;
+  /** S5c: limits granted to the running turn; reserved against the parent's caps until the turn is folded in. */
+  reservation?: SubagentChildLimits;
   /** S5c: the child runs in a host-owned Git worktree. */
   isolation?: 'worktree';
 }
