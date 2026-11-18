@@ -15,9 +15,9 @@ import {
 import {normalizeHistory} from '../context/builder';
 import {compactConversation} from './compact';
 import {TurnRun} from './turn';
-import type {ActiveTurn, ConversationOptions, ConversationState, TurnHost} from './turn-types';
+import type {ActiveTurn, ConversationOptions, ConversationState, TurnHost, TurnLimitsSnapshot} from './turn-types';
 
-export {SAFETY_LIMITS, estimateTokens, type ConversationOptions} from './turn-types';
+export {SAFETY_LIMITS, estimateTokens, type ConversationOptions, type TurnLimitsSnapshot} from './turn-types';
 
 /**
  * Conversation runtime (Codex `Session`). Tools run only through the injected ToolPort; no provider
@@ -75,6 +75,11 @@ export class Conversation {
    */
   forkableHistory(): Message[] {
     return (this.active?.inTurnMessages?.() ?? this.state.messages).map(m => ({...m}));
+  }
+
+  /** Caps and usage of the running turn (undefined when idle); subagents inherit what remains (S5c). */
+  turnLimits(): TurnLimitsSnapshot | undefined {
+    return this.active?.limits?.();
   }
 
   /** Fold a subagent's usage into the active turn's receipt (or the latest stored turn when idle). */

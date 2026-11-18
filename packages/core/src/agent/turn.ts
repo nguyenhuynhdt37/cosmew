@@ -168,6 +168,15 @@ export class TurnRun {
       accepting: false,
       pending: [],
       addUsage: usage => this.addChildUsage(usage),
+      limits: () => ({
+        ...(this.request.maxOutputTokens !== undefined ? {maxOutputTokens: this.request.maxOutputTokens} : {}),
+        ...(this.request.maxEstimatedCostUSD !== undefined
+          ? {maxEstimatedCostUSD: this.request.maxEstimatedCostUSD}
+          : {}),
+        budget: {...this.budget},
+        usage: this.receipt.usage ? {...this.receipt.usage} : null,
+        elapsedMs: Date.now() - this.startedAt,
+      }),
       inTurnMessages: () => [...this.host.state.messages, ...this.carried, this.user, ...this.steps],
     };
     this.tools = new TurnTools({

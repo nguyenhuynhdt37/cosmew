@@ -40,3 +40,5 @@ Accepted 2026-11-16 on the user's explicit decision ("l√†m native support all h·
 ## Update 2026-11-17
 
 [ADR 0053](0053-codex-sandbox-and-approval-alignment.md) aligns the profile with Codex: `.git` is readable (workspace and parents) and still not writable; localhost bind/connect is allowed, external network still needs approval; FSEvents is allowed; tool caches live in the per-session scratch directory. "No unsandboxed fallback" above still holds: a failing sandbox never runs unsandboxed. The only unsandboxed run is a single command the user approved after `sandbox_permissions: "require_escalated"`.
+
+- 2026-11-18 (F12, see ADR 0058 S5c): the scratch `HOME`/`TMPDIR`/XDG/cache environment applies only to sandboxed commands. A command the user approved to run without the sandbox (`require_escalated`, Full Access) runs with the user's real `HOME` and host environment (Codex `shell_environment_policy` defaults: names containing `KEY`/`SECRET`/`TOKEN`, `FUTRYN_*` and `HANNES_*` dropped).

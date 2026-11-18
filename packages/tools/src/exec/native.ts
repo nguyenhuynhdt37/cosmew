@@ -69,6 +69,9 @@ const EXEC_ENV = {
   FUTRYN_SANDBOX: '1',
 };
 
+/** Codex `shell_environment_policy` default excludes: names that look like credentials. */
+const HOST_ENV_EXCLUDED = /KEY|SECRET|TOKEN/i;
+
 export interface NativeRuntimeOptions {
   /** Canonical discovered skill directories; outside-workspace resources are read-only. */
   skillDirectories?: readonly string[];
@@ -362,7 +365,8 @@ export class NativeCommandRuntime implements CommandRuntime {
     };
   }
 
-  private env(tty: boolean): Record<string, string> {
+  private env(tty: boolean, unsandboxed = false): Record<string, string> {
+    if (unsandboxed) return this.hostEnv(tty);
     return {
       ...EXEC_ENV,
       ...(tty ? {TERM: 'xterm-256color', NO_COLOR: ''} : {}),
@@ -372,6 +376,29 @@ export class NativeCommandRuntime implements CommandRuntime {
       ...this.cacheEnv(),
       ...(this.rustupHome ? {RUSTUP_HOME: this.rustupHome} : {}),
       ...(this.cargoHome ? {CARGO_HOME: this.cargoHome} : {}),
+    };
+  }
+
+  /**
+   * Environment of a command the user approved to run WITHOUT the sandbox (an escalation or Full
+   * Access, F12): the user's real environment and HOME, as Codex's `shell_environment_policy`
+   * (inherit all, default excludes `*KEY*`, `*SECRET*`, `*TOKEN*`) followed by Codex's unified-exec
+   * overlay. Futryn's own state and configuration variables never pass, and neither does the
+   * sandbox scratch directory (no scratch HOME, XDG_* or cache redirects).
+   */
+  private hostEnv(tty: boolean): Record<string, string> {
+    const inherited: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined || HOST_ENV_EXCLUDED.test(key) || /^(FUTRYN|HANNES)_/i.test(key)) continue;
+      inherited[key] = value;
+    }
+    const {FUTRYN_SANDBOX: _marker, ...overlay} = EXEC_ENV;
+    return {
+      ...inherited,
+      ...overlay,
+      ...(tty ? {TERM: 'xterm-256color', NO_COLOR: ''} : {}),
+      PATH: this.path,
+      HOME: this.options.home ?? process.env.HOME ?? homedir(),
     };
   }
 
@@ -425,7 +452,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private startPty(session: NativeSession, argv: string[], cwd: string): void {
     const child = Bun.spawn(argv, {
       cwd,
-      env: this.env(true),
+      env: this.env(true, session.sandbox.unsandboxed === true),
       terminal: {cols: 120, rows: 40, data: (_terminal, data) => recordOutput(session, 'stdout', Buffer.from(data))},
     });
     session.ptyChild = child;
@@ -443,7 +470,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private startPipes(session: NativeSession, argv: string[], cwd: string): void {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd,
-      env: this.env(false),
+      env: this.env(false, session.sandbox.unsandboxed === true),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     });

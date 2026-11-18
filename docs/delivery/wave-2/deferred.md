@@ -42,3 +42,12 @@ Agent tổng hợp riêng như Codex phase 2 là một bước sau nữa: lock p
 - `codex-rs/memories/write/src/{phase1,lib,start,runtime}.rs` là vị trí thực tế của orchestration tại revision pinned; đường `codex-rs/core/src/memories/` user/README nhắc tới **không tồn tại** trong checkout này. `phase1.rs` và `lib.rs` đã đọc để xác minh limits; các file runner còn lại cần đọc chi tiết khi triển khai.
 - `codex-rs/config/src/types.rs` (defaults/clamps); `codex-rs/state/src/runtime/memories.rs` (phase-2 selection SQL).
 - `codex-rs/memories/read/src/{citations,usage}.rs`, `codex-rs/ext/memories/templates/memories/read_path.md` cho phần đã triển khai. Usage upstream phân loại shell reads; Futryn chỉ đếm explicit dispatcher memory reads, không shell telemetry.
+
+## Subagent — hoãn sau S5c
+
+Ngày 2026-11-18, theo [ADR 0058](../../adr/0058-synchronous-subagents.md). S5a-S5c đã xong; những mục sau chủ ý chưa làm và KHÔNG được coi là có trong sản phẩm:
+
+- **Remote/cloud agents** (chạy subagent trên máy hoặc dịch vụ từ xa, Claude Code remote/Codex cloud): cần ADR riêng về danh tính, truyền workspace, bí mật, mạng và audit; hiện mọi con chạy trong tiến trình Futryn cùng sandbox cục bộ, qua API provider.
+- **Agent teams / teammates** (nhiều agent ngang hàng có danh sách tác vụ chung, mailbox hai chiều giữa các con, lead điều phối): hiện chỉ có cây cha-con độ sâu mặc định 1; con không nhắn nhau, chỉ cha qua `agent_message`.
+- Agent role dạng file TOML kiểu Codex; resume tự động của con nền qua restart tiến trình; hook/`permissionMode` của agent tuỳ chỉnh; UI tạo/sửa agent; TUI nhiều con song song nâng cao (TUI được viết lại riêng).
+- Worktree cách ly: bubblewrap/Linux chưa kiểm chứng, Windows chưa hỗ trợ; con cách ly không `git commit` được (thư mục Git chung chỉ đọc).

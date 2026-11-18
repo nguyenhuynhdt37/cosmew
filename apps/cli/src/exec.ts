@@ -211,14 +211,48 @@ export async function runExec(
   });
   let finalText = '';
   try {
-    for await (const event of client.sendMessage(options.prompt, {signal})) {
-      if (event.type === 'started' || event.type === 'responseDiscarded') finalText = '';
-      if (event.type === 'textDelta') finalText += event.text;
-      if (event.type === 'context.compacted' && !options.json)
-        process.stderr.write(
-          `[context compacted (${event.strategy}): ~${event.tokensBefore} -> ~${event.tokensAfter} tokens]\n`,
-        );
-      emit(event);
+    const runTurn = async (message: string) => {
+      for await (const event of client.sendMessage(message, {signal})) {
+        if (event.type === 'started' || event.type === 'responseDiscarded') finalText = '';
+        if (event.type === 'textDelta') finalText += event.text;
+        if (event.type === 'context.compacted' && !options.json)
+          process.stderr.write(
+            `[context compacted (${event.strategy}): ~${event.tokensBefore} -> ~${event.tokensAfter} tokens]\n`,
+          );
+        emit(event);
+      }
+    };
+    await runTurn(options.prompt);
+    // Background subagents (S5c): headless mode has no UI to wake the parent, so wait for them here and give each
+    // finished child's queued `<subagent>` result to the parent as its next turn, until nothing is running or queued.
+    let noticed = false;
+    let wake: (() => void) | undefined;
+    const stopNotices = client.onSubagentNotice(() => {
+      noticed = true;
+      wake?.();
+    });
+    const abortWake = () => wake?.();
+    signal?.addEventListener('abort', abortWake);
+    try {
+      while (!signal?.aborted) {
+        const queued = client.takeQueuedMessage();
+        if (queued !== undefined) {
+          await runTurn(queued);
+          continue;
+        }
+        if (!client.subagents().some(child => child.background && child.status === 'running')) break;
+        await new Promise<void>(resolve => {
+          wake = resolve;
+          const timer = setTimeout(resolve, 500);
+          if (noticed) resolve();
+          void Promise.resolve().then(() => timer.unref?.());
+        });
+        wake = undefined;
+        noticed = false;
+      }
+    } finally {
+      stopNotices();
+      signal?.removeEventListener('abort', abortWake);
     }
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     const text = app.redactor.text(finalText);

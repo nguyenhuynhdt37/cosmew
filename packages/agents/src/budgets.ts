@@ -4,6 +4,9 @@ import {
   combineUsage,
   type HostAgentsConfig,
   type ModelInfo,
+  type SubagentChildLimits,
+  type SubagentParentLimits,
+  type TurnBudget,
   type Selection,
   type Usage,
 } from '@futryn/contracts';
@@ -17,6 +20,8 @@ export function defaultAgentsConfig(): HostAgentsConfig {
     roles: {},
   };
 }
+
+const positive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
 
 export function normalizeAgentsConfig(raw?: Partial<HostAgentsConfig>): HostAgentsConfig {
   const base = defaultAgentsConfig();
@@ -35,6 +40,11 @@ export function normalizeAgentsConfig(raw?: Partial<HostAgentsConfig>): HostAgen
     maxDepth,
     ...(raw.defaultModel?.trim() ? {defaultModel: raw.defaultModel.trim()} : {}),
     ...(raw.defaultReasoningEffort?.trim() ? {defaultReasoningEffort: raw.defaultReasoningEffort.trim()} : {}),
+    ...(positive(raw.maxChildTokens) ? {maxChildTokens: Math.floor(raw.maxChildTokens)} : {}),
+    ...(positive(raw.maxChildDurationMs)
+      ? {maxChildDurationMs: Math.max(1000, Math.floor(raw.maxChildDurationMs))}
+      : {}),
+    ...(positive(raw.maxChildCostUSD) ? {maxChildCostUSD: raw.maxChildCostUSD} : {}),
     roles: raw.roles ? {...raw.roles} : {},
   };
 }
@@ -140,4 +150,75 @@ export function resolveSubagentModelAndEffort(options: {
 export function accumulateSubagentUsage(current: Usage | null, child: Usage | null | undefined): Usage | null {
   if (!child) return current;
   return combineUsage(current, child);
+}
+
+const tokensOf = (usage: Usage | null | undefined): number =>
+  usage ? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) : 0;
+
+/**
+ * What a child may spend (S5c security fix). It inherits the parent turn's caps minus what the parent and
+ * the children still running (not yet folded into the parent's receipt) used: `maxOutputTokens` and
+ * `maxEstimatedCostUSD` become the child's per-request caps, the user's work budget (tokens, cost, time)
+ * shrinks to the remainder, and the optional `[agents] max_child_*` ceilings apply on top. A parent whose cap
+ * is already spent gets a refusal instead of a child.
+ */
+export function inheritChildLimits(
+  parent: SubagentParentLimits | undefined,
+  runningChildrenUsage: Usage | null,
+  config: HostAgentsConfig,
+): {ok: true; limits: SubagentChildLimits} | {ok: false; message: string} {
+  const budget: TurnBudget = {...(parent?.budget ?? {})};
+  let maxOutputTokens = parent?.maxOutputTokens;
+  let maxEstimatedCostUSD = parent?.maxEstimatedCostUSD;
+  if (parent) {
+    const spent = runningChildrenUsage ? combineUsage(parent.usage, runningChildrenUsage) : parent.usage;
+    const spentTokens = tokensOf(spent);
+    const spentOutput = spent?.outputTokens ?? 0;
+    const spentCost = spent?.costUSD ?? 0;
+    const exhausted = (what: string) => ({
+      ok: false as const,
+      message: `The parent turn's ${what} is already used up (including subagents), so no new subagent was started. Finish the work yourself or ask the user to raise the limit.`,
+    });
+    if (budget.maxTokens !== undefined) {
+      const left = budget.maxTokens - spentTokens;
+      if (left <= 0) return exhausted('token budget');
+      budget.maxTokens = left;
+    }
+    if (budget.maxCostUSD !== undefined) {
+      const left = budget.maxCostUSD - spentCost;
+      if (left <= 0) return exhausted('cost budget');
+      budget.maxCostUSD = left;
+    }
+    if (budget.maxDurationMs !== undefined) {
+      const left = budget.maxDurationMs - parent.elapsedMs;
+      if (left <= 0) return exhausted('time budget');
+      budget.maxDurationMs = left;
+    }
+    if (maxOutputTokens !== undefined) {
+      const left = maxOutputTokens - spentOutput;
+      if (left <= 0) return exhausted('output token cap');
+      maxOutputTokens = left;
+    }
+    if (maxEstimatedCostUSD !== undefined) {
+      const left = maxEstimatedCostUSD - spentCost;
+      if (left <= 0) return exhausted('estimated cost cap');
+      maxEstimatedCostUSD = left;
+    }
+    if (budget.maxTokens !== undefined && maxOutputTokens !== undefined)
+      maxOutputTokens = Math.min(maxOutputTokens, budget.maxTokens);
+  }
+  if (config.maxChildTokens !== undefined)
+    budget.maxTokens = Math.min(budget.maxTokens ?? Infinity, config.maxChildTokens);
+  if (config.maxChildDurationMs !== undefined)
+    budget.maxDurationMs = Math.min(budget.maxDurationMs ?? Infinity, config.maxChildDurationMs);
+  if (config.maxChildCostUSD !== undefined)
+    budget.maxCostUSD = Math.min(budget.maxCostUSD ?? Infinity, config.maxChildCostUSD);
+  return {
+    ok: true,
+    limits: {
+      ...(maxOutputTokens !== undefined ? {maxOutputTokens: Math.max(1, Math.floor(maxOutputTokens))} : {}),
+      ...(maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD} : {}),
+      budget,
+    },
+  };
 }

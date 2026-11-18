@@ -29,6 +29,7 @@ import {
   type PlanState,
   type Provider,
   type SubagentNotice,
+  type SubagentWorktreePort,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {
@@ -52,6 +53,9 @@ import {
   skillInvocations,
   WorkspaceDenied,
   WorkspaceRoot,
+  GitWorktrees,
+  WorktreeError,
+  type WorktreeInfo,
   nestedLabel,
 } from '@futryn/workspace';
 import {
@@ -687,6 +691,50 @@ export function startup(
       }
     };
 
+    // Isolated children (`isolation: "worktree"`, S5c): host-created Git worktrees, one per child id.
+    const gitWorktrees = new GitWorktrees({workspaceRoot});
+    const worktreeInfos = new Map<string, WorktreeInfo>();
+    const worktreePort: SubagentWorktreePort = {
+      acquire: agentId => {
+        if ((client ? client.sandboxConfig() : sandboxSettings).mode === 'read-only')
+          return {
+            ok: false,
+            code: 'MODE_RESTRICTED',
+            message: 'The read-only sandbox does not allow creating worktrees. Nothing was executed.',
+          };
+        try {
+          let info = worktreeInfos.get(agentId);
+          if (!info || !gitWorktrees.exists(info)) info = gitWorktrees.open(agentId) ?? gitWorktrees.create(agentId);
+          worktreeInfos.set(agentId, info);
+          return {ok: true, worktree: {path: info.path, branch: info.branch, gitCommonDir: info.gitCommonDir}};
+        } catch (error) {
+          const reason = error instanceof WorktreeError ? error.reason : 'create-failed';
+          return {
+            ok: false,
+            code: reason === 'create-failed' ? 'EXECUTION_FAILED' : 'UNSUPPORTED',
+            message:
+              reason === 'not-a-repository'
+                ? 'isolation "worktree" needs a Git repository; this workspace is not one. Run the subagent without isolation.'
+                : reason === 'git-unavailable'
+                  ? 'isolation "worktree" needs Git, which could not be started.'
+                  : reason === 'no-commit'
+                    ? 'isolation "worktree" needs at least one commit in the repository.'
+                    : 'The Git worktree could not be created.',
+          };
+        }
+      },
+      finish: agentId => {
+        const info = worktreeInfos.get(agentId);
+        if (!info) return undefined;
+        const outcome = gitWorktrees.finish(info);
+        if (outcome.removed) worktreeInfos.delete(agentId);
+        return {
+          changed: outcome.changed,
+          worktree: {path: info.path, branch: info.branch, gitCommonDir: info.gitCommonDir},
+        };
+      },
+    };
+
     const createSubagentManager = (options: {
       depth: number;
       getParentConversation: () => Conversation | undefined;
@@ -708,10 +756,12 @@ export function startup(
             reasoningEffort: options.getParentReasoningEffort(),
             analysisOnly: options.getParentAnalysisOnly(),
             messages: conv ? conv.forkableHistory() : (client?.activeSession()?.messages ?? []),
+            limits: conv?.turnLimits(),
           };
         },
         lookupModel: lookupSubagentModel,
         availableModelIds: availableSubagentModels,
+        worktrees: worktreePort,
         store: conversations,
         addParentUsage: usage => {
           options.getParentConversation()?.addSubagentUsage(usage);
@@ -754,8 +804,22 @@ export function startup(
             getParentReasoningEffort: () => runContext.reasoningEffort,
             getParentAnalysisOnly: () => runContext.profile.readOnly || parentIsAnalysisOnly(),
           });
+          // An isolated child sees only its worktree: its own workspace root, command runtime and writable root.
+          const worktree = runContext.worktree;
+          const childWorkspace = worktree ? new WorkspaceRoot(worktree.path) : workspaceTree();
+          const childCommands = worktree
+            ? services.commands
+              ? services.commands(childWorkspace.root, stateDirectory)
+              : createCommandRuntime(
+                  childWorkspace.root,
+                  stateDirectory,
+                  process.env,
+                  [...skills().scriptDirectories(), worktree.gitCommonDir],
+                  [...skills().userDirectories(), worktree.gitCommonDir],
+                )
+            : commands();
           const childDispatcher = new ToolDispatcher({
-            workspace: workspaceTree(),
+            workspace: childWorkspace,
             skills: skills(),
             // Subagents never load or mutate user/project memories (Wave 2 S5a).
             memories: undefined,
@@ -763,11 +827,11 @@ export function startup(
             analysisOnly: () => runContext.profile.id === 'plan' || parentIsAnalysisOnly(),
             stateDirectory,
             readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
-            commands: commands(),
+            commands: childCommands,
             sandbox: () =>
               effectiveSubagentSandbox(client ? client.sandboxConfig() : sandboxSettings, runContext.profile),
             turnId: () => childConv?.activeTurnId() ?? runContext.parentTurnId ?? client?.currentTurnId(),
-            codeIntel: languageServers(),
+            codeIntel: worktree ? undefined : languageServers(),
             web: {
               search: (query, count, signal) => webSearch.search(query, count, signal),
               searchEndpoint: webSearch.endpoint,
@@ -847,18 +911,25 @@ export function startup(
               skills: skillPort,
               memories: undefined,
               contextNotes: () => runContext.contextNotes,
-              workspaceRoot: resolve(workspaceRoot),
+              workspaceRoot: worktree ? childWorkspace.root : resolve(workspaceRoot),
               projectContext,
-              budget: () => client?.turnBudget(),
+              budget: () => runContext.limits.budget,
               analysisOnly: () => runContext.profile.id === 'plan' || parentIsAnalysisOnly(),
               modeInstructions: () => runContext.profile.developerInstructions,
             },
           );
           activeConversations.set(childConv.id, childConv);
           try {
-            yield* childConv.send(runContext.prompt, childSignal, undefined, undefined, runContext.reasoningEffort);
+            yield* childConv.send(
+              runContext.prompt,
+              childSignal,
+              runContext.limits.maxOutputTokens,
+              runContext.limits.maxEstimatedCostUSD,
+              runContext.reasoningEffort,
+            );
           } finally {
             activeConversations.delete(childConv.id);
+            if (worktree) await Promise.resolve(childCommands.shutdown?.()).catch(() => undefined);
           }
         },
       });

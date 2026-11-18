@@ -2,7 +2,7 @@
 
 - Ngày: 2026-11-18
 - Trạng thái: Accepted; S5a (chế độ chờ) và S5b (nền, `agent_message/wait/close`, agent tuỳ chỉnh, `/agents`), fixture verified, không claim live provider hay OS sandbox mới.
-- Contract: 1.31 → **1.32** (S5a) → **1.33** (S5b: `SubagentType` thành string, schema tool điều khiển, `AgentTypeView`, `SubagentNotice`, `CustomAgentDefinition`, `SubagentEvent.background`); SQLite vẫn 8 (bảng `subagent_sessions` thêm bằng `CREATE TABLE IF NOT EXISTS`); không dependency mới.
+- Contract: 1.31 → **1.32** (S5a) → **1.33** (S5b: `SubagentType` thành string, schema tool điều khiển, `AgentTypeView`, `SubagentNotice`, `CustomAgentDefinition`, `SubagentEvent.background`); → **1.34** (S5c: `agent.isolation`, `HostAgentsConfig.maxChild*`, `SubagentParentLimits/ChildLimits`, `SubagentWorktreePort`, `SubagentSessionRecord.isolation`); SQLite vẫn 8 (bảng `subagent_sessions` thêm bằng `CREATE TABLE IF NOT EXISTS`, cột `isolation` thêm bằng `ALTER TABLE` có kiểm tra `PRAGMA table_info`); không dependency mới.
 
 ## Quyết định
 
@@ -82,6 +82,49 @@ Mọi lời gọi tool của con (kể cả resume) vẫn qua một `ToolDispatc
 - Con nền không sống sau restart tiến trình (phục hồi thành `interrupted`; `agent_message` mở lại được). Steer đã nhận nhưng chưa giao khi lượt con kết thúc vẫn nằm trong pendingInput của con và đi cùng lượt kế tiếp. `fyn exec` (headless) không có vòng nhận lại thông báo: lượt cha kết thúc thì con nền bị huỷ khi thoát; dùng `agent_wait` nếu cần kết quả.
 - Fixture verified (`tests/end-to-end/subagents-background.test.ts`, `tests/contracts/subagent-definitions.test.ts`); không live provider, không Seatbelt mới.
 
-## Để lại cho S5c
+## Để lại cho S5c (đã xử lý một phần: xem phần S5c)
 
 Agent role qua file TOML kiểu Codex, `resume` qua restart tự động của con nền, hook/`permissionMode` của agent tuỳ chỉnh, đệ quy thư mục agent, nhắn giữa các con (mailbox), UI sửa/tạo agent.
+
+## S5c (2026-11-18)
+
+### Cap của lượt cha áp cho con (sửa lỗi bảo mật bắt buộc)
+
+Trước S5c, `childConv.send(...)` không nhận cap nào của lượt cha: một con có thể tiêu vượt `maxOutputTokens`/`maxEstimatedCostUSD` của lượt gọi và ngân sách người dùng (`TurnBudget`). Nay `Conversation.turnLimits()` (snapshot của lượt đang chạy: cap `send`, `TurnBudget`, usage gồm cả con đã xong, thời gian đã trôi) đi vào `getParentState().limits`; `inheritChildLimits` (`packages/agents/src/budgets.ts`) tính phần còn lại sau usage của cha và các con anh em ĐANG chạy (chưa được cộng vào receipt của cha):
+- `maxOutputTokens` của con = cap cha trừ output đã dùng (và không vượt token budget còn lại); `maxEstimatedCostUSD` = cap cha trừ chi phí đã dùng; `TurnBudget.maxTokens/maxCostUSD/maxDurationMs` co lại bằng phần còn lại; `maxSteps/maxToolCalls` giữ nguyên cho lượt của con.
+- Bất kỳ cap nào của cha đã hết (kể cả `maxOutputTokens`, coi là trần output cộng dồn của cả cây con) thì lời gọi `agent` (và `agent_message` mở lại con) bị từ chối `AGENT_BUDGET_EXHAUSTED`, không tạo conversation/worktree/slot. Con nền chạy các lượt sau của nó với snapshot lúc spawn/resume.
+- Giới hạn có chủ ý: `maxDurationMs` là soft (kiểm trước mỗi vòng model như mọi budget, ADR 0030); hai con song song cùng thấy "phần còn lại" tại thời điểm spawn nên tổng của chúng có thể vượt cap tới một lần phần còn lại, nhưng lời gọi spawn kế tiếp đã tính usage đang chạy của chúng và bị từ chối khi cạn.
+
+Ngân sách tuỳ chọn mỗi con: `~/.futryn/config.toml` `[agents] max_child_tokens`, `max_child_duration_ms` (>= 1000), `max_child_cost_usd` (chỉ cấp user); áp thêm lên phần còn lại (lấy giá trị nhỏ hơn).
+
+### Model/effort theo con
+
+Đã có từ S5a (`model`, `reasoning_effort` của tool và `[agents.<role>] model/reasoning_effort`); S5c bổ sung test (role mặc định cho `explore`, tham số tường minh thắng, model lạ bị từ chối). Thứ tự: tham số tool > `[agents.<type>]` > `[agents]` mặc định > model của cha.
+
+### `isolation: "worktree"`
+
+`agent {isolation: "worktree"}` (chỉ từ session gốc; Plan/Review và sandbox `read-only` từ chối; không phải repo Git hoặc chưa có commit -> lỗi `UNSUPPORTED` rõ ràng, con không chạy). `@futryn/workspace` `GitWorktrees` chạy `git` với cấu hình an toàn của ADR 0037 (không fsmonitor, hooks, bare ngầm, bỏ `GIT_*`, vô hiệu driver `filter.*.clean/process` khi kiểm tra thay đổi) để `git worktree add -b futryn/agent-<id8> <path> HEAD`. Worktree nằm ngoài repo và ngoài thư mục state: `<tmpdir>/futryn-worktrees/<sha256(repo)[:12]>/<agentId>`. Workspace, command runtime, writable root và `projectDir` của con là worktree; sandbox của con chỉ ghi được worktree (không ghi repo chính, không ghi `.git`; `.git` của worktree là file và bị Seatbelt/bwrap chặn ghi như mọi `.git`). Thư mục Git chung của repo chính được mở chỉ-đọc cho lệnh của con (`git status` chạy được; commit thì không, nên thay đổi nằm ở working tree của worktree). LSP bị tắt cho con cách ly. `.git` chỉ bị `git worktree add/remove` của host ghi, qua `GitWorktrees`.
+
+Khi con xong: không đổi gì (status sạch và HEAD = commit gốc) thì worktree + nhánh bị xoá; có thay đổi (hoặc không kiểm tra được) thì giữ lại và kết quả tool/thông báo nền nói rõ `Worktree kept with changes: <path> (branch <branch>)`. Con nền chỉ kết thúc worktree khi hết vòng lặp (idle); `agent_message` mở lại con cách ly mở lại worktree còn đó hoặc tạo mới (cột `subagent_sessions.isolation`). Sau restart, worktree giữ lại vẫn mở được (`GitWorktrees.open`), không tự xoá.
+
+### Sửa phụ từ review
+
+`agent_message` mở lại con idle bằng vòng lặp nền nay bị từ chối `UNSUPPORTED` khi quản lý ở độ sâu >= 1, như `run()` (trước đó con độ sâu 1 có thể khởi động vòng lặp nền).
+
+### `fyn exec`
+
+Sau lượt đầu, `fyn exec` chờ các con nền đang chạy; mỗi thông báo `<subagent>` trong hàng đợi trở thành lượt kế tiếp của cha (như TUI đánh thức cha) tới khi không còn con chạy/tin xếp hàng; câu trả lời cuối là của lượt cuối. Hủy (SIGINT) dừng cả hai. `--json` phát đủ event của các lượt thêm.
+
+### F12 — lệnh không sandbox dùng môi trường thật
+
+`NativeCommandRuntime.env(tty, unsandboxed)`: lệnh `require_escalated` (đã được duyệt) và Full Access / `danger-full-access` chạy với HOME thật, không còn HOME/TMPDIR/XDG_*/cache của scratch. Môi trường là môi trường host theo mặc định `shell_environment_policy` của Codex (kế thừa toàn bộ, loại tên chứa `KEY`/`SECRET`/`TOKEN`) cộng overlay unified-exec (NO_COLOR, TERM, PAGER=cat...), bỏ marker `FUTRYN_SANDBOX`, bỏ mọi biến `FUTRYN_*`/`HANNES_*` (state/config của Futryn) và dùng PATH đã chuẩn hoá của runtime. Lệnh trong sandbox giữ nguyên môi trường scratch (ADR 0035). Test: `tests/security/native-host-env.test.ts`.
+
+### Khác upstream / giới hạn
+
+- Claude Code `isolation: "worktree"` còn dọn khi không đổi gì; port đó. Codex không có worktree cho subagent.
+- Con cách ly không thể `git commit` (không ghi được thư mục Git chung): cha/user commit hoặc merge từ nhánh/worktree được giữ lại.
+- Worktree để trong thư mục tạm của OS; hệ điều hành có thể dọn nó (nhánh vẫn còn trong repo).
+- bubblewrap (Linux) chưa kiểm chứng thật cho worktree; Windows chưa hỗ trợ (như ADR 0035).
+- UI TUI cho nhiều con song song: `/agents` (S5b) là danh sách gọn có chọn xem; không thay đổi TUI trong S5c (TUI được viết lại riêng).
+- Chạy agent từ xa/cloud và agent teams hoãn: `docs/delivery/wave-2/deferred.md`.
+- Fixture verified: `tests/contracts/subagents-s5c.test.ts`, `tests/security/subagent-worktree.test.ts` (Git thật, Seatbelt thật trên macOS), `tests/end-to-end/subagents.test.ts` (S5c). Không live provider.

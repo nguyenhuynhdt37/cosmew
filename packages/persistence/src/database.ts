@@ -83,6 +83,10 @@ export function openPrivateDatabase(directory: string): Database {
         finished_at TEXT,
         error_code TEXT);
         CREATE INDEX IF NOT EXISTS subagent_sessions_parent ON subagent_sessions(parent_conversation, created_at);`);
+      // S5c: additive column for worktree-isolated children (no schema version bump).
+      const subagentColumns = db.query('PRAGMA table_info(subagent_sessions)').all() as {name: string}[];
+      if (!subagentColumns.some(column => column.name === 'isolation'))
+        db.exec('ALTER TABLE subagent_sessions ADD COLUMN isolation TEXT');
       // v7 (ADR 0045): chat-only subscription runtimes are removed; their accounts are logged out.
       if (version < 7) migrateRemovedRuntimes(db);
       // v8 (ADR 0049): the Codex app-server runtime is removed; its accounts and leases are deleted.

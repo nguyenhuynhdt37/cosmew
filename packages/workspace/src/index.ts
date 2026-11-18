@@ -12,3 +12,11 @@ export {
   AGENT_FILE_BYTES,
   AGENT_DESCRIPTION_CHARS,
 } from './agent-definitions';
+export {
+  GitWorktrees,
+  WorktreeError,
+  type GitWorktreesOptions,
+  type WorktreeFinish,
+  type WorktreeInfo,
+  type WorktreeRefusal,
+} from './worktrees';

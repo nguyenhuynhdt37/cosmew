@@ -39,6 +39,8 @@ export interface ActiveSubagentTask {
   errorCode?: string;
   /** Called whenever the child's status changes (turn started/finished). */
   listeners: Set<() => void>;
+  /** S5c: the child runs in a host-owned Git worktree. */
+  isolation?: 'worktree';
 }
 
 export interface SlotReservation {

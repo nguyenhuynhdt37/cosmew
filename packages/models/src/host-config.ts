@@ -356,6 +356,9 @@ const AGENT_TOP_FIELDS = new Set([
   'reasoning_effort',
   'default_reasoning_effort',
   'default_subagent_reasoning_effort',
+  'max_child_tokens',
+  'max_child_duration_ms',
+  'max_child_cost_usd',
 ]);
 
 const AGENT_ROLE_FIELDS = new Set([
@@ -423,6 +426,29 @@ export function loadHostAgents(parsed: unknown): HostAgentsLoadedConfig {
       });
     }
   }
+
+  const childLimit = (key: string, max: number, integer: boolean): number | undefined => {
+    const raw = agents[key];
+    if (raw === undefined) return undefined;
+    if (
+      typeof raw === 'number' &&
+      Number.isFinite(raw) &&
+      raw > 0 &&
+      raw <= max &&
+      (!integer || Number.isSafeInteger(raw))
+    )
+      return raw;
+    result.diagnostics.push({
+      message: `agents.${key} must be ${integer ? 'an integer' : 'a number'} greater than 0 and at most ${max}; no per-child limit.`,
+    });
+    return undefined;
+  };
+  const maxChildTokens = childLimit('max_child_tokens', 1_000_000_000, true);
+  if (maxChildTokens !== undefined) result.maxChildTokens = maxChildTokens;
+  const maxChildDurationMs = childLimit('max_child_duration_ms', 86_400_000, true);
+  if (maxChildDurationMs !== undefined) result.maxChildDurationMs = Math.max(1000, maxChildDurationMs);
+  const maxChildCostUSD = childLimit('max_child_cost_usd', 1000, false);
+  if (maxChildCostUSD !== undefined) result.maxChildCostUSD = maxChildCostUSD;
 
   const rawDefaultModel = agents.default_model ?? agents.default_subagent_model ?? agents.model;
   if (rawDefaultModel !== undefined) {

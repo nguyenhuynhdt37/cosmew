@@ -167,6 +167,11 @@ export function agentHandler(options: ToolDispatcherOptions): ToolHandler {
             type: 'boolean',
             description: 'When true, fork the current conversation history into the subagent before its prompt.',
           },
+          isolation: {
+            type: 'string',
+            enum: ['worktree'],
+            description: 'Run in an isolated Git worktree (Git repos only).',
+          },
         },
         required: ['agent_type', 'description', 'prompt'],
         additionalProperties: false,
@@ -187,7 +192,11 @@ export function agentHandler(options: ToolDispatcherOptions): ToolHandler {
           content: 'Expected {agent_type, description, prompt} for agent.',
         };
       }
-      const target = `${parsed.data.agent_type}: ${parsed.data.description}`.slice(0, 240);
+      const target =
+        `${parsed.data.agent_type}${parsed.data.isolation ? ' [worktree]' : ''}: ${parsed.data.description}`.slice(
+          0,
+          240,
+        );
       return {
         kind: 'agent',
         target,

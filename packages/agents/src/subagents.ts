@@ -13,6 +13,11 @@ import {
   type AgentTypesReport,
   type CustomAgentDefinition,
   type SteerOutcome,
+  type SubagentChildLimits,
+  type SubagentParentLimits,
+  type SubagentWorktree,
+  type SubagentWorktreePort,
+  combineUsage,
   type SubagentToolOutcome,
   type ConversationStore,
   type HostAgentsConfig,
@@ -30,7 +35,13 @@ import {
   type ToolCall,
   type Usage,
 } from '@futryn/contracts';
-import {exceedsAgentDepth, nextAgentDepth, normalizeAgentsConfig, resolveSubagentModelAndEffort} from './budgets';
+import {
+  exceedsAgentDepth,
+  inheritChildLimits,
+  nextAgentDepth,
+  normalizeAgentsConfig,
+  resolveSubagentModelAndEffort,
+} from './budgets';
 import {
   buildAgentToolDescription,
   listBuiltinAgentProfiles,
@@ -64,6 +75,10 @@ export interface ChildRunContext {
   resume: boolean;
   /** Untrusted user-context notes for the child (custom agent definition); never `ModelRequest.instructions`. */
   contextNotes: string[];
+  /** S5c: caps inherited from the parent turn (and `[agents] max_child_*`); applied to every turn of the child. */
+  limits: SubagentChildLimits;
+  /** S5c: the child's host-owned Git worktree (workspace and only writable root). */
+  worktree?: SubagentWorktree;
 }
 
 /** Redacted, bounded notification the parent receives when a background child finishes (S5b). */
@@ -104,6 +119,8 @@ export interface SubagentManagerDeps {
     analysisOnly: boolean;
     /** Committed + completed in-turn messages of the parent up to the current round. */
     messages: Message[];
+    /** S5c: caps and usage of the parent's running turn; absent when it has no active turn. */
+    limits?: SubagentParentLimits;
   };
   lookupModel(modelRef: string, defaultAccountId: string): {selection: Selection; model: ModelInfo} | undefined;
   availableModelIds(accountId: string): string[];
@@ -122,6 +139,8 @@ export interface SubagentManagerDeps {
   onBackgroundEvent?(event: SubagentEvent): void;
   /** S5b: out-of-turn notice for the UI. */
   onNotice?(notice: SubagentNotice): void;
+  /** S5c: host-owned Git worktrees for `isolation: "worktree"`; absent means isolation is unsupported. */
+  worktrees?: SubagentWorktreePort;
   /** Override Codex's 10 s minimum `agent_wait` timeout (tests only). */
   waitMinMs?: number;
 }
@@ -358,7 +377,7 @@ export class SubagentManager implements SubagentExecutionPort {
         status: 'error',
         code: 'INVALID_INPUT',
         content:
-          'Invalid arguments for agent. Expected {agent_type, description, prompt, model?, reasoning_effort?, background?, fork_context?}.',
+          'Invalid arguments for agent. Expected {agent_type, description, prompt, model?, reasoning_effort?, background?, fork_context?, isolation?}.',
       };
     }
     const input = parsed.data;
@@ -431,6 +450,36 @@ export class SubagentManager implements SubagentExecutionPort {
       };
     }
 
+    const isolated = input.isolation === 'worktree';
+    if (isolated) {
+      if (this.currentDepth > 0)
+        return {
+          status: 'error',
+          code: 'UNSUPPORTED',
+          content: 'Worktree isolation can only be requested from the root session.',
+          target: description,
+        };
+      if (parent.analysisOnly)
+        return {
+          status: 'denied',
+          code: 'MODE_RESTRICTED',
+          content: 'Plan and Review modes do not create worktrees. Nothing was executed.',
+          target: description,
+        };
+      if (!this.deps.worktrees)
+        return {
+          status: 'error',
+          code: 'UNSUPPORTED',
+          content: 'Worktree isolation is not available in this session.',
+          target: description,
+        };
+    }
+
+    const inherited = inheritChildLimits(parent.limits, this.runningChildrenUsage(parent.sessionId), cfg);
+    if (!inherited.ok) {
+      return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message, target: description};
+    }
+
     const resolvedModel = this.resolveModel(profile, parent, cfg, input.model, input.reasoning_effort);
     if (!resolvedModel.ok) {
       return {
@@ -463,6 +512,14 @@ export class SubagentManager implements SubagentExecutionPort {
     }
 
     let agentId: string | undefined;
+    let worktree: SubagentWorktree | undefined;
+    let worktreeNote = '';
+    let worktreeClosed = false;
+    const closeWorktree = () => {
+      if (worktreeClosed || !worktree || !agentId) return;
+      worktreeClosed = true;
+      worktreeNote = this.finishWorktree(agentId);
+    };
     let latestUsage: Usage | null = null;
     let usageReported = false;
     const reportUsageOnce = () => {
@@ -504,11 +561,29 @@ export class SubagentManager implements SubagentExecutionPort {
         selection,
         forkContext,
         background,
+        ...(isolated ? {isolation: 'worktree' as const} : {}),
         status: 'running',
         createdAt: new Date(startedAt).toISOString(),
         finishedAt: null,
       };
       this.deps.store.saveSubagentSession?.(sessionRecord);
+      if (isolated) {
+        const acquired = this.deps.worktrees!.acquire(agentId);
+        if (!acquired.ok) {
+          this.deps.store.updateSubagentSession?.(agentId, {
+            status: 'failed',
+            finishedAt: new Date().toISOString(),
+            errorCode: acquired.code,
+          });
+          return {
+            status: 'error',
+            code: acquired.code,
+            content: this.deps.redact(acquired.message),
+            target: description,
+          };
+        }
+        worktree = acquired.worktree;
+      }
 
       const task: ActiveSubagentTask = {
         agentId,
@@ -531,6 +606,7 @@ export class SubagentManager implements SubagentExecutionPort {
         inbox: [],
         waiters: 0,
         listeners: new Set(),
+        ...(isolated ? {isolation: 'worktree' as const} : {}),
       };
       this.scheduler.registerTask(task);
 
@@ -569,6 +645,8 @@ export class SubagentManager implements SubagentExecutionPort {
         },
         resume: false,
         contextNotes: profile.custom ? [this.deps.redact(profile.custom.guidance)] : [],
+        limits: inherited.limits,
+        ...(worktree ? {worktree} : {}),
       };
 
       if (background) {
@@ -590,9 +668,10 @@ export class SubagentManager implements SubagentExecutionPort {
       }
 
       reportUsageOnce();
+      closeWorktree();
       const finishedAt = new Date().toISOString();
       const durationMs = Math.max(0, Date.now() - startedAt);
-      const summary = this.deps.redact(finalText.trim());
+      const summary = this.deps.redact([finalText.trim(), worktreeNote].filter(Boolean).join('\n\n'));
       if (summary) {
         task.steps.push({kind: 'text', text: summary.slice(0, 4000)});
       }
@@ -630,6 +709,7 @@ export class SubagentManager implements SubagentExecutionPort {
       };
     } catch (error) {
       reportUsageOnce();
+      closeWorktree();
       const cancelled =
         signal?.aborted || childAbort.signal.aborted || (error instanceof FutrynError && error.code === 'CANCELLED');
       const errorCode = cancelled ? 'CANCELLED' : error instanceof FutrynError ? error.code : 'EXECUTION_FAILED';
@@ -673,14 +753,37 @@ export class SubagentManager implements SubagentExecutionPort {
         status: 'error',
         code: errorCode,
         target: description,
-        content: `Subagent [${profile.id}] "${description}" failed (${errorCode}): ${this.deps.redact(safeMessage)}`,
+        content: `Subagent [${profile.id}] "${description}" failed (${errorCode}): ${this.deps.redact(safeMessage)}${worktreeNote ? `\n\n${worktreeNote}` : ''}`,
       };
     } finally {
       signal?.removeEventListener('abort', onParentAbort);
+      if (!handedOff) closeWorktree();
       if (!handedOff) {
         if (agentId) this.scheduler.removeTask(agentId);
         slot.reservation.release();
       }
+    }
+  }
+
+  /** Usage of this parent's children that are still running (not yet folded into the parent's receipt). */
+  private runningChildrenUsage(parentId: string): Usage | null {
+    let total: Usage | null = null;
+    for (const task of this.scheduler.listTasks(parentId)) {
+      if (task.status === 'running' && task.usage) total = combineUsage(total, task.usage);
+    }
+    return total;
+  }
+
+  /** Deletes an unchanged worktree or keeps one with changes; returns the note for the child's result. */
+  private finishWorktree(agentId: string): string {
+    try {
+      const outcome = this.deps.worktrees?.finish(agentId);
+      if (!outcome) return '';
+      return outcome.changed
+        ? `Worktree kept with changes: ${outcome.worktree.path} (branch ${outcome.worktree.branch}). Review it and merge the branch or copy the changes; remove it with "git worktree remove" when done.`
+        : 'The isolated worktree had no changes and was removed.';
+    } catch {
+      return 'The isolated worktree could not be inspected and was left in place.';
     }
   }
 
@@ -832,6 +935,11 @@ export class SubagentManager implements SubagentExecutionPort {
                   error instanceof FutrynError ? error.message : 'The subagent encountered an unexpected error.',
                 );
           }
+          const continues = status === 'completed' && task.inbox.length > 0 && !this.scheduler.closed;
+          if (!continues && task.isolation === 'worktree') {
+            const note = this.finishWorktree(task.agentId);
+            if (note) summary = [summary, note].filter(Boolean).join('\n\n');
+          }
           const storedUsage = this.deps.store.get?.(task.agentId)?.turns?.at(-1)?.usage;
           const finalUsage = storedUsage ?? latestUsage;
           if (finalUsage) {
@@ -871,7 +979,7 @@ export class SubagentManager implements SubagentExecutionPort {
           });
           this.notifyListeners(task);
 
-          if (status === 'completed' && task.inbox.length && !this.scheduler.closed) {
+          if (continues) {
             const next = task.inbox.splice(0).join('\n\n');
             task.status = 'running';
             task.abortController = new AbortController();
@@ -959,6 +1067,13 @@ export class SubagentManager implements SubagentExecutionPort {
     }
 
     // Idle (completed/failed/cancelled/interrupted): reopen the child's conversation for another turn.
+    // Like run(), a background loop can only be started from the root session (S5c security review).
+    if (this.currentDepth > 0)
+      return {
+        status: 'error',
+        code: 'UNSUPPORTED',
+        content: 'Idle subagents can only be resumed from the root session; nothing was started.',
+      };
     const cfg = this.config();
     const profile = resolveAgentProfile(record.agentType, cfg.roles, this.customLookup);
     if (!profile)
@@ -981,6 +1096,8 @@ export class SubagentManager implements SubagentExecutionPort {
     );
     if (!found)
       return {status: 'error', code: 'INVALID_INPUT', content: 'The model of this subagent is no longer available.'};
+    const inherited = inheritChildLimits(parent.limits, this.runningChildrenUsage(owned.parentId), cfg);
+    if (!inherited.ok) return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message};
     const slot = this.scheduler.tryReserveSlot();
     if (!slot.ok)
       return {
@@ -989,7 +1106,21 @@ export class SubagentManager implements SubagentExecutionPort {
         content: `Agent thread limit reached (max_threads = ${slot.maxThreads}). Wait for running subagents to finish.`,
       };
     let handedOff = false;
+    let reopened = false;
     try {
+      let worktree: SubagentWorktree | undefined;
+      if (record.isolation === 'worktree') {
+        const acquired = this.deps.worktrees?.acquire(id);
+        if (!acquired)
+          return {
+            status: 'error',
+            code: 'UNSUPPORTED',
+            content: 'Worktree isolation is not available in this session.',
+          };
+        if (!acquired.ok) return {status: 'error', code: acquired.code, content: this.deps.redact(acquired.message)};
+        worktree = acquired.worktree;
+        reopened = true;
+      }
       const inspected = this.inspectSubagent(id);
       const task2: ActiveSubagentTask = task ?? {
         agentId: id,
@@ -1011,6 +1142,7 @@ export class SubagentManager implements SubagentExecutionPort {
         inbox: [],
         waiters: 0,
         listeners: new Set(),
+        ...(record.isolation ? {isolation: record.isolation} : {}),
       };
       task2.status = 'running';
       task2.background = true;
@@ -1037,6 +1169,8 @@ export class SubagentManager implements SubagentExecutionPort {
         attribution: {agentId: id, agentType: record.agentType, description: record.description},
         resume: true,
         contextNotes: profile.custom ? [this.deps.redact(profile.custom.guidance)] : [],
+        limits: inherited.limits,
+        ...(worktree ? {worktree} : {}),
       };
       this.deps.onBackgroundEvent?.({
         type: 'subagent.started',
@@ -1052,7 +1186,10 @@ export class SubagentManager implements SubagentExecutionPort {
       this.notifyListeners(task2);
       return {status: 'ok', content: JSON.stringify({id, status: 'running', delivery: 'resumed'})};
     } finally {
-      if (!handedOff) slot.reservation.release();
+      if (!handedOff) {
+        slot.reservation.release();
+        if (reopened) this.finishWorktree(id);
+      }
     }
   }
 

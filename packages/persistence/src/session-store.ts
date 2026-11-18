@@ -214,8 +214,8 @@ export class SqliteConversations implements ConversationStore {
           `INSERT INTO subagent_sessions(
             id, parent_conversation, parent_turn_id, call_id, depth,
             agent_type, description, prompt, fork_context, background,
-            status, created_at, finished_at, error_code
-          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            status, created_at, finished_at, error_code, isolation
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(id) DO UPDATE SET
             status=excluded.status,
             finished_at=excluded.finished_at,
@@ -236,6 +236,7 @@ export class SqliteConversations implements ConversationStore {
           parsed.createdAt,
           parsed.finishedAt,
           parsed.errorCode ?? null,
+          parsed.isolation ?? null,
         );
     } catch {
       throw new FutrynError('STORAGE');
@@ -279,6 +280,7 @@ export class SqliteConversations implements ConversationStore {
         created_at: string;
         finished_at: string | null;
         error_code: string | null;
+        isolation: string | null;
         selection: string;
       } | null;
       if (!row) return undefined;
@@ -314,6 +316,7 @@ export class SqliteConversations implements ConversationStore {
         selection: selectionSchema.parse(JSON.parse(row.selection)),
         forkContext: row.fork_context !== 0,
         background: row.background !== 0,
+        ...(row.isolation === 'worktree' ? {isolation: 'worktree' as const} : {}),
         status,
         createdAt: row.created_at,
         finishedAt,

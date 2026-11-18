@@ -79,6 +79,17 @@ export interface ActiveTurn {
   addUsage?: (usage: Usage) => void;
   /** Snapshot of committed + in-turn messages up to the current round for `fork_context` (Wave 2 S5). */
   inTurnMessages?: () => Message[];
+  /** Caps of this turn and what it (and its subagents) used so far, for subagent budget inheritance (S5c). */
+  limits?: () => TurnLimitsSnapshot;
+}
+
+export interface TurnLimitsSnapshot {
+  maxOutputTokens?: number;
+  maxEstimatedCostUSD?: number;
+  budget: TurnBudget;
+  /** Parent model usage plus subagent usage already folded into the receipt. */
+  usage: Usage | null;
+  elapsedMs: number;
 }
 
 /** Conversation state shared with the running turn, which updates it as the journal advances. */

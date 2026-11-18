@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {modelIdSchema, type Selection, type Usage} from './models';
+import type {TurnBudget} from './telemetry';
 
 /** Codex `DEFAULT_AGENT_MAX_THREADS` (`codex-rs/core/src/config/mod.rs:277`, pinned 090be4df). */
 export const DEFAULT_AGENT_MAX_THREADS = 6;
@@ -29,6 +30,8 @@ export const agentToolInputSchema = z.strictObject({
   reasoning_effort: z.string().max(40).optional(),
   background: z.boolean().optional(),
   fork_context: z.boolean().optional(),
+  /** S5c: run the child in its own Git worktree (Claude Code `isolation`); only `worktree` exists. */
+  isolation: z.enum(['worktree']).optional(),
 });
 export type AgentToolInput = z.infer<typeof agentToolInputSchema>;
 
@@ -122,6 +125,7 @@ export const subagentSessionRecordSchema = z.strictObject({
   selection: z.strictObject({accountId: z.string().uuid(), modelId: modelIdSchema}).optional(),
   forkContext: z.boolean(),
   background: z.boolean(),
+  isolation: z.enum(['worktree']).optional(),
   status: subagentStatusSchema,
   createdAt: z.string().datetime(),
   finishedAt: z.string().datetime().nullable(),
@@ -142,7 +146,43 @@ export interface HostAgentsConfig {
   maxDepth: number;
   defaultModel?: string;
   defaultReasoningEffort?: string;
+  /** S5c: optional per-child ceilings (`[agents] max_child_tokens / max_child_duration_ms / max_child_cost_usd`). */
+  maxChildTokens?: number;
+  maxChildDurationMs?: number;
+  maxChildCostUSD?: number;
   roles: Record<string, HostAgentRoleConfig>;
+}
+
+/** Caps and usage of the parent's running turn, which children inherit (S5c security fix). */
+export interface SubagentParentLimits {
+  maxOutputTokens?: number;
+  maxEstimatedCostUSD?: number;
+  budget: TurnBudget;
+  /** Parent model usage plus subagent usage already folded into the parent's receipt. */
+  usage: Usage | null;
+  elapsedMs: number;
+}
+
+/** What a child turn may use: per-request caps for `send` plus the child's own work budget. */
+export interface SubagentChildLimits {
+  maxOutputTokens?: number;
+  maxEstimatedCostUSD?: number;
+  budget: TurnBudget;
+}
+
+/** Host-owned Git worktree for an isolated child (S5c). Only `path` is writable for the child. */
+export interface SubagentWorktree {
+  path: string;
+  branch: string;
+  /** Main repository's Git directory, readable (never writable) so `git status` works in the worktree. */
+  gitCommonDir: string;
+}
+
+export interface SubagentWorktreePort {
+  /** Create the child's worktree (or reopen it when it still exists); refuses non-Git workspaces. */
+  acquire(agentId: string): {ok: true; worktree: SubagentWorktree} | {ok: false; code: string; message: string};
+  /** Delete the worktree when nothing changed; keep it (and say so) when it holds changes. */
+  finish(agentId: string): {changed: boolean; worktree: SubagentWorktree} | undefined;
 }
 
 export interface SubagentPromptAttribution {

@@ -1,4 +1,10 @@
-export {Conversation, SAFETY_LIMITS, estimateTokens, type ConversationOptions} from './agent/engine';
+export {
+  Conversation,
+  SAFETY_LIMITS,
+  estimateTokens,
+  type ConversationOptions,
+  type TurnLimitsSnapshot,
+} from './agent/engine';
 export {explorationGuidance, budgetExhaustedNotice} from './agent/guidance';
 export {ExecutionGate} from './agent/tool-runtime';
 

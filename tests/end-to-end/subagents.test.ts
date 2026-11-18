@@ -22,6 +22,8 @@ type ExtendedScriptedReply = Omit<ScriptedReply, 'calls'> & {
 };
 
 interface SetupOptions {
+  /** Make the project a Git repository with one commit before startup. */
+  git?: boolean;
   config?: string;
   files?: Record<string, string>;
   models?: {id: string; context_length?: number}[];
@@ -47,6 +49,31 @@ async function setup(options: SetupOptions) {
     const abs = join(project, rel);
     mkdirSync(dirname(abs), {recursive: true});
     writeFileSync(abs, text);
+  }
+
+  if (options.git) {
+    const git = (...args: string[]) =>
+      Bun.spawnSync(
+        [
+          'git',
+          '-C',
+          project,
+          '-c',
+          'user.email=t@example.invalid',
+          '-c',
+          'user.name=t',
+          '-c',
+          'commit.gpgsign=false',
+          ...args,
+        ],
+        {stdout: 'ignore', stderr: 'ignore'},
+      );
+    git('init', '-q', '-b', 'main');
+    git('add', '.');
+    git('commit', '-q', '-m', 'init');
+    cleanup.push(() => {
+      git('worktree', 'prune');
+    });
   }
 
   const requests: {body: any; view: ExtendedScriptedView}[] = [];
@@ -803,7 +830,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(resumedFrame).toContain('⏺ Agent(check entrypoint)');
   expect(resumedFrame).toContain('• read src/index.ts [ok]');
 
-  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.33.
+  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.34.
   const lines: string[] = [];
   const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
     lines.push(String(chunk));
@@ -830,5 +857,158 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.33')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.34')).toBe(true);
+});
+
+test('S5c: isolation worktree edits stay out of the main checkout; unchanged worktrees vanish; non-git is refused', async () => {
+  const kept: string[] = [];
+  const h = await setup({
+    git: true,
+    files: {'src/target.ts': 'export const count = 1;\n'},
+    script: view => {
+      const isWorker = view.system.includes('You are a worker subagent');
+      const isExplore = view.system.includes('You are an explore subagent');
+      if (!isWorker && !isExplore) {
+        if (!view.results.length)
+          return {
+            calls: [
+              {
+                id: 'w',
+                name: 'agent',
+                input: {agent_type: 'worker', description: 'edit', prompt: 'change it', isolation: 'worktree'},
+              },
+              {
+                id: 'x',
+                name: 'agent',
+                input: {agent_type: 'explore', description: 'look', prompt: 'look', isolation: 'worktree'},
+              },
+            ],
+          };
+        return {text: 'parent done:' + view.results.map(r => r.content).join('\n---\n')};
+      }
+      if (isExplore)
+        return view.results.length
+          ? {text: 'nothing changed'}
+          : {calls: [{id: 'r', name: 'read', input: {path: 'src/target.ts'}}]};
+      if (!view.results.length) return {calls: [{id: 'r', name: 'read', input: {path: 'src/target.ts'}}]};
+      if (view.results.length === 1)
+        return {
+          calls: [
+            {
+              id: 'e',
+              name: 'edit',
+              input: {path: 'src/target.ts', old_string: 'count = 1', new_string: 'count = 2'},
+            },
+          ],
+        };
+      return {text: 'edited in worktree'};
+    },
+  });
+  for await (const _ of h.client.sendMessage('Use isolated children')) {
+  }
+  const parentFinal = h.requests
+    .at(-1)!
+    .view.results.map(r => r.content)
+    .join('\n---\n');
+  const match = /Worktree kept with changes: (\S+) \(branch (\S+)\)/.exec(parentFinal);
+  expect(match).not.toBeNull();
+  const [, path, branch] = match!;
+  kept.push(path!);
+  cleanup.push(() => {
+    Bun.spawnSync(['git', '-C', h.project, 'worktree', 'remove', '--force', path!]);
+    Bun.spawnSync(['git', '-C', h.project, 'branch', '-D', branch!]);
+  });
+  expect(readFileSync(join(path!, 'src/target.ts'), 'utf8')).toBe('export const count = 2;\n');
+  expect(readFileSync(join(h.project, 'src/target.ts'), 'utf8')).toBe('export const count = 1;\n'); // main checkout untouched
+  expect(path!.startsWith(h.project)).toBe(false);
+  expect(parentFinal).toContain('had no changes and was removed'); // the explore child's worktree is gone
+  expect(
+    Bun.spawnSync(['git', '-C', h.project, 'worktree', 'list', '--porcelain'])
+      .stdout.toString()
+      .match(/^worktree /gm),
+  ).toHaveLength(2);
+});
+
+test('S5c: isolation worktree outside a Git repository is refused with a clear error', async () => {
+  const h = await setup({
+    files: {'a.txt': 'x\n'},
+    script: view =>
+      view.system.includes('You are a worker subagent')
+        ? {text: 'should not run'}
+        : view.results.length
+          ? {text: 'parent:' + view.results[0]!.content}
+          : {
+              calls: [
+                {
+                  id: 'g',
+                  name: 'agent',
+                  input: {agent_type: 'worker', description: 'iso', prompt: 'p', isolation: 'worktree'},
+                },
+              ],
+            },
+  });
+  for await (const _ of h.client.sendMessage('isolate')) {
+  }
+  const result = h.requests.at(-1)!.view.results[0]!.content;
+  expect(result).toContain('needs a Git repository');
+  expect(h.requests.some(r => r.view.system.includes('You are a worker subagent'))).toBe(false);
+});
+
+test('S5c: a child turn inherits the parent turn output cap', async () => {
+  const caps: Record<string, number | undefined> = {};
+  const h = await setup({
+    script: (view, body) => {
+      const isChild = view.system.includes('You are an explore subagent');
+      const cap = body.max_tokens ?? body.max_completion_tokens ?? body.max_output_tokens;
+      if (isChild) {
+        caps.child = cap;
+        return {text: 'child done'};
+      }
+      caps.parent ??= cap;
+      return view.results.length
+        ? {text: 'parent done'}
+        : {calls: [{id: 'a', name: 'agent', input: {agent_type: 'explore', description: 'd', prompt: 'p'}}]};
+    },
+  });
+  for await (const _ of h.client.sendMessage('go', {maxOutputTokens: 4000})) {
+  }
+  expect(caps.parent).toBe(4000);
+  expect(caps.child).toBeGreaterThan(0);
+  expect(caps.child!).toBeLessThanOrEqual(4000);
+});
+
+test('S5c: fyn exec waits for a background child and gives its result to the parent as the next turn', async () => {
+  const h = await setup({
+    files: {'a.txt': 'x\n'},
+    script: view => {
+      const isChild = view.system.includes('You are an explore subagent');
+      if (isChild) return {text: 'CHILD-RESULT-42'};
+      if (!view.results.length && !view.user.some(u => u.includes('CHILD-RESULT-42')))
+        return {
+          calls: [
+            {
+              id: 'bg',
+              name: 'agent',
+              input: {agent_type: 'explore', description: 'bg job', prompt: 'p', background: true},
+            },
+          ],
+        };
+      if (view.user.some(u => u.includes('CHILD-RESULT-42'))) return {text: 'FINAL: child said CHILD-RESULT-42'};
+      return {text: 'started the job'};
+    },
+  });
+  const lines: string[] = [];
+  const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
+    lines.push(String(chunk));
+    return true;
+  });
+  try {
+    expect(
+      await runExec(h.app, {prompt: 'run it in the background', workspace: h.project, approval: 'never', json: false}),
+    ).toBe(0);
+  } finally {
+    stdoutSpy.mockRestore();
+  }
+  expect(lines.join('')).toContain('FINAL: child said CHILD-RESULT-42');
+  expect(h.client.subagents().every(s => s.status !== 'running')).toBe(true);
 });
