@@ -1,5 +1,11 @@
 import type {CommandClassification} from '@futryn/security';
-import type {CommandRuntime, CommandOutputChunk, CommandSandbox, ToolDescriptor} from '@futryn/contracts';
+import type {
+  CommandRuntime,
+  CommandOutputChunk,
+  CommandSandbox,
+  ToolDescriptor,
+  PermissionDecision,
+} from '@futryn/contracts';
 import type {ResolvedPath} from '@futryn/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ToolOutput} from '../context';
@@ -9,7 +15,7 @@ export type PreparedTool = {
   execute(signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): ToolOutput | Promise<ToolOutput>;
 } & (
   | {kind: 'patch'; plan: PatchPlan; runtime: ApplyPatchRuntime}
-  | {kind: 'read'; file: ResolvedPath}
+  | {kind: 'read'; file: ResolvedPath; revalidate?: () => ResolvedPath; readDecision?: PermissionDecision}
   /** Agent session state (plan): no workspace effect, no approval; audited (ADR 0042). */
   | {kind: 'state'}
   /** A question to the user: no workspace effect; the answer is text (ADR 0042). */

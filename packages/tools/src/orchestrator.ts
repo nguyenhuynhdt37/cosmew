@@ -58,9 +58,10 @@ export class ToolOrchestrator {
       });
     let authorizationScopeHash: string | undefined;
     const finish = (result: ToolOutput): ToolResult => {
-      const clipped = clipBytes(this.options.redact(result.content), 60000);
+      const clipped = clipBytes(this.options.redact(result.content), call.name === 'skill' ? 65536 : 60000);
       const final = toolResultSchema.parse({
         ...result,
+        ...(result.skillDirectory ? {skillDirectory: this.options.redact(result.skillDirectory)} : {}),
         ...(result.target ? {target: this.options.redact(result.target)} : {}),
         ...(result.attachments
           ? {attachments: result.attachments.map(a => ({...a, ...(a.name ? {name: this.options.redact(a.name)} : {})}))}
@@ -123,7 +124,7 @@ export class ToolOrchestrator {
           : prepared.kind === 'command'
             ? await this.authorizeCommand(prepared, audit, signal)
             : prepared.kind === 'read'
-              ? await this.authorizeRead(call.name, prepared.file, audit, signal)
+              ? await this.authorizeRead(call.name, prepared.file, audit, signal, true, !!prepared.revalidate)
               : prepared.kind === 'web-search'
                 ? await this.authorizeWeb(call.name, prepared.target, true, audit, signal)
                 : prepared.kind === 'web-fetch'
@@ -141,7 +142,14 @@ export class ToolOrchestrator {
         return finish({status: 'denied', code: 'DENIED', content: 'The tool registration changed before execution.'});
       const revalidation =
         prepared.kind === 'read'
-          ? this.revalidateRead(prepared.file, authorization.viaSession, audit)
+          ? this.revalidateRead(
+              prepared.file,
+              authorization.viaSession,
+              audit,
+              true,
+              prepared.revalidate,
+              prepared.readDecision,
+            )
           : prepared.kind === 'command'
             ? this.revalidateCommand(prepared, authorization.viaSession, audit)
             : null;
@@ -263,8 +271,9 @@ export class ToolOrchestrator {
     audit: Audit,
     signal?: AbortSignal,
     allowPrompt = true,
+    skillRead = false,
   ): Promise<Authorization> {
-    const decision = readDecision(this.options, file.relative, file.absolute);
+    const decision = readDecision(this.options, file.relative, file.absolute, skillRead);
     return this.permission(
       decision,
       {tool, capability: 'fs.read', target: file.relative, reason: decision.reason},
@@ -278,13 +287,21 @@ export class ToolOrchestrator {
     );
   }
 
-  revalidateRead(file: ResolvedPath, viaSession: boolean, audit: Audit, allowPrompt = true): ToolOutput | null {
-    const again = this.options.workspace.resolve(file.relative);
-    const current = readDecision(this.options, again.relative, again.absolute);
+  revalidateRead(
+    file: ResolvedPath,
+    viaSession: boolean,
+    audit: Audit,
+    allowPrompt = true,
+    resolve?: () => ResolvedPath,
+    authorizedDecision?: PermissionDecision,
+  ): ToolOutput | null {
+    const again = resolve ? resolve() : this.options.workspace.resolve(file.relative);
+    const current = readDecision(this.options, again.relative, again.absolute, !!resolve);
     if (
       again.absolute !== file.absolute ||
       again.kind !== file.kind ||
       current.effect === 'deny' ||
+      (authorizedDecision?.effect === 'allow' && current.effect === 'ask') ||
       (viaSession && !this.options.grants.has('fs.read', file.absolute))
     ) {
       audit({target: file.relative, phase: 'decided', decision: 'deny', reason: 'revalidation'});

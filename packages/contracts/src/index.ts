@@ -10,3 +10,4 @@ export * from './project-context';
 export * from './command-runtime';
 
 export * from './recovery';
+export * from './skills';

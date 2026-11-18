@@ -1,3 +1,4 @@
+import {parseSlashCommand} from './commands';
 import {summarizeUsage} from './telemetry';
 import {quotaItems, type AccountLimits, type FetchAccountLimits} from './limits';
 import {createHash} from 'node:crypto';
@@ -11,6 +12,7 @@ import {
   type Account,
   type CommandOutputChunk,
   type ToolResult,
+  type SkillsReport,
   type ProjectContextReport,
   type Integration,
   type ProviderAuthChallenge,
@@ -125,6 +127,7 @@ export interface TerminalRuntimeReport {
 
 export interface FutrynBackendPorts {
   workspace: string;
+  skills?(): SkillsReport;
   terminalRuntime?(): TerminalRuntimeReport;
   /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
@@ -379,6 +382,20 @@ export class FutrynClient {
   }
 
   /** Last authorized instruction snapshot metadata; instruction contents are not exposed here. */
+  skills(): SkillsReport {
+    return structuredClone(
+      this.toolsEnabled()
+        ? (this.ports.skills?.() ?? {skills: [], errors: [], warnings: []})
+        : {skills: [], errors: [], warnings: []},
+    );
+  }
+
+  isSkillCommand(input: string): boolean {
+    if (parseSlashCommand(input).definition) return false;
+    const name = /^\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})(?:\s|$)/.exec(input.trim())?.[1];
+    return !!name && this.skills().skills.some(skill => skill.name === name);
+  }
+
   projectContext(): ProjectContextReport | null {
     return this.ports.getProjectContext?.() ?? null;
   }

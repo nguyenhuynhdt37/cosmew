@@ -1,5 +1,5 @@
 import {existsSync} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {dirname, isAbsolute, join, relative} from 'node:path';
 import type {CommandSandbox} from '@futryn/contracts';
 import {SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES} from '@futryn/security';
 import type {NativeSandbox} from './native-sandbox';
@@ -17,6 +17,10 @@ export interface SecretPatterns {
 }
 
 export interface SeatbeltOptions {
+  /** Only discovered skill directories. Outside-workspace resources are read-only. */
+  skillDirectories?: readonly string[];
+  /** User skill resources stay read-only even when home is the workspace. */
+  readOnlySkillDirectories?: readonly string[];
   /** Canonical workspace root. */
   workspace: string;
   /** Futryn's state directory; never readable or writable. */
@@ -242,6 +246,18 @@ export class SeatbeltSandbox implements NativeSandbox {
     return rules;
   }
 
+  private skillRules(): string[] {
+    return (this.options.skillDirectories ?? []).flatMap(directory => [
+      `(allow file-read-metadata (path-ancestors ${quote(directory)}))`,
+      `(allow file-read* ${subpath(directory)})`,
+      ...(this.options.readOnlySkillDirectories?.includes(directory) ||
+      relative(this.options.workspace, directory).startsWith('..') ||
+      isAbsolute(relative(this.options.workspace, directory))
+        ? [`(deny file-write* ${subpath(directory)})`]
+        : []),
+    ]);
+  }
+
   /**
    * Futryn state and optional secret names, denied last so they win. `.git/config` stays readable
    * because git cannot run without it (as in Codex); URL credentials are redacted from output instead.
@@ -252,7 +268,18 @@ export class SeatbeltSandbox implements NativeSandbox {
     const rules = [
       `(deny file-read* file-write* (regex #"^${ws}/(.*/)?\\.(futryn|hannes)(/|$)") (regex #"^${ws}/(.*/)?\\.(futryn|hannes)-patch-"))`,
     ];
-    if (state) rules.push(`(deny file-read* file-write* ${subpath(state)})`);
+    rules.push(...this.skillRules());
+    if (state) {
+      const skillExceptions = (this.options.skillDirectories ?? []).filter(directory =>
+        directory.startsWith(join(state, 'skills') + '/'),
+      );
+      if (skillExceptions.length) {
+        rules.push(`(deny file-write* ${subpath(state)})`);
+        rules.push(
+          `(deny file-read* (require-all ${subpath(state)} ${skillExceptions.map(directory => `(require-not ${subpath(directory)})`).join(' ')}))`,
+        );
+      } else rules.push(`(deny file-read* file-write* ${subpath(state)})`);
+    }
     if (denied?.length)
       rules.push(`(deny file-read* file-write* ${denied.map(path => `(literal ${quote(path)})`).join(' ')})`);
     if (secrets) {

@@ -26,6 +26,7 @@ export type CommandHandler =
   | 'accounts'
   | 'clear'
   | 'compact'
+  | 'skills'
   | 'exit'
   | 'mode'
   | 'unavailable';
@@ -156,6 +157,15 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Plugin Management',
     description: 'Not implemented in PA1/TUI1; no plugin host is enabled',
     category: 'Workspace & Security',
+  },
+  {
+    command: '/skills',
+    handler: 'skills',
+    aliases: [],
+    title: 'Skills',
+    description: 'List discovered skills, sources and discovery diagnostics',
+    category: 'Workspace & Security',
+    duringRequest: true,
   },
   {
     command: '/compact',

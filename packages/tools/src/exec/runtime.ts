@@ -46,6 +46,9 @@ const SYSTEM_READ = ['/usr', '/bin', '/sbin', '/System', '/Library/Apple', '/pri
 const SYSTEM_EXEC_MAPS = ['/usr/lib', '/System/Library', '/Library/Apple'];
 
 export interface SeatbeltOptions {
+  skillDirectories?: readonly string[];
+  /** User skill resources stay read-only even when home is the workspace. */
+  readOnlySkillDirectories?: readonly string[];
   /** Canonical workspace root; the only user tree the command may read. */
   workspaceRoot: string;
   /** Futryn's state directory; always denied, even if it lies inside the workspace. */
@@ -226,6 +229,8 @@ export function platformCommandRuntime(
     platform,
     hostPath: options.hostPath,
     hideSecrets: options.hideSecrets,
+    skillDirectories: options.skillDirectories,
+    readOnlySkillDirectories: options.readOnlySkillDirectories,
   });
 }
 

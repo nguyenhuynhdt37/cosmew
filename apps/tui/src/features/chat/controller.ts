@@ -239,7 +239,8 @@ export class ChatController {
       await this.runShell(trimmed);
       return;
     }
-    if (trimmed.startsWith('/')) {
+    if (this.isStreaming && this.host.client.isSkillCommand(trimmed)) return;
+    if (trimmed.startsWith('/') && !this.host.client.isSkillCommand(trimmed)) {
       const parsed = parseSlashCommand(trimmed);
       if (!parsed.error && !parsed.definition?.unavailable && (!this.isStreaming || parsed.definition?.duringRequest))
         this.composer = recordComposerHistory(this.composer, trimmed);

@@ -137,6 +137,8 @@ export const toolResultSchema = z.strictObject({
   status: z.enum(['ok', 'denied', 'error']),
   /** Bounded, redacted text returned to the model. */
   content: z.string().max(65536),
+  /** S3: directory of the discovered skill, informational only, never an access grant. */
+  skillDirectory: z.string().max(4096).optional(),
   /** Workspace-relative target shown to the user (never an absolute path outside it). */
   target: z.string().max(1024).optional(),
   truncated: z.boolean().optional(),

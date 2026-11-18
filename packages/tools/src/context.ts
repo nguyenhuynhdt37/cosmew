@@ -9,7 +9,7 @@ import type {
 } from '@futryn/contracts';
 import {evaluateRead, type SessionGrants, type SandboxEscalation} from '@futryn/security';
 import type {LspManager} from '@futryn/code-intel';
-import type {WorkspaceRoot} from '@futryn/workspace';
+import type {SkillCatalog, WorkspaceRoot} from '@futryn/workspace';
 
 /**
  * The answer to an approval prompt (ADR 0055, Codex `ReviewDecision`): `session` is
@@ -58,6 +58,8 @@ export interface ToolAuditRecord {
 
 export interface ToolDispatcherOptions {
   workspace: WorkspaceRoot;
+  /** Discovered exact skill files; no arbitrary outside-workspace reads. */
+  skills?: SkillCatalog;
   grants: SessionGrants;
   /** Ask the user; must resolve to 'deny' when the prompt is dismissed or cancelled. */
   approve(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;
@@ -196,11 +198,13 @@ export function effectiveSandboxMode(
 }
 
 export function readDecision(
-  options: Pick<ToolDispatcherOptions, 'stateDirectory' | 'readPolicy'>,
+  options: Pick<ToolDispatcherOptions, 'stateDirectory' | 'readPolicy' | 'skills'>,
   relative: string,
   absolute: string,
+  skillRead = false,
 ): PermissionDecision {
-  const builtin = evaluateRead(relative, absolute, {stateDirectory: options.stateDirectory});
+  const stateSkill = skillRead && options.skills?.isStateSkillFile(absolute, options.stateDirectory);
+  const builtin = evaluateRead(relative, absolute, {stateDirectory: stateSkill ? undefined : options.stateDirectory});
   if (builtin.effect === 'deny') return builtin;
   const project = options.readPolicy?.(relative, absolute);
   if (project === 'deny') return {effect: 'deny', reason: 'project-read-rule'};

@@ -275,6 +275,11 @@ export class TurnRun {
         Buffer.byteLength(context.content) > context.budgetBytes);
     if (invalidBudget) throw new FutrynError('BUDGET');
     this.projectMessages = context?.content ? [messageSchema.parse({role: 'user', content: context.content})] : [];
+    const skillBodies: string[] = [];
+    for (const message of [...this.carried, this.user])
+      skillBodies.push(...((await host.options.skills?.loadPrompt(message.content, this.signal)) ?? []));
+    this.signal.throwIfAborted();
+    this.projectMessages.push(...skillBodies.map(content => messageSchema.parse({role: 'user', content})));
 
     // Codex sends no output cap and reserves nothing from the window. Only a cap the caller asked
     // for (`--max-output-tokens`) is sent, clamped to the model's limit, and reserved.
@@ -289,6 +294,8 @@ export class TurnRun {
     const {state, store, id} = this.host;
     while (this.turn.pending.length) {
       const item = this.turn.pending.shift()!;
+      const skillBodies = (await this.host.options.skills?.loadPrompt(item.message.content, this.signal)) ?? [];
+      this.projectMessages.push(...skillBodies.map(content => messageSchema.parse({role: 'user', content})));
       this.steps.push(item.message);
       if (state.task) {
         state.task.latestRequest = item.message.content;
@@ -336,7 +343,9 @@ export class TurnRun {
               steps: budget.maxSteps,
               calls: budget.maxToolCalls,
             }),
-          ) + 80
+          ) +
+          estimateTokens(host.options.skills?.instructions() ?? '') +
+          80
         : 0;
     const measure = () => {
       const estimate = estimateTokens(history) + estimateTokens(offered) + guidanceEstimate;
@@ -493,7 +502,14 @@ export class TurnRun {
     if (offerTools) base = guidance;
     else if (stop || toolsUsed) base = [guidance, budgetExhaustedNotice(stop)].filter(Boolean).join('\n');
 
-    return [base, this.progressNotice, ...(recovering ? [RECOVERY_INSTRUCTION] : [])].filter(Boolean).join('\n');
+    return [
+      base,
+      ...(offerTools ? [host.options.skills?.instructions()] : []),
+      this.progressNotice,
+      ...(recovering ? [RECOVERY_INSTRUCTION] : []),
+    ]
+      .filter(Boolean)
+      .join('\n');
   }
 
   // -------------------------------------------------------------------------------------------

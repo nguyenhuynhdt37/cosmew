@@ -46,7 +46,7 @@ export function toolMessage(call: ToolCall, result: ToolResult): Message {
       : `[${result.status}${result.code ? ': ' + result.code : ''}] ${result.content}`;
   return {
     role: 'tool',
-    content,
+    content: result.skillDirectory ? `Skill directory: ${result.skillDirectory}\n\n${content}` : content,
     toolCallId: call.id,
     toolName: call.name,
     ...(result.status === 'ok' && result.attachments?.length ? {attachments: result.attachments} : {}),

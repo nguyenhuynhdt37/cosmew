@@ -21,7 +21,7 @@ async function setup(
   );
   const server = fixtureServer();
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault()});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider(protocol, {id: 'context-fixture', auth: 'none'}));
   const account = await app.accounts.add('context-fixture', 'context-user', {kind: 'none'});

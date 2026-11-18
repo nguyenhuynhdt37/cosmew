@@ -70,6 +70,10 @@ const EXEC_ENV = {
 };
 
 export interface NativeRuntimeOptions {
+  /** Canonical discovered skill directories; outside-workspace resources are read-only. */
+  skillDirectories?: readonly string[];
+  /** User skill resources stay read-only even when home is the workspace. */
+  readOnlySkillDirectories?: readonly string[];
   workspaceRoot: string;
   stateDirectory?: string;
   platform?: NodeJS.Platform;
@@ -182,6 +186,8 @@ export class NativeCommandRuntime implements CommandRuntime {
         scratch: this.scratch,
         home,
         toolchains,
+        skillDirectories: options.skillDirectories,
+        readOnlySkillDirectories: options.readOnlySkillDirectories,
         secrets: options.hideSecrets ? secretPatterns() : undefined,
         denied: this.deniedFiles,
         metadataOnly: this.rustupHome ? [this.rustupHome] : [],

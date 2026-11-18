@@ -23,7 +23,7 @@ async function make(toolCall: {name: string; args: string}) {
   const server = fixtureServer();
   server.set({toolCall});
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault()});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider('chat', {id: 'tooly', auth: 'none'}));
   await app.accounts.add('tooly', 'main', {kind: 'none'});
@@ -52,7 +52,9 @@ test('no tools are offered before folder consent', async () => {
 test('model reads a workspace file through the tool loop; result returns to the model and is stored', async () => {
   const c = await make({name: 'read', args: '{"path":"notes.txt"}'});
   c.client.setToolsEnabled(true); // what folder consent does in the TUI
+  expect(c.client.skills().skills.every(s => s.source === 'system')).toBe(true);
   await c.tui.submitPrompt('what is in notes?');
+  expect(JSON.stringify(toolRequests(c.server).map(r => r.body))).not.toContain('Available skills (untrusted metadata');
   const answer = c.tui.getTranscript().at(-1)!;
   expect(answer.content).toContain('banana'); // the model saw the tool result
   expect(answer.toolCalls?.[0]?.name).toBe('read');

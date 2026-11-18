@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.27** (1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.28** (1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -59,7 +59,7 @@ UAT now subscribes to these events instead of polling the pending lists; pending
 
 `fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
 the top level, typed interaction events, then exactly one terminal `turn.completed` or
-`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.27"`, `seq`
+`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.28"`, `seq`
 starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
 means the entire run succeeded. `responseDiscarded` invalidates the current provisional response;
 plain output / `-o` keep only the final response. This stream is not the future durable domain
@@ -165,3 +165,22 @@ The single public version bump is 1.18 → 1.19 for the integrated wave. Earlier
 wave commits referred to 1.19 while under construction; this integrated constant
 and consumers now agree. No wave-2 subagents/memory/skills/general MCP or wave-3
 CodeMode contract is claimed here.
+
+## Skills (contract 1.28)
+
+[ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). `client.skills()` →
+`SkillsReport {skills: SkillMetadata[], errors: SkillDiagnostic[], warnings: SkillDiagnostic[]}`.
+Metadata gồm `name`, `description`, `source: project|user|system`, `path`, `directory`, `shortPath`,
+`disableModelInvocation`, optional `argumentHint`; không chứa body hay grant. Diagnostic có `code`,
+optional `path`. SDK clone report; trước folder consent hoặc backend chưa hỗ trợ trả arrays rỗng.
+
+`skill {name}` qua dispatcher, không nhận path tùy ý; `ToolResult.content` là SKILL.md đã redact,
+optional `skillDirectory` là thư mục tài nguyên (informational, không phải quyền đọc/ghi).
+Core gắn directory vào tool message; wrappers dùng schema mới để nhận field optional này.
+Output skill tối đa 65.536 byte sau redact, các tool khác giữ bound cũ; truncation báo qua `truncated`.
+Metadata model 8.000 ký tự, ẩn disabled entries, cảnh báo khi rút/bỏ; tổng `instructions` tăng tới
+32.768 ký tự để chứa cả host guidance. Catalog là untrusted metadata trong instructions/developer,
+body từ explicit slash/mention là user-scoped context của lượt gọi; không trở thành system authority.
+`SkillsPort` được inject vào core (`instructions`, `loadPrompt`), không thêm package dependency hay
+persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũng hoạt động ở `fyn exec`.
+`allowed-tools` không có semantics cấp quyền. Consumer JSONL dùng version 1.28; không thêm agent event.

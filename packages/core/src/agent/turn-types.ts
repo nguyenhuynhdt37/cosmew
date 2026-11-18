@@ -8,6 +8,7 @@ import type {
   Selection,
   ToolPort,
   TurnBudget,
+  SkillsPort,
 } from '@futryn/contracts';
 import {GENERATION_LIMITS} from '@futryn/contracts';
 import {estimateContextTokens} from '../context/builder';
@@ -34,6 +35,7 @@ export const SAFETY_LIMITS = {
 export const estimateTokens = estimateContextTokens;
 
 export interface ConversationOptions {
+  skills?: SkillsPort;
   /** Optional user work budget, read at the start of every turn. */
   budget?: () => TurnBudget | undefined;
   /** Model context window in tokens, when known. */

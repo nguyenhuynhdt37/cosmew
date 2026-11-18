@@ -19,14 +19,15 @@ export class ToolDispatcher implements ToolPort {
   private readonly registry = new ToolRegistry();
   private readonly orchestrator: ToolOrchestrator;
   private readonly instructions: InstructionReader;
-  constructor(options: ToolDispatcherOptions) {
+  constructor(private readonly options: ToolDispatcherOptions) {
     const filesystem = new FileSystemRuntime(options);
     for (const handler of createHandlers(options, filesystem)) this.registry.register(handler);
     this.orchestrator = new ToolOrchestrator(options, new ToolRouter(this.registry));
     this.instructions = new InstructionReader(options, this.orchestrator, filesystem);
   }
   descriptors() {
-    return this.registry.descriptors();
+    // Exposure is separate from invocation: explicit slash/mentions still use the dispatcher.
+    return this.registry.descriptors().filter(d => d.name !== 'skill' || !!this.options.skills?.instructions());
   }
   commandsReady(): boolean {
     return this.registry.get('exec_command')?.handler.available() === true;

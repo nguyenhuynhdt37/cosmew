@@ -202,6 +202,8 @@ native(
       await runtime.shutdown();
     }
   },
+  // Two runtime probes and 32 separate Seatbelt launches share this test's total budget.
+  30000,
 );
 
 native('a PATH-exposed cargo root still cannot reveal its credentials or config', async () => {

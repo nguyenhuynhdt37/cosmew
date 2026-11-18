@@ -23,6 +23,10 @@ export class CommandRouter {
     host.clearSelection();
     const parsed = parseSlashCommand(rawInput);
     if (parsed.error) {
+      if (client.isSkillCommand(rawInput) && !host.isStreaming) {
+        await host.submitPrompt(rawInput);
+        return;
+      }
       host.setBanner(parsed.error);
       return;
     }
@@ -127,6 +131,18 @@ export class CommandRouter {
           host.closeOverlay();
           host.setBanner('Started a fresh conversation. Previous sessions remain in /resume.');
           return;
+        case 'skills': {
+          const report = client.skills();
+          const text =
+            [
+              ...report.skills.map(s => `${s.name} (${s.source}) ${s.shortPath}`),
+              ...report.errors.map(e => `Error: ${e.code} ${e.path ?? ''}`),
+              ...report.warnings.map(e => `Warning: ${e.code} ${e.path ?? ''}`),
+            ].join('\n') || 'No skills discovered.';
+          host.addTranscriptNotice(text.length > 60000 ? text.slice(0, 59900) + '\n[Skills list truncated]' : text);
+          host.setBanner('Skills listed in transcript.');
+          return;
+        }
         case 'compact': {
           host.setBanner('Compacting context with the current model...');
           const outcome = await client.compact(args || undefined);

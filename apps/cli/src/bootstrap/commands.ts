@@ -151,13 +151,21 @@ export function sandboxSettingsFromEnv(
  * selected, nothing when disabled. Selecting a backend grants nothing; availability still requires
  * the runtime's real self-test.
  */
-export function createCommandRuntime(workspaceRoot: string, stateDirectory: string, env = process.env): CommandRuntime {
+export function createCommandRuntime(
+  workspaceRoot: string,
+  stateDirectory: string,
+  env = process.env,
+  skillDirectories: readonly string[] = [],
+  readOnlySkillDirectories: readonly string[] = [],
+): CommandRuntime {
   const backend = commandBackendFromEnv(env.FUTRYN_COMMAND_BACKEND);
   if (backend === 'none') return new UnsupportedRuntime('Commands are disabled (FUTRYN_COMMAND_BACKEND).');
   return platformCommandRuntime({
     workspaceRoot,
     stateDirectory,
     backend,
+    skillDirectories,
+    readOnlySkillDirectories,
     hideSecrets: env.FUTRYN_SANDBOX_HIDE_SECRETS === '1',
   });
 }

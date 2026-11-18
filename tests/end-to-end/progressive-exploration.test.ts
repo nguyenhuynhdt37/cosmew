@@ -76,7 +76,7 @@ async function make(
   const server = fixtureServer();
   server.set({script});
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault()});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider(protocol, {id: 'tooly', auth: 'none'}));
   await app.accounts.add('tooly', 'main', {kind: 'none'});

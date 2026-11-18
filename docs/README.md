@@ -6,7 +6,7 @@ The continued Claude task implements W0–W7 from the approved
 [approval ADR 0040](adr/0040-codex-approval-policy.md), [extended read ADR 0041](adr/0041-full-read.md),
 [plan/questions ADR 0042](adr/0042-plan-and-questions.md),
 [LSP ADR 0043](adr/0043-sandboxed-code-intelligence.md), [MCP/web ADR 0044](adr/0044-mcp-and-web-tools.md). Login rework: [ADR 0045](adr/0045-remove-delegated-and-chat-only-runtimes.md), [0046](adr/0046-host-provider-config.md), [0047](adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), [0048](adr/0048-deepseek-reasoning-replay.md).
-Public contract is 1.27; SQLite schema 8. ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
+Public contract is 1.28 (skills: [ADR 0056](adr/0056-skills-discovery-and-mediated-invocation.md)); SQLite schema 8. ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
 UAT diagnostics, usage and execution evidence: [ADR 0051](adr/0051-uat-diagnostics-usage-and-execution-evidence.md). Wave 2 S1 headless exec: [ADR 0052](adr/0052-headless-exec-and-sdk-interactions.md). Codex sandbox/approval alignment, model compaction, and presets/Full Access: [ADR 0053](adr/0053-codex-sandbox-and-approval-alignment.md), [0054](adr/0054-model-compaction.md), [0055](adr/0055-codex-approval-decisions-network-and-full-access.md). Other wave 2/3 steps remain future work.
 This is not authenticated-generation or Product MVP completion evidence.
 

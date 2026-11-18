@@ -11,7 +11,7 @@ const chatFixture = () => {
     runSlashCommand: async (command: string) => {
       commands.push(command);
     },
-    client: {activeSession: () => null},
+    client: {activeSession: () => null, isSkillCommand: () => false},
   } as unknown as TuiHost);
   return {chat, commands};
 };

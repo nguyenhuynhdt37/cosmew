@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.27' as const;
+export const CONTRACT_VERSION = '1.28' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -213,10 +213,10 @@ export const requestSchema = z.strictObject({
     .max(32)
     .default([]),
   /**
-   * Trusted host guidance (ADR 0020), never repository or user text. Adapters place it in the
+   * Host guidance (ADR 0020) plus explicitly labeled untrusted skill metadata (ADR 0056). Adapters place it in the
    * provider's system/developer channel; it is not stored with the conversation.
    */
-  instructions: z.string().min(1).max(8000).optional(),
+  instructions: z.string().min(1).max(32768).optional(),
   /**
    * Opaque conversation identifier for provider prompt caching. Adapters hash it before it leaves
    * the process; it is never a secret and carries no user text.
