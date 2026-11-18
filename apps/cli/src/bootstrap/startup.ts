@@ -1,5 +1,7 @@
 import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
+import {homedir} from 'node:os';
+import {pathToFileURL} from 'node:url';
 import {dirname, join, resolve} from 'node:path';
 import {
   FULL_ACCESS_WARNING,
@@ -14,6 +16,7 @@ import {
   type ProjectContextOptions,
   type ProjectContextPort,
   type SkillsPort,
+  type MemoriesPort,
   type SkillsReport,
   type ProjectContextReport,
   type Selection,
@@ -57,6 +60,7 @@ import {
 } from '@futryn/models';
 import {
   FileCustomThemeStore,
+  FileMemories,
   MigrationOutbox,
   removeRuntimeProfiles,
   SqliteConversations,
@@ -76,7 +80,7 @@ import {
   terminalText,
   validateEndpoint,
 } from '@futryn/security';
-import {ChatGPTOAuth, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
+import {ChatGPTOAuth, openExternalURL, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
 import {grantLabel, toolPermissionRequest} from './approvals';
 import {HostConfigStore, TokenCommandRunner} from './host-config';
 import {
@@ -149,6 +153,7 @@ interface ConversationWiring {
   workspaceRoot?: string;
   projectContext?: ProjectContextPort;
   skills?: SkillsPort;
+  memories?: Pick<MemoriesPort, 'context'>;
   budget?: () => TurnBudget | undefined;
   /** Plan/review modes cannot be turned into mutating artifact recovery. */
   analysisOnly?: () => boolean;
@@ -168,6 +173,10 @@ export function startup(
     chatgpt?: ChatGPTOAuthOptions;
     /** Test seam for user skill discovery; production uses the OS home directory. */
     skillsHome?: string;
+    /** Isolated user home for memory fixtures; production always uses ~/.futryn. */
+    memoriesHome?: string;
+    /** Host opener for an explicit /memory open action, never a model tool. */
+    openMemoryFolder?: (path: string) => Promise<void>;
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
     /** Session-only CLI launch permission overrides (ADR 0055). */
     permissions?: LaunchPermissionFlags;
@@ -374,6 +383,7 @@ export function startup(
       // ADR 0030: the user's optional work budget and the model's reported context window.
       {
         skills: wiring.skills,
+        memories: wiring.memories,
         budget: wiring.budget ?? (() => undefined),
         analysisOnly: wiring.analysisOnly ?? (() => false),
         contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
@@ -491,6 +501,15 @@ export function startup(
     let terminalReport: TerminalRuntimeReport | undefined;
     const toolsEnabled = () => client?.toolsEnabled() === true;
     const plans = new Map<string, PlanState | null>();
+    const memoriesEnabled = process.env.FUTRYN_MEMORY !== '0' && hostLoaded.memoriesEnabled;
+    let memoryStore: FileMemories | undefined;
+    const memories = () =>
+      (memoryStore ??= new FileMemories(
+        join(realpathSync.native(services.memoriesHome ?? homedir()), '.futryn'),
+        workspaceTree().root,
+        text => terminalText(redactor.text(text)),
+        {maxUnusedDays: hostLoaded.memoryMaxUnusedDays},
+      ));
 
     // Everything below is created lazily, on first use after folder consent.
     const workspaceTree = () => (workspace ??= new WorkspaceRoot(workspaceRoot));
@@ -563,6 +582,18 @@ export function startup(
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
         skills: skills(),
+        memories: memoriesEnabled
+          ? {
+              get directory() {
+                return memories().directory;
+              },
+              list: () => memories().list(),
+              read: name => memories().read(name),
+              write: entry => memories().write(entry),
+              delete: name => memories().delete(name),
+              context: () => memories().context(),
+            }
+          : undefined,
         grants,
         stateDirectory,
         readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
@@ -753,6 +784,18 @@ export function startup(
     const wiring: ConversationWiring = {
       tools: toolPort,
       skills: skillPort,
+      memories: memoriesEnabled
+        ? {
+            context: () => {
+              if (!toolsEnabled()) return '';
+              try {
+                return memories().context();
+              } catch {
+                return 'Memories (untrusted project context): storage unavailable; no memories loaded.';
+              }
+            },
+          }
+        : undefined,
       workspaceRoot: resolve(workspaceRoot),
       projectContext,
       budget: () => client?.turnBudget(),
@@ -778,6 +821,16 @@ export function startup(
 
     client = new FutrynClient({
       // Workspace and tools
+      memories: () => (toolsEnabled() && memoriesEnabled ? memories().list() : []),
+      memoryDirectory: () =>
+        toolsEnabled() && memoriesEnabled ? terminalText(redactor.text(memories().directory)) : null,
+      openMemoryDirectory: async () => {
+        if (!toolsEnabled() || !memoriesEnabled) throw new FutrynError('UNSUPPORTED');
+        memories().prepareDirectory(); // Explicit user action: ensure/validate the fixed private folder.
+        await (services.openMemoryFolder ?? (path => openExternalURL(pathToFileURL(path).href)))(memories().directory);
+      },
+      memoryAction: async (action, name) =>
+        toolPort.invoke({id: crypto.randomUUID(), name: 'memory', input: {action, name}}),
       skills: () => (toolsEnabled() ? skillReport() : {skills: [], errors: [], warnings: []}),
       availableTools: () =>
         toolsEnabled()

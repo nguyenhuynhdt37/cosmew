@@ -1,3 +1,4 @@
+import {MemoryFeature} from './features/memory';
 import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import {commandForShortcut, type FutrynClient} from '@futryn/sdk';
 import type {FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost} from './core/feature';
@@ -184,6 +185,7 @@ export class FutrynTuiApp {
       new HelpFeature(host),
       new ReportsFeature(host),
       new EffortFeature(host),
+      new MemoryFeature(host),
       new SettingsFeature(host),
       new ThemesFeature(host),
       new ThemeEditorFeature(host),

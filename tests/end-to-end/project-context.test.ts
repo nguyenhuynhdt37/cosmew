@@ -21,7 +21,7 @@ async function setup(
   );
   const server = fixtureServer();
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault(), skillsHome: home});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home, memoriesHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider(protocol, {id: 'context-fixture', auth: 'none'}));
   const account = await app.accounts.add('context-fixture', 'context-user', {kind: 'none'});
@@ -129,6 +129,7 @@ test('project text cannot authorize a tool to read outside the workspace', async
           'read',
           'glob',
           'grep',
+          'memory',
           'exec_command',
           'apply_patch',
           'edit',

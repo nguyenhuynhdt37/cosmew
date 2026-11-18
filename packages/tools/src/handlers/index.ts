@@ -1,5 +1,6 @@
 import type {ToolDispatcherOptions} from '../context';
 import {FileSystemRuntime} from '../runtimes/filesystem';
+import {memoryHandler} from './memory';
 import {skillHandler} from './skill';
 import {fileHandlers} from './filesystem';
 import {ApplyPatchHandler} from './apply-patch';
@@ -16,6 +17,7 @@ export function createHandlers(options: ToolDispatcherOptions, filesystem = new 
   return [
     ...fileHandlers(options, filesystem),
     skillHandler(options),
+    memoryHandler(options),
     commandHandler(options),
     stdinHandler(options),
     new ApplyPatchHandler(options, filesystem.ledger),

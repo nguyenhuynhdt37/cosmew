@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.28** (1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.30** (1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -186,3 +186,39 @@ của lượt gọi; không trở thành system authority. `$name` bỏ qua comm
 `SkillsPort` được inject vào core (`instructions`, `loadPrompt`), không thêm package dependency hay
 persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũng hoạt động ở `fyn exec`.
 `allowed-tools` không có semantics cấp quyền. Consumer JSONL dùng version 1.28; không thêm agent event.
+
+## Memories (contract 1.29)
+
+[ADR 0057](../adr/0057-user-scoped-project-memories.md). `MemoryMetadata {name, description, type}` với
+`type: user|feedback|project|reference`; `MemoryWrite` thêm `content`. `MemoriesPort` cung cấp
+`directory`, `list/read/write/delete/context`; persistence sở hữu durable file writes.
+`memory {action: list|read|write|delete, name?, description?, type?, content?}` là tool `agent.state`,
+không approval filesystem, vẫn qua dispatcher/audit/redact. Read/delete cần slug; write cần đủ field.
+File ≤16 KiB gồm frontmatter, directory ≤1 MiB/256 entries; secret-like input bị từ chối.
+SDK `client.memories()` trả metadata clone; `client.readMemory(name)`/`deleteMemory(name)` trả
+`Promise<ToolResult>` qua dispatcher. Backend không hỗ trợ trả list rỗng/UNSUPPORTED cho actions.
+`memoryDirectory()` và `openMemoryDirectory()` là đường UI/host cho folder cố định, không model tool.
+`/memory` mở Modal; args `list`, `read <name>`, `delete <name>`, `open`.
+
+`~/.futryn/projects/<sha256(canonical workspace)>/memory/MEMORY.md` được nạp tối đa 200 dòng/25.000 byte
+vào user/project-context có nhãn untrusted và nhắc kiểm chứng, không vào `ModelRequest.instructions`.
+Không có ký ức thì không thêm context; `fyn exec` dùng cùng cơ chế S3. `FUTRYN_MEMORY=0` hoặc
+`[memories] enabled = false` ở host config user tắt loading/tool; không đọc config repo.
+Port context optional của core phải được bỏ khi S5 tạo subagent. Không thêm event hay migration SQLite;
+headless envelopes/consumers dùng 1.29.
+
+### Memories bổ sung (contract 1.30)
+
+`MemoriesPort.list()` / `client.memories()` → `MemoryInfo[]`, metadata cũ cộng
+`usage_count: number`, `last_usage: string|null` (UTC ISO), `updated_at: string`, `unused: boolean`.
+Write input giữ nguyên, không nhận counters. Successful read tăng sidecar `.usage.json` trước khi trả output.
+Mục lục overflow ưu tiên fresh, count rồi recency; không đổi disk index. User `[memories] max_unused_days`
+mặc định 30, clamp 0..365; SDK/UI chỉ gợi ý xoá, không tự prune.
+
+SDK `parseMemoryCitations(text, streaming?)` → `{content, files}` cho presentation. Model thêm block
+`<oai-mem-citation><citation_entries>name.md:1-3|note=[reason]</citation_entries></oai-mem-citation>`
+cuối câu trả lời ngoài code fence; standalone `name.md` entries cũng đọc được. Parser loại index/path/range sai,
+dedupe, giữ code examples, ẩn block dở; TUI render một dòng “Ký ức đã dùng: …” cho assistant text cả stream/replay.
+Journal, SDK model events và headless JSONL giữ text gốc; không có event/schema Message mới hay SQLite migration.
+Citations là model-declared provenance, không phải proof hay grant. Không đưa memory body/metadata vào instructions.
+Auto extraction vẫn deferred/off; `auto_extract=true` chỉ báo unsupported, không chạy ngầm.

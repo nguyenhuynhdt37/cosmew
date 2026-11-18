@@ -11,3 +11,5 @@ export * from './command-runtime';
 
 export * from './recovery';
 export * from './skills';
+
+export * from './memories';

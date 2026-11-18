@@ -23,7 +23,7 @@ async function make(toolCall: {name: string; args: string}) {
   const server = fixtureServer();
   server.set({toolCall});
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault(), skillsHome: home});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home, memoriesHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider('chat', {id: 'tooly', auth: 'none'}));
   await app.accounts.add('tooly', 'main', {kind: 'none'});
@@ -69,6 +69,7 @@ test('model reads a workspace file through the tool loop; result returns to the 
     'read',
     'glob',
     'grep',
+    'memory',
     'apply_patch',
     'edit',
     'write',

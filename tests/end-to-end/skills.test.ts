@@ -65,6 +65,7 @@ async function setup(defaultState = false) {
     vault: memoryVault(),
     fetch: fetchFixture,
     skillsHome: home,
+    memoriesHome: home,
   });
   cleanup.push(async () => {
     await app.shutdownCommands();
@@ -187,7 +188,7 @@ test('headless fyn exec resolves a dollar mention through the same dispatcher', 
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.28'});
+  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.30'});
 });
 
 test('default state and user skills coexist through production discovery and dispatcher', async () => {

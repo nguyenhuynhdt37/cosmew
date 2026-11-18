@@ -102,6 +102,8 @@ Theo W11. Bổ sung: đọc skill ở thư mục user đi qua reader có kiểm 
 
 Theo W10. Bổ sung: `/memory` trong TUI; `hannes exec` vẫn nạp `MEMORY.md`; tắt bằng `FUTRYN_MEMORY=0`.
 
+**Trạng thái (2026-11-18): S4 đã triển khai** — [ADR 0057](../../adr/0057-user-scoped-project-memories.md), contract 1.30. Memories kiểu Claude Code ở cấp user, Markdown/index private, dispatcher `memory`, context dữ liệu không tin cậy, `/memory` Modal, SDK list/read/delete, headless và env/config disable. Fixture verified; không claim live provider/OS opener/Seatbelt. S5 phải bỏ memory context của subagent. Citations gọn, usage_count/last_usage, ranking khi overflow và stale hint 30 ngày đã triển khai; trích xuất nền/tổng hợp còn hoãn chi tiết trong deferred.md. Không commit/push.
+
 ### S5 — W9 Subagent
 
 Theo W9. Bổ sung: sự kiện `subagent.started/finished` (contract); subagent kế thừa approval policy nhưng **không** kế thừa grant phiên của cha trừ grant đọc; `explore` dùng model rẻ hơn nếu cấu hình `[agents.explore] model=...` trong `~/.futryn/config.toml`.

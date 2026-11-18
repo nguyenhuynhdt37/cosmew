@@ -1,5 +1,6 @@
 import type {
   ToolResult,
+  MemoriesPort,
   CommandRuntime,
   CommandSandbox,
   PlanState,
@@ -60,6 +61,7 @@ export interface ToolDispatcherOptions {
   workspace: WorkspaceRoot;
   /** Discovered exact skill files; no arbitrary outside-workspace reads. */
   skills?: SkillCatalog;
+  memories?: MemoriesPort;
   grants: SessionGrants;
   /** Ask the user; must resolve to 'deny' when the prompt is dismissed or cancelled. */
   approve(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;

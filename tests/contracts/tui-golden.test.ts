@@ -62,7 +62,7 @@ async function environment() {
     () => rmSync(dir, {recursive: true, force: true}),
     () => server.server.stop(true),
   );
-  const app = startup(dir, {vault: memoryVault()});
+  const app = startup(dir, {vault: memoryVault(), memoriesHome: dir});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider('chat', {id: 'golden', auth: 'none'}));
   await app.accounts.add('golden', 'primary', {kind: 'none'});

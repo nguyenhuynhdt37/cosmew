@@ -1,3 +1,4 @@
+import {MEMORY_READ_GUIDANCE} from '@futryn/contracts';
 /**
  * Host guidance for progressive code exploration (ADR 0020).
  *
@@ -32,6 +33,7 @@ export function explorationGuidance(
           'exec_command runs in the configured sandbox. The default workspace-write sandbox permits project writes, protects .git (readable, never writable) and Futryn state, and reaches only localhost unless an external network grant is approved; read-only sessions prohibit project writes. Approval follows project rules and the current policy: on-request runs sandboxed commands automatically, untrusted may ask, and never refuses prompts and escalation. Dangerous commands may require approval. If a command fails because of the sandbox, you may retry it with sandbox_permissions "require_escalated" and a justification: the user is asked first and the command then runs once without the sandbox. Use read/grep/lsp for focused lookups, or a command when it saves work. Pipe/PTY sessions and write_stdin exist only when offered; non-empty stdin runs inside the launch sandbox of its session (untrusted asks). A nonzero exit code is evidence, not a reason to retry blindly.',
         ]
       : []),
+    ...(has('memory') ? [MEMORY_READ_GUIDANCE] : []),
     ...(has('update_plan')
       ? [
           'Use update_plan for multi-step work: publish the concrete steps early, keep at most one in_progress, and update completed or cancelled steps as evidence changes. Skip a plan for a one-step task.',

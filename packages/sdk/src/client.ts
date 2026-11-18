@@ -13,6 +13,7 @@ import {
   type CommandOutputChunk,
   type ToolResult,
   type SkillsReport,
+  type MemoryInfo,
   type ProjectContextReport,
   type Integration,
   type ProviderAuthChallenge,
@@ -128,6 +129,10 @@ export interface TerminalRuntimeReport {
 export interface FutrynBackendPorts {
   workspace: string;
   skills?(): SkillsReport;
+  memories?(): MemoryInfo[];
+  memoryDirectory?(): string | null;
+  openMemoryDirectory?(): Promise<void>;
+  memoryAction?(action: 'read' | 'delete', name: string): Promise<ToolResult>;
   terminalRuntime?(): TerminalRuntimeReport;
   /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
@@ -381,7 +386,28 @@ export class FutrynClient {
     this.notifyStateChange();
   }
 
-  /** Last authorized instruction snapshot metadata; instruction contents are not exposed here. */
+  /** User-scoped memory metadata; detailed reads/deletes remain mediated tool calls. */
+  memories(): MemoryInfo[] {
+    return this.toolsEnabled() ? structuredClone(this.ports.memories?.() ?? []) : [];
+  }
+  memoryDirectory(): string | null {
+    return this.toolsEnabled() ? (this.ports.memoryDirectory?.() ?? null) : null;
+  }
+  async openMemoryDirectory(): Promise<void> {
+    if (!this.toolsEnabled() || !this.ports.openMemoryDirectory) throw new FutrynError('UNSUPPORTED');
+    await this.ports.openMemoryDirectory();
+  }
+  async readMemory(name: string): Promise<ToolResult> {
+    return this.memoryAction('read', name);
+  }
+  async deleteMemory(name: string): Promise<ToolResult> {
+    return this.memoryAction('delete', name);
+  }
+  private async memoryAction(action: 'read' | 'delete', name: string): Promise<ToolResult> {
+    if (!this.toolsEnabled() || !this.ports.memoryAction) throw new FutrynError('UNSUPPORTED');
+    return this.ports.memoryAction(action, name);
+  }
+
   skills(): SkillsReport {
     return structuredClone(
       this.toolsEnabled()

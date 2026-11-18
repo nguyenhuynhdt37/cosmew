@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {join} from 'node:path';
-import {FutrynError, type Provider} from '@futryn/contracts';
+import {DEFAULT_MEMORY_MAX_UNUSED_DAYS, FutrynError, type Provider} from '@futryn/contracts';
 import {
   appendProvider,
   loadHostConfig,
@@ -37,6 +37,8 @@ export interface LoadedHostConfig {
   diagnostics: HostConfigDiagnostic[];
   /** False when the file exists but could not be used as a whole (unsafe, unreadable, not TOML). */
   usable: boolean;
+  memoriesEnabled: boolean;
+  memoryMaxUnusedDays: number;
 }
 
 export class HostConfigStore {
@@ -72,6 +74,8 @@ export class HostConfigStore {
     const base = {
       path: this.path,
       providers: [],
+      memoriesEnabled: true,
+      memoryMaxUnusedDays: DEFAULT_MEMORY_MAX_UNUSED_DAYS,
       permissions: {diagnostics: []} as HostPermissionConfig,
       diagnostics: [] as HostConfigDiagnostic[],
     };
@@ -84,13 +88,30 @@ export class HostConfigStore {
     } catch {
       return {...base, diagnostics: [{message: 'config.toml is not valid TOML'}], usable: false};
     }
+    const memories = (parsed as {memories?: {enabled?: unknown; max_unused_days?: unknown; auto_extract?: unknown}})
+      .memories;
+    const memoriesEnabled = memories?.enabled !== false;
+    const configuredDays = memories?.max_unused_days;
+    const validDays = typeof configuredDays === 'number' && Number.isSafeInteger(configuredDays);
+    const memoryMaxUnusedDays = validDays ? Math.min(365, Math.max(0, configuredDays)) : DEFAULT_MEMORY_MAX_UNUSED_DAYS;
     const config = loadHostConfig(parsed, this.reserved);
     const permissions = loadHostPermissions(parsed);
     return {
       path: this.path,
       providers: config.providers,
+      memoriesEnabled,
+      memoryMaxUnusedDays,
       permissions,
-      diagnostics: [...config.diagnostics, ...permissions.diagnostics],
+      diagnostics: [
+        ...config.diagnostics,
+        ...permissions.diagnostics,
+        ...(configuredDays !== undefined && !validDays
+          ? [{message: 'memories.max_unused_days must be an integer; using the default.'}]
+          : []),
+        ...(memories?.auto_extract === true
+          ? [{message: 'Memories auto_extract is not implemented; no background extraction runs.'}]
+          : []),
+      ],
       usable: true,
     };
   }

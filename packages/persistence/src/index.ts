@@ -166,3 +166,5 @@ export class FileCustomThemeStore {
     }
   }
 }
+
+export {FileMemories} from './memories';

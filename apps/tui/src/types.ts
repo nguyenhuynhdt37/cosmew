@@ -4,6 +4,7 @@ import type {RenderedBoxLine} from './ui/types';
 
 export type ActiveOverlay =
   | 'none'
+  | 'memory'
   | 'themes'
   | 'theme-editor'
   | 'models'

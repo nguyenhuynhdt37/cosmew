@@ -131,6 +131,29 @@ export class CommandRouter {
           host.closeOverlay();
           host.setBanner('Started a fresh conversation. Previous sessions remain in /resume.');
           return;
+        case 'memory': {
+          if (!args || args === 'list') {
+            host.openOverlay('memory');
+            return;
+          }
+          if (args === 'open') {
+            const directory = client.memoryDirectory();
+            if (directory) await client.openMemoryDirectory();
+            host.addTranscriptNotice(
+              directory ? `Memory folder: ${directory}` : 'Memories disabled or workspace access unavailable.',
+            );
+            return;
+          }
+          const match = /^(read|delete) ([a-z0-9-]+)$/.exec(args);
+          if (!match) {
+            host.setBanner('Usage: /memory [list|read <name>|delete <name>|open]');
+            return;
+          }
+          const result =
+            match[1] === 'read' ? await client.readMemory(match[2]!) : await client.deleteMemory(match[2]!);
+          host.addTranscriptNotice(result.content);
+          return;
+        }
         case 'skills': {
           const report = client.skills();
           const text =

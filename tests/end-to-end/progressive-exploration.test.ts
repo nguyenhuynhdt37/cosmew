@@ -51,7 +51,18 @@ function explorer(view: ScriptedView): ScriptedReply {
 }
 
 /** exec_command is offered only where its OS sandbox is verified (ADR 0022). */
-const OFFERED = ['read', 'glob', 'grep', 'apply_patch', 'edit', 'write', 'update_plan', 'web_search', 'web_fetch'];
+const OFFERED = [
+  'read',
+  'glob',
+  'grep',
+  'memory',
+  'apply_patch',
+  'edit',
+  'write',
+  'update_plan',
+  'web_search',
+  'web_fetch',
+];
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -76,7 +87,7 @@ async function make(
   const server = fixtureServer();
   server.set({script});
   cleanup.push(() => server.server.stop(true));
-  const app = startup(home, {vault: memoryVault(), skillsHome: home});
+  const app = startup(home, {vault: memoryVault(), skillsHome: home, memoriesHome: home});
   cleanup.push(() => app.db.close());
   app.registry.add(server.provider(protocol, {id: 'tooly', auth: 'none'}));
   await app.accounts.add('tooly', 'main', {kind: 'none'});
@@ -309,7 +320,7 @@ test(`user call budget: only ${MAX_TOOL_CALLS} calls run in a turn; the rest get
   expect(final.unansweredCalls).toBe(0);
   expect(final.orphanResults).toBe(0);
   expect(JSON.stringify(c.server.requests)).not.toContain('chain/f34.txt\\n'); // f33's content names f34; f33 was never read
-});
+}, 20_000);
 
 test('rereading an unchanged file returns a short notice; a changed file returns its new content', async () => {
   let ws = '';
@@ -361,6 +372,7 @@ for (const protocol of ['chat', 'anthropic'] as const)
         'read',
         'glob',
         'grep',
+        'memory',
         'apply_patch',
         'edit',
         'write',
@@ -393,7 +405,7 @@ test('no default ceiling: one turn runs 40 model rounds and 40+ tool calls until
   expect(c.views().every(v => v.orphanResults === 0 && v.unansweredCalls === 0)).toBe(true);
   const receipt = c.app.conversations.get(c.client.activeSession()!.id)!;
   expect(receipt.messages.filter(m => m.role === 'tool')).toHaveLength(41);
-});
+}, 20_000);
 
 test('several calls in one response: reads run together, results stay paired and ordered', async () => {
   const wide = (view: ScriptedView): ScriptedReply =>

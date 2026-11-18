@@ -1,3 +1,4 @@
+import {parseMemoryCitations} from '@futryn/sdk';
 import {graphemes, textWidth} from '../../input/text';
 import {TranscriptLayout, type TranscriptViewportOptions, type TranscriptViewportResult} from './layout';
 import {isFileChangeTool, type BorderStyle, type ThemeTokens, type ToolCall, type ToolResult} from '@futryn/contracts';
@@ -232,8 +233,12 @@ function renderTranscriptItem(options: {
           );
         });
       } else {
+        const citation = parseMemoryCitations(part.text, Boolean(item.streaming));
+        const content = [citation.content, citation.files.length ? `Ký ức đã dùng: ${citation.files.join(', ')}` : '']
+          .filter(Boolean)
+          .join('\n');
         const body = renderMarkdownBody({
-          content: part.text,
+          content,
           width: Math.max(8, innerWidth - 2),
           tokens,
           bg,

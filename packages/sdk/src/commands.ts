@@ -27,6 +27,7 @@ export type CommandHandler =
   | 'clear'
   | 'compact'
   | 'skills'
+  | 'memory'
   | 'exit'
   | 'mode'
   | 'unavailable';
@@ -157,6 +158,15 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Plugin Management',
     description: 'Not implemented in PA1/TUI1; no plugin host is enabled',
     category: 'Workspace & Security',
+  },
+  {
+    command: '/memory',
+    handler: 'memory',
+    aliases: [],
+    title: 'Memories',
+    description: 'List, read or delete memories; /memory open opens the user memory folder',
+    category: 'Workspace & Security',
+    arguments: 'optional',
   },
   {
     command: '/skills',
