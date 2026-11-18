@@ -9,6 +9,14 @@
   },
   "dependencies": {
     "@futryn/contracts": "workspace:*",
-    "@futryn/sdk": "workspace:*"
+    "@futryn/sdk": "workspace:*",
+    "cli-highlight": "2.1.11",
+    "ink": "8.0.0",
+    "marked": "18.1.2",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "ink-testing-library": "4.0.0"
   }
 }

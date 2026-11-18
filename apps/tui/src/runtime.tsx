@@ -6,6 +6,10 @@ import {TerminalInputDecoder} from './input/terminal-keys';
 import type {FutrynTuiOptions} from './types';
 
 export async function runInteractiveTui(options: FutrynTuiOptions & {initialCommand?: string}): Promise<void> {
+  if ((options.env ?? process.env).FUTRYN_TUI === 'ink') {
+    const {runInkTui} = await import('./ink/runtime');
+    return runInkTui(options);
+  }
   const app = new FutrynTuiApp(options);
   await app.initialize();
   const stdout = process.stdout;
