@@ -129,9 +129,11 @@ export class ToolOrchestrator {
                 ? await this.authorizeWeb(call.name, prepared.target, true, audit, signal)
                 : prepared.kind === 'web-fetch'
                   ? {gate: null, viaSession: false}
-                  : prepared.kind === 'state' || prepared.kind === 'question'
-                    ? this.authorizeState(audit, prepared.kind)
-                    : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
+                  : prepared.kind === 'state-write'
+                    ? await this.authorizeStateWrite(call.name, prepared.target, audit, signal)
+                    : prepared.kind === 'state' || prepared.kind === 'question'
+                      ? this.authorizeState(audit, prepared.kind)
+                      : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
@@ -154,6 +156,10 @@ export class ToolOrchestrator {
             ? this.revalidateCommand(prepared, authorization.viaSession, audit)
             : null;
       if (revalidation) return finish(revalidation);
+      if (prepared.kind === 'state-write') {
+        const denied = this.stateWriteRestriction();
+        if (denied) return finish(denied);
+      }
       if (prepared.kind === 'patch') {
         if (authorization.viaSession && !this.options.grants.has('fs.write', prepared.plan.scopeKey))
           return finish({
@@ -409,6 +415,48 @@ export class ToolOrchestrator {
       'The user denied web access.',
       signal,
     );
+  }
+
+  private stateWriteRestriction(): ToolOutput | null {
+    const analysis = this.options.analysisOnly?.();
+    if (!analysis && sandboxConfig(this.options).mode !== 'read-only') return null;
+    return {
+      status: 'denied',
+      code: 'MODE_RESTRICTED',
+      content: `Memory write/delete is refused in ${analysis ? 'Plan/Review (analysis-only) mode' : 'the Read Only sandbox'}. Nothing was written or deleted.`,
+    };
+  }
+
+  private async authorizeStateWrite(
+    tool: string,
+    target: string,
+    audit: Audit,
+    signal?: AbortSignal,
+  ): Promise<Authorization> {
+    const restriction = this.stateWriteRestriction();
+    if (restriction) {
+      audit({target, phase: 'decided', decision: 'deny', reason: 'memory-read-only'});
+      return {gate: restriction, viaSession: false};
+    }
+    // Always consult current policy, even after a session approval: project deny rules must win.
+    // The adapter resolves normal edit policy without a prompt; untrusted asks.
+    audit({target, phase: 'decided', decision: 'ask', reason: 'agent-state-edit'});
+    const answer = await this.options.approve(
+      {tool, capability: 'agent.state.write', target, reason: 'agent-state-edit'},
+      signal,
+    );
+    signal?.throwIfAborted();
+    audit({target, phase: 'decided', decision: answer, reason: 'user'});
+    return {
+      gate: ['once', 'session', 'always'].includes(answer)
+        ? null
+        : {
+            status: 'denied',
+            code: 'DENIED',
+            content: 'Memory edit denied by policy or the user. Nothing was written or deleted.',
+          },
+      viaSession: false,
+    };
   }
 
   private authorizeState(audit: Audit, kind: 'state' | 'question'): Authorization {

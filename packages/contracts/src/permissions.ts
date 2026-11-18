@@ -15,6 +15,7 @@ export const permissionPromptRequestSchema = z.strictObject({
   capability: z.enum([
     'fs.read',
     'fs.write',
+    'agent.state.write',
     'process.execute',
     'network.connect',
     'network.search',

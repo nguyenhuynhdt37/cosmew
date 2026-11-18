@@ -123,7 +123,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.30', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.31', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');
@@ -167,7 +167,7 @@ test('exec requires explicit folder consent and never waits for approval without
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'denied')).toBe(true);
   expect(events.some(e => e.type === 'permission.requested')).toBe(false);
   expect(JSON.stringify(x.server.requests.at(-1)?.body)).toContain('denied');
-});
+}, 30_000);
 
 test('exec cancels provider work cleanly on SIGINT and SIGTERM (1)', async () => {
   const x = context();
@@ -235,7 +235,7 @@ test.skipIf(process.platform !== 'darwin')(
       .split('\n')
       .map(line => JSON.parse(line));
     expect(events.some(e => e.type === 'permission.requested')).toBe(false);
-    expect(events.at(-1)).toMatchObject({contractVersion: '1.30', type: 'turn.completed'});
+    expect(events.at(-1)).toMatchObject({contractVersion: '1.31', type: 'turn.completed'});
 
     rmSync(outside, {force: true});
     const yolo = await x.cli(

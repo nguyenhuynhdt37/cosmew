@@ -106,10 +106,12 @@ test('memory dispatcher state operations are audited, redacted, never request fi
   const dispatcher = new ToolDispatcher({
     workspace: new WorkspaceRoot(project),
     memories: store,
+    sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
     grants: new SessionGrants(),
     redact: t => redactor.text(t),
-    approve: async () => {
-      throw new Error('unexpected approval');
+    approve: async request => {
+      expect(request.capability).toBe('agent.state.write');
+      return 'once'; // Normal edit policy approves without a UI prompt.
     },
     audit: r => audit.push(r.phase),
   });
@@ -122,6 +124,63 @@ test('memory dispatcher state operations are audited, redacted, never request fi
   expect(audit.filter(p => p === 'requested')).toHaveLength(5);
   expect(audit).toContain('decided');
   expect(audit.filter(p => p === 'completed')).toHaveLength(5);
+});
+
+for (const restriction of ['read-only', 'analysisOnly'] as const)
+  test(`memory ${restriction} refuses mutations but permits list/read`, async () => {
+    const {store, project} = fixture();
+    store.write(entry);
+    const before = readFileSync(join(store.directory, 'preference.md'), 'utf8');
+    const index = readFileSync(join(store.directory, 'MEMORY.md'), 'utf8');
+    const dispatcher = new ToolDispatcher({
+      workspace: new WorkspaceRoot(project),
+      memories: store,
+      grants: new SessionGrants(),
+      sandbox: () => ({mode: restriction === 'read-only' ? 'read-only' : 'workspace-write', escalation: 'on-request'}),
+      analysisOnly: () => restriction === 'analysisOnly',
+      redact: t => t,
+      approve: async () => {
+        throw new Error('unexpected prompt');
+      },
+    });
+    const invoke = (input: unknown) => dispatcher.invoke({id: crypto.randomUUID(), name: 'memory', input});
+    for (const input of [
+      {action: 'write', ...entry, content: 'changed'},
+      {action: 'delete', name: entry.name},
+    ]) {
+      const result = await invoke(input);
+      expect(result.status).toBe('denied');
+      expect(result.content).toContain('Nothing was written');
+      expect(readFileSync(join(store.directory, 'preference.md'), 'utf8')).toBe(before);
+      expect(readFileSync(join(store.directory, 'MEMORY.md'), 'utf8')).toBe(index);
+    }
+    expect((await invoke({action: 'list'})).status).toBe('ok');
+    expect((await invoke({action: 'read', name: entry.name})).content).toContain(entry.content);
+  });
+
+test('memory mutation rechecks analysis mode after approval and cancellation never writes', async () => {
+  const {store, project} = fixture();
+  let analysis = false;
+  const controller = new AbortController();
+  const dispatcher = new ToolDispatcher({
+    workspace: new WorkspaceRoot(project),
+    memories: store,
+    grants: new SessionGrants(),
+    sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
+    analysisOnly: () => analysis,
+    redact: t => t,
+    approve: async () => {
+      analysis = true;
+      return 'once';
+    },
+  });
+  const call = () => ({id: crypto.randomUUID(), name: 'memory', input: {action: 'write', ...entry}});
+  expect((await dispatcher.invoke(call())).status).toBe('denied');
+  expect(store.list()).toEqual([]);
+  analysis = false;
+  controller.abort();
+  await expect(dispatcher.invoke(call(), controller.signal)).rejects.toThrow();
+  expect(store.list()).toEqual([]);
 });
 
 test('16 KiB includes frontmatter, aggregate bytes and count are enforced before update', () => {

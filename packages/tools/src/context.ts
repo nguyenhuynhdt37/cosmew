@@ -22,7 +22,7 @@ export type ApprovalDecision = 'once' | 'session' | 'always' | 'deny';
 export interface ApprovalRequest {
   tool: string;
   /** `network.connect` is a `request_permissions` grant (ADR 0040). */
-  capability: 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect' | 'network.search';
+  capability: 'agent.state.write' | 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect' | 'network.search';
   /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
@@ -62,6 +62,8 @@ export interface ToolDispatcherOptions {
   /** Discovered exact skill files; no arbitrary outside-workspace reads. */
   skills?: SkillCatalog;
   memories?: MemoriesPort;
+  /** Plan/Review workflow restriction, checked again after awaiting approval. */
+  analysisOnly?: () => boolean;
   grants: SessionGrants;
   /** Ask the user; must resolve to 'deny' when the prompt is dismissed or cancelled. */
   approve(request: ApprovalRequest, signal?: AbortSignal): Promise<ApprovalDecision>;

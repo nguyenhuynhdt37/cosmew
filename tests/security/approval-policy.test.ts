@@ -20,6 +20,7 @@ import {FutrynTuiApp} from '@futryn/tui';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
 import {ToolDispatcher, NativeCommandRuntime, type ToolAuditRecord} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
+import {FileMemories} from '@futryn/persistence';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {toolPermissionRequest} from '../../apps/cli/src/bootstrap/approvals';
 import {
@@ -302,9 +303,12 @@ async function chain(
   if (options.runtimeFactory) cleanup.push(() => runtime.shutdown?.());
   let turn: string | undefined;
   const grants = new SessionGrants();
+  const memories = new FileMemories(realpathSync(home), root, t => t);
   const dispatcher = new ToolDispatcher({
     workspace: new WorkspaceRoot(root),
     grants,
+    memories,
+    analysisOnly: () => ['plan', 'review'].includes(client.mode()),
     commands: runtime,
     stateDirectory: join(home, 'state-not-in-ws'),
     readPolicy: relative => permissionRuleDecision(client.permissionRules(), {tool: 'Read', target: relative}),
@@ -366,6 +370,7 @@ async function chain(
     ran,
     launches,
     audits,
+    memories,
     attempt,
     setTurn: (id: string | undefined) => (turn = id),
   };
@@ -382,6 +387,42 @@ const exec = (cmd: string, network = false) =>
     : {cmd};
 
 describe('policy matrix through the production permission chain', () => {
+  test('memory edits follow presets, plan mode, untrusted policy and project denies', async () => {
+    const c = await chain();
+    const entry = {name: 'preference', description: 'Preference', type: 'user' as const, content: 'Use Vietnamese.'};
+    c.memories.write(entry);
+    for (const preset of ['read-only', 'auto'] as const) {
+      c.client.setPermissionPreset(preset);
+      if (preset === 'auto') c.client.setPermissionMode('plan');
+      for (const input of [
+        {action: 'write', ...entry},
+        {action: 'delete', name: entry.name},
+      ])
+        expect((await c.attempt('memory', input)).outcome).toBe('refused');
+      expect((await c.attempt('memory', {action: 'list'})).outcome).toBe('ran');
+      expect((await c.attempt('memory', {action: 'read', name: entry.name})).outcome).toBe('ran');
+      expect(c.memories.list()).toHaveLength(1);
+    }
+    c.client.setPermissionPreset('auto');
+    expect((await c.attempt('memory', {action: 'write', ...entry})).outcome).toBe('ran');
+    expect((await c.attempt('memory', {action: 'delete', name: entry.name})).outcome).toBe('ran');
+    expect(c.memories.list()).toEqual([]);
+    c.memories.write(entry);
+    c.client.setPermissionMode('default');
+    expect((await c.attempt('memory', {action: 'write', ...entry}, 'once')).outcome).toBe('prompt');
+    expect((await c.attempt('memory', {action: 'delete', name: entry.name})).outcome).toBe('prompt');
+    expect(c.memories.list()).toHaveLength(1);
+    c.client.setPermissionPreset('auto');
+    c.client.addPermissionRule('deny', 'Tool(memory)');
+    for (const input of [
+      {action: 'write', ...entry},
+      {action: 'delete', name: entry.name},
+    ])
+      expect((await c.attempt('memory', input)).outcome).toBe('refused');
+    expect(c.memories.list()).toHaveLength(1);
+    c.client.setPermissionPreset('full-access');
+    expect((await c.attempt('memory', {action: 'write', ...entry})).outcome).toBe('refused');
+  });
   const modes: [PermissionMode, string][] = [
     ['default', 'untrusted'],
     ['auto', 'on-request'],

@@ -36,7 +36,9 @@ export function memoryHandler(options: ToolDispatcherOptions): ToolHandler {
       if (!parsed.success)
         return {status: 'error', code: 'INVALID_INPUT', content: 'Invalid memory action, metadata or name.'};
       return {
-        kind: 'state',
+        ...(parsed.data.action === 'write' || parsed.data.action === 'delete'
+          ? {kind: 'state-write' as const, target: `memory ${parsed.data.action} ${parsed.data.name}`}
+          : {kind: 'state' as const}),
         execute(signal) {
           signal?.throwIfAborted();
           const data = parsed.data,

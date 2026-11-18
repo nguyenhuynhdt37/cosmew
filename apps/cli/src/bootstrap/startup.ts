@@ -595,6 +595,7 @@ export function startup(
             }
           : undefined,
         grants,
+        analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
         stateDirectory,
         readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
         commands: commands(),

@@ -12,6 +12,8 @@ export const toolCapabilitySchema = z.enum([
   'process.execute',
   /** Session state the agent keeps for itself: plan, memory (wave 1, ADR 0042). */
   'agent.state',
+  /** Durable agent-state edits (memory write/delete, ADR 0057). */
+  'agent.state.write',
   /** Questions to the user (ADR 0042). */
   'user.input',
   /** Language-server queries (ADR 0043). */

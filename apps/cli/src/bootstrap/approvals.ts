@@ -82,6 +82,18 @@ function commandRule(tool: PermissionRuleTool, request: ApprovalRequest): string
 export function toolPermissionRequest(request: ApprovalRequest): PermissionInput {
   // One approval table for every tool (ADR 0040): the policy reason names the permission kind.
   const kind = APPROVAL_KIND_FOR_REASON[request.reason];
+  if (request.capability === 'agent.state.write')
+    return {
+      capability: request.capability,
+      kind: 'edit',
+      ruleTool: 'Tool',
+      ruleTarget: request.target,
+      action: 'Edit project memory',
+      target: request.target,
+      reason: 'Saves or deletes durable agent state for this project.',
+      riskLevel: 'medium',
+      ...offer(null),
+    };
   if (request.capability === 'network.search')
     return {
       capability: 'network.search',

@@ -18,6 +18,8 @@ export type PreparedTool = {
   | {kind: 'read'; file: ResolvedPath; revalidate?: () => ResolvedPath; readDecision?: PermissionDecision}
   /** Agent session state (plan): no workspace effect, no approval; audited (ADR 0042). */
   | {kind: 'state'}
+  /** Durable memory mutation; authorized as an edit, never as a workspace path. */
+  | {kind: 'state-write'; target: string}
   /** A question to the user: no workspace effect; the answer is text (ADR 0042). */
   | {kind: 'question'}
   | {kind: 'web-search'; target: string}

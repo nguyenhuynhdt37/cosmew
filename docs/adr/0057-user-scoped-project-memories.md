@@ -2,7 +2,7 @@
 
 - Ngày: 2026-11-18
 - Trạng thái: Accepted; chỉ S4, fixture verified, không claim live provider/OS sandbox parity.
-- Contract: 1.28 → 1.29 → **1.30**; SQLite giữ 8, không dependency mới.
+- Contract: 1.28 → 1.29 → 1.30 → **1.31**; SQLite giữ 8, không dependency mới.
 
 ## Quyết định
 
@@ -10,7 +10,7 @@ User đã chọn kiểu Claude Code: mỗi ký ức là Markdown trong `~/.futry
 
 Persistence sở hữu `FileMemories`; contracts xuất schema/metadata và `MemoriesPort`; tools nhận port inject, core chỉ nhận context port; CLI nối graph; SDK/TUI không import persistence. Không đổi dependency DAG. Không tái sử dụng workspace write tools để vượt state deny. Không mở quyền đọc/ghi ký ức cho shell/LSP.
 
-`memory {action: list|read|write|delete, name?, description?, type?, content?}` đi qua ToolDispatcher như `update_plan`: validate → policy `agent.state` (allow, không approval filesystem) → audit → revalidate route → execute → redact/bound output. Write cần đầy đủ metadata + content, là replace toàn bộ entry; read/delete chỉ nhận slug lowercase ASCII ≤64 ký tự, không nhận path; tên `memory` được dành riêng để tránh collision với `MEMORY.md` trên filesystem không phân biệt hoa thường. SDK `client.memories()` trả metadata clone (rỗng trước consent/disabled); `readMemory`/`deleteMemory` gọi dispatcher, không gọi store trực tiếp. Tên tool, requested/decided/completed được audit; không ghi body bí mật vào audit. Tool description dặn nhớ/quên theo yêu cầu user hoặc lưu điều bền vững không suy từ code; không lưu điều repo đã ghi.
+`memory {action: list|read|write|delete, name?, description?, type?, content?}` đi qua ToolDispatcher như `update_plan`: validate → policy `agent.state` cho list/read, `agent.state.write` cho write/delete (không approval filesystem) → audit → revalidate route → execute → redact/bound output. Write cần đầy đủ metadata + content, là replace toàn bộ entry; read/delete chỉ nhận slug lowercase ASCII ≤64 ký tự, không nhận path; tên `memory` được dành riêng để tránh collision với `MEMORY.md` trên filesystem không phân biệt hoa thường. SDK `client.memories()` trả metadata clone (rỗng trước consent/disabled); `readMemory`/`deleteMemory` gọi dispatcher, không gọi store trực tiếp. Tên tool, requested/decided/completed được audit; không ghi body bí mật vào audit. Tool description dặn nhớ/quên theo yêu cầu user hoặc lưu điều bền vững không suy từ code; không lưu điều repo đã ghi.
 
 ## Lưu trữ và an toàn
 
@@ -132,3 +132,15 @@ Chỉ khi index vượt 200 dòng/25.000 byte, đọc full index bounded ≤1 Mi
 - Sáu file với temporary preload in-process `/tmp/futryn-s4-loopback.ts`: transcript-activity, quiet-transcript, tui-golden, progressive-exploration, read-tools, project-context — **58 pass / 1 filtered out / 0 fail**, 457 assertions. Filter bỏ `actual PTY:` cần process/socket thật. Golden hiện có giữ nguyên trong lượt bổ sung. Preload gọi chính handler fixture, không thay production transport và không chứng minh mạng localhost/PTY/OS/live provider.
 - Test mới kiểm tra block an toàn/dedupe/no index/traversal, literal fenced code và mọi streaming prefix, persisted answer/replay render; successful model read đúng count/timestamp, list/context không tăng, update/delete/recreate, sidecar symlink/quota/failure, legacy mtime và tên trùng inherited object key, ngưỡng 30 ngày, user config 7 ngày/stale deletion hint, no extraction generation call, count/recency prioritization ở cả line/byte overflow và disk index giữ nguyên; redact trước cutoff để không lộ prefix secret vắt qua biên và marker khi redaction làm output vượt budget.
 - Tạo thêm `packages/sdk/src/memory-citations.ts`, `tests/contracts/memory-citations.test.ts`. Sửa `packages/contracts/src/{memories,models}.ts`, `packages/persistence/src/{memories,memory-directory}.ts`, `packages/sdk/src/{client,index}.ts`, `packages/core/src/agent/guidance.ts`, `packages/tools/src/handlers/memory.ts`, `apps/cli/src/bootstrap/{host-config,startup}.ts`, `apps/tui/src/features/memory/{types,logic}.ts`, `apps/tui/src/features/transcript/view.ts`, fixtures/consumers headless và docs S4. Tệp trong inventory S4 ban đầu ở trên được giữ; không commit/push/dependency mới, không sửa đường dẫn user loại trừ.
+
+## Security fix: memory edits (contract 1.31)
+
+List/read giữ `agent.state`; write/delete dùng capability `agent.state.write` và prepared kind
+`state-write`. Dispatcher từ chối mutation trong sandbox `read-only` (Read Only preset)
+và Plan/Review (`analysisOnly`), kiểm tra lại sau approval; không ghi/xoá memory hay index.
+Read vẫn giữ usage sidecar của contract 1.30, không đổi nội dung memory.
+Approval adapter dùng kind `edit`, rule namespace `Tool`, target `memory write|delete <slug>`:
+project deny thắng như các edits khác; `untrusted` hỏi, Auto/on-request/never không prompt
+trừ project ask/deny. Không cache approval mutation trong dispatcher để bỏ qua policy mới.
+Đây là quyết định user kiểu Claude Code, không mở quyền shell/LSP vào state.
+Regression tests bao phủ Read Only, plan/analysisOnly, untrusted, Auto và project deny.

@@ -70,6 +70,7 @@ async function setup(config = '') {
   }) as typeof globalThis.fetch;
   const opened: string[] = [];
   const app = startup(state, {
+    permissions: {sandbox: 'workspace-write', approval: 'on-request'},
     openMemoryFolder: async path => {
       opened.push(path);
     },
@@ -205,7 +206,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('fyn exec uses the same memory context and contract 1.30', async () => {
+test('fyn exec uses the same memory context and contract 1.31', async () => {
   const h = await setup();
   h.put();
   let stdout = '';
@@ -221,7 +222,7 @@ test('fyn exec uses the same memory context and contract 1.30', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.30"');
+  expect(stdout).toContain('"contractVersion":"1.31"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {

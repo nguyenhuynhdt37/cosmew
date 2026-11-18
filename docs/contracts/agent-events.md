@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.30** (1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -192,7 +192,7 @@ persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũn
 [ADR 0057](../adr/0057-user-scoped-project-memories.md). `MemoryMetadata {name, description, type}` với
 `type: user|feedback|project|reference`; `MemoryWrite` thêm `content`. `MemoriesPort` cung cấp
 `directory`, `list/read/write/delete/context`; persistence sở hữu durable file writes.
-`memory {action: list|read|write|delete, name?, description?, type?, content?}` là tool `agent.state`,
+`memory {action: list|read|write|delete, name?, description?, type?, content?}` dùng `agent.state` cho list/read, `agent.state.write` cho write/delete (contract 1.31),
 không approval filesystem, vẫn qua dispatcher/audit/redact. Read/delete cần slug; write cần đủ field.
 File ≤16 KiB gồm frontmatter, directory ≤1 MiB/256 entries; secret-like input bị từ chối.
 SDK `client.memories()` trả metadata clone; `client.readMemory(name)`/`deleteMemory(name)` trả
@@ -222,3 +222,12 @@ dedupe, giữ code examples, ẩn block dở; TUI render một dòng “Ký ức
 Journal, SDK model events và headless JSONL giữ text gốc; không có event/schema Message mới hay SQLite migration.
 Citations là model-declared provenance, không phải proof hay grant. Không đưa memory body/metadata vào instructions.
 Auto extraction vẫn deferred/off; `auto_extract=true` chỉ báo unsupported, không chạy ngầm.
+
+### Memory mutation policy (contract 1.31)
+
+`agent.state.write` is a distinct tool/prompt capability for durable memory edits.
+Read Only sandbox and Plan/Review (`analysisOnly`) refuse write/delete before storage,
+including after an awaited approval. List/read stay available as `agent.state`.
+Memory edits use permission kind `edit` and `Tool(memory …)` project rules:
+`untrusted` asks; normal Auto/on-request and never approve without a prompt unless
+a project rule restricts them. No new events or SQLite migration.
