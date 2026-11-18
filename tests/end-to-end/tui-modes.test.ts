@@ -1,7 +1,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, resolve} from 'node:path';
 import {FutrynTuiApp} from '@futryn/tui';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedView} from '../fixtures';
@@ -316,4 +316,66 @@ test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full A
   await c.tui.handleKey('4');
   expect(await waiting).toBe('always');
   expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
+});
+
+test('interactive CLI/TUI entry accepts Codex launch flags (--yolo, --full-auto, -s, -a), warns on Full Access and rejects conflicts', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'futryn-cli-launch-flags-'));
+  cleanup.push(() => rmSync(home, {recursive: true, force: true}));
+  const run = async (args: string[]) => {
+    const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
+      env: {...process.env, FUTRYN_HOME: home},
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    child.stdin.end();
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    return {stdout, stderr, code};
+  };
+
+  const yoloTui = await run(['tui', '--yolo']);
+  expect(yoloTui.code).toBe(0);
+  expect(yoloTui.stderr).toContain('WARNING: Full Access');
+  expect(yoloTui.stdout).toContain('WARNING: Full Access');
+  expect(yoloTui.stdout).toContain('Full Access');
+
+  const bypassStatus = await run(['status', '--dangerously-bypass-approvals-and-sandbox', '--json']);
+  expect(bypassStatus.code).toBe(0);
+  expect(bypassStatus.stderr).toContain('WARNING: Full Access');
+  expect(JSON.parse(bypassStatus.stdout)).toMatchObject({
+    permissionPreset: 'full-access',
+    sandboxMode: 'danger-full-access',
+    approvalPolicy: 'never',
+  });
+
+  const fullAutoStatus = await run(['status', '--full-auto', '--json']);
+  expect(fullAutoStatus.code).toBe(0);
+  expect(JSON.parse(fullAutoStatus.stdout)).toMatchObject({
+    permissionPreset: 'auto',
+    sandboxMode: 'workspace-write',
+    approvalPolicy: 'on-request',
+  });
+
+  const readOnlyStatus = await run(['status', '-s', 'read-only', '-a', 'on-request', '--json']);
+  expect(readOnlyStatus.code).toBe(0);
+  expect(JSON.parse(readOnlyStatus.stdout)).toMatchObject({
+    permissionPreset: 'read-only',
+    sandboxMode: 'read-only',
+    approvalPolicy: 'on-request',
+  });
+
+  for (const bad of [
+    ['tui', '--yolo', '--sandbox', 'read-only'],
+    ['tui', '--yolo', '--full-auto'],
+    ['tui', '--full-auto', '-a', 'never'],
+    ['tui', '--approval', 'never', '--ask-for-approval', 'on-request'],
+  ]) {
+    const conflict = await run(bad);
+    expect(conflict.code).toBe(1);
+    expect(conflict.stderr).toContain('INVALID_INPUT');
+  }
 });

@@ -55,7 +55,7 @@ export class PermissionsFeature implements OverlayFeature {
   layout(_overlay: 'permissions', cols: number, rows: number) {
     const pending = this.pending().length;
     if (!pending) return {width: Math.min(cols - 2, 82), height: Math.min(rows - 2, 20), backdrop: true};
-    return {width: Math.min(cols - 2, 82), height: Math.min(rows - 2, 18), backdrop: true};
+    return {width: Math.min(cols - 2, 82), height: Math.min(rows - 2, 20), backdrop: true};
   }
 
   render(_overlay: 'permissions', size: {width: number; height: number}, theme: ThemeFrame) {

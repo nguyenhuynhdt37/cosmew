@@ -89,6 +89,8 @@ test('exec validates arguments (64), stdin and missing tool account (2) without 
     ['hi', '--sandbox', 'oops'],
     ['hi', '--approval', 'never', '--ask-for-approval', 'on-request'],
     ['hi', '--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'read-only'],
+    ['hi', '--yolo', '--sandbox', 'read-only'],
+    ['hi', '--yolo', '--full-auto'],
     ['hi', '--full-auto', '--approval', 'never'],
     ['hi', '--unknown'],
     ['a', 'b'],
@@ -253,6 +255,26 @@ test.skipIf(process.platform !== 'darwin')(
     );
     expect(yolo.code).toBe(0);
     expect(yolo.stderr).toContain('WARNING: Full Access');
+    expect(existsSync(outside)).toBe(true);
+
+    rmSync(outside, {force: true});
+    const yoloAlias = await x.cli(
+      [
+        'exec',
+        'write marker with --yolo',
+        '-C',
+        x.root,
+        '--yolo',
+        '--account',
+        'exec-test',
+        '--model',
+        'fixture-model',
+      ],
+      '',
+      {FUTRYN_COMMAND_BACKEND: 'native'},
+    );
+    expect(yoloAlias.code).toBe(0);
+    expect(yoloAlias.stderr).toContain('WARNING: Full Access');
     expect(existsSync(outside)).toBe(true);
   },
   20_000,

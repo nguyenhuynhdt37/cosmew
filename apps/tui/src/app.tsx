@@ -1,3 +1,4 @@
+import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import {commandForShortcut, type FutrynClient} from '@futryn/sdk';
 import type {FeatureRegistry, OverlayFeature, ThemeFrame, TuiHost} from './core/feature';
 import {ChatController, drawChatScreen} from './features/chat';
@@ -211,7 +212,9 @@ export class FutrynTuiApp {
       this.themeEngine.subscribe(() => this.updateListener?.()),
     );
     const warnings = this.themeEngine.getWarnings();
-    if (warnings.length > 0) {
+    if (this.client.sandboxMode() === 'danger-full-access') {
+      this.statusBanner = FULL_ACCESS_WARNING;
+    } else if (warnings.length > 0) {
       this.statusBanner = warnings[0]!;
     }
   }

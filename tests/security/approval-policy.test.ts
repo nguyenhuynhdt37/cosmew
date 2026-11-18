@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
   BANNED_PREFIX_SUGGESTIONS,
+  FULL_ACCESS_WARNING,
   decideApproval,
   isSafeAlwaysRule,
   permissionModeDecision,
@@ -15,6 +16,7 @@ import {
   type PermissionResolutionScope,
   type SandboxModeSetting,
 } from '@futryn/contracts';
+import {FutrynTuiApp} from '@futryn/tui';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
 import {ToolDispatcher, NativeCommandRuntime, type ToolAuditRecord} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
@@ -22,6 +24,7 @@ import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {toolPermissionRequest} from '../../apps/cli/src/bootstrap/approvals';
 import {
   approvalPolicyFromEnv,
+  parsePermissionFlags,
   permissionModeFromEnv,
   sandboxSettingsFromEnv,
 } from '../../apps/cli/src/bootstrap/commands';
@@ -1090,5 +1093,106 @@ describe('ADR 0055: ReviewDecision once/session/always, multi-turn network grant
     const refused = await dockerLike.attempt('exec_command', exec('ls'));
     expect(refused.status).toBe('error');
     expect(refused.content).toContain('cannot enforce the configured sandbox');
+  });
+
+  test('shared Codex launch flags parse presets, short/long aliases and conflicts, and apply to the startup session with warnings', async () => {
+    expect(parsePermissionFlags([])).toEqual({});
+    expect(parsePermissionFlags(['--dangerously-bypass-approvals-and-sandbox'])).toEqual({
+      sandbox: 'danger-full-access',
+      approval: 'never',
+    });
+    expect(parsePermissionFlags(['--yolo'])).toEqual({
+      sandbox: 'danger-full-access',
+      approval: 'never',
+    });
+    expect(parsePermissionFlags(['--full-auto'])).toEqual({
+      sandbox: 'workspace-write',
+      approval: 'on-request',
+    });
+    expect(parsePermissionFlags(['-s', 'read-only', '-a', 'untrusted'])).toEqual({
+      sandbox: 'read-only',
+      approval: 'untrusted',
+    });
+    expect(parsePermissionFlags(['--sandbox', 'danger-full-access', '--ask-for-approval', 'never'])).toEqual({
+      sandbox: 'danger-full-access',
+      approval: 'never',
+    });
+    expect(parsePermissionFlags(['--approval', 'on-request'])).toEqual({
+      approval: 'on-request',
+    });
+
+    for (const conflict of [
+      ['--yolo', '--full-auto'],
+      ['--dangerously-bypass-approvals-and-sandbox', '--full-auto'],
+      ['--yolo', '--sandbox', 'read-only'],
+      ['--yolo', '-s', 'workspace-write'],
+      ['--dangerously-bypass-approvals-and-sandbox', '-s', 'read-only'],
+      ['--yolo', '--ask-for-approval', 'on-request'],
+      ['--yolo', '-a', 'never'],
+      ['--yolo', '--approval', 'untrusted'],
+      ['--full-auto', '--sandbox', 'read-only'],
+      ['--full-auto', '-a', 'never'],
+      ['--full-auto', '--ask-for-approval', 'on-request'],
+      ['--approval', 'never', '--ask-for-approval', 'on-request'],
+      ['-a', 'never', '--ask-for-approval', 'on-request'],
+      ['-s', 'bogus'],
+      ['-a', 'bogus'],
+      ['--ask-for-approval', 'bogus'],
+      ['--unknown'],
+    ]) {
+      expect(() => parsePermissionFlags(conflict)).toThrow();
+    }
+
+    // Startup applies the launch flags to the session only (overriding config/env defaults) and warns on stderr + TUI banner.
+    const dir = mkdtempSync(join(tmpdir(), 'futryn-launch-flags-'));
+    cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
+    writeFileSync(join(dir, 'config.toml'), `sandbox_mode = "read-only"\napproval_policy = "untrusted"\n`);
+
+    const stderrChunks: string[] = [];
+    const stderrSpy = spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      stderrChunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    });
+    cleanup.push(() => stderrSpy.mockRestore());
+
+    const launched = startup(dir, {
+      vault: memoryVault(),
+      permissions: parsePermissionFlags(['--yolo']),
+    });
+    cleanup.push(
+      () => launched.db.close(),
+      () => launched.shutdownCommands(),
+    );
+    const client = launched.createFutrynClient(dir);
+    expect(client.status()).toMatchObject({
+      permissionPreset: 'full-access',
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'never',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(stderrChunks.join('')).toContain(FULL_ACCESS_WARNING);
+
+    const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
+    await tui.initialize();
+    cleanup.push(() => tui.shutdown());
+    expect(tui.getStatusBanner()).toBe(FULL_ACCESS_WARNING);
+
+    // Project deny rules still win, and a later launch without flags falls back to config defaults.
+    client.addPermissionRule('deny', 'Bash(git push:*)');
+    expect(permissionRuleDecision(client.permissionRules(), {tool: 'Bash', target: 'git push origin main'})).toBe(
+      'deny',
+    );
+    await tui.shutdown();
+    launched.db.close();
+
+    const next = startup(dir, {vault: memoryVault()});
+    cleanup.push(
+      () => next.db.close(),
+      () => next.shutdownCommands(),
+    );
+    expect(next.createFutrynClient(dir).status()).toMatchObject({
+      sandboxMode: 'read-only',
+      approvalPolicy: 'untrusted',
+    });
   });
 });

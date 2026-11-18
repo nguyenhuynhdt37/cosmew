@@ -8,7 +8,7 @@ import {fetchModelsDev, terminalText} from '@futryn/security';
 import {reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
 import {loginOAuth} from './subscriptions/login';
 import {loginWizard} from './auth-wizard';
-import {startup, type Application} from './bootstrap/startup';
+import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
 import {execCli} from './exec';
 
@@ -40,11 +40,14 @@ const HELP = `Futryn (fyn) provider, authentication & TUI CLI
     [--cell-size <1..4>] [--veil <0..0.95>] [--enabled true|false] [--reduced-motion true|false]
   themes export [<theme-id>]
   themes remove <custom-theme-id> | reset [--project]
-  fyn tui
+  fyn [tui] [--sandbox|-s read-only|workspace-write|danger-full-access]
+    [--ask-for-approval|--approval|-a untrusted|on-request|never]
+    [--full-auto] [--dangerously-bypass-approvals-and-sandbox|--yolo]
   fyn [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
   fyn run [--json] < message.txt
-  fyn exec <prompt|-> --cd|-C <dir> [--json] [--approval untrusted|on-request|never]
-    [--sandbox read-only|workspace-write] [--output-last-message|-o <file>] [--account <id>] [--model <id>]
+  fyn exec <prompt|-> --cd|-C <dir> [--json] [--approval|--ask-for-approval|-a untrusted|on-request|never]
+    [--sandbox|-s read-only|workspace-write|danger-full-access] [--full-auto]
+    [--dangerously-bypass-approvals-and-sandbox|--yolo] [--output-last-message|-o <file>] [--account <id>] [--model <id>]
 
 Options: --json, --help, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
@@ -690,11 +693,14 @@ async function main() {
       args: process.argv.slice(2),
       allowPositionals: true,
       strict: true,
-      options: Object.fromEntries([
-        ...stringOptions.map(name => [name, {type: 'string' as const}]),
-        ...listOptions.map(name => [name, {type: 'string' as const, multiple: true}]),
-        ...booleanOptions.map(name => [name, {type: 'boolean' as const}]),
-      ]),
+      options: {
+        ...Object.fromEntries([
+          ...stringOptions.map(name => [name, {type: 'string' as const}]),
+          ...listOptions.map(name => [name, {type: 'string' as const, multiple: true}]),
+          ...booleanOptions.map(name => [name, {type: 'boolean' as const}]),
+        ]),
+        ...PERMISSION_CLI_OPTIONS,
+      },
     });
   } catch {
     throw new FutrynError('INVALID_INPUT');
@@ -705,7 +711,10 @@ async function main() {
     process.stdout.write(HELP);
     return;
   }
-  const app = startup();
+  const launchPermissions = resolvePermissionFlags(options);
+  if (launchPermissions.approval !== undefined) process.env.FUTRYN_APPROVAL_POLICY = launchPermissions.approval;
+  if (launchPermissions.sandbox !== undefined) process.env.FUTRYN_SANDBOX_MODE = launchPermissions.sandbox;
+  const app = startup(undefined, {permissions: launchPermissions});
   // One-time migration notices (ADR 0045) go to stderr so --json output stays clean.
   for (const notice of app.takeStartupNotices()) process.stderr.write(`Notice: ${notice}\n`);
   await app.migrationCleanup;
@@ -736,6 +745,9 @@ async function main() {
           account: status.activeAccount?.alias ?? null,
           provider: status.activeProvider?.id ?? null,
           model: status.selection?.modelId ?? null,
+          permissionPreset: status.permissionPreset,
+          sandboxMode: status.sandboxMode,
+          approvalPolicy: status.approvalPolicy,
           validatedAt: status.activeAccount?.validatedAt ?? null,
           connectivity: 'Historical validation only; run doctor for a live check.',
           capabilities: status.capabilities,

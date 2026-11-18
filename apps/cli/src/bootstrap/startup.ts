@@ -2,6 +2,7 @@ import {runUserShellCommand} from './user-shell';
 import {realpathSync} from 'node:fs';
 import {dirname, join, resolve} from 'node:path';
 import {
+  FULL_ACCESS_WARNING,
   FutrynError,
   type Account,
   type CredentialVault,
@@ -67,13 +68,27 @@ import {
 import {ChatGPTOAuth, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
 import {grantLabel, toolPermissionRequest} from './approvals';
 import {HostConfigStore, TokenCommandRunner} from './host-config';
-import {CommandRuntimes, createCommandRuntime, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
+import {
+  CommandRuntimes,
+  createCommandRuntime,
+  permissionModeFromEnv,
+  sandboxSettingsFromEnv,
+  type LaunchPermissionFlags,
+} from './commands';
 import {defaultStateDirectory} from './paths';
 import {fitUtf8Prefix} from './utf8';
 import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 
 export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
-export {approvalPolicyFromEnv, permissionModeFromEnv, sandboxSettingsFromEnv} from './commands';
+export {
+  PERMISSION_CLI_OPTIONS,
+  approvalPolicyFromEnv,
+  parsePermissionFlags,
+  permissionModeFromEnv,
+  resolvePermissionFlags,
+  sandboxSettingsFromEnv,
+  type LaunchPermissionFlags,
+} from './commands';
 
 const OPENROUTER_API = 'https://openrouter.ai/api/v1';
 
@@ -140,8 +155,11 @@ export function startup(
     /** Test seams for the ChatGPT sign-in (issuer, browser opener, clock). */
     chatgpt?: ChatGPTOAuthOptions;
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
+    /** Session-only CLI launch permission overrides (ADR 0055). */
+    permissions?: LaunchPermissionFlags;
   } = {},
 ) {
+  let fullAccessWarned = false;
   const commandRuntimes = new CommandRuntimes();
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
@@ -425,9 +443,18 @@ export function startup(
   ): FutrynClient => {
     const contextBudget = projectContextOptions(contextOptions);
     const stateDirectory = realpathSync.native(resolve(directory));
-    // User-level config defaults (ADR 0055); the environment overrides them, never a workspace file.
+    // User-level config defaults (ADR 0055); the environment and CLI launch flags override them, never a workspace file.
     const permissionDefaults = hostLoaded.permissions;
-    const sandboxSettings = sandboxSettingsFromEnv(process.env, permissionDefaults);
+    const effectiveEnv = {
+      ...process.env,
+      ...(services.permissions?.sandbox ? {FUTRYN_SANDBOX_MODE: services.permissions.sandbox} : {}),
+      ...(services.permissions?.approval ? {FUTRYN_APPROVAL_POLICY: services.permissions.approval} : {}),
+    };
+    const sandboxSettings = sandboxSettingsFromEnv(effectiveEnv, permissionDefaults);
+    if (sandboxSettings.mode === 'danger-full-access' && !fullAccessWarned) {
+      fullAccessWarned = true;
+      process.stderr.write(`${FULL_ACCESS_WARNING}\n`);
+    }
     const grants = new SessionGrants();
     const activeConversations = new Map<string, Conversation>();
     let client: FutrynClient | undefined;
@@ -686,7 +713,7 @@ export function startup(
         }
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
-      permissionMode: permissionModeFromEnv(process.env, permissionDefaults),
+      permissionMode: permissionModeFromEnv(effectiveEnv, permissionDefaults),
       sandboxMode: sandboxSettings.mode,
       sandboxNetwork: sandboxSettings.network,
       getPlan: id => {

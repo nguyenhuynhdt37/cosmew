@@ -1,6 +1,9 @@
+import {parseArgs} from 'node:util';
 import {
+  approvalPolicySchema,
   FutrynError,
   MODE_FOR_APPROVAL_POLICY,
+  sandboxModeSchema,
   type ApprovalPolicy,
   type PermissionMode,
   type SandboxModeSetting,
@@ -13,6 +16,84 @@ export interface PermissionDefaults {
   sandboxMode?: SandboxModeSetting;
   approvalPolicy?: ApprovalPolicy;
   networkAccess?: boolean;
+}
+
+/**
+ * Codex launch flags shared by interactive TUI/CLI entry points and `fyn exec`
+ * (`codex-rs/utils/cli/src/shared_options.rs`, `codex-rs/tui/src/cli.rs`, pinned 090be4df).
+ */
+export const PERMISSION_CLI_OPTIONS = {
+  approval: {type: 'string' as const, short: 'a'},
+  'ask-for-approval': {type: 'string' as const},
+  sandbox: {type: 'string' as const, short: 's'},
+  'full-auto': {type: 'boolean' as const},
+  'dangerously-bypass-approvals-and-sandbox': {type: 'boolean' as const},
+  yolo: {type: 'boolean' as const},
+} as const;
+
+export interface LaunchPermissionFlags {
+  sandbox?: SandboxModeSetting;
+  approval?: ApprovalPolicy;
+}
+
+/** Validate and resolve parsed CLI permission flags with Codex conflict rules (ADR 0055). */
+export function resolvePermissionFlags(values: {
+  approval?: unknown;
+  'ask-for-approval'?: unknown;
+  sandbox?: unknown;
+  'full-auto'?: unknown;
+  'dangerously-bypass-approvals-and-sandbox'?: unknown;
+  yolo?: unknown;
+}): LaunchPermissionFlags {
+  if (values.approval !== undefined && values['ask-for-approval'] !== undefined) {
+    throw new FutrynError('INVALID_INPUT');
+  }
+  const explicitApproval = values.approval ?? values['ask-for-approval'];
+  const yolo = values['dangerously-bypass-approvals-and-sandbox'] === true || values.yolo === true;
+  const fullAuto = values['full-auto'] === true;
+  if ((yolo && fullAuto) || ((yolo || fullAuto) && (values.sandbox !== undefined || explicitApproval !== undefined))) {
+    throw new FutrynError('INVALID_INPUT');
+  }
+  let sandbox: SandboxModeSetting | undefined;
+  if (values.sandbox !== undefined) {
+    const parsed = sandboxModeSchema.safeParse(values.sandbox);
+    if (!parsed.success) throw new FutrynError('INVALID_INPUT');
+    sandbox = parsed.data;
+  } else if (yolo) {
+    sandbox = 'danger-full-access';
+  } else if (fullAuto) {
+    sandbox = 'workspace-write';
+  }
+  let approval: ApprovalPolicy | undefined;
+  if (explicitApproval !== undefined) {
+    const parsed = approvalPolicySchema.safeParse(explicitApproval);
+    if (!parsed.success) throw new FutrynError('INVALID_INPUT');
+    approval = parsed.data;
+  } else if (yolo) {
+    approval = 'never';
+  } else if (fullAuto) {
+    approval = 'on-request';
+  }
+  return {
+    ...(sandbox !== undefined ? {sandbox} : {}),
+    ...(approval !== undefined ? {approval} : {}),
+  };
+}
+
+/** Parse raw CLI arguments containing only shared launch permission flags. */
+export function parsePermissionFlags(args: string[]): LaunchPermissionFlags {
+  let values: Record<string, unknown>;
+  try {
+    ({values} = parseArgs({
+      args,
+      allowPositionals: false,
+      strict: true,
+      options: PERMISSION_CLI_OPTIONS,
+    }));
+  } catch {
+    throw new FutrynError('INVALID_INPUT');
+  }
+  return resolvePermissionFlags(values);
 }
 
 /**
