@@ -1,4 +1,4 @@
-import {suggestPermissionRule, type PermissionRuleTool} from '@futryn/contracts';
+import {isSafeAlwaysRule, suggestPermissionRule, type PermissionRuleTool} from '@futryn/contracts';
 import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
 import type {ApprovalRequest} from '@futryn/tools';
 import type {WorkspaceRoot} from '@futryn/workspace';
@@ -27,7 +27,7 @@ const APPROVAL_REASONS: Record<string, string> = {
   'shell-parser-unavailable':
     'Futryn could not load its shell parser, so it cannot check this command. It still runs inside the sandbox.',
   'unsandboxed-escalation':
-    'WITHOUT THE SANDBOX: this command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason. "For session" remembers exactly this command in this directory; "always" saves an Unsandboxed rule for this project.',
+    'WITHOUT THE SANDBOX: this command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason. "For session" remembers exactly this command in this directory.',
   'outside-writable-roots':
     'The session sandbox is read-only here: approving lets Futryn write this file anyway (workspace policy still applies).',
   'request-permissions':
@@ -49,15 +49,33 @@ function offer(rule: string | null): Offer {
   return rule ? {decisions: ['once', 'session', 'always'], alwaysRule: rule} : {decisions: ['once', 'session']};
 }
 
+function withAlwaysRule(reason: string, rule: string | null): string {
+  if (!rule) return reason.slice(0, 400);
+  const note = ` "Always" saves ${rule} for this project.`;
+  return reason.slice(0, Math.max(0, 400 - note.length)) + note;
+}
+
 /** A command prompt's `always` rule: only for exactly one parsed sub-command; an unparsed script never matches an allow rule. */
 function commandRule(tool: PermissionRuleTool, request: ApprovalRequest): string | null {
   if (!request.commands || request.commands.length !== 1) return null;
-  return suggestPermissionRule({
+  const rule = suggestPermissionRule({
     tool,
     target: request.commands[0]!,
-    // A dangerous command is never generalized to a prefix (`rm -rf build` is not `Bash(rm:*)`).
-    exact: Boolean(request.dangerous) || request.reason === 'dangerous-command',
+    // Unsandboxed escalations (`require_escalated`) and dangerous commands are never generalized to a prefix.
+    exact:
+      tool === 'Unsandboxed' ||
+      Boolean(request.unsandboxed) ||
+      Boolean(request.dangerous) ||
+      request.reason === 'dangerous-command',
   });
+  return rule &&
+    isSafeAlwaysRule(rule, {
+      tool,
+      target: request.target,
+      segments: request.commands,
+    })
+    ? rule
+    : null;
 }
 
 /** The dialog request for a Futryn tool call (read of a secret, patch, command or terminal input). */
@@ -92,19 +110,22 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
     };
   }
   if (request.capability === 'fs.write') {
+    const rule = suggestPermissionRule({tool: 'Edit', target: request.target});
     return {
       capability: 'fs.write',
       ...(kind ? {kind} : {}),
       action: 'Apply verified workspace patch',
       target: request.target,
-      reason:
+      reason: withAlwaysRule(
         request.reason === 'outside-writable-roots'
           ? reasonText(request.reason)
           : 'Review the exact file changes before applying.',
+        rule,
+      ),
       riskLevel: 'high',
       scopeKey: request.scopeKey,
       diffPreview: request.diffPreview,
-      ...offer(suggestPermissionRule({tool: 'Edit', target: request.target})),
+      ...offer(rule),
     };
   }
   if (request.capability === 'process.execute') {
@@ -116,6 +137,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
         ? ' The model gave no reason.'
         : '';
     const tool: PermissionRuleTool = request.network ? 'Network' : request.unsandboxed ? 'Unsandboxed' : 'Bash';
+    const rule = commandRule(tool, request);
     return {
       capability: request.network ? 'network.connect' : request.capability,
       ...(request.network
@@ -133,25 +155,25 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
         ? `Run WITHOUT SANDBOX in ${(request.workdir ?? '.').slice(0, 60)}`
         : `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
-      reason: (reasonText(request.reason) + justification).slice(0, 400),
+      reason: withAlwaysRule(reasonText(request.reason) + justification, rule),
       riskLevel: 'high',
       scopeKey: request.scopeKey,
-      ...offer(commandRule(tool, request)),
+      ...offer(rule),
     };
   }
+  const rule =
+    request.capability === 'fs.read'
+      ? suggestPermissionRule({tool: 'Read', target: request.target})
+      : request.capability === 'network.connect'
+        ? suggestPermissionRule({tool: 'WebFetch', target: request.target})
+        : null;
   return {
     capability: request.capability,
     action: `${request.tool} ${request.target}`,
     target: request.target,
-    reason: reasonText(request.reason),
+    reason: withAlwaysRule(reasonText(request.reason), rule),
     riskLevel: 'medium',
-    ...offer(
-      request.capability === 'fs.read'
-        ? suggestPermissionRule({tool: 'Read', target: request.target})
-        : request.capability === 'network.connect'
-          ? suggestPermissionRule({tool: 'WebFetch', target: request.target})
-          : null,
-    ),
+    ...offer(rule),
   };
 }
 

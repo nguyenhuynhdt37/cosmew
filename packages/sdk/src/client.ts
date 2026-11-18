@@ -48,6 +48,7 @@ import {
   permissionModeDecision,
   permissionRuleDecision,
   permissionRuleSchema,
+  isSafeAlwaysRule,
   type CompactionOutcome,
   type PermissionRuleEffect,
   type PermissionRuleSet,
@@ -1848,8 +1849,7 @@ export class FutrynClient {
     alwaysRule?: string;
   }): PermissionPromptRequest {
     const now = new Date();
-    const rule =
-      input.alwaysRule && permissionRuleSchema.safeParse(input.alwaysRule).success ? input.alwaysRule : undefined;
+    const rule = input.alwaysRule && isSafeAlwaysRule(input.alwaysRule) ? input.alwaysRule : undefined;
     const offered = (input.decisions ?? ['once', 'session']).filter(decision => decision !== 'always' || rule);
     const expires = new Date(now.getTime() + (input.ttlMs ?? 300_000));
     const scopeHash = createHash('sha256')
@@ -1902,7 +1902,7 @@ export class FutrynClient {
     if (decision !== 'deny' && !req.decisions.includes(decision)) throw new FutrynError('POLICY');
     if (decision === 'always') {
       // Persist the project Allow rule first: if it cannot be saved nothing is approved.
-      if (!req.alwaysRule) throw new FutrynError('POLICY');
+      if (!req.alwaysRule || !isSafeAlwaysRule(req.alwaysRule)) throw new FutrynError('POLICY');
       this.addPermissionRule('allow', req.alwaysRule);
     }
     req.status =

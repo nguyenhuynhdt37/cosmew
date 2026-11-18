@@ -226,9 +226,9 @@ export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
 export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool', 'Network', 'Unsandboxed'] as const;
 export type PermissionRuleTool = (typeof PERMISSION_RULE_TOOLS)[number];
 /**
- * `Network(curl:*)` lets a matching command use the network without asking, `Unsandboxed(npm i:*)`
- * lets it run once outside the sandbox when the model requests `require_escalated` (ADR 0055, the
- * project form of Codex's execpolicy amendment for those prompts). They match like `Bash` rules.
+ * `Network(curl:*)` lets a matching command use the network without asking, `Unsandboxed(npm run build)`
+ * lets that exact command run outside the sandbox when the model requests `require_escalated` (ADR 0055,
+ * the project form of Codex's execpolicy amendment for those prompts). They match like `Bash` rules.
  * A plain `Bash` allow rule never grants either: it covers sandboxed commands only.
  */
 export const COMMAND_RULE_TOOLS: readonly PermissionRuleTool[] = ['Bash', 'Network', 'Unsandboxed'];
@@ -372,40 +372,177 @@ export function normalizeRulePath(path: string): string | null {
   return out.join('/') || null;
 }
 
-const RULE_INTERPRETERS = new Set([
-  'bash',
-  'sh',
-  'zsh',
-  'fish',
-  'dash',
-  'python',
-  'python3',
-  'node',
-  'bun',
-  'deno',
-  'perl',
-  'ruby',
-  'php',
-  'env',
-  'sudo',
-  'doas',
-  'xargs',
-  'eval',
-  'exec',
-  'nohup',
-  'timeout',
-  'npx',
-  'bunx',
-  'osascript',
-  'ssh',
-]);
+/**
+ * Command prefixes that must never be offered or saved as prefix wildcard rules (Codex
+ * `BANNED_PREFIX_SUGGESTIONS`, `codex-rs/core/src/exec_policy.rs:64-153`, pinned 090be4df).
+ */
+export const BANNED_PREFIX_SUGGESTIONS: readonly (readonly string[])[] = [
+  ['/bin/bash'],
+  ['/bin/bash', '-c'],
+  ['/bin/bash', '-lc'],
+  ['/bin/sh'],
+  ['/bin/sh', '-c'],
+  ['/bin/sh', '-lc'],
+  ['/bin/zsh'],
+  ['/bin/zsh', '-c'],
+  ['/bin/zsh', '-lc'],
+  ['Rscript'],
+  ['bash'],
+  ['bash', '-c'],
+  ['bash', '-lc'],
+  ['bun'],
+  ['bun', '-e'],
+  ['bun', 'run'],
+  ['cmd'],
+  ['cmd', '/c'],
+  ['cmd', '/k'],
+  ['cmd.exe'],
+  ['cmd.exe', '/c'],
+  ['cmd.exe', '/k'],
+  ['dash'],
+  ['dash', '-c'],
+  ['deno'],
+  ['deno', 'eval'],
+  ['env'],
+  ['fish'],
+  ['fish', '-c'],
+  ['git'],
+  ['julia'],
+  ['julia', '-e'],
+  ['ksh'],
+  ['ksh', '-c'],
+  ['lua'],
+  ['lua', '-e'],
+  ['node'],
+  ['node', '-e'],
+  ['nodejs'],
+  ['nodejs', '-e'],
+  ['npm', 'run'],
+  ['osascript'],
+  ['perl'],
+  ['perl', '-e'],
+  ['php'],
+  ['php', '-r'],
+  ['pnpm', 'run'],
+  ['powershell'],
+  ['powershell', '-Command'],
+  ['powershell', '-EncodedCommand'],
+  ['powershell', '-File'],
+  ['powershell', '-c'],
+  ['powershell.exe'],
+  ['powershell.exe', '-Command'],
+  ['powershell.exe', '-EncodedCommand'],
+  ['powershell.exe', '-File'],
+  ['powershell.exe', '-c'],
+  ['pwsh'],
+  ['pwsh', '-Command'],
+  ['pwsh', '-EncodedCommand'],
+  ['pwsh', '-File'],
+  ['pwsh', '-c'],
+  ['pwsh', '-e'],
+  ['pwsh', '-ec'],
+  ['pwsh', '-f'],
+  ['py'],
+  ['py', '-3'],
+  ['pypy'],
+  ['pypy3'],
+  ['python'],
+  ['python', '-'],
+  ['python', '-c'],
+  ['python3'],
+  ['python3', '-'],
+  ['python3', '-c'],
+  ['pythonw'],
+  ['pyw'],
+  ['rm'],
+  ['ruby'],
+  ['ruby', '-e'],
+  ['sh'],
+  ['sh', '-c'],
+  ['sh', '-lc'],
+  ['sudo'],
+  ['yarn', 'run'],
+  ['zsh'],
+  ['zsh', '-c'],
+  ['zsh', '-lc'],
+];
+
+const RULE_INTERPRETERS = new Set(['doas', 'xargs', 'eval', 'exec', 'nohup', 'timeout', 'npx', 'bunx', 'ssh']);
+
+function commandVariants(words: readonly string[]): string[][] {
+  if (!words.length) return [];
+  const lower = words.map(w => w.toLowerCase());
+  const base = lower[0]!.replace(/^.*[\\/]/, '');
+  return base && base !== lower[0] ? [lower, [base, ...lower.slice(1)]] : [lower];
+}
+
+/**
+ * True when `words` is a banned prefix suggestion or a broader prefix of one (e.g. `npm` for
+ * `npm run`, or `git push` under `git`): never generalize to `Tool(<prefix>:*)`.
+ */
+export function isBannedPrefixSuggestion(words: readonly string[]): boolean {
+  if (!words.length || words.some(w => !w || w.includes('*'))) return true;
+  for (const variant of commandVariants(words)) {
+    if (RULE_INTERPRETERS.has(variant[0]!)) return true;
+    for (const banned of BANNED_PREFIX_SUGGESTIONS) {
+      const len = Math.min(variant.length, banned.length);
+      if (len > 0 && Array.from({length: len}, (_, i) => variant[i] === banned[i]!.toLowerCase()).every(Boolean))
+        return true;
+    }
+  }
+  return false;
+}
+
+/** True when an exact command has no concrete operand beyond a banned prefix or interpreter name. */
+function isMeaninglessExactCommand(words: readonly string[]): boolean {
+  if (!words.length || words.some(w => !w || w.includes('*'))) return true;
+  for (const variant of commandVariants(words)) {
+    if (variant.length === 1 && RULE_INTERPRETERS.has(variant[0]!)) return true;
+    for (const banned of BANNED_PREFIX_SUGGESTIONS) {
+      if (variant.length <= banned.length && variant.every((word, index) => word === banned[index]!.toLowerCase()))
+        return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Codex `BANNED_PREFIX_SUGGESTIONS` + `prefix_rule_would_approve_all_commands` guard: an `always`
+ * amendment must be a valid scoped rule, never a catch-all (`Bash`, `Bash(*)`), never a banned
+ * prefix wildcard, and never a prefix wildcard for `Unsandboxed`. When `request` is supplied, the
+ * rule must also approve every segment of that request.
+ */
+export function isSafeAlwaysRule(
+  rule: string,
+  request?: {tool: PermissionRuleTool; target: string; segments?: string[] | null},
+): boolean {
+  if (!permissionRuleSchema.safeParse(rule).success) return false;
+  const parsed = /^(\w+)(?:\((.*)\))?$/.exec(rule);
+  if (!parsed || !parsed[2]) return false;
+  const tool = parsed[1] as PermissionRuleTool;
+  const pattern = parsed[2].trim();
+  if (!pattern || /^\*+$|^:\*$/.test(pattern)) return false;
+  if (COMMAND_RULE_TOOLS.includes(tool)) {
+    if (tool === 'Unsandboxed' && (pattern.endsWith(':*') || pattern.includes('*'))) return false;
+    if (pattern.endsWith(':*')) {
+      const prefix = pattern.slice(0, -2).trim();
+      if (!prefix || prefix.includes('*')) return false;
+      if (isBannedPrefixSuggestion(prefix.split(/\s+/).filter(Boolean))) return false;
+    } else {
+      if (pattern.includes('*')) return false;
+      if (isMeaninglessExactCommand(pattern.split(/\s+/).filter(Boolean))) return false;
+    }
+    if (permissionRuleMatches(rule, {tool, target: '__futryn_unrelated_command__'})) return false;
+    if (request && permissionRuleDecision({allow: [rule], ask: [], deny: []}, request) !== 'allow') return false;
+  }
+  return true;
+}
 
 /**
  * The project Allow rule an `always` answer saves (ADR 0028/0055), Claude style: a command prefix
- * (`Bash(npm test:*)`) - or the exact command for an interpreter, wrapper or `exact` request such as
- * a dangerous command - the exact file for edits and secret reads, the domain for web access.
- * Null when no rule can safely stand for the request (chained, substituted or redirected commands
- * never auto-allow, so none is offered).
+ * (`Bash(npm test:*)`) - or the exact command for `Unsandboxed`, a banned prefix, an interpreter/wrapper
+ * or an `exact` request such as a dangerous command - the exact file for edits and secret reads, the
+ * domain for web access. Null when no meaningful rule can safely stand for the request.
  */
 export function suggestPermissionRule(request: {
   tool: PermissionRuleTool;
@@ -420,18 +557,27 @@ export function suggestPermissionRule(request: {
       .slice(0, 200);
   if (COMMAND_RULE_TOOLS.includes(request.tool)) {
     const command = clean(request.target);
-    if (!command || /[;&|<>`\n]|\$\(/.test(command)) return null;
+    if (!command || /[;&|<>`\n*]|\$\(/.test(command)) return null;
     const words = command.split(/\s+/).filter(Boolean);
-    if (request.exact || RULE_INTERPRETERS.has(words[0]!.replace(/^.*\//, ''))) return `${request.tool}(${command})`;
-    const prefix =
+    if (!words.length) return null;
+    const prefixWords =
       words.length > 1 && !words[1]!.startsWith('-') && /^[\w.:@/-]+$/.test(words[1]!)
-        ? `${words[0]} ${words[1]}`
-        : words[0]!;
-    return `${request.tool}(${prefix}:*)`;
+        ? [words[0]!, words[1]!]
+        : [words[0]!];
+    const exact = request.exact || request.tool === 'Unsandboxed' || isBannedPrefixSuggestion(prefixWords);
+    const rule = exact ? `${request.tool}(${command})` : `${request.tool}(${prefixWords.join(' ')}:*)`;
+    return isSafeAlwaysRule(rule, {
+      tool: request.tool,
+      target: request.target.trim(),
+      segments: [request.target.trim()],
+    })
+      ? rule
+      : null;
   }
   if (request.tool === 'Edit' || request.tool === 'Read') {
     const path = clean(request.target);
-    return path && !path.includes(', ') ? `${request.tool}(${path})` : null;
+    const rule = path && !path.includes(', ') ? `${request.tool}(${path})` : null;
+    return rule && isSafeAlwaysRule(rule) ? rule : null;
   }
   if (request.tool === 'WebFetch') {
     let host = clean(request.target);
@@ -440,7 +586,8 @@ export function suggestPermissionRule(request: {
     } catch {
       /* plain host */
     }
-    return host ? `WebFetch(domain:${host})` : null;
+    const rule = host ? `WebFetch(domain:${host})` : null;
+    return rule && isSafeAlwaysRule(rule) ? rule : null;
   }
   return null;
 }

@@ -3,9 +3,12 @@ import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
+  BANNED_PREFIX_SUGGESTIONS,
   decideApproval,
+  isSafeAlwaysRule,
   permissionModeDecision,
   permissionRuleDecision,
+  suggestPermissionRule,
   type CommandRequest,
   type CommandRuntime,
   type PermissionMode,
@@ -794,6 +797,7 @@ describe('ADR 0055: ReviewDecision once/session/always, multi-turn network grant
     expect(onceCmd.outcome).toBe('prompt');
     expect(onceCmd.prompt?.decisions).toEqual(['once', 'session', 'always']);
     expect(onceCmd.prompt?.alwaysRule).toBe('Bash(npm test:*)');
+    expect(onceCmd.prompt?.reason).toContain('Bash(npm test:*)');
     expect((await c.attempt('exec_command', exec('npm test'), 'session')).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', exec('npm test'))).outcome).toBe('ran');
     // Session grant covers only `npm test`, not `npm test --watch`; `always` generalizes to the prefix.
@@ -815,25 +819,126 @@ describe('ADR 0055: ReviewDecision once/session/always, multi-turn network grant
     const alwaysNet = await c.attempt('exec_command', exec('curl -s https://b.example', true), 'always');
     expect(alwaysNet.outcome).toBe('prompt');
     expect(alwaysNet.prompt?.alwaysRule).toBe('Network(curl:*)');
+    expect(alwaysNet.prompt?.reason).toContain('Network(curl:*)');
     expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
     expect((await c.attempt('exec_command', exec('curl -s https://c.example', true))).outcome).toBe('ran');
     // Bash deny rule still overrides Network allow rule.
     c.client.addPermissionRule('deny', 'Bash(curl -s https://blocked.example)');
     expect((await c.attempt('exec_command', exec('curl -s https://blocked.example', true))).outcome).toBe('refused');
 
-    // 3. Escalation (`require_escalated`): once, session, always -> Unsandboxed(cargo install:*); dangerous stays exact.
+    // 3. Escalation (`require_escalated`): `always` ALWAYS saves the exact full command, never a prefix wildcard.
     expect((await c.attempt('exec_command', escalate('cargo install ripgrep'), 'once')).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', escalate('cargo install ripgrep'), 'session')).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', escalate('cargo install ripgrep'))).outcome).toBe('ran');
+    const alwaysNpmEsc = await c.attempt('exec_command', escalate('npm run build'), 'always');
+    expect(alwaysNpmEsc.outcome).toBe('prompt');
+    expect(alwaysNpmEsc.prompt?.alwaysRule).toBe('Unsandboxed(npm run build)');
+    expect(alwaysNpmEsc.prompt?.reason).toContain('Unsandboxed(npm run build)');
+    expect(c.client.permissionRules().allow).toContain('Unsandboxed(npm run build)');
+    expect(c.client.permissionRules().allow).not.toContain('Unsandboxed(npm:*)');
+    expect(c.client.permissionRules().allow).not.toContain('Unsandboxed(npm run:*)');
+    expect((await c.attempt('exec_command', escalate('npm run build'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox?.unsandboxed).toBe(true);
+    // Any other npm command still prompts when escalated.
+    expect((await c.attempt('exec_command', escalate('npm run test'))).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', escalate('npm exec evil'))).outcome).toBe('prompt');
     const alwaysEsc = await c.attempt('exec_command', escalate('cargo install fd-find'), 'always');
     expect(alwaysEsc.outcome).toBe('prompt');
-    expect(alwaysEsc.prompt?.alwaysRule).toBe('Unsandboxed(cargo install:*)');
-    expect(c.client.permissionRules().allow).toContain('Unsandboxed(cargo install:*)');
-    expect((await c.attempt('exec_command', escalate('cargo install bat'))).outcome).toBe('ran');
-    expect(c.launches.at(-1)?.sandbox?.unsandboxed).toBe(true);
+    expect(alwaysEsc.prompt?.alwaysRule).toBe('Unsandboxed(cargo install fd-find)');
+    expect(alwaysEsc.prompt?.reason).toContain('Unsandboxed(cargo install fd-find)');
+    expect(c.client.permissionRules().allow).toContain('Unsandboxed(cargo install fd-find)');
+    expect((await c.attempt('exec_command', escalate('cargo install fd-find'))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', escalate('cargo install bat'))).outcome).toBe('prompt');
     // Dangerous command with network or escalation never generalizes to `rm:*`.
     const dangerousEsc = await c.attempt('exec_command', escalate('rm -rf build'));
     expect(dangerousEsc.prompt?.alwaysRule).toBe('Unsandboxed(rm -rf build)');
+    expect(dangerousEsc.prompt?.reason).toContain('Unsandboxed(rm -rf build)');
+  });
+
+  test('Codex BANNED_PREFIX_SUGGESTIONS and prefix_rule_would_approve_all_commands: banned prefixes never become prefix rules', async () => {
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['npm', 'run']);
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['pnpm', 'run']);
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['bun', 'run']);
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['python']);
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['bash', '-c']);
+    expect(BANNED_PREFIX_SUGGESTIONS).toContainEqual(['git']);
+
+    // Banned prefixes fall back to the exact command, never a `:*` prefix rule.
+    for (const [target, expected] of [
+      ['python script.py', 'Bash(python script.py)'],
+      ['bash -c "echo hi"', 'Bash(bash -c "echo hi")'],
+      ['npm run x', 'Bash(npm run x)'],
+      ['pnpm run build', 'Bash(pnpm run build)'],
+      ['bun run dev', 'Bash(bun run dev)'],
+      ['git push', 'Bash(git push)'],
+      ['git push origin main', 'Bash(git push origin main)'],
+      ['node server.js', 'Bash(node server.js)'],
+      ['deno eval "1+1"', 'Bash(deno eval "1+1")'],
+      ['perl -e "print 1"', 'Bash(perl -e "print 1")'],
+      ['php -r "echo 1;"', null],
+      ['powershell -Command Write-Host hi', 'Bash(powershell -Command Write-Host hi)'],
+    ] as const) {
+      expect(suggestPermissionRule({tool: 'Bash', target})).toBe(expected);
+      expect(suggestPermissionRule({tool: 'Network', target})).toBe(
+        expected ? expected.replace(/^Bash/, 'Network') : null,
+      );
+    }
+
+    // When even the exact command is not meaningful (bare interpreter/prefix, unparseable parens, or wildcards), `always` is not offered.
+    for (const target of [
+      'bash',
+      'bash -c',
+      'sh -lc',
+      'python',
+      'python -c',
+      'npm',
+      'npm run',
+      'git',
+      "python -c 'print(1)'",
+      'echo *',
+    ]) {
+      expect(suggestPermissionRule({tool: 'Bash', target})).toBeNull();
+    }
+
+    // Unsafe or catch-all rules cannot be offered or saved as `alwaysRule`.
+    for (const badRule of [
+      'Bash',
+      'Bash(*)',
+      'Bash(:*)',
+      'Bash(python:*)',
+      'Bash(bash -c:*)',
+      'Bash(npm:*)',
+      'Bash(npm run:*)',
+      'Bash(git:*)',
+      'Bash(git push:*)',
+      'Unsandboxed(npm:*)',
+      'Unsandboxed(npm run:*)',
+      'Unsandboxed(cargo install:*)',
+    ]) {
+      expect(isSafeAlwaysRule(badRule)).toBe(false);
+    }
+
+    const c = await chain();
+    c.client.setPermissionMode('default');
+    for (const [cmd, exactRule, otherCmd] of [
+      ['python script.py', 'Bash(python script.py)', 'python other.py'],
+      ['npm run x', 'Bash(npm run x)', 'npm run y'],
+      ['git push', 'Bash(git push)', 'git push --force'],
+      ["bash -c 'python third.py'", 'Bash(python third.py)', "bash -c 'python other.py'"],
+    ] as const) {
+      const first = await c.attempt('exec_command', exec(cmd), 'always');
+      expect(first.outcome).toBe('prompt');
+      expect(first.prompt?.alwaysRule).toBe(exactRule);
+      expect(first.prompt?.reason).toContain(exactRule);
+      expect(c.client.permissionRules().allow).toContain(exactRule);
+      expect((await c.attempt('exec_command', exec(cmd))).outcome).toBe('ran');
+      expect((await c.attempt('exec_command', exec(otherCmd))).outcome).toBe('prompt');
+    }
+
+    // Meaningless or unparsed commands offer only `once` and `session`, never `always`.
+    const unparsed = await c.attempt('exec_command', exec("bash -c 'echo $(id)'"));
+    expect(unparsed.prompt?.decisions).toEqual(['once', 'session']);
+    expect(unparsed.prompt?.alwaysRule).toBeUndefined();
   });
 
   test('request_permissions session network grant survives across multiple turns and implicitly enables network on plain commands', async () => {
