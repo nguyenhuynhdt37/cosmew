@@ -10,12 +10,15 @@ import {
   type TurnReceipt,
   messageSchema,
   selectionSchema,
+  subagentSessionRecordSchema,
   type ConversationStore,
   type Message,
   type Selection,
   type SessionRecord,
   type SessionSummary,
   type StoredMessage,
+  type SubagentSessionRecord,
+  type SubagentStatus,
 } from '@futryn/contracts';
 
 import {ExecutionJournal} from './event-store';
@@ -199,6 +202,135 @@ export class SqliteConversations implements ConversationStore {
     try {
       const row = this.db.query('SELECT data FROM session_plan WHERE conversation=?').get(id) as {data: string} | null;
       return row ? planStateSchema.parse(JSON.parse(row.data)) : null;
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  saveSubagentSession(record: SubagentSessionRecord): void {
+    try {
+      const parsed = subagentSessionRecordSchema.parse(this.clean(record));
+      this.db
+        .query(
+          `INSERT INTO subagent_sessions(
+            id, parent_conversation, parent_turn_id, call_id, depth,
+            agent_type, description, prompt, fork_context, background,
+            status, created_at, finished_at, error_code
+          ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(id) DO UPDATE SET
+            status=excluded.status,
+            finished_at=excluded.finished_at,
+            error_code=excluded.error_code`,
+        )
+        .run(
+          parsed.id,
+          parsed.parentConversationId,
+          parsed.parentTurnId,
+          parsed.callId,
+          parsed.depth,
+          parsed.agentType,
+          parsed.description,
+          parsed.prompt,
+          parsed.forkContext ? 1 : 0,
+          parsed.background ? 1 : 0,
+          parsed.status,
+          parsed.createdAt,
+          parsed.finishedAt,
+          parsed.errorCode ?? null,
+        );
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  updateSubagentSession(
+    id: string,
+    patch: {status: SubagentStatus; finishedAt?: string | null; errorCode?: string},
+  ): void {
+    try {
+      const cleanCode = patch.errorCode ? this.redact(patch.errorCode).slice(0, 64) : null;
+      this.db
+        .query(
+          'UPDATE subagent_sessions SET status=?, finished_at=COALESCE(?, finished_at), error_code=COALESCE(?, error_code) WHERE id=?',
+        )
+        .run(patch.status, patch.finishedAt ?? null, cleanCode, id);
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  getSubagentSession(id: string): SubagentSessionRecord | undefined {
+    try {
+      const row = this.db
+        .query(
+          `SELECT s.*, c.selection FROM subagent_sessions s
+           JOIN conversations c ON c.id = s.id
+           WHERE s.id = ?`,
+        )
+        .get(id) as {
+        id: string;
+        parent_conversation: string;
+        parent_turn_id: string | null;
+        call_id: string;
+        depth: number;
+        agent_type: string;
+        description: string;
+        prompt: string;
+        fork_context: number;
+        background: number;
+        status: string;
+        created_at: string;
+        finished_at: string | null;
+        error_code: string | null;
+        selection: string;
+      } | null;
+      if (!row) return undefined;
+      let status = row.status as SubagentStatus;
+      let finishedAt = row.finished_at;
+      let errorCode = row.error_code ?? undefined;
+      if (status === 'running') {
+        const recovered = this.recover(id);
+        const lastTurn = recovered.turns.at(-1);
+        if (lastTurn && !['pending', 'running'].includes(lastTurn.state)) {
+          status =
+            lastTurn.state === 'completed'
+              ? 'completed'
+              : lastTurn.state === 'cancelled'
+                ? 'cancelled'
+                : lastTurn.state === 'interrupted'
+                  ? 'interrupted'
+                  : 'failed';
+          finishedAt ??= new Date().toISOString();
+          if (status === 'interrupted' && !errorCode) errorCode = 'PROCESS_EXIT';
+          this.updateSubagentSession(id, {status, finishedAt, ...(errorCode ? {errorCode} : {})});
+        }
+      }
+      return subagentSessionRecordSchema.parse({
+        id: row.id,
+        parentConversationId: row.parent_conversation,
+        parentTurnId: row.parent_turn_id,
+        callId: row.call_id,
+        depth: row.depth,
+        agentType: row.agent_type,
+        description: row.description,
+        prompt: row.prompt,
+        selection: selectionSchema.parse(JSON.parse(row.selection)),
+        forkContext: row.fork_context !== 0,
+        background: row.background !== 0,
+        status,
+        createdAt: row.created_at,
+        finishedAt,
+        ...(errorCode ? {errorCode} : {}),
+      });
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  listSubagentSessions(parentConversationId: string): SubagentSessionRecord[] {
+    try {
+      const rows = this.db
+        .query('SELECT id FROM subagent_sessions WHERE parent_conversation=? ORDER BY rowid ASC')
+        .all(parentConversationId) as {id: string}[];
+      return rows
+        .map(row => this.getSubagentSession(row.id))
+        .filter((item): item is SubagentSessionRecord => item !== undefined);
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -389,7 +521,9 @@ export class SqliteConversations implements ConversationStore {
   list(): SessionSummary[] {
     try {
       const rows = this.db
-        .query('SELECT id, selection, revision, rowid FROM conversations ORDER BY rowid DESC LIMIT 200')
+        .query(
+          'SELECT id, selection, revision, rowid FROM conversations WHERE id NOT IN (SELECT id FROM subagent_sessions) ORDER BY rowid DESC LIMIT 200',
+        )
         .all() as {
         id: string;
         selection: string;
@@ -469,23 +603,31 @@ export class SqliteConversations implements ConversationStore {
     try {
       return this.db
         .transaction(() => {
-          if (
-            this.db
-              .query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")
-              .get(id)
-          )
-            throw new FutrynError('POLICY');
-          this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM session_instructions WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM session_plan WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM turn_receipts WHERE conversation=?').run(id);
-          this.db.query('DELETE FROM messages WHERE conversation=?').run(id);
-          const res = this.db.query('DELETE FROM conversations WHERE id=?').run(id);
-          return res.changes > 0;
+          const removeConversation = (targetId: string): boolean => {
+            if (
+              this.db
+                .query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")
+                .get(targetId)
+            )
+              throw new FutrynError('POLICY');
+            const children = this.db
+              .query('SELECT id FROM subagent_sessions WHERE parent_conversation=?')
+              .all(targetId) as {id: string}[];
+            for (const child of children) removeConversation(child.id);
+            this.db.query('DELETE FROM subagent_sessions WHERE id=? OR parent_conversation=?').run(targetId, targetId);
+            this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM session_instructions WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM session_plan WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM turn_receipts WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM messages WHERE conversation=?').run(targetId);
+            const res = this.db.query('DELETE FROM conversations WHERE id=?').run(targetId);
+            return res.changes > 0;
+          };
+          return removeConversation(id);
         })
         .immediate();
     } catch (e) {

@@ -10,6 +10,7 @@ import {
   type Selection,
   type SteerOutcome,
   type ToolPort,
+  type Usage,
 } from '@futryn/contracts';
 import {normalizeHistory} from '../context/builder';
 import {compactConversation} from './compact';
@@ -66,6 +67,23 @@ export class Conversation {
   /** Identity of the turn that currently accepts steering, if any. */
   activeTurnId(): string | undefined {
     return this.active?.accepting ? this.active.id : undefined;
+  }
+
+  /**
+   * Snapshot of conversation history including completed rounds of the active turn, used when a
+   * subagent is spawned with `fork_context: true` (Codex FullHistory, Wave 2 S5).
+   */
+  forkableHistory(): Message[] {
+    return (this.active?.inTurnMessages?.() ?? this.state.messages).map(m => ({...m}));
+  }
+
+  /** Fold a subagent's usage into the active turn's receipt (or the latest stored turn when idle). */
+  addSubagentUsage(usage: Usage): void {
+    if (this.active?.addUsage) {
+      this.active.addUsage(usage);
+      return;
+    }
+    this.store.addUsage?.(this.id, usage);
   }
 
   /**

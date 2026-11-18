@@ -77,6 +77,7 @@ test('model reads a workspace file through the tool loop; result returns to the 
     'request_user_input',
     'web_search',
     'web_fetch',
+    'agent',
   ]);
   // Resume: the stored turn keeps the tool call and result, and the transcript folds them into one card.
   const resumed = c.app.createFutrynClient(c.ws);

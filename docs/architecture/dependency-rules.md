@@ -16,7 +16,7 @@
 | mcp | security | Map permissions, register tool descriptors qua port |
 | extensions | security | Grants và mediated service ports |
 | compat-opencode / compat-deepseek | extensions | Chuyển hooks/services; không import core internals |
-| agents | Không | Scheduler gọi runtime ports; không import core |
+| agents | Không (chỉ contracts) | Profile/scheduler/SubagentManager; chạy con qua port `runChildTurn` do apps/cli cấp, không import core/tools/security (ADR 0058) |
 | sdk | Không | Client protocol, không nhúng core |
 | testkit | Không | Fakes hợp đồng, không production dependency |
 | apps/cli, apps/server | Implementations cần composition | Chỉ composition root được nối graph |

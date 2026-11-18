@@ -1,4 +1,20 @@
-import type {Message, ToolCall, ToolResult, Usage} from '@futryn/contracts';
+import type {Message, SubagentTranscriptStep, ToolCall, ToolResult, Usage} from '@futryn/contracts';
+
+export interface SubagentActivityState {
+  callId: string;
+  agentId: string;
+  agentType: string;
+  description: string;
+  modelId?: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  currentTool?: string;
+  toolCount: number;
+  usage: Usage | null;
+  durationMs?: number;
+  summary?: string;
+  errorCode?: string;
+  steps: SubagentTranscriptStep[];
+}
 
 export interface TranscriptItem {
   id: string;
@@ -11,6 +27,8 @@ export interface TranscriptItem {
   /** Results matched to `toolCalls` by call id; a call without a result is still running. */
   toolResults?: ToolResult[];
   toolOutput?: Record<string, string>;
+  /** Live and completed subagent progress by tool call id (Wave 2 S5a). */
+  subagents?: Record<string, SubagentActivityState>;
   streaming?: boolean;
   /** Live wait indicator, not provider reasoning or a claim that a tool has started. */
   awaitingModel?: boolean;

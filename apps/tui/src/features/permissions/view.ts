@@ -49,6 +49,9 @@ export function renderPermissionDialogOverlay(options: {
   };
   if (request) {
     wrap(`${state.selectedIndex + 1}/${pending.length} waiting · ${request.capability}`);
+    if (request.subagent) {
+      wrap(`Subagent: ${request.subagent.agentType} (${request.subagent.description})`);
+    }
     const command = request.capability === 'process.execute';
     wrap(command ? `Command: ${request.target}` : `Target: ${JSON.stringify(request.target)}`);
     wrap(`${command ? 'Where' : 'Action'}: ${request.action}`);

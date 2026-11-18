@@ -101,6 +101,18 @@ export interface ConversationStore {
   /** The session's current plan (`update_plan`, ADR 0042); durable, replaced as a whole. */
   savePlan?(id: string, plan: import('./tools').PlanState): void;
   loadPlan?(id: string): import('./tools').PlanState | null;
+  /** Durable subagent metadata linked to a parent conversation (Wave 2 S5). */
+  saveSubagentSession?(record: import('./subagents').SubagentSessionRecord): void;
+  updateSubagentSession?(
+    id: string,
+    patch: {
+      status: import('./subagents').SubagentStatus;
+      finishedAt?: string | null;
+      errorCode?: string;
+    },
+  ): void;
+  getSubagentSession?(id: string): import('./subagents').SubagentSessionRecord | undefined;
+  listSubagentSessions?(parentConversationId: string): import('./subagents').SubagentSessionRecord[];
   append(
     id: string,
     message: Message,

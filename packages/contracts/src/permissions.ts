@@ -30,6 +30,14 @@ export const permissionPromptRequestSchema = z.strictObject({
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
   diffPreview: z.string().optional(),
+  /** Subagent that triggered this permission prompt, when requested by a child conversation (Wave 2 S5). */
+  subagent: z
+    .strictObject({
+      agentId: z.string().min(1).max(100),
+      agentType: z.string().min(1).max(64),
+      description: z.string().min(1).max(200),
+    })
+    .optional(),
   /** The approvals this prompt may be answered with, in display order (Codex `available_decisions`). */
   decisions: z.array(permissionDecisionKindSchema).min(1).max(3).default(['once', 'session']),
   /** The project Allow rule `always` saves; present exactly when `decisions` includes `always`. */

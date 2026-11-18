@@ -30,6 +30,14 @@ import {
   type Provider,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
+import {
+  SubagentManager,
+  SubagentScheduler,
+  effectiveSubagentSandbox,
+  filterSubagentTools,
+  isToolAllowedForProfile,
+  type ChildRunContext,
+} from '@futryn/agents';
 import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
 import {WebSearchClient, type SearchKeys} from '@futryn/mcp';
 import {LspManager} from '@futryn/code-intel';
@@ -344,7 +352,7 @@ export function startup(
         if (cachedModel(account, modelId)?.capabilities.tools === 'unsupported') return [];
         return tools.descriptors();
       },
-      invoke: (call, signal, onOutput) => tools.invoke(call, signal, onOutput),
+      invoke: (call, signal, onOutput, onEvent) => tools.invoke(call, signal, onOutput, onEvent),
     };
   };
 
@@ -385,6 +393,9 @@ export function startup(
         skills: wiring.skills,
         memories: wiring.memories,
         budget: wiring.budget ?? (() => undefined),
+        // Parallel `agent` calls must reach the scheduler, which rejects the one beyond max_threads like
+        // Codex; the generic shared-slot cap must therefore admit max_threads + 1 (ADR 0033/0058).
+        parallelSlots: () => hostLoaded.agents.maxThreads + 1,
         analysisOnly: wiring.analysisOnly ?? (() => false),
         contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
         outputLimit: () => cachedModel(account, selection.modelId)?.outputLimit ?? null,
@@ -482,6 +493,7 @@ export function startup(
     }
     const grants = new SessionGrants();
     const activeConversations = new Map<string, Conversation>();
+    let currentTurnConversation: Conversation | undefined;
     let client: FutrynClient | undefined;
     let projectReport: ProjectContextReport | null = null;
     let contextLoader: ProjectContextLoader | undefined;
@@ -578,6 +590,234 @@ export function startup(
       languageServerManagers.add(codeIntel);
       return codeIntel;
     };
+
+    const currentAgentsConfig = () => {
+      const fresh = hostConfig.load();
+      return fresh.usable ? fresh.agents : hostLoaded.agents;
+    };
+    const subagentScheduler = new SubagentScheduler(() => currentAgentsConfig().maxThreads);
+
+    const resolveRootConversation = (): Conversation | undefined => {
+      if (currentTurnConversation) return currentTurnConversation;
+      const activeId = client?.activeSession()?.id;
+      if (activeId && activeConversations.has(activeId)) return activeConversations.get(activeId);
+      return (
+        [...activeConversations.values()].find(c => c.activeTurnId() !== undefined) ??
+        [...activeConversations.values()].at(-1)
+      );
+    };
+
+    const lookupSubagentModel = (
+      modelRef: string,
+      defaultAccountId: string,
+    ): {selection: Selection; model: ModelInfo} | undefined => {
+      const ref = modelRef.trim();
+      if (!ref) return undefined;
+      const signedInAccounts = settings.read().accounts.filter(a => a.status !== 'logged-out');
+      const colonIdx = ref.indexOf(':');
+      if (colonIdx > 0) {
+        const prefix = ref.slice(0, colonIdx).trim();
+        const targetModelId = ref.slice(colonIdx + 1).trim();
+        const matchedAccount = signedInAccounts.find(
+          a => a.id === prefix || a.alias === prefix || a.providerId === prefix,
+        );
+        if (matchedAccount) {
+          const model = catalog(matchedAccount)
+            .cached()
+            .find(m => m.id === targetModelId);
+          if (model) return {selection: {accountId: matchedAccount.id, modelId: model.id}, model};
+        }
+      }
+      try {
+        const defaultAccount = accounts.get(defaultAccountId);
+        if (defaultAccount.status !== 'logged-out') {
+          const onDefault = catalog(defaultAccount)
+            .cached()
+            .find(m => m.id === ref);
+          if (onDefault) return {selection: {accountId: defaultAccount.id, modelId: onDefault.id}, model: onDefault};
+        }
+      } catch {
+        /* fallback to other signed-in accounts */
+      }
+      for (const acc of signedInAccounts) {
+        if (acc.id === defaultAccountId) continue;
+        const found = catalog(acc)
+          .cached()
+          .find(m => m.id === ref);
+        if (found) return {selection: {accountId: acc.id, modelId: found.id}, model: found};
+      }
+      return undefined;
+    };
+
+    const availableSubagentModels = (accountId: string): string[] => {
+      try {
+        return catalog(accounts.get(accountId))
+          .cached()
+          .map(m => m.id);
+      } catch {
+        return [];
+      }
+    };
+
+    const createSubagentManager = (options: {
+      depth: number;
+      getParentConversation: () => Conversation | undefined;
+      getParentSessionId: () => string;
+      getParentSelection: () => Selection;
+      getParentReasoningEffort: () => string | undefined;
+      getParentAnalysisOnly: () => boolean;
+    }): SubagentManager =>
+      new SubagentManager({
+        depth: options.depth,
+        scheduler: subagentScheduler,
+        getConfig: currentAgentsConfig,
+        getParentState: () => {
+          const conv = options.getParentConversation();
+          return {
+            sessionId: conv?.id ?? options.getParentSessionId(),
+            turnId: conv?.activeTurnId() ?? client?.currentTurnId(),
+            selection: options.getParentSelection(),
+            reasoningEffort: options.getParentReasoningEffort(),
+            analysisOnly: options.getParentAnalysisOnly(),
+            messages: conv ? conv.forkableHistory() : (client?.activeSession()?.messages ?? []),
+          };
+        },
+        lookupModel: lookupSubagentModel,
+        availableModelIds: availableSubagentModels,
+        store: conversations,
+        addParentUsage: usage => {
+          options.getParentConversation()?.addSubagentUsage(usage);
+        },
+        redact: text => terminalText(redactor.text(text)),
+        runChildTurn: async function* (runContext: ChildRunContext, childSignal: AbortSignal) {
+          // Subagents inherit ONLY read grants from the parent session (Wave 2 S5a).
+          const childGrants = grants.createChild();
+          let childConv: Conversation | undefined;
+          const parentIsAnalysisOnly = () => ['plan', 'review'].includes(client?.mode() ?? 'chat');
+          const nestedSubagents = createSubagentManager({
+            depth: runContext.depth,
+            getParentConversation: () => childConv,
+            getParentSessionId: () => runContext.agentId,
+            getParentSelection: () => runContext.selection,
+            getParentReasoningEffort: () => runContext.reasoningEffort,
+            getParentAnalysisOnly: () => runContext.profile.readOnly || parentIsAnalysisOnly(),
+          });
+          const childDispatcher = new ToolDispatcher({
+            workspace: workspaceTree(),
+            skills: skills(),
+            // Subagents never load or mutate user/project memories (Wave 2 S5a).
+            memories: undefined,
+            grants: childGrants,
+            analysisOnly: () => runContext.profile.id === 'plan' || parentIsAnalysisOnly(),
+            stateDirectory,
+            readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
+            commands: commands(),
+            sandbox: () =>
+              effectiveSubagentSandbox(client ? client.sandboxConfig() : sandboxSettings, runContext.profile),
+            turnId: () => childConv?.activeTurnId() ?? runContext.parentTurnId ?? client?.currentTurnId(),
+            codeIntel: languageServers(),
+            web: {
+              search: (query, count, signal) => webSearch.search(query, count, signal),
+              searchEndpoint: webSearch.endpoint,
+            },
+            agentState: {
+              updatePlan: plan => {
+                conversations.savePlan(runContext.agentId, plan);
+              },
+              canAskUser: () => false,
+            },
+            subagents: nestedSubagents,
+            redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
+            audit: record => toolAudit.append(record),
+            approve: (request, signal) =>
+              client
+                ? client.requestPermission(toolPermissionRequest(request, runContext.attribution), signal)
+                : Promise.resolve('deny'),
+          });
+
+          const childToolPort: ToolPort = {
+            descriptors: () => {
+              if (!toolsEnabled()) return [];
+              return filterSubagentTools(childDispatcher.descriptors(), runContext.profile, {
+                depth: runContext.depth,
+                maxDepth: runContext.maxDepth,
+                parentAnalysisOnly: parentIsAnalysisOnly(),
+              });
+            },
+            invoke: async (call, signal, onOutput, onEvent): Promise<ToolResult> => {
+              if (!toolsEnabled()) {
+                return {
+                  callId: call.id,
+                  name: call.name,
+                  status: 'denied',
+                  code: 'TOOLS_DISABLED',
+                  content: 'Workspace tools are not enabled for this session.',
+                };
+              }
+              if (call.name === 'agent' && runContext.depth >= runContext.maxDepth) {
+                return {
+                  callId: call.id,
+                  name: call.name,
+                  status: 'error',
+                  code: 'AGENT_DEPTH_LIMIT',
+                  content: 'Agent depth limit reached. Solve the task yourself.',
+                };
+              }
+              if (
+                !isToolAllowedForProfile(call.name, runContext.profile, {
+                  depth: runContext.depth,
+                  maxDepth: runContext.maxDepth,
+                  parentAnalysisOnly: parentIsAnalysisOnly(),
+                })
+              ) {
+                return {
+                  callId: call.id,
+                  name: call.name,
+                  status: 'denied',
+                  code: 'DENIED',
+                  content: `Tool "${call.name}" is not permitted for subagent type "${runContext.profile.id}".`,
+                };
+              }
+              const result = await childDispatcher.invoke(call, signal, onOutput, onEvent);
+              return call.name === 'read' ? withNestedInstructions(result, signal) : result;
+            },
+          };
+
+          childConv = createConversationForSelection(
+            runContext.selection,
+            {id: runContext.agentId, messages: runContext.initialMessages},
+            {
+              tools: childToolPort,
+              skills: skillPort,
+              memories: undefined,
+              workspaceRoot: resolve(workspaceRoot),
+              projectContext,
+              budget: () => client?.turnBudget(),
+              analysisOnly: () => runContext.profile.id === 'plan' || parentIsAnalysisOnly(),
+              modeInstructions: () => runContext.profile.developerInstructions,
+            },
+          );
+          activeConversations.set(childConv.id, childConv);
+          try {
+            yield* childConv.send(runContext.prompt, childSignal, undefined, undefined, runContext.reasoningEffort);
+          } finally {
+            activeConversations.delete(childConv.id);
+          }
+        },
+      });
+
+    const rootSubagents = createSubagentManager({
+      depth: 0,
+      getParentConversation: resolveRootConversation,
+      getParentSessionId: () => client?.activeSession()?.id ?? resolveRootConversation()?.id ?? '',
+      getParentSelection: () =>
+        client?.activeSession()?.selection ??
+        (resolveRootConversation() ? conversations.get(resolveRootConversation()!.id)?.selection : undefined) ??
+        router.resolve(workspaceRoot),
+      getParentReasoningEffort: () => client?.status().reasoningEffort ?? undefined,
+      getParentAnalysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
+    });
+
     const tools = () =>
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
@@ -623,6 +863,7 @@ export function startup(
               : Promise.resolve({kind: 'unavailable' as const, reason: 'no client'}),
           canAskUser: () => client?.userInputReady() === true,
         },
+        subagents: rootSubagents,
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),
         approve: (request, signal) =>
@@ -692,7 +933,7 @@ export function startup(
 
     const toolPort: ToolPort = {
       descriptors: () => (toolsEnabled() ? tools().descriptors() : []),
-      invoke: async (call, signal, onOutput): Promise<ToolResult> => {
+      invoke: async (call, signal, onOutput, onEvent): Promise<ToolResult> => {
         if (toolsEnabled()) {
           const analysis = ['plan', 'review'].includes(client?.mode() ?? 'chat');
           const descriptor = tools()
@@ -707,7 +948,7 @@ export function startup(
               content:
                 'Plan and Review modes permit only read, search, code-intelligence, plan, question and web-read tools. Nothing was executed.',
             };
-          const result = await tools().invoke(call, signal, onOutput);
+          const result = await tools().invoke(call, signal, onOutput, onEvent);
           return call.name === 'read' ? withNestedInstructions(result, signal) : result;
         }
         return {
@@ -867,6 +1108,8 @@ export function startup(
         if (!plans.has(id)) plans.set(id, conversations.loadPlan(id));
         return plans.get(id) ?? null;
       },
+      subagents: sessionId => (sessionId ? rootSubagents.listSubagents(sessionId) : []),
+      inspectSubagent: agentId => rootSubagents.inspectSubagent(agentId),
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
@@ -1053,7 +1296,13 @@ export function startup(
         queuedInputId,
       ) {
         const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
-        yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, queuedInputId);
+        const previousTurnConversation = currentTurnConversation;
+        currentTurnConversation = conv;
+        try {
+          yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, queuedInputId);
+        } finally {
+          currentTurnConversation = previousTurnConversation;
+        }
       },
       compactSession: (sessionId, instructions, signal) =>
         (activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv).compact(instructions, signal),

@@ -4,6 +4,7 @@ import {
   toolResultSchema,
   type CommandOutputChunk,
   type PermissionDecision,
+  type SubagentEvent,
   type ToolCall,
   type ToolResult,
 } from '@futryn/contracts';
@@ -46,6 +47,7 @@ export class ToolOrchestrator {
     call: ToolCall,
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
+    onEvent?: (event: SubagentEvent) => void,
   ): Promise<ToolResult> {
     signal?.throwIfAborted();
     const audit: Audit = record =>
@@ -133,7 +135,9 @@ export class ToolOrchestrator {
                     ? await this.authorizeStateWrite(call.name, prepared.target, audit, signal)
                     : prepared.kind === 'state' || prepared.kind === 'question'
                       ? this.authorizeState(audit, prepared.kind)
-                      : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
+                      : prepared.kind === 'agent'
+                        ? this.authorizeAgent(prepared, audit)
+                        : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
@@ -189,6 +193,8 @@ export class ToolOrchestrator {
               if (delta) onOutput({stream: chunk.stream, text: delta});
             }
           : undefined,
+        onEvent,
+        call.id,
       );
       if (prepared.kind === 'patch' && before) return finish(await this.withDiagnostics(output, before, signal));
       return finish(output);
@@ -461,6 +467,11 @@ export class ToolOrchestrator {
 
   private authorizeState(audit: Audit, kind: 'state' | 'question'): Authorization {
     audit({target: null, phase: 'decided', decision: 'allow', reason: kind === 'state' ? 'agent-state' : 'user-input'});
+    return {gate: null, viaSession: false};
+  }
+
+  private authorizeAgent(prepared: Extract<PreparedTool, {kind: 'agent'}>, audit: Audit): Authorization {
+    audit({target: prepared.target, phase: 'decided', decision: 'allow', reason: 'subagent'});
     return {gate: null, viaSession: false};
   }
 

@@ -191,7 +191,12 @@ export async function runExec(
       if (interactive && !signal?.aborted && effectiveApproval !== 'never') {
         input ??= new ChatInput(signal);
         try {
-          const answer = await input.ask(app.redactor.text(`${request.action} → ${request.target}. Allow once? [y/N]`));
+          const prefix = request.subagent
+            ? `[Subagent ${request.subagent.agentType} (${request.subagent.description})] `
+            : '';
+          const answer = await input.ask(
+            app.redactor.text(`${prefix}${request.action} → ${request.target}. Allow once? [y/N]`),
+          );
           if (/^y(?:es)?$/i.test(answer) && !signal?.aborted) decision = 'once';
         } catch {
           // EOF/cancellation refuses the operation.

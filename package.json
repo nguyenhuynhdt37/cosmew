@@ -6,6 +6,7 @@
   "workspaces": [
     "apps/cli",
     "apps/tui",
+    "packages/agents",
     "packages/code-intel",
     "packages/contracts",
     "packages/core",
@@ -35,6 +36,7 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js}\""
   },
   "devDependencies": {
+    "@futryn/agents": "workspace:*",
     "@futryn/code-intel": "workspace:*",
     "@futryn/contracts": "workspace:*",
     "@futryn/core": "workspace:*",

@@ -1,4 +1,7 @@
 import {
+  BUILTIN_SUBAGENT_TYPES,
+  DEFAULT_AGENT_MAX_DEPTH,
+  DEFAULT_AGENT_MAX_THREADS,
   approvalPolicySchema,
   sandboxModeSchema,
   envNameSchema,
@@ -8,6 +11,8 @@ import {
   protocolSchema,
   providerSchema,
   type ApprovalPolicy,
+  type HostAgentRoleConfig,
+  type HostAgentsConfig,
   type Provider,
   type SandboxModeSetting,
 } from '@futryn/contracts';
@@ -333,6 +338,154 @@ export function loadHostPermissions(parsed: unknown): HostPermissionConfig {
         });
     }
   }
+  return result;
+}
+
+export interface HostAgentsLoadedConfig extends HostAgentsConfig {
+  diagnostics: HostConfigDiagnostic[];
+}
+
+const AGENT_TOP_FIELDS = new Set([
+  'enabled',
+  'max_threads',
+  'max_concurrent_threads_per_session',
+  'max_depth',
+  'model',
+  'default_model',
+  'default_subagent_model',
+  'reasoning_effort',
+  'default_reasoning_effort',
+  'default_subagent_reasoning_effort',
+]);
+
+const AGENT_ROLE_FIELDS = new Set([
+  'model',
+  'reasoning_effort',
+  'model_reasoning_effort',
+  'description',
+  'developer_instructions',
+]);
+
+const VALID_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const VALID_ROLE_NAMES = new Set<string>([...BUILTIN_SUBAGENT_TYPES, 'explorer', 'default']);
+
+/**
+ * Subagent configuration in `~/.futryn/config.toml` (`[agents]` and `[agents.<role>]`, Wave 2 S5).
+ * Pure parser: invalid values emit diagnostics and fall back to Codex defaults (`max_threads = 6`, `max_depth = 1`).
+ */
+export function loadHostAgents(parsed: unknown): HostAgentsLoadedConfig {
+  const result: HostAgentsLoadedConfig = {
+    enabled: true,
+    maxThreads: DEFAULT_AGENT_MAX_THREADS,
+    maxDepth: DEFAULT_AGENT_MAX_DEPTH,
+    roles: {},
+    diagnostics: [],
+  };
+  if (!isRecord(parsed) || parsed.agents === undefined) return result;
+  const agents = parsed.agents;
+  if (!isRecord(agents)) {
+    result.diagnostics.push({message: 'agents must be a table; using defaults.'});
+    return result;
+  }
+
+  if (agents.enabled !== undefined) {
+    if (typeof agents.enabled === 'boolean') result.enabled = agents.enabled;
+    else result.diagnostics.push({message: 'agents.enabled must be true or false; using true.'});
+  }
+
+  const rawMaxThreads = agents.max_threads ?? agents.max_concurrent_threads_per_session;
+  if (rawMaxThreads !== undefined) {
+    if (
+      typeof rawMaxThreads === 'number' &&
+      Number.isSafeInteger(rawMaxThreads) &&
+      rawMaxThreads >= 1 &&
+      rawMaxThreads <= 64
+    ) {
+      result.maxThreads = rawMaxThreads;
+    } else {
+      result.diagnostics.push({
+        message: `agents.max_threads must be an integer between 1 and 64; using ${DEFAULT_AGENT_MAX_THREADS}.`,
+      });
+    }
+  }
+
+  if (agents.max_depth !== undefined) {
+    if (
+      typeof agents.max_depth === 'number' &&
+      Number.isSafeInteger(agents.max_depth) &&
+      agents.max_depth >= 1 &&
+      agents.max_depth <= 8
+    ) {
+      result.maxDepth = agents.max_depth;
+    } else {
+      result.diagnostics.push({
+        message: `agents.max_depth must be an integer between 1 and 8; using ${DEFAULT_AGENT_MAX_DEPTH}.`,
+      });
+    }
+  }
+
+  const rawDefaultModel = agents.default_model ?? agents.default_subagent_model ?? agents.model;
+  if (rawDefaultModel !== undefined) {
+    if (typeof rawDefaultModel === 'string' && modelIdSchema.safeParse(rawDefaultModel.trim()).success) {
+      result.defaultModel = rawDefaultModel.trim();
+    } else {
+      result.diagnostics.push({message: 'agents.default_model must be a valid model id.'});
+    }
+  }
+
+  const rawDefaultEffort =
+    agents.default_reasoning_effort ?? agents.default_subagent_reasoning_effort ?? agents.reasoning_effort;
+  if (rawDefaultEffort !== undefined) {
+    if (typeof rawDefaultEffort === 'string' && VALID_REASONING_EFFORTS.has(rawDefaultEffort.trim().toLowerCase())) {
+      result.defaultReasoningEffort = rawDefaultEffort.trim().toLowerCase();
+    } else {
+      result.diagnostics.push({
+        message: 'agents.reasoning_effort must be one of none, minimal, low, medium, high, xhigh.',
+      });
+    }
+  }
+
+  for (const [key, value] of Object.entries(agents)) {
+    if (AGENT_TOP_FIELDS.has(key)) continue;
+    if (!isRecord(value) || !VALID_ROLE_NAMES.has(key.toLowerCase())) {
+      result.diagnostics.push({message: `agents.${key} is not a recognized field or role table.`});
+      continue;
+    }
+    const role: HostAgentRoleConfig = {};
+    for (const [roleKey, roleVal] of Object.entries(value)) {
+      if (!AGENT_ROLE_FIELDS.has(roleKey)) {
+        result.diagnostics.push({message: `agents.${key}.${roleKey} is not a supported role field.`});
+        continue;
+      }
+      if (roleKey === 'model') {
+        if (typeof roleVal === 'string' && modelIdSchema.safeParse(roleVal.trim()).success) {
+          role.model = roleVal.trim();
+        } else {
+          result.diagnostics.push({message: `agents.${key}.model must be a valid model id.`});
+        }
+      } else if (roleKey === 'reasoning_effort' || roleKey === 'model_reasoning_effort') {
+        if (typeof roleVal === 'string' && VALID_REASONING_EFFORTS.has(roleVal.trim().toLowerCase())) {
+          role.reasoningEffort = roleVal.trim().toLowerCase();
+        } else {
+          result.diagnostics.push({message: `agents.${key}.${roleKey} must be a valid reasoning effort.`});
+        }
+      } else if (roleKey === 'description') {
+        if (typeof roleVal === 'string' && roleVal.trim().length > 0 && roleVal.trim().length <= 1000) {
+          role.description = roleVal.trim();
+        } else {
+          result.diagnostics.push({message: `agents.${key}.description must be a string <= 1000 chars.`});
+        }
+      } else if (roleKey === 'developer_instructions') {
+        if (typeof roleVal === 'string' && roleVal.trim().length > 0 && roleVal.trim().length <= 8000) {
+          role.developerInstructions = roleVal.trim();
+        } else {
+          result.diagnostics.push({message: `agents.${key}.developer_instructions must be a string <= 8000 chars.`});
+        }
+      }
+    }
+    result.roles[key.toLowerCase()] = role;
+  }
+
   return result;
 }
 

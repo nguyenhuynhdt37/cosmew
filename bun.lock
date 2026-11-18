@@ -5,6 +5,7 @@
     "": {
       "name": "futryn",
       "devDependencies": {
+        "@futryn/agents": "workspace:*",
         "@futryn/code-intel": "workspace:*",
         "@futryn/contracts": "workspace:*",
         "@futryn/core": "workspace:*",
@@ -30,6 +31,7 @@
         "hannes": "./src/index.ts",
       },
       "dependencies": {
+        "@futryn/agents": "workspace:*",
         "@futryn/code-intel": "workspace:*",
         "@futryn/contracts": "workspace:*",
         "@futryn/core": "workspace:*",
@@ -49,6 +51,13 @@
       "dependencies": {
         "@futryn/contracts": "workspace:*",
         "@futryn/sdk": "workspace:*",
+      },
+    },
+    "packages/agents": {
+      "name": "@futryn/agents",
+      "version": "0.1.0",
+      "dependencies": {
+        "@futryn/contracts": "workspace:*",
       },
     },
     "packages/code-intel": {
@@ -155,6 +164,8 @@
     "@ai-sdk/provider": ["@ai-sdk/provider@4.0.38", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-GElz70UUCuDFFyD6m6aQJFgRY0HEABQzB5otzgkrisYaF5mnss7o0upAmbBTSD6KWiM9h7lZm1ls2c7xzHR8CA=="],
 
     "@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@5.0.81", "", { "dependencies": { "@ai-sdk/provider": "4.0.38", "@standard-schema/spec": "^1.1.0", "@workflow/serde": "4.1.0", "eventsource-parser": "^3.0.8" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-pfvvdQ3d1WxdBuug/mnGEP6E48cPokwD8dMBnsFeeAUp0/rb/H2aj0f3mwOiY62gu/Cu5GO44e+SE5nDHyBWMA=="],
+
+    "@futryn/agents": ["@futryn/agents@workspace:packages/agents"],
 
     "@futryn/cli": ["@futryn/cli@workspace:apps/cli"],
 

@@ -7,6 +7,7 @@ import type {
   UserInputOutcome,
   UserQuestion,
   PermissionDecision,
+  SubagentExecutionPort,
 } from '@futryn/contracts';
 import {evaluateRead, type SessionGrants, type SandboxEscalation} from '@futryn/security';
 import type {LspManager} from '@futryn/code-intel';
@@ -107,6 +108,8 @@ export interface ToolDispatcherOptions {
     /** Whether a user can answer now; the tool is offered only then (never in non-interactive runs). */
     canAskUser?(): boolean;
   };
+  /** Nested subagent execution port (Wave 2 S5a), wired by the composition root. */
+  subagents?: SubagentExecutionPort;
 }
 
 /** Grant keys for `request_permissions` (ADR 0040), stored in the session grants. */

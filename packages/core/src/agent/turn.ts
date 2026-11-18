@@ -130,6 +130,10 @@ export class TurnRun {
   /** Provider-measured tokens of the previous round: its input plus its output form the next prefix. */
   private lastInput: number | null | undefined;
   private lastOutput: number | null | undefined;
+  /** Usage of the parent model's own requests (sampling + compaction), kept distinct from subagent usage. */
+  private modelUsage: Usage | null = null;
+  /** Cumulative usage reported by subagents spawned during this turn (Wave 2 S5). */
+  private childUsage: Usage | null = null;
   /** Compaction events produced while preparing a request, delivered before it is sent (ADR 0054). */
   private notices: ModelEvent[] = [];
   /** A model summary failed this turn: do not spend another request on it (the excerpt fallback applies). */
@@ -159,13 +163,19 @@ export class TurnRun {
       usage: null,
       context: null,
     };
-    this.turn = {id: this.receipt.requestId, accepting: false, pending: []};
+    this.turn = {
+      id: this.receipt.requestId,
+      accepting: false,
+      pending: [],
+      addUsage: usage => this.addChildUsage(usage),
+      inTurnMessages: () => [...this.host.state.messages, ...this.carried, this.user, ...this.steps],
+    };
     this.tools = new TurnTools({
       port: host.tools,
       budget: this.budget,
       signal: this.signal,
       progress: this.progress,
-      parallelSlots: SAFETY_LIMITS.parallelTools,
+      parallelSlots: Math.max(SAFETY_LIMITS.parallelTools, host.options.parallelSlots?.() ?? 0),
       record: event => this.record(event),
       workExhausted: () => this.workExhausted(),
       onSettled: (call, result, sequence) => this.observeTaskResult(call, result, sequence),
@@ -458,7 +468,8 @@ export class TurnRun {
     });
     // Billed whether or not it helps: count it in this turn's (and so the session's) usage.
     if (summary.usage) {
-      this.receipt.usage = combineUsage(this.receipt.usage, summary.usage);
+      this.modelUsage = combineUsage(this.modelUsage, summary.usage);
+      this.receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
       store.observeTurn?.(host.id, this.revision!, this.receipt);
     }
     const handoff = assembleHandoff(summary.text, input, store.loadPlan?.(host.id));
@@ -527,7 +538,7 @@ export class TurnRun {
       preempted: false,
     };
     const flights: InFlight[] = [];
-    const usageBefore = this.receipt.usage; // totals of earlier requests
+    const usageBefore = this.modelUsage; // totals of earlier parent requests
     let drained = false;
     const stepId = crypto.randomUUID();
     // Preemption requests another model call, so it is off once a budget or the context window has
@@ -568,6 +579,9 @@ export class TurnRun {
         // retry or a later turn sees their real outcome instead of repeating them.
         const {results, failure} = yield* this.tools.drain(flights);
         drained = true;
+        if (this.childUsage && this.receipt.usage) {
+          yield {type: 'usage', usage: this.receipt.usage};
+        }
         // Unfinished text of a response that did not complete is not history (Codex discards items
         // that never reached OutputItemDone); its completed calls and their results are.
         const committed = result.terminal && result.terminal.finishReason !== 'length';
@@ -678,8 +692,8 @@ export class TurnRun {
   ): ModelEvent | undefined {
     const {host, tools, receipt} = this;
     if (this.signal.aborted) throw new FutrynError('CANCELLED');
-    // toolOutputDelta is Futryn's own event: a provider stream cannot fabricate it.
-    if (event.type === 'toolOutputDelta') throw new FutrynError('PROTOCOL');
+    // toolOutputDelta and subagent.* are Futryn's own events: a provider stream cannot fabricate them.
+    if (event.type === 'toolOutputDelta' || event.type.startsWith('subagent.')) throw new FutrynError('PROTOCOL');
     if (result.terminal) throw new FutrynError('PROTOCOL');
     if (event.type === 'textDelta' || event.type === 'toolCallComplete') this.rejectionCandidate = false;
 
@@ -694,7 +708,8 @@ export class TurnRun {
       result.reasoningText += event.text;
     }
     if (event.type === 'usage' || event.type === 'completed') {
-      receipt.usage = combineUsage(usageBefore, event.usage);
+      this.modelUsage = combineUsage(usageBefore, event.usage);
+      receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
       this.lastInput = event.usage.inputTokens;
       this.lastOutput = event.usage.outputTokens;
     }
@@ -914,6 +929,14 @@ export class TurnRun {
 
   private record(event: ExecutionEventData): number {
     return this.host.store.recordExecution?.(this.host.id, this.receipt.requestId, event) ?? 0;
+  }
+
+  private addChildUsage(usage: Usage): void {
+    this.childUsage = combineUsage(this.childUsage, usage);
+    this.receipt.usage = combineUsage(this.modelUsage, this.childUsage);
+    if (this.revision !== undefined) {
+      this.host.store.observeTurn?.(this.host.id, this.revision, this.receipt);
+    }
   }
 
   private observeTaskResult(call: ToolCall, result: ToolResult, sequence: number): void {

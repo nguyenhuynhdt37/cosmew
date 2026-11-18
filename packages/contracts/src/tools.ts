@@ -22,6 +22,8 @@ export const toolCapabilitySchema = z.enum([
   'network.fetch',
   'network.search',
   'mcp.call',
+  /** Delegated subagent execution (Wave 2 S5). */
+  'agent.spawn',
 ]);
 export type ToolCapability = z.infer<typeof toolCapabilitySchema>;
 /**
@@ -35,6 +37,7 @@ export const ANALYSIS_CAPABILITIES: readonly ToolCapability[] = [
   'user.input',
   'network.search',
   'network.fetch',
+  'agent.spawn',
 ];
 export const analysisCapability = (capability: ToolCapability | undefined): boolean =>
   capability !== undefined && ANALYSIS_CAPABILITIES.includes(capability);
@@ -157,5 +160,10 @@ export type ToolResult = z.infer<typeof toolResultSchema>;
 /** What `core` sees: descriptors to offer and one call to run. */
 export interface ToolPort {
   descriptors(): ToolDescriptor[];
-  invoke(call: ToolCall, signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): Promise<ToolResult>;
+  invoke(
+    call: ToolCall,
+    signal?: AbortSignal,
+    onOutput?: (chunk: CommandOutputChunk) => void,
+    onEvent?: (event: import('./subagents').SubagentEvent) => void,
+  ): Promise<ToolResult>;
 }

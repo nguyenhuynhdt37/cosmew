@@ -369,6 +369,52 @@ export class ChatController {
           this.transcript = [...this.transcript, steeredItem, assistantItem];
           this.layout.invalidate(assistantItem.id);
           responseMark = markResponse(assistantItem);
+        } else if (event.type === 'subagent.started') {
+          assistantItem.awaitingModel = false;
+          assistantItem.subagents ??= {};
+          assistantItem.subagents[event.callId] = {
+            callId: event.callId,
+            agentId: event.agentId,
+            agentType: event.agentType,
+            description: event.description,
+            modelId: event.modelId,
+            status: 'running',
+            toolCount: 0,
+            usage: null,
+            steps: [],
+          };
+        } else if (event.type === 'subagent.progress') {
+          assistantItem.subagents ??= {};
+          const prev = assistantItem.subagents[event.callId];
+          assistantItem.subagents[event.callId] = {
+            callId: event.callId,
+            agentId: event.agentId,
+            agentType: event.agentType,
+            description: event.description,
+            modelId: prev?.modelId,
+            status: 'running',
+            currentTool: event.currentTool,
+            toolCount: event.toolCount,
+            usage: event.usage,
+            steps: event.steps ?? prev?.steps ?? [],
+          };
+        } else if (event.type === 'subagent.finished') {
+          assistantItem.subagents ??= {};
+          const prev = assistantItem.subagents[event.callId];
+          assistantItem.subagents[event.callId] = {
+            callId: event.callId,
+            agentId: event.agentId,
+            agentType: event.agentType,
+            description: event.description,
+            modelId: prev?.modelId,
+            status: event.status,
+            toolCount: event.toolCount,
+            usage: event.usage,
+            durationMs: event.durationMs,
+            summary: event.summary,
+            errorCode: event.errorCode,
+            steps: event.steps ?? prev?.steps ?? [],
+          };
         } else if (event.type === 'completed') {
           completed = true;
           assistantItem.usage = event.usage;

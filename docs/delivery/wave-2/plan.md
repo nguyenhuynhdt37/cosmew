@@ -106,6 +106,8 @@ Theo W10. Bổ sung: `/memory` trong TUI; `hannes exec` vẫn nạp `MEMORY.md`;
 
 ### S5 — W9 Subagent
 
+**Trạng thái (2026-11-18): S5a đã triển khai** — [ADR 0058](../../adr/0058-synchronous-subagents.md), contract 1.32: tool `agent` chế độ chờ, `explore/worker/general/plan`, song song 6 / độ sâu 1, quyền thu hẹp, journal + recovery, sự kiện + TUI + `exec --json`. Còn lại: S5b (`background`, `send_input/wait/close/resume`), S5c (agent tuỳ chỉnh, `/agents`). Fixture verified, không claim live provider. Không commit/push.
+
 Theo W9. Bổ sung: sự kiện `subagent.started/finished` (contract); subagent kế thừa approval policy nhưng **không** kế thừa grant phiên của cha trừ grant đọc; `explore` dùng model rẻ hơn nếu cấu hình `[agents.explore] model=...` trong `~/.futryn/config.toml`.
 
 ### S6 — W12 MCP đầy đủ + tự cài

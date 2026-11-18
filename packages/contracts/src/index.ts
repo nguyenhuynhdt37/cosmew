@@ -13,3 +13,4 @@ export * from './recovery';
 export * from './skills';
 
 export * from './memories';
+export * from './subagents';

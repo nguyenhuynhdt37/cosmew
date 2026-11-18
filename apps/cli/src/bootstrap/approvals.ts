@@ -1,4 +1,9 @@
-import {isSafeAlwaysRule, suggestPermissionRule, type PermissionRuleTool} from '@futryn/contracts';
+import {
+  isSafeAlwaysRule,
+  suggestPermissionRule,
+  type PermissionRuleTool,
+  type SubagentPromptAttribution,
+} from '@futryn/contracts';
 import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
 import type {ApprovalRequest} from '@futryn/tools';
 import type {WorkspaceRoot} from '@futryn/workspace';
@@ -79,11 +84,12 @@ function commandRule(tool: PermissionRuleTool, request: ApprovalRequest): string
 }
 
 /** The dialog request for a Futryn tool call (read of a secret, patch, command or terminal input). */
-export function toolPermissionRequest(request: ApprovalRequest): PermissionInput {
+export function toolPermissionRequest(request: ApprovalRequest, subagent?: SubagentPromptAttribution): PermissionInput {
+  const withSubagent = (input: PermissionInput): PermissionInput => (subagent ? {...input, subagent} : input);
   // One approval table for every tool (ADR 0040): the policy reason names the permission kind.
   const kind = APPROVAL_KIND_FOR_REASON[request.reason];
   if (request.capability === 'agent.state.write')
-    return {
+    return withSubagent({
       capability: request.capability,
       kind: 'edit',
       ruleTool: 'Tool',
@@ -93,9 +99,9 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       reason: 'Saves or deletes durable agent state for this project.',
       riskLevel: 'medium',
       ...offer(null),
-    };
+    });
   if (request.capability === 'network.search')
-    return {
+    return withSubagent({
       capability: 'network.search',
       kind: 'read',
       ruleTarget: 'web_search',
@@ -104,10 +110,10 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       reason: 'Sends the query to the configured search provider.',
       scopeKey: request.scopeKey,
       riskLevel: 'low',
-    };
+    });
   if (request.tool === 'request_permissions') {
     const justification = request.justification ? ` Model's reason: ${request.justification}` : '';
-    return {
+    return withSubagent({
       capability: request.capability === 'network.connect' ? 'network.connect' : 'fs.write',
       kind: 'escalation',
       // Display-only: no Allow rule can pre-approve a sandbox escalation.
@@ -119,11 +125,11 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       scopeKey: request.scopeKey,
       // Codex offers a turn grant and a session grant only; nothing persists.
       ...offer(null),
-    };
+    });
   }
   if (request.capability === 'fs.write') {
     const rule = suggestPermissionRule({tool: 'Edit', target: request.target});
-    return {
+    return withSubagent({
       capability: 'fs.write',
       ...(kind ? {kind} : {}),
       action: 'Apply verified workspace patch',
@@ -138,7 +144,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       scopeKey: request.scopeKey,
       diffPreview: request.diffPreview,
       ...offer(rule),
-    };
+    });
   }
   if (request.capability === 'process.execute') {
     // The action names directory and sandbox, so a "session" answer is bound to all three.
@@ -150,7 +156,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
         : '';
     const tool: PermissionRuleTool = request.network ? 'Network' : request.unsandboxed ? 'Unsandboxed' : 'Bash';
     const rule = commandRule(tool, request);
-    return {
+    return withSubagent({
       capability: request.network ? 'network.connect' : request.capability,
       ...(request.network
         ? {kind: 'network' as const}
@@ -171,7 +177,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       riskLevel: 'high',
       scopeKey: request.scopeKey,
       ...offer(rule),
-    };
+    });
   }
   const rule =
     request.capability === 'fs.read'
@@ -179,14 +185,14 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       : request.capability === 'network.connect'
         ? suggestPermissionRule({tool: 'WebFetch', target: request.target})
         : null;
-  return {
+  return withSubagent({
     capability: request.capability,
     action: `${request.tool} ${request.target}`,
     target: request.target,
     reason: withAlwaysRule(reasonText(request.reason), rule),
     riskLevel: 'medium',
     ...offer(rule),
-  };
+  });
 }
 
 /** How a session grant is listed in `/permissions`. */

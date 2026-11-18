@@ -10,9 +10,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {join} from 'node:path';
-import {DEFAULT_MEMORY_MAX_UNUSED_DAYS, FutrynError, type Provider} from '@futryn/contracts';
+import {
+  DEFAULT_AGENT_MAX_DEPTH,
+  DEFAULT_AGENT_MAX_THREADS,
+  DEFAULT_MEMORY_MAX_UNUSED_DAYS,
+  FutrynError,
+  type HostAgentsConfig,
+  type Provider,
+} from '@futryn/contracts';
 import {
   appendProvider,
+  loadHostAgents,
   loadHostConfig,
   loadHostPermissions,
   type HostPermissionConfig,
@@ -34,6 +42,8 @@ export interface LoadedHostConfig {
   providers: HostProviderEntry[];
   /** Permission defaults (`sandbox_mode`, `approval_policy`, `[sandbox_workspace_write]`; ADR 0055). */
   permissions: HostPermissionConfig;
+  /** Subagent configuration (`[agents]` and `[agents.<role>]`; Wave 2 S5). */
+  agents: HostAgentsConfig;
   diagnostics: HostConfigDiagnostic[];
   /** False when the file exists but could not be used as a whole (unsafe, unreadable, not TOML). */
   usable: boolean;
@@ -77,6 +87,12 @@ export class HostConfigStore {
       memoriesEnabled: true,
       memoryMaxUnusedDays: DEFAULT_MEMORY_MAX_UNUSED_DAYS,
       permissions: {diagnostics: []} as HostPermissionConfig,
+      agents: {
+        enabled: true,
+        maxThreads: DEFAULT_AGENT_MAX_THREADS,
+        maxDepth: DEFAULT_AGENT_MAX_DEPTH,
+        roles: {},
+      } as HostAgentsConfig,
       diagnostics: [] as HostConfigDiagnostic[],
     };
     const read = this.readText();
@@ -96,15 +112,19 @@ export class HostConfigStore {
     const memoryMaxUnusedDays = validDays ? Math.min(365, Math.max(0, configuredDays)) : DEFAULT_MEMORY_MAX_UNUSED_DAYS;
     const config = loadHostConfig(parsed, this.reserved);
     const permissions = loadHostPermissions(parsed);
+    const agents = loadHostAgents(parsed);
+    const {diagnostics: agentDiagnostics, ...agentsConfig} = agents;
     return {
       path: this.path,
       providers: config.providers,
       memoriesEnabled,
       memoryMaxUnusedDays,
       permissions,
+      agents: agentsConfig,
       diagnostics: [
         ...config.diagnostics,
         ...permissions.diagnostics,
+        ...agentDiagnostics,
         ...(configuredDays !== undefined && !validDays
           ? [{message: 'memories.max_unused_days must be an integer; using the default.'}]
           : []),

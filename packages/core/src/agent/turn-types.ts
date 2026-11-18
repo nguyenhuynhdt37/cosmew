@@ -9,6 +9,7 @@ import type {
   ToolPort,
   TurnBudget,
   SkillsPort,
+  Usage,
 } from '@futryn/contracts';
 import {GENERATION_LIMITS} from '@futryn/contracts';
 import {estimateContextTokens} from '../context/builder';
@@ -40,6 +41,8 @@ export interface ConversationOptions {
   memories?: {context(): string};
   /** Optional user work budget, read at the start of every turn. */
   budget?: () => TurnBudget | undefined;
+  /** Optional override for concurrent shared-slot tool executions. */
+  parallelSlots?: () => number | undefined;
   /** Model context window in tokens, when known. */
   contextLimit?: () => number | null | undefined;
   outputLimit?: () => number | null | undefined;
@@ -67,6 +70,10 @@ export interface ActiveTurn {
   pending: PendingInput[];
   /** Set while a model response streams; arriving steering calls it to preempt the response. */
   wake?: () => void;
+  /** Fold subagent token/cost usage into this running turn's receipt (Wave 2 S5). */
+  addUsage?: (usage: Usage) => void;
+  /** Snapshot of committed + in-turn messages up to the current round for `fork_context` (Wave 2 S5). */
+  inTurnMessages?: () => Message[];
 }
 
 /** Conversation state shared with the running turn, which updates it as the journal advances. */

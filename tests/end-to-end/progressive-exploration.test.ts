@@ -62,6 +62,7 @@ const OFFERED = [
   'update_plan',
   'web_search',
   'web_fetch',
+  'agent',
 ];
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -379,6 +380,7 @@ for (const protocol of ['chat', 'anthropic'] as const)
         'update_plan',
         'web_search',
         'web_fetch',
+        'agent',
       ]);
       expect(view.orphanResults).toBe(0);
       expect(view.unansweredCalls).toBe(0);

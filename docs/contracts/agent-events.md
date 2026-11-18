@@ -231,3 +231,13 @@ including after an awaited approval. List/read stay available as `agent.state`.
 Memory edits use permission kind `edit` and `Tool(memory …)` project rules:
 `untrusted` asks; normal Auto/on-request and never approve without a prompt unless
 a project rule restricts them. No new events or SQLite migration.
+
+### Subagents (contract 1.32, ADR 0058)
+
+Tool `agent` (`agent.spawn`, parallel) và ba sự kiện: `subagent.started {callId, agentId, agentType, description, modelId, reasoningEffort?, forkContext?, background?}`,
+`subagent.progress {…, currentTool?, toolCount, usage, steps?}` (gộp theo `callId`, có thể bị bỏ khi hàng đợi đầy) và
+`subagent.finished {…, status: completed|failed|cancelled, toolCount, usage, durationMs, summary?, errorCode?, steps?}`.
+Thứ tự: started → progress* → finished, trước tool result của cha. Chỉ Futryn phát; provider stream phát `subagent.*` là lỗi `PROTOCOL`.
+`steps` đã redact và bounded. `fyn exec --json` phát cùng envelope (`contractVersion` 1.32). SDK: `client.subagents(sessionId?)`,
+`client.inspectSubagent(agentId)`, `ReactiveAgentEventKind` thêm ba kind. Prompt quyền có `subagent {agentId, agentType, description}`.
+Persistence: bảng `subagent_sessions` (SQLite vẫn 8). Con ẩn khỏi `listSessions()`.

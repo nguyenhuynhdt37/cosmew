@@ -129,8 +129,11 @@ export class TurnTools {
 
     let result: ToolResult;
     try {
-      const output = await this.options.port!.invoke(call, toolSignal, chunk =>
-        this.options.progress.publish(call, chunk),
+      const output = await this.options.port!.invoke(
+        call,
+        toolSignal,
+        chunk => this.options.progress.publish(call, chunk),
+        event => this.options.progress.publishSubagent(event),
       );
       result = toolResultSchema.parse(output);
       if (result.callId !== call.id || result.name !== call.name) throw new FutrynError('PROTOCOL');

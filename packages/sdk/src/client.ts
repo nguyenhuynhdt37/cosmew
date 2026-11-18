@@ -62,6 +62,8 @@ import {
   type SessionSummary,
   type SettingsStore,
   type SteerOutcome,
+  type SubagentPromptAttribution,
+  type SubagentSummaryView,
   type ThemeManifest,
   type Usage,
   type WorkspaceDiffFile,
@@ -83,7 +85,11 @@ export type ReactiveAgentEventKind =
   /** Wave 1 notifications (contract 1.19); they never replace the current activity state. */
   | 'plan.updated'
   | 'question.asked'
-  | 'question.answered';
+  | 'question.answered'
+  /** Wave 2 S5a subagent notifications (contract 1.32); they never replace the current activity state. */
+  | 'subagent.started'
+  | 'subagent.progress'
+  | 'subagent.finished';
 
 export interface ReactiveAgentEvent {
   seq: number;
@@ -158,6 +164,10 @@ export interface FutrynBackendPorts {
   sandboxNetwork?: boolean;
   /** Durable plan of a session (ADR 0042). */
   getPlan?(sessionId: string): PlanState | null;
+  /** Subagents spawned in `sessionId` (Wave 2 S5a), including recovered ones from persistence. */
+  subagents?(sessionId?: string): SubagentSummaryView[];
+  /** Inspect a specific subagent by its conversation ID. */
+  inspectSubagent?(agentId: string): SubagentSummaryView | undefined;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -688,6 +698,18 @@ export class FutrynClient {
   plan(): PlanState | null {
     const id = this.currentSession?.id;
     return id ? (this.ports.getPlan?.(id) ?? null) : null;
+  }
+
+  /** Subagents spawned by `sessionId` (defaults to the active session), in creation order. */
+  subagents(sessionId = this.currentSession?.id): SubagentSummaryView[] {
+    if (!sessionId) return [];
+    return structuredClone(this.ports.subagents?.(sessionId) ?? []);
+  }
+
+  /** Inspect one subagent session by its conversation ID. */
+  inspectSubagent(agentId: string): SubagentSummaryView | undefined {
+    const found = this.ports.inspectSubagent?.(agentId);
+    return found ? structuredClone(found) : undefined;
   }
 
   // ---- request_user_input (ADR 0042) -------------------------------------------------------
@@ -1371,6 +1393,11 @@ export class FutrynClient {
             this.streamingText = '';
             this.notifyStateChange();
             break;
+          case 'subagent.started':
+          case 'subagent.progress':
+          case 'subagent.finished':
+            this.notify(event.type, `${event.agentType}: ${event.description}`);
+            break;
           case 'completed': {
             this.lastUsage = event.usage;
             this.streamingText = '';
@@ -1890,6 +1917,8 @@ export class FutrynClient {
     decisions?: PermissionPromptRequest['decisions'];
     /** The project Allow rule `always` saves; without it `always` is not offered. */
     alwaysRule?: string;
+    /** Subagent attribution when the request comes from a nested subagent (Wave 2 S5a). */
+    subagent?: SubagentPromptAttribution;
   }): PermissionPromptRequest {
     const now = new Date();
     const rule = input.alwaysRule && isSafeAlwaysRule(input.alwaysRule) ? input.alwaysRule : undefined;
@@ -1897,7 +1926,14 @@ export class FutrynClient {
     const expires = new Date(now.getTime() + (input.ttlMs ?? 300_000));
     const scopeHash = createHash('sha256')
       .update(
-        JSON.stringify([input.capability, input.action, input.target, ...(input.scopeKey ? [input.scopeKey] : [])]),
+        JSON.stringify([
+          input.capability,
+          input.action,
+          input.target,
+          ...(input.scopeKey ? [input.scopeKey] : []),
+          // Subagents inherit only `fs.read` session grants from the parent (Wave 2 S5a).
+          ...(input.subagent && input.capability !== 'fs.read' ? [`subagent:${input.subagent.agentId}`] : []),
+        ]),
       )
       .digest('hex');
     const req = permissionPromptRequestSchema.parse({
@@ -1913,6 +1949,15 @@ export class FutrynClient {
       diffPreview: input.diffPreview ? this.ports.sanitizeText(input.diffPreview) : undefined,
       decisions: offered.length ? offered : ['once'],
       ...(rule && offered.includes('always') ? {alwaysRule: this.ports.sanitizeText(rule)} : {}),
+      ...(input.subagent
+        ? {
+            subagent: {
+              agentId: input.subagent.agentId,
+              agentType: this.ports.sanitizeText(input.subagent.agentType),
+              description: this.ports.sanitizeText(input.subagent.description),
+            },
+          }
+        : {}),
       status: this.sessionGrants.has(scopeHash) && offered.includes('session') ? 'approved_session' : 'pending',
     });
     this.permissions.set(req.approvalId, req);
@@ -2002,6 +2047,8 @@ export class FutrynClient {
       ruleTarget?: string | null;
       /** Bash: parsed sub-commands for project rules, or null for an unparsed script (ADR 0040). */
       ruleSegments?: string[] | null;
+      /** Subagent attribution when the request comes from a nested subagent (Wave 2 S5a). */
+      subagent?: SubagentPromptAttribution;
     },
     signal?: AbortSignal,
   ): Promise<PermissionResolutionScope> {

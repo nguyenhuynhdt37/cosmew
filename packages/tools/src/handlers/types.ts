@@ -5,6 +5,7 @@ import type {
   CommandSandbox,
   ToolDescriptor,
   PermissionDecision,
+  SubagentEvent,
 } from '@futryn/contracts';
 import type {ResolvedPath} from '@futryn/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
@@ -12,7 +13,12 @@ import type {ToolOutput} from '../context';
 
 /** Only the execution shapes needed by the registered built-ins. No plugin or arbitrary runtime port. */
 export type PreparedTool = {
-  execute(signal?: AbortSignal, onOutput?: (chunk: CommandOutputChunk) => void): ToolOutput | Promise<ToolOutput>;
+  execute(
+    signal?: AbortSignal,
+    onOutput?: (chunk: CommandOutputChunk) => void,
+    onEvent?: (event: SubagentEvent) => void,
+    callId?: string,
+  ): ToolOutput | Promise<ToolOutput>;
 } & (
   | {kind: 'patch'; plan: PatchPlan; runtime: ApplyPatchRuntime}
   | {kind: 'read'; file: ResolvedPath; revalidate?: () => ResolvedPath; readDecision?: PermissionDecision}
@@ -22,6 +28,8 @@ export type PreparedTool = {
   | {kind: 'state-write'; target: string}
   /** A question to the user: no workspace effect; the answer is text (ADR 0042). */
   | {kind: 'question'}
+  /** Subagent delegation (Wave 2 S5a): child tools enforce the same dispatcher/policy invariants. */
+  | {kind: 'agent'; target: string; agentType: string}
   | {kind: 'web-search'; target: string}
   | {kind: 'web-fetch'; url: string; authorize?: (url: string, signal?: AbortSignal) => Promise<boolean>}
   /** Resolved asynchronously before policy (LSP rename asks the server first, ADR 0043). */

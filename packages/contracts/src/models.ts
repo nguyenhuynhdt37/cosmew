@@ -3,7 +3,7 @@ import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.31' as const;
+export const CONTRACT_VERSION = '1.32' as const;
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -258,7 +258,9 @@ export type ModelEvent =
   /** Accepted steering the turn could not deliver (budget, context or interruption); it opens the next turn. */
   | {type: 'inputDeferred'; steerIds: string[]; reason: string}
   /** Older history was replaced by a handoff summary (or, as a fallback, an excerpt checkpoint). ADR 0054. */
-  | ({type: 'context.compacted'} & ContextCompaction);
+  | ({type: 'context.compacted'} & ContextCompaction)
+  /** Subagent lifecycle and progress events (Wave 2 S5). */
+  | import('./subagents').SubagentEvent;
 /** A provider API adapter: Futryn sends the request and reads the response; it owns the loop and tools. */
 export interface ModelPort {
   stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;

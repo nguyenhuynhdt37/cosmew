@@ -77,6 +77,7 @@ export function evaluateRead(
  */
 export class SessionGrants {
   private readonly grants = new Set<string>();
+  private readonly children = new Set<SessionGrants>();
 
   private key(capability: string, target: string): string {
     return `${capability}\0${target}`;
@@ -92,6 +93,7 @@ export class SessionGrants {
 
   revoke(capability: string, target: string): void {
     this.grants.delete(this.key(capability, target));
+    for (const child of this.children) child.revoke(capability, target);
   }
 
   list(): {capability: string; target: string}[] {
@@ -103,6 +105,30 @@ export class SessionGrants {
 
   clear(): void {
     this.grants.clear();
+    for (const child of this.children) child.clear();
+  }
+
+  /**
+   * Create a child grant scope for a subagent (Wave 2 S5a): inherits ONLY `fs.read` grants from
+   * this parent, never command, write, network or sandbox-escalation grants. Revoking or clearing
+   * the parent also revokes/clears the child.
+   */
+  createChild(): SessionGrants {
+    const child = new ChildSessionGrants(this);
+    this.children.add(child);
+    return child;
+  }
+}
+
+export class ChildSessionGrants extends SessionGrants {
+  constructor(private readonly parent: SessionGrants) {
+    super();
+  }
+
+  override has(capability: string, target: string): boolean {
+    if (super.has(capability, target)) return true;
+    if (capability === 'fs.read') return this.parent.has('fs.read', target);
+    return false;
   }
 }
 

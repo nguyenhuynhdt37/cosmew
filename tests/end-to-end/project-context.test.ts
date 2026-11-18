@@ -137,6 +137,7 @@ test('project text cannot authorize a tool to read outside the workspace', async
           'update_plan',
           'web_search',
           'web_fetch',
+          'agent',
         ].includes(t.function.name),
       ),
     ).toBe(true);

@@ -1,7 +1,14 @@
 import {parseMemoryCitations} from '@futryn/sdk';
 import {graphemes, textWidth} from '../../input/text';
 import {TranscriptLayout, type TranscriptViewportOptions, type TranscriptViewportResult} from './layout';
-import {isFileChangeTool, type BorderStyle, type ThemeTokens, type ToolCall, type ToolResult} from '@futryn/contracts';
+import {
+  isFileChangeTool,
+  type BorderStyle,
+  type SubagentTranscriptStep,
+  type ThemeTokens,
+  type ToolCall,
+  type ToolResult,
+} from '@futryn/contracts';
 import type {RenderedBoxLine, StyledSpan} from '../../ui';
 import {
   commandSummary,
@@ -403,11 +410,17 @@ const TOOL_NAMES: Record<string, string> = {
   lsp: 'LSP',
   lsp_rename: 'Rename',
   request_permissions: 'Permissions',
+  agent: 'Agent',
 };
 
-/** Short argument text for wave-1 tools whose input is not a path or command (ADR 0042). */
+/** Short argument text for wave-1/wave-2 tools whose input is not a path or command (ADR 0042, 0058). */
 function stateToolArgs(call: ToolCall): string | undefined {
   const input = call.input as Record<string, unknown> | undefined;
+  if (call.name === 'agent') {
+    const desc = typeof input?.description === 'string' ? input.description.trim() : '';
+    const type = typeof input?.agent_type === 'string' ? input.agent_type.trim() : '';
+    return desc || type || 'subagent';
+  }
   if (call.name === 'update_plan') {
     const plan = Array.isArray(input?.plan) ? (input.plan as {status?: unknown}[]) : [];
     const done = plan.filter(item => item.status === 'completed').length;
@@ -463,6 +476,21 @@ function renderToolCall(options: {
         ? 'ok'
         : 'error';
   const lines = callHeader(name, args, state, width, tokens, bg, {itemId: item.id, key}, expanded);
+  if (call.name === 'agent') {
+    return renderAgentToolCall({
+      item,
+      call,
+      result,
+      width,
+      tokens,
+      bg,
+      awaiting: options.awaiting,
+      expanded,
+      live,
+      disclosure: {itemId: item.id, key},
+      headerLines: lines,
+    });
+  }
   if (isFileChangeTool(call.name)) {
     // The patch title (Patched / partially applied / failed / denied / pending / stopped) leads the `⎿`.
     const patch = renderPatchCell({call, result, width, tokens, bg, live, showDiff: true});
@@ -557,6 +585,148 @@ function renderToolCall(options: {
           ? `Found ${count} ${count === 1 ? 'match' : 'matches'}`
           : `${count} lines`;
   return [...lines, ...outputRows(expanded ? `${summary}\n${result.content}` : summary, width, expanded, tokens, bg)];
+}
+
+function parseStoredSubagentOutput(content: string | undefined): {
+  agentType?: string;
+  toolCount: number;
+  totalTokens: number;
+  steps: SubagentTranscriptStep[];
+  summary: string;
+} {
+  if (!content) return {toolCount: 0, totalTokens: 0, steps: [], summary: ''};
+  const header = /^Subagent \[([^\]]+)\] "([^"]*)" \(agent_id: ([^,]+), tools: (\d+), usage: (\d+) tokens/.exec(
+    content,
+  );
+  if (!header) return {toolCount: 0, totalTokens: 0, steps: [], summary: content.trim()};
+  const steps: SubagentTranscriptStep[] = [];
+  const activity = /\n\nActivity:\n([\s\S]*?)(?=\n\nResult:\n|$)/.exec(content)?.[1];
+  if (activity) {
+    for (const line of activity.split('\n')) {
+      const m = /^- ([a-zA-Z0-9_.-]+)(?: (.*))? \[(running|ok|denied|error)\]$/.exec(line.trim());
+      if (m) {
+        steps.push({
+          kind: 'tool',
+          toolName: m[1]!,
+          ...(m[2] ? {target: m[2]} : {}),
+          status: m[3] as 'running' | 'ok' | 'denied' | 'error',
+        });
+      }
+    }
+  }
+  const resultIdx = content.indexOf('\n\nResult:\n');
+  const summary = resultIdx >= 0 ? content.slice(resultIdx + '\n\nResult:\n'.length).trim() : content.trim();
+  if (summary) steps.push({kind: 'text', text: summary});
+  return {
+    agentType: header[1]!,
+    toolCount: Number(header[4] ?? 0),
+    totalTokens: Number(header[5] ?? 0),
+    steps,
+    summary,
+  };
+}
+
+function renderAgentToolCall(options: {
+  item: TranscriptItem;
+  call: ToolCall;
+  result: ToolResult | undefined;
+  width: number;
+  tokens: ThemeTokens;
+  bg: string;
+  awaiting: boolean;
+  expanded: boolean;
+  live: boolean;
+  disclosure: RenderedBoxLine['disclosure'];
+  headerLines: RenderedBoxLine[];
+}): RenderedBoxLine[] {
+  const {item, call, result, width, tokens, bg, awaiting, expanded, live, disclosure, headerLines} = options;
+  const input = call.input as Record<string, unknown> | undefined;
+  const sub = item.subagents?.[call.id];
+  const parsed = parseStoredSubagentOutput(result?.content);
+  const agentType =
+    sub?.agentType ?? parsed.agentType ?? (typeof input?.agent_type === 'string' ? input.agent_type : 'agent');
+  const toolCount = sub ? sub.toolCount : parsed.toolCount;
+  const totalTokens = sub?.usage ? (sub.usage.inputTokens ?? 0) + (sub.usage.outputTokens ?? 0) : parsed.totalTokens;
+  const steps = sub?.steps.length ? sub.steps : parsed.steps;
+  const summaryText = sub?.summary ?? parsed.summary;
+
+  let statusLabel: string;
+  let statusFg = tokens.foregroundMuted;
+  if (awaiting && !result) {
+    statusLabel = 'Waiting for permission…';
+    statusFg = tokens.warning;
+  } else if (!result) {
+    if (live) {
+      statusLabel = sub?.currentTool ? `Running ${sub.currentTool}…` : 'Running…';
+    } else {
+      statusLabel = 'Stopped';
+    }
+  } else if (result.status === 'denied') {
+    statusLabel = `Permission denied${result.code && result.code !== 'DENIED' ? ` (${result.code})` : ''}`;
+    statusFg = tokens.error;
+  } else if (result.status === 'error' || sub?.status === 'failed') {
+    const code = result.code ?? sub?.errorCode;
+    statusLabel = `Failed${code ? ` (${code})` : ''}`;
+    statusFg = tokens.error;
+  } else {
+    statusLabel = 'Done';
+  }
+
+  const metrics = `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'} · ${totalTokens} tokens`;
+  const hasDetails = steps.length > 0 || Boolean(summaryText) || Boolean(result?.content);
+  const expandHint = !expanded && hasDetails ? ' (click to expand)' : '';
+  const progressLine = `[${agentType}] ${statusLabel} · ${metrics}${expandHint}`;
+
+  const lines: RenderedBoxLine[] = [...headerLines];
+  const wrappedProgress = wrapTextToWidth(progressLine, Math.max(8, width - 5));
+  wrappedProgress.forEach((text, idx) => {
+    lines.push({
+      ...(idx === 0 ? {disclosure} : {}),
+      spans: [
+        {text: idx === 0 ? '  ⎿  ' : '     ', fg: tokens.foregroundSubtle, bg},
+        {text, fg: statusFg, bg, italic: !result && live},
+      ],
+    });
+  });
+
+  if (!expanded) return lines;
+
+  const toolSteps = steps.filter(s => s.kind === 'tool' && s.toolName);
+  for (const step of toolSteps) {
+    const target = step.target ? ` ${step.target}` : '';
+    const status = step.status ?? 'ok';
+    const rowText = `• ${step.toolName}${target} [${status}]`;
+    const fg = status === 'error' || status === 'denied' ? tokens.error : tokens.foregroundMuted;
+    for (const wrapped of wrapTextToWidth(rowText, Math.max(8, width - 5))) {
+      lines.push({
+        spans: [
+          {text: '     ', fg: tokens.foregroundSubtle, bg},
+          {text: wrapped, fg, bg},
+        ],
+      });
+    }
+  }
+
+  const bodyText = summaryText || (result && result.status !== 'ok' ? result.content : '');
+  if (bodyText) {
+    const rawLines = bodyText.replace(/\r/g, '').split('\n');
+    for (const rawLine of rawLines) {
+      for (const wrapped of wrapTextToWidth(rawLine || ' ', Math.max(8, width - 5))) {
+        lines.push({
+          spans: [
+            {text: '     ', fg: tokens.foregroundSubtle, bg},
+            {
+              text: wrapped,
+              fg: result && result.status !== 'ok' ? tokens.error : tokens.foreground,
+              bg,
+            },
+          ],
+        });
+      }
+    }
+  }
+
+  return lines;
 }
 
 export function renderTranscriptViewport(options: TranscriptViewportOptions): TranscriptViewportResult {

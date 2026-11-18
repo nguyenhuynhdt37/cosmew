@@ -1,13 +1,13 @@
-import type {CommandOutputChunk, ModelEvent, ToolCall} from '@futryn/contracts';
+import type {CommandOutputChunk, ModelEvent, SubagentEvent, ToolCall} from '@futryn/contracts';
 
 /** Bounds on live command output buffered between the tool and the event stream. */
 const MAX_QUEUED_EVENTS = 128;
 const MAX_QUEUED_BYTES = 64000;
 
 /**
- * Live progress of running tools (command output), yielded between model events and tool results.
- * It is bounded: beyond the limits, deltas are dropped from the live stream only; the final tool
- * result still carries the bounded output.
+ * Live progress of running tools (command output and subagent lifecycle/progress), yielded between
+ * model events and tool results. Command output is bounded: beyond the limits, deltas are dropped
+ * from the live stream only; the final tool result still carries the bounded output.
  */
 export class ProgressQueue {
   private readonly events: ModelEvent[] = [];
@@ -23,6 +23,22 @@ export class ProgressQueue {
     if (this.queuedBytes + bytes > MAX_QUEUED_BYTES || this.events.length >= MAX_QUEUED_EVENTS) return;
     this.events.push({type: 'toolOutputDelta', callId: call.id, name: call.name, ...chunk});
     this.queuedBytes += bytes;
+    this.wake();
+  }
+
+  publishSubagent(event: SubagentEvent): void {
+    if (event.type === 'subagent.progress') {
+      const existingIndex = this.events.findIndex(
+        queued => queued.type === 'subagent.progress' && queued.callId === event.callId,
+      );
+      if (existingIndex >= 0) {
+        this.events[existingIndex] = event;
+        this.wake();
+        return;
+      }
+      if (this.events.length >= MAX_QUEUED_EVENTS) return;
+    }
+    this.events.push(event);
     this.wake();
   }
 

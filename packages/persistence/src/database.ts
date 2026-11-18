@@ -66,7 +66,23 @@ export function openPrivateDatabase(directory: string): Database {
         conversation TEXT NOT NULL REFERENCES conversations(id), directory TEXT NOT NULL,
         PRIMARY KEY(conversation, directory));
         CREATE TABLE IF NOT EXISTS session_plan (
-        conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);`);
+        conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS subagent_sessions (
+        id TEXT PRIMARY KEY REFERENCES conversations(id),
+        parent_conversation TEXT NOT NULL REFERENCES conversations(id),
+        parent_turn_id TEXT,
+        call_id TEXT NOT NULL,
+        depth INTEGER NOT NULL DEFAULT 1,
+        agent_type TEXT NOT NULL,
+        description TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        fork_context INTEGER NOT NULL DEFAULT 0,
+        background INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        finished_at TEXT,
+        error_code TEXT);
+        CREATE INDEX IF NOT EXISTS subagent_sessions_parent ON subagent_sessions(parent_conversation, created_at);`);
       // v7 (ADR 0045): chat-only subscription runtimes are removed; their accounts are logged out.
       if (version < 7) migrateRemovedRuntimes(db);
       // v8 (ADR 0049): the Codex app-server runtime is removed; its accounts and leases are deleted.
