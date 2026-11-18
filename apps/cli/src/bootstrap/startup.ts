@@ -425,7 +425,9 @@ export function startup(
   ): FutrynClient => {
     const contextBudget = projectContextOptions(contextOptions);
     const stateDirectory = realpathSync.native(resolve(directory));
-    const sandboxSettings = sandboxSettingsFromEnv();
+    // User-level config defaults (ADR 0055); the environment overrides them, never a workspace file.
+    const permissionDefaults = hostLoaded.permissions;
+    const sandboxSettings = sandboxSettingsFromEnv(process.env, permissionDefaults);
     const grants = new SessionGrants();
     const activeConversations = new Map<string, Conversation>();
     let client: FutrynClient | undefined;
@@ -497,7 +499,8 @@ export function startup(
         stateDirectory,
         readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
         commands: commands(),
-        sandbox: () => sandboxSettings,
+        // The session's sandbox (Read Only / Auto / Full Access presets) is read for every call.
+        sandbox: () => (client ? client.sandboxConfig() : sandboxSettings),
         turnId: () => client?.currentTurnId(),
         codeIntel: languageServers(),
         web: {
@@ -683,7 +686,9 @@ export function startup(
         }
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
-      permissionMode: permissionModeFromEnv(),
+      permissionMode: permissionModeFromEnv(process.env, permissionDefaults),
+      sandboxMode: sandboxSettings.mode,
+      sandboxNetwork: sandboxSettings.network,
       getPlan: id => {
         if (!plans.has(id)) plans.set(id, conversations.loadPlan(id));
         return plans.get(id) ?? null;
@@ -694,24 +699,36 @@ export function startup(
       },
       workspace: resolve(workspaceRoot),
       terminalRuntime: () => {
-        if (terminalReport) return terminalReport;
-        const runtime = commands();
-        const availability = runtime.availability();
-        return (terminalReport = {
-          label: runtime.label,
-          available: availability.ok,
-          ...(!availability.ok ? {reason: availability.reason} : {}),
-          sandbox: availability.ok ? sandboxSettings.mode : 'unavailable',
-          escalation: sandboxSettings.escalation,
-          limitations: runtime.id.startsWith('native-macos')
-            ? [
-                'Detached setsid descendants may survive; termination can be unconfirmed.',
-                'Secret files are readable unless FUTRYN_SANDBOX_HIDE_SECRETS=1.',
-              ]
-            : runtime.id.startsWith('native-linux')
-              ? ['Linux bubblewrap has not received live platform acceptance.']
-              : [],
-        });
+        if (!terminalReport) {
+          const runtime = commands();
+          const availability = runtime.availability();
+          terminalReport = {
+            label: runtime.label,
+            available: availability.ok,
+            ...(!availability.ok ? {reason: availability.reason} : {}),
+            sandbox: sandboxSettings.mode,
+            escalation: sandboxSettings.escalation,
+            limitations: runtime.id.startsWith('native-macos')
+              ? [
+                  'Detached setsid descendants may survive; termination can be unconfirmed.',
+                  'Secret files are readable unless FUTRYN_SANDBOX_HIDE_SECRETS=1.',
+                ]
+              : runtime.id.startsWith('native-linux')
+                ? ['Linux bubblewrap has not received live platform acceptance.']
+                : [],
+          };
+        }
+        // The sandbox and escalation are the session's current preset (ADR 0055), not a startup snapshot.
+        const config = client?.sandboxConfig() ?? sandboxSettings;
+        return {
+          ...terminalReport,
+          sandbox: terminalReport.available ? config.mode : 'unavailable',
+          escalation: config.escalation,
+          limitations:
+            config.mode === 'danger-full-access'
+              ? ['Full Access: commands run WITHOUT the OS sandbox and with network.', ...terminalReport.limitations]
+              : terminalReport.limitations,
+        };
       },
       settings,
       listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),

@@ -2,12 +2,16 @@ import {closeSync, constants, openSync, realpathSync, statSync, writeFileSync} f
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {
+  APPROVAL_POLICY_FOR_MODE,
   CONTRACT_VERSION,
+  FULL_ACCESS_WARNING,
   FutrynError,
   MODE_FOR_APPROVAL_POLICY,
   approvalPolicySchema,
+  sandboxModeSchema,
   type ApprovalPolicy,
   type HeadlessEvent,
+  type SandboxModeSetting,
 } from '@futryn/contracts';
 import {startup, type Application} from './bootstrap/startup';
 import {ChatInput} from './input';
@@ -17,7 +21,8 @@ type WithoutEnvelope<T> = T extends unknown ? Omit<T, 'seq' | 'contractVersion'>
 export interface ExecOptions {
   prompt: string;
   workspace?: string;
-  approval: ApprovalPolicy;
+  approval?: ApprovalPolicy;
+  sandbox?: SandboxModeSetting;
   json: boolean;
   account?: string;
   model?: string;
@@ -25,16 +30,20 @@ export interface ExecOptions {
 }
 
 const HELP = `fyn exec <prompt|-> [--cd|-C <dir>] [--json]
-  [--approval untrusted|on-request|never] [--sandbox read-only|workspace-write]
+  [--approval|-a untrusted|on-request|never] [--sandbox|-s read-only|workspace-write|danger-full-access]
+  [--full-auto] [--dangerously-bypass-approvals-and-sandbox]
   [--output-last-message|-o <file>] [--account <id-or-alias>] [--model <id>]
-Explicit --cd grants folder consent. Without a TTY approvals default to never.
+Explicit --cd grants folder consent. Without a TTY approvals default to never. --sandbox danger-full-access
+(Codex Full Access, with --approval never or --dangerously-bypass-approvals-and-sandbox) runs commands WITHOUT
+the sandbox: use it only in a disposable environment. Without --sandbox, FUTRYN_SANDBOX_MODE or the config
+sandbox_mode applies; FUTRYN_SANDBOX_NETWORK=1 or [sandbox_workspace_write] network_access = true gives sandboxed commands network.
 Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 64 invalid arguments.
 `;
 
 /** Own lifecycle so invalid exec arguments never open state or enter an interactive command. */
 export async function execCli(args: string[]): Promise<number> {
   let options: ExecOptions;
-  let sandbox: string | undefined;
+  let sandbox: SandboxModeSetting | undefined;
   try {
     const {values, positionals} = parseArgs({
       args,
@@ -42,8 +51,11 @@ export async function execCli(args: string[]): Promise<number> {
       strict: true,
       options: {
         cd: {type: 'string', short: 'C'},
-        approval: {type: 'string'},
-        sandbox: {type: 'string'},
+        approval: {type: 'string', short: 'a'},
+        'ask-for-approval': {type: 'string'},
+        sandbox: {type: 'string', short: 's'},
+        'full-auto': {type: 'boolean'},
+        'dangerously-bypass-approvals-and-sandbox': {type: 'boolean'},
         json: {type: 'boolean'},
         'output-last-message': {type: 'string', short: 'o'},
         account: {type: 'string'},
@@ -56,9 +68,26 @@ export async function execCli(args: string[]): Promise<number> {
       return 0;
     }
     if (positionals.length !== 1 || !positionals[0]?.trim()) throw new FutrynError('INVALID_INPUT');
-    sandbox = values.sandbox;
-    if (sandbox !== undefined && sandbox !== 'read-only' && sandbox !== 'workspace-write')
+    if (values.approval !== undefined && values['ask-for-approval'] !== undefined)
       throw new FutrynError('INVALID_INPUT');
+    const explicitApproval = values.approval ?? values['ask-for-approval'];
+    const yolo = values['dangerously-bypass-approvals-and-sandbox'] === true;
+    const fullAuto = values['full-auto'] === true;
+    if ((yolo && fullAuto) || ((yolo || fullAuto) && (values.sandbox !== undefined || explicitApproval !== undefined)))
+      throw new FutrynError('INVALID_INPUT');
+    if (values.sandbox !== undefined) sandbox = sandboxModeSchema.parse(values.sandbox);
+    else if (yolo) sandbox = 'danger-full-access';
+    else if (fullAuto) sandbox = 'workspace-write';
+    const approval =
+      explicitApproval !== undefined
+        ? approvalPolicySchema.parse(explicitApproval)
+        : yolo
+          ? 'never'
+          : fullAuto
+            ? 'on-request'
+            : process.stdin.isTTY
+              ? undefined
+              : 'never';
     const workspace = values.cd === undefined ? undefined : realpathSync(resolve(values.cd));
     if (workspace && !statSync(workspace).isDirectory()) throw new FutrynError('INVALID_INPUT');
     for (const value of [values.cd, values.account, values.model, values['output-last-message']])
@@ -66,7 +95,8 @@ export async function execCli(args: string[]): Promise<number> {
     options = {
       prompt: positionals[0]!,
       workspace,
-      approval: approvalPolicySchema.parse(values.approval ?? (process.stdin.isTTY ? 'on-request' : 'never')),
+      ...(approval !== undefined ? {approval} : {}),
+      ...(sandbox !== undefined ? {sandbox} : {}),
       json: values.json ?? false,
       account: values.account,
       model: values.model,
@@ -77,7 +107,7 @@ export async function execCli(args: string[]): Promise<number> {
     return 64;
   }
   // These process-local settings are read by the existing composition root/runtime. No new tool path.
-  process.env.FUTRYN_APPROVAL_POLICY = options.approval;
+  if (options.approval !== undefined) process.env.FUTRYN_APPROVAL_POLICY = options.approval;
   if (sandbox) process.env.FUTRYN_SANDBOX_MODE = sandbox;
   const interactive = !!process.stdin.isTTY && options.prompt !== '-';
   const controller = new AbortController();
@@ -156,7 +186,12 @@ export async function runExec(
   }
   client.setToolsEnabled(true);
   client.setUserInputAvailable(false);
-  client.setPermissionMode(MODE_FOR_APPROVAL_POLICY[options.approval]);
+  if (options.sandbox) client.setSandboxMode(options.sandbox);
+  const effectiveApproval: ApprovalPolicy =
+    options.approval ?? (interactive ? APPROVAL_POLICY_FOR_MODE[client.permissionMode()] : 'never');
+  client.setPermissionMode(MODE_FOR_APPROVAL_POLICY[effectiveApproval]);
+  // The warning goes to stderr: stdout stays the model's answer (or the JSON event stream).
+  if (client.sandboxMode() === 'danger-full-access') process.stderr.write(`${FULL_ACCESS_WARNING}\n`);
   const status = client.status();
   if (
     !status.activeAccount ||
@@ -175,7 +210,7 @@ export async function runExec(
     const request = event.request;
     approvals = approvals.then(async () => {
       let decision: 'once' | 'deny' = 'deny';
-      if (interactive && !signal?.aborted && options.approval !== 'never') {
+      if (interactive && !signal?.aborted && effectiveApproval !== 'never') {
         input ??= new ChatInput(signal);
         try {
           const answer = await input.ask(app.redactor.text(`${request.action} → ${request.target}. Allow once? [y/N]`));

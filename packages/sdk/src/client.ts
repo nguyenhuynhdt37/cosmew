@@ -35,6 +35,13 @@ import {
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
   APPROVAL_POLICY_FOR_MODE,
+  COMMAND_RULE_TOOLS,
+  PERMISSION_PRESETS,
+  SANDBOX_MODES,
+  permissionPresetFor,
+  type PermissionPreset,
+  type PermissionPresetId,
+  type SandboxModeSetting,
   turnBudgetSchema,
   type TurnBudget,
   executionBackendFor,
@@ -110,7 +117,7 @@ export interface TerminalRuntimeReport {
   label: string;
   available: boolean;
   reason?: string;
-  sandbox: 'read-only' | 'workspace-write' | 'unavailable';
+  sandbox: SandboxModeSetting | 'unavailable';
   escalation: 'on-request' | 'never';
   limitations: string[];
 }
@@ -133,6 +140,13 @@ export interface FutrynBackendPorts {
    * (Codex `on-request` in the workspace-write sandbox).
    */
   permissionMode?: PermissionMode;
+  /**
+   * Sandbox every session starts in (ADR 0055; `FUTRYN_SANDBOX_MODE`, config `sandbox_mode`).
+   * Defaults to `workspace-write`. The session can change it with a preset; it is never persisted.
+   */
+  sandboxMode?: SandboxModeSetting;
+  /** Sandboxed commands get network without asking (`FUTRYN_SANDBOX_NETWORK`, config `network_access`). */
+  sandboxNetwork?: boolean;
   /** Durable plan of a session (ADR 0042). */
   getPlan?(sessionId: string): PlanState | null;
   settings: SettingsStore;
@@ -234,6 +248,8 @@ export class FutrynClient {
   private currentMode: AgentMode = 'chat';
   /** Session permission mode (ADR 0027/0040); never persisted, every session starts in the configured mode. */
   private permissionModeValue: PermissionMode;
+  /** Session sandbox (ADR 0055): changed only by a preset/`setSandboxMode`, reset with the session. */
+  private sandboxModeValue: SandboxModeSetting;
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
   private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
@@ -263,6 +279,13 @@ export class FutrynClient {
   constructor(private readonly ports: FutrynBackendPorts) {
     this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
     this.permissionModeValue = this.initialPermissionMode();
+    this.sandboxModeValue = this.initialSandboxMode();
+  }
+
+  /** The configured starting sandbox (ADR 0055); `workspace-write` unless configured otherwise. */
+  initialSandboxMode(): SandboxModeSetting {
+    const mode = this.ports.sandboxMode;
+    return mode && SANDBOX_MODES.includes(mode) ? mode : 'workspace-write';
   }
 
   /** The configured starting mode (ADR 0040); `auto` = Codex on-request unless configured otherwise. */
@@ -306,6 +329,7 @@ export class FutrynClient {
 
   private clearSessionAuthorization(): void {
     this.permissionModeValue = this.initialPermissionMode();
+    this.sandboxModeValue = this.initialSandboxMode();
     this.sessionGrants.clear();
     this.ports.toolGrants?.clear();
     this.denyPendingPermissions();
@@ -406,6 +430,44 @@ export class FutrynClient {
     this.notifyStateChange();
     return mode;
   }
+
+  /** The session sandbox (ADR 0055): the preset's sandbox, or the configured one at session start. */
+  sandboxMode(): SandboxModeSetting {
+    return this.sandboxModeValue;
+  }
+  setSandboxMode(mode: SandboxModeSetting): SandboxModeSetting {
+    if (!SANDBOX_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
+    this.sandboxModeValue = mode;
+    this.notifyStateChange();
+    return mode;
+  }
+  /**
+   * What the command dispatcher reads for every call: the session sandbox, whether escalating is
+   * still possible (`never` refuses it), and whether the user's config gives sandboxed commands
+   * network. Reading it here makes a preset change take effect on the next call (ADR 0055).
+   */
+  sandboxConfig(): {mode: SandboxModeSetting; escalation: 'on-request' | 'never'; network: boolean} {
+    return {
+      mode: this.sandboxModeValue,
+      escalation: APPROVAL_POLICY_FOR_MODE[this.permissionModeValue] === 'never' ? 'never' : 'on-request',
+      network: this.ports.sandboxNetwork === true,
+    };
+  }
+  /** Read Only / Auto / Full Access (Codex approval presets), or `custom` for any other pair. */
+  permissionPreset(): PermissionPresetId | 'custom' {
+    return permissionPresetFor(this.sandboxModeValue, this.permissionModeValue);
+  }
+  /** Apply a Codex preset: its sandbox and approval policy together. Never persisted; a new session resets it. */
+  setPermissionPreset(id: PermissionPresetId): PermissionPreset {
+    const preset = PERMISSION_PRESETS.find(entry => entry.id === id);
+    if (!preset) throw new FutrynError('INVALID_INPUT');
+    this.sandboxModeValue = preset.sandbox;
+    this.permissionModeValue = preset.mode;
+    // A stricter preset leaves no stale prompt answerable under the looser one.
+    this.denyPendingPermissions();
+    this.notifyStateChange();
+    return preset;
+  }
   /** Rules saved for this workspace (ADR 0028). */
   permissionRules(): PermissionRuleSet {
     const saved = this.ports.settings.read().projectPermissionRules?.[this.ports.workspace];
@@ -422,10 +484,12 @@ export class FutrynClient {
       if (set[effect].length >= 200) throw new FutrynError('POLICY');
       set[effect].push(parsed.data);
     });
-    // Tightening policy invalidates old prompts. Adding Allow is a relaxation and is also
-    // the normal 'don't ask again' flow, so its selected prompt remains resolvable.
-    if (effect !== 'allow') this.denyPendingPermissions();
-    this.revokeToolGrants();
+    // Tightening policy invalidates old prompts and session grants. Adding Allow is a relaxation
+    // (including the `always` prompt answer), so active prompts and session grants stay intact.
+    if (effect !== 'allow') {
+      this.denyPendingPermissions();
+      this.revokeToolGrants();
+    }
     return this.permissionRules();
   }
   removePermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
@@ -438,7 +502,6 @@ export class FutrynClient {
     return this.permissionRules();
   }
 
-  /** Shift+Tab order, as in Claude Code: default → acceptEdits → auto → plan → bypassPermissions. */
   /** Rule paths are workspace-relative; runtimes may report absolute ones. */
   private workspaceRelative(target: string): string {
     const root = this.ports.workspace.replace(/\/+$/, '');
@@ -448,9 +511,12 @@ export class FutrynClient {
       .join(', ');
   }
 
-  cyclePermissionMode(): PermissionMode {
-    const order: PermissionMode[] = ['default', 'acceptEdits', 'auto', 'plan', 'bypassPermissions'];
-    return this.setPermissionMode(order[(order.indexOf(this.permissionModeValue) + 1) % order.length]!);
+  /** Shift+Tab: Read Only → Auto → Full Access → Read Only. A custom pair starts the cycle at Auto. */
+  cyclePermissionPreset(): PermissionPreset {
+    const current = this.permissionPreset();
+    const order = PERMISSION_PRESETS.map(preset => preset.id);
+    const next = current === 'custom' ? 'auto' : order[(order.indexOf(current) + 1) % order.length]!;
+    return this.setPermissionPreset(next);
   }
 
   cycleMode(): AgentMode {
@@ -697,6 +763,7 @@ export class FutrynClient {
     const account = this.currentAccountId();
     const elevated =
       this.permissionModeValue !== this.initialPermissionMode() ||
+      this.sandboxModeValue !== this.initialSandboxMode() ||
       this.listToolGrants().length > 0 ||
       this.sessionGrants.size > 0;
     if (!elevated) {
@@ -711,6 +778,7 @@ export class FutrynClient {
     this.guarding = true;
     try {
       this.permissionModeValue = this.initialPermissionMode();
+      this.sandboxModeValue = this.initialSandboxMode();
       this.ports.toolGrants?.clear();
       this.sessionGrants.clear();
       this.elevatedFor = undefined;
@@ -793,6 +861,10 @@ export class FutrynClient {
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
       approvalPolicy: APPROVAL_POLICY_FOR_MODE[this.permissionModeValue],
+      /** Session sandbox, preset and whether sandboxed commands get network by configuration (ADR 0055). */
+      sandboxMode: this.sandboxModeValue,
+      permissionPreset: this.permissionPreset(),
+      sandboxNetwork: this.ports.sandboxNetwork === true && this.sandboxModeValue === 'workspace-write',
       executionBackend,
       /** Futryn tools reach the model: folder consent AND a backend that runs them AND a capable model. */
       toolsEnabled: workspaceReadStatus === 'read-only',
@@ -1763,8 +1835,15 @@ export class FutrynClient {
     diffPreview?: string;
     ttlMs?: number;
     scopeKey?: string;
+    /** Approvals this prompt offers (Codex `available_decisions`); default once + session. */
+    decisions?: PermissionPromptRequest['decisions'];
+    /** The project Allow rule `always` saves; without it `always` is not offered. */
+    alwaysRule?: string;
   }): PermissionPromptRequest {
     const now = new Date();
+    const rule =
+      input.alwaysRule && permissionRuleSchema.safeParse(input.alwaysRule).success ? input.alwaysRule : undefined;
+    const offered = (input.decisions ?? ['once', 'session']).filter(decision => decision !== 'always' || rule);
     const expires = new Date(now.getTime() + (input.ttlMs ?? 300_000));
     const scopeHash = createHash('sha256')
       .update(
@@ -1782,7 +1861,9 @@ export class FutrynClient {
       createdAt: now.toISOString(),
       expiresAt: expires.toISOString(),
       diffPreview: input.diffPreview ? this.ports.sanitizeText(input.diffPreview) : undefined,
-      status: this.sessionGrants.has(scopeHash) ? 'approved_session' : 'pending',
+      decisions: offered.length ? offered : ['once'],
+      ...(rule && offered.includes('always') ? {alwaysRule: this.ports.sanitizeText(rule)} : {}),
+      status: this.sessionGrants.has(scopeHash) && offered.includes('session') ? 'approved_session' : 'pending',
     });
     this.permissions.set(req.approvalId, req);
     if (req.status === 'pending') {
@@ -1810,7 +1891,21 @@ export class FutrynClient {
       req.status = 'expired';
       throw new FutrynError('POLICY');
     }
-    req.status = decision === 'once' ? 'approved_once' : decision === 'session' ? 'approved_session' : 'denied';
+    // Only what the prompt offered can be answered (Codex `available_decisions`).
+    if (decision !== 'deny' && !req.decisions.includes(decision)) throw new FutrynError('POLICY');
+    if (decision === 'always') {
+      // Persist the project Allow rule first: if it cannot be saved nothing is approved.
+      if (!req.alwaysRule) throw new FutrynError('POLICY');
+      this.addPermissionRule('allow', req.alwaysRule);
+    }
+    req.status =
+      decision === 'once'
+        ? 'approved_once'
+        : decision === 'session'
+          ? 'approved_session'
+          : decision === 'always'
+            ? 'approved_always'
+            : 'denied';
     if (decision === 'session') {
       this.sessionGrants.add(req.scopeHash);
     }
@@ -1843,6 +1938,16 @@ export class FutrynClient {
       scopeKey?: string;
       diffPreview?: string;
       kind?: PermissionKind;
+      /** Approvals offered (ADR 0055); default once + session. */
+      decisions?: PermissionPromptRequest['decisions'];
+      /** The project Allow rule an `always` answer saves. */
+      alwaysRule?: string;
+      /**
+       * Rule namespace whose Allow rules may answer this request: `Network` and `Unsandboxed`
+       * for a command that needs network or to leave the sandbox (ADR 0055). `Bash` deny and ask
+       * rules judge the same command either way. Defaults to the tool of the capability.
+       */
+      ruleTool?: PermissionRuleTool;
       /** Exact structured command/path for project rules; null skips rules (display-only request). Defaults to `target`. */
       ruleTarget?: string | null;
       /** Bash: parsed sub-commands for project rules, or null for an unparsed script (ADR 0040). */
@@ -1852,7 +1957,7 @@ export class FutrynClient {
   ): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
-    const {kind: explicitKind, ruleTarget, ruleSegments, ...prompt} = input;
+    const {kind: explicitKind, ruleTarget, ruleSegments, ruleTool, ...prompt} = input;
     const kind: PermissionKind =
       explicitKind ??
       (
@@ -1864,25 +1969,49 @@ export class FutrynClient {
       'other';
     // Project rules first (deny > ask > allow), then the session mode.
     const tool: PermissionRuleTool =
+      ruleTool ??
       (
         {'process.execute': 'Bash', 'fs.write': 'Edit', 'fs.read': 'Read', 'network.connect': 'WebFetch'} as Record<
           string,
           PermissionRuleTool
         >
-      )[input.capability] ?? 'Tool';
+      )[input.capability] ??
+      'Tool';
+    const commandRule = COMMAND_RULE_TOOLS.includes(tool);
     // Allow rules judge only structured targets (a real command or real paths), never display labels.
     const rules = this.permissionRules();
     const target =
       ruleTarget === null || (tool === 'Tool' && ruleTarget === undefined) ? null : (ruleTarget ?? input.target);
     const relative = (value: string) => (tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(value) : value);
-    let ruled =
-      target === null
-        ? undefined
-        : permissionRuleDecision(rules, {
-            tool,
-            target: relative(target),
-            ...(tool === 'Bash' && ruleSegments !== undefined ? {segments: ruleSegments} : {}),
-          });
+    const judge = (set: PermissionRuleSet, ruleToolName: PermissionRuleTool) =>
+      permissionRuleDecision(set, {
+        tool: ruleToolName,
+        target: relative(target!),
+        ...(commandRule && ruleSegments !== undefined ? {segments: ruleSegments} : {}),
+      });
+    let ruled: PermissionRuleEffect | undefined;
+    if (target !== null) {
+      if (commandRule) {
+        // A command run with network or without a sandbox (including under `network_access` or Full
+        // Access) is also judged by `Network`/`Unsandboxed` deny and ask rules; only the request's
+        // own `tool` namespace can allow it (ADR 0055).
+        const restrict: PermissionRuleSet = {allow: [], ask: rules.ask, deny: rules.deny};
+        const extras: PermissionRuleTool[] = ['Bash'];
+        if (
+          tool === 'Network' ||
+          this.sandboxModeValue === 'danger-full-access' ||
+          (this.ports.sandboxNetwork === true && this.sandboxModeValue === 'workspace-write')
+        )
+          extras.push('Network');
+        if (tool === 'Unsandboxed' || this.sandboxModeValue === 'danger-full-access') extras.push('Unsandboxed');
+        const verdicts = [...new Set(extras)].map(name => judge(restrict, name));
+        ruled = verdicts.includes('deny')
+          ? 'deny'
+          : verdicts.includes('ask')
+            ? 'ask'
+            : judge({allow: rules.allow, ask: [], deny: []}, tool);
+      } else ruled = judge(rules, tool);
+    }
     if (target === null) {
       // Fail closed: deny/ask rules still apply to the best text we have, and an unverifiable request
       // never slips past a deny/ask rule of its tool through a permissive mode such as bypass.
@@ -1890,7 +2019,7 @@ export class FutrynClient {
         permissionRuleDecision({allow: [], ask: rules.ask, deny: rules.deny}, {tool, target: relative(input.target)}) ??
         ([...rules.deny, ...rules.ask].some(rule => rule === tool || rule.startsWith(tool + '(')) ? 'ask' : undefined);
     }
-    let decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind);
+    let decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind, this.sandboxModeValue);
     // Codex `prompt_is_rejected_by_policy`: under `never` an ask rule (or any prompt) is refused, never shown.
     if (decision === 'ask' && APPROVAL_POLICY_FOR_MODE[this.permissionModeValue] === 'never') decision = 'deny';
     if (decision !== 'ask') {

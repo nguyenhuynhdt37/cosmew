@@ -173,7 +173,10 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Account', `${status.activeAccount?.alias ?? 'Not connected'} · ${status.activeProvider?.name ?? '—'}`),
       field('Model', status.selection?.modelId ?? 'Not selected'),
       field('Mode', status.mode),
-      field('Permissions', `${status.permissionMode} · ${status.pendingPermissions} pending`),
+      field(
+        'Permissions',
+        `${status.permissionPreset} (${status.sandboxMode}, ${status.approvalPolicy}) · ${status.pendingPermissions} pending`,
+      ),
       field('Backend', status.executionBackend?.label ?? 'No model selected'),
       field(
         'Terminal',
@@ -274,7 +277,8 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     'CONNECTION & SESSION',
     `Workspace: ${status.workspace}`,
     `Git: ${git?.state === 'ready' ? `${git.branch ?? 'branch unknown'} · ${git.files.length} change entries +${git.totalAdditions} -${git.totalDeletions}${git.truncated ? ' (bounded)' : ''}` : (git?.message ?? 'Not inspected; folder consent is required.')}`,
-    `Mode: ${status.mode} · Permission mode: ${status.permissionMode} · Pending approvals: ${status.pendingPermissions}`,
+    `Mode: ${status.mode} · Permissions: ${status.permissionPreset} (sandbox ${status.sandboxMode}, approval ${status.approvalPolicy}, mode ${status.permissionMode}) · Pending approvals: ${status.pendingPermissions}`,
+    `Sandboxed commands network: ${status.sandboxNetwork ? 'on (network_access / FUTRYN_SANDBOX_NETWORK)' : 'off unless approved'}`,
     `Terminal runtime: ${status.terminalRuntime.label} · ${status.terminalRuntime.available ? 'available' : (status.terminalRuntime.reason ?? 'unavailable')}`,
     `Sandbox: ${status.terminalRuntime.sandbox} · Network escalation: ${status.terminalRuntime.escalation}`,
     ...status.terminalRuntime.limitations,

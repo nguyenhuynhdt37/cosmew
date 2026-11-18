@@ -1,11 +1,15 @@
 import {
+  approvalPolicySchema,
+  sandboxModeSchema,
   envNameSchema,
   headerNameSchema,
   idSchema,
   modelIdSchema,
   protocolSchema,
   providerSchema,
+  type ApprovalPolicy,
   type Provider,
+  type SandboxModeSetting,
 } from '@futryn/contracts';
 
 /**
@@ -279,6 +283,54 @@ export function loadHostConfig(parsed: unknown, reserved: ReadonlySet<string> = 
         providerId: id,
         message: error instanceof Invalid ? error.message : 'invalid definition',
       });
+    }
+  }
+  return result;
+}
+
+/**
+ * Permission defaults of the user-level config (ADR 0055), with Codex field names: top-level
+ * `sandbox_mode` and `approval_policy`, and `[sandbox_workspace_write] network_access`. Pure: the
+ * composition root reads the file, applies the environment and the CLI flags on top, and never
+ * reads this from a workspace. An invalid value fails closed (stricter) and is reported.
+ */
+export interface HostPermissionConfig {
+  sandboxMode?: SandboxModeSetting;
+  approvalPolicy?: ApprovalPolicy;
+  networkAccess?: boolean;
+  diagnostics: HostConfigDiagnostic[];
+}
+
+export function loadHostPermissions(parsed: unknown): HostPermissionConfig {
+  const result: HostPermissionConfig = {diagnostics: []};
+  if (!isRecord(parsed)) return result;
+  if (parsed.sandbox_mode !== undefined) {
+    const mode = sandboxModeSchema.safeParse(parsed.sandbox_mode);
+    if (mode.success) result.sandboxMode = mode.data;
+    else {
+      result.sandboxMode = 'read-only';
+      result.diagnostics.push({
+        message: 'sandbox_mode must be read-only, workspace-write or danger-full-access; using read-only',
+      });
+    }
+  }
+  if (parsed.approval_policy !== undefined) {
+    const policy = approvalPolicySchema.safeParse(parsed.approval_policy);
+    if (policy.success) result.approvalPolicy = policy.data;
+    else {
+      result.approvalPolicy = 'untrusted';
+      result.diagnostics.push({message: 'approval_policy must be untrusted, on-request or never; using untrusted'});
+    }
+  }
+  const workspaceWrite = parsed.sandbox_workspace_write;
+  if (workspaceWrite !== undefined) {
+    if (!isRecord(workspaceWrite)) result.diagnostics.push({message: 'sandbox_workspace_write must be a table'});
+    else if (workspaceWrite.network_access !== undefined) {
+      if (typeof workspaceWrite.network_access === 'boolean') result.networkAccess = workspaceWrite.network_access;
+      else
+        result.diagnostics.push({
+          message: 'sandbox_workspace_write.network_access must be true or false; network stays off',
+        });
     }
   }
   return result;

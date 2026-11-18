@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fixtureServer} from '../fixtures';
@@ -18,9 +18,9 @@ function context() {
     () => rmSync(root, {recursive: true, force: true}),
     () => server.server.stop(true),
   );
-  const spawn = (args: string[], input = '') => {
+  const spawn = (args: string[], input = '', extraEnv: Record<string, string | undefined> = {}) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, FUTRYN_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret'},
+      env: {...process.env, FUTRYN_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret', ...extraEnv},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -38,7 +38,8 @@ function context() {
     expect(stdout + stderr).not.toContain('exec-fixture-secret');
     return {stdout, stderr, code};
   };
-  const cli = (args: string[], input = '') => collect(spawn(args, input));
+  const cli = (args: string[], input = '', extraEnv: Record<string, string | undefined> = {}) =>
+    collect(spawn(args, input, extraEnv));
   const configure = async () => {
     expect(
       (
@@ -86,6 +87,9 @@ test('exec validates arguments (64), stdin and missing tool account (2) without 
     [],
     ['hi', '--approval', 'yes'],
     ['hi', '--sandbox', 'oops'],
+    ['hi', '--approval', 'never', '--ask-for-approval', 'on-request'],
+    ['hi', '--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'read-only'],
+    ['hi', '--full-auto', '--approval', 'never'],
     ['hi', '--unknown'],
     ['a', 'b'],
     ['-C'],
@@ -117,7 +121,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.26', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.27', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');
@@ -192,3 +196,64 @@ test('exec reports provider turn failure as exit 1 and a terminal JSONL failure'
     error: {code: 'AUTH'},
   });
 });
+
+test.skipIf(process.platform !== 'darwin')(
+  'exec --sandbox danger-full-access and --dangerously-bypass-approvals-and-sandbox run unsandboxed with stderr warning',
+  async () => {
+    const x = context();
+    await x.configure();
+    const outside = join(tmpdir(), `fyn-exec-dfa-${crypto.randomUUID()}`);
+    cleanup.push(() => rmSync(outside, {force: true}));
+    x.server.set({
+      script: view =>
+        view.results.length ? {text: 'DONE'} : {calls: [{name: 'exec_command', input: {cmd: `touch ${outside}`}}]},
+    });
+    const result = await x.cli(
+      [
+        'exec',
+        'write marker',
+        '--cd',
+        x.root,
+        '--sandbox',
+        'danger-full-access',
+        '--json',
+        '--account',
+        'exec-test',
+        '--model',
+        'fixture-model',
+      ],
+      '',
+      {FUTRYN_COMMAND_BACKEND: 'native'},
+    );
+    expect(result.code).toBe(0);
+    expect(result.stderr).toContain('WARNING: Full Access');
+    expect(existsSync(outside)).toBe(true);
+    const events = result.stdout
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line));
+    expect(events.some(e => e.type === 'permission.requested')).toBe(false);
+    expect(events.at(-1)).toMatchObject({contractVersion: '1.27', type: 'turn.completed'});
+
+    rmSync(outside, {force: true});
+    const yolo = await x.cli(
+      [
+        'exec',
+        'write marker again',
+        '-C',
+        x.root,
+        '--dangerously-bypass-approvals-and-sandbox',
+        '--account',
+        'exec-test',
+        '--model',
+        'fixture-model',
+      ],
+      '',
+      {FUTRYN_COMMAND_BACKEND: 'native'},
+    );
+    expect(yolo.code).toBe(0);
+    expect(yolo.stderr).toContain('WARNING: Full Access');
+    expect(existsSync(outside)).toBe(true);
+  },
+  20_000,
+);

@@ -24,7 +24,7 @@ The following are Codex behavior now; the stricter Futryn controls they replace 
 4. **Tool caches.** Commands get `npm_config_cache`, `npm_config_store_dir`, `YARN_CACHE_FOLDER`, `PIP_CACHE_DIR`, `GOCACHE`, `COREPACK_HOME`, `XDG_*` and the existing `BUN_INSTALL_CACHE_DIR` inside the per-runtime private scratch directory (the profile already makes `scratch/tmp` and `scratch/home` writable, like Codex lets commands write `TMPDIR`). The real home and secrets are never exposed. The scratch directory is now canonicalized with `realpath`: on macOS `$TMPDIR` is under the `/var` symlink and Seatbelt matches real paths, so the writable rule never applied before.
 5. **Approval table.** `unverified-command` and `shell-parser-unavailable` (commands the parser cannot split) are kind `execute` instead of `dangerous`; non-empty `write_stdin` input (`stdin`) follows `execute`. Result: `untrusted` asks; `on-request` and `never` run them inside the sandbox. Dangerous-command detection (forced `rm`, `trap`, wrappers) and the dangerous table row are unchanged (`on-request` asks, `never` forbids). Project deny/ask rules still win; an allow rule never matches an unparsed script.
 6. **`require_escalated` (Codex `SandboxPermissions::RequireEscalated`).** `exec_command` with `sandbox_permissions: "require_escalated"` (+ `justification`) is a normal, validated request carrying `CommandSandbox.unsandboxed`:
-   - `untrusted` and `on-request`: the user is asked. The prompt shows `NO SANDBOX`, says the command runs with the user's full permissions, and shows the model's justification. Kind `escalation`, no allow rule or session grant can answer it (deny and ask rules, and the hard denies, still apply first). Approval covers exactly that command once: a "session" answer is revoked and the prompt scope is unique per call.
+   - `untrusted` and `on-request`: the user is asked. The prompt shows `NO SANDBOX`, says the command runs with the user's full permissions, and shows the model's justification. Kind `escalation`, no allow rule or session grant can answer it (deny and ask rules, and the hard denies, still apply first). Approval covers exactly that command once: a "session" answer is revoked and the prompt scope is unique per call. _(Updated by [ADR 0055](0055-codex-approval-decisions-network-and-full-access.md): `session` remembers that exact command/cwd/sandbox for the session like Codex `UnifiedExecApprovalKey`, and `always` saves a project `Unsandboxed(...)` allow rule.)_
    - `never`: refused without a prompt (`escalation-forbidden`); nothing runs.
    - Approved: the same dispatcher path (validate → path → policy → approval → revalidate → audit → execute → redact) runs that command without the OS sandbox. The audit trail records the decision with reason `unsandboxed-escalation` and the call's target. Runtimes that cannot do it (Docker) refuse (`UNSUPPORTED`).
    - A sandbox that fails to start is still reported as `SANDBOX_FAILED`; it is never replaced by this path, which exists only for an explicitly approved request.
@@ -35,7 +35,7 @@ The following are Codex behavior now; the stricter Futryn controls they replace 
 
 - ADR 0040: "`stdin` — documented deviation from Codex" (every non-empty input asks), the `stdin` table row (`ask/ask/deny`), "Hardening over bare Codex" for unparsed scripts (kind `dangerous`) and "unverified fail-closed gate". Replaced by items 5 above.
 - ADR 0034: "Futryn has no unsandboxed mode, so it never retries" and `require_escalated ⇒ UNSUPPORTED`; ADR 0034/0035 "no network" and ".git read-only subpath" wording is read as: no _external_ network, `.git` readable. Replaced by items 1, 2 and 6.
-- ADR 0035 / AGENTS.md / CLAUDE.md claims of "no unsandboxed mode" for requests: an explicitly approved escalation exists. `danger-full-access` as a session mode is still not implemented.
+- ADR 0035 / AGENTS.md / CLAUDE.md claims of "no unsandboxed mode" for requests: an explicitly approved escalation exists. `danger-full-access` as a session mode is still not implemented _(subsequently implemented in [ADR 0055](0055-codex-approval-decisions-network-and-full-access.md), together with `[sandbox_workspace_write] network_access` and the Read Only / Auto / Full Access presets)_.
 
 ## Consequences and limits
 
@@ -51,6 +51,7 @@ The following are Codex behavior now; the stricter Futryn controls they replace 
 ## Rủi ro user đã chấp nhận (2026-11-17)
 
 Sau review bảo mật tự động, user chọn ưu tiên "chạy được trước":
+
 - Lệnh trong sandbox kết nối được mọi dịch vụ đang nghe trên localhost (DB local, Docker TCP, Ollama…) mà không cần duyệt mạng.
 - Session đã được duyệt chạy ngoài sandbox (`require_escalated`) nhận `write_stdin` không hỏi lại (như Codex); duyệt một shell tương tác là cấp toàn quyền.
 - Đọc `.git`: chỉ repo gần nhất bao quanh workspace, không bao giờ `.git` ở thư mục home (832d4ca) — không mất chức năng build/git.

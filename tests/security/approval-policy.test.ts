@@ -5,16 +5,24 @@ import {join} from 'node:path';
 import {
   decideApproval,
   permissionModeDecision,
+  permissionRuleDecision,
   type CommandRequest,
   type CommandRuntime,
   type PermissionMode,
+  type PermissionResolutionScope,
+  type SandboxModeSetting,
 } from '@futryn/contracts';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
-import {ToolDispatcher, NativeCommandRuntime} from '@futryn/tools';
+import {ToolDispatcher, NativeCommandRuntime, type ToolAuditRecord} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {toolPermissionRequest} from '../../apps/cli/src/bootstrap/approvals';
-import {approvalPolicyFromEnv, permissionModeFromEnv} from '../../apps/cli/src/bootstrap/commands';
+import {
+  approvalPolicyFromEnv,
+  permissionModeFromEnv,
+  sandboxSettingsFromEnv,
+} from '../../apps/cli/src/bootstrap/commands';
+import {loadHostPermissions} from '@futryn/models';
 import {ensureShellParser, parsePlainCommands, shellParsers} from '../../packages/tools/src/exec/shell-parse';
 import {memoryVault} from '../fixtures';
 
@@ -223,7 +231,12 @@ describe('approval table', () => {
 
 /** The production chain: dispatcher → toolPermissionRequest → FutrynClient.requestPermission (rules, mode). */
 async function chain(
-  options: {sandboxMode?: 'read-only' | 'workspace-write'; runtimeFactory?: (root: string) => CommandRuntime} = {},
+  options: {
+    sandboxMode?: SandboxModeSetting;
+    configToml?: string;
+    workspaceConfigToml?: string;
+    runtimeFactory?: (root: string) => CommandRuntime;
+  } = {},
 ) {
   const home = mkdtempSync(join(tmpdir(), 'futryn-policy-home-'));
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'futryn-policy-ws-')));
@@ -231,21 +244,29 @@ async function chain(
     () => rmSync(home, {recursive: true, force: true}),
     () => rmSync(root, {recursive: true, force: true}),
   );
+  if (options.configToml !== undefined) writeFileSync(join(home, 'config.toml'), options.configToml, {mode: 0o600});
+  if (options.workspaceConfigToml !== undefined) {
+    writeFileSync(join(root, 'config.toml'), options.workspaceConfigToml);
+    mkdirSync(join(root, '.futryn'), {recursive: true});
+    writeFileSync(join(root, '.futryn', 'config.toml'), options.workspaceConfigToml);
+  }
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(async () => {
     await app.shutdownCommands();
     app.db.close();
   });
   const client = app.createFutrynClient(root);
+  if (options.sandboxMode) client.setSandboxMode(options.sandboxMode);
   client.setToolsEnabled(true);
   const ran: string[] = [];
   const launches: CommandRequest[] = [];
+  const audits: ToolAuditRecord[] = [];
   const runtime: CommandRuntime = options.runtimeFactory?.(root) ?? {
     id: 'policy-fixture',
     label: 'fixture',
     availability: () => ({ok: true}),
     capabilities: () => ({
-      modes: ['read-only', 'workspace-write'],
+      modes: ['read-only', 'workspace-write', 'danger-full-access'],
       network: true,
       tty: false,
       unsandboxed: true,
@@ -280,26 +301,28 @@ async function chain(
     grants,
     commands: runtime,
     stateDirectory: join(home, 'state-not-in-ws'),
-    sandbox: () => ({mode: options.sandboxMode ?? 'workspace-write', escalation: 'on-request'}),
+    readPolicy: relative => permissionRuleDecision(client.permissionRules(), {tool: 'Read', target: relative}),
+    sandbox: () => client.sandboxConfig(),
     turnId: () => turn,
     redact: t => t,
+    audit: record => audits.push(record),
     approve: (request, signal) => client.requestPermission(toolPermissionRequest(request), signal),
   });
   /** Run one call; a prompt is recorded and then answered with `answer` (deny by default). */
   async function attempt(
     name: string,
     input: unknown,
-    answer: 'deny' | 'once' | 'session' = 'deny',
+    answer: PermissionResolutionScope = 'deny',
   ): Promise<{
     outcome: 'ran' | 'prompt' | 'refused';
     status: string;
     prompts: number;
-    prompt?: {action: string; reason: string};
+    prompt?: {action: string; reason: string; decisions: string[]; alwaysRule?: string};
     content: string;
   }> {
     let settled = false;
     let prompts = 0;
-    let prompt: {action: string; reason: string} | undefined;
+    let prompt: {action: string; reason: string; decisions: string[]; alwaysRule?: string} | undefined;
     const pending = dispatcher.invoke({id: crypto.randomUUID(), name, input}).finally(() => (settled = true));
     const end = Date.now() + 3000;
     while (!settled && Date.now() < end) {
@@ -307,7 +330,12 @@ async function chain(
       if (waiting.length) {
         prompts++;
         const request = waiting[0]!;
-        prompt = {action: request.action, reason: request.reason};
+        prompt = {
+          action: request.action,
+          reason: request.reason,
+          decisions: [...request.decisions],
+          alwaysRule: request.alwaysRule,
+        };
         if (answer === 'deny') client.dismissPermissionDialog(request.approvalId);
         else client.resolvePermission(request.approvalId, request.scopeHash, answer);
       }
@@ -322,7 +350,19 @@ async function chain(
       content: result.content,
     };
   }
-  return {client, dispatcher, grants, root, ran, launches, attempt, setTurn: (id: string | undefined) => (turn = id)};
+  return {
+    app,
+    home,
+    client,
+    dispatcher,
+    grants,
+    root,
+    ran,
+    launches,
+    audits,
+    attempt,
+    setTurn: (id: string | undefined) => (turn = id),
+  };
 }
 
 const exec = (cmd: string, network = false) =>
@@ -422,7 +462,7 @@ const escalate = (cmd: string) => ({
 });
 
 describe('escalation to no sandbox (require_escalated, ADR 0053)', () => {
-  test('on-request asks with a prompt that says there is no sandbox, then runs that one command unsandboxed', async () => {
+  test('on-request asks with a prompt that says there is no sandbox, then runs that command unsandboxed', async () => {
     const c = await chain();
     c.client.setPermissionMode('auto');
     const first = await c.attempt('exec_command', escalate('npm i -g tool'), 'session');
@@ -431,8 +471,10 @@ describe('escalation to no sandbox (require_escalated, ADR 0053)', () => {
     expect(first.prompt!.reason).toContain('WITHOUT THE SANDBOX');
     expect(first.prompt!.reason).toContain('needs the real home');
     expect(c.launches.map(r => r.sandbox)).toEqual([{mode: 'workspace-write', network: false, unsandboxed: true}]);
-    // "For session" is not a standing grant: the same escalation asks again, and a plain run stays sandboxed.
-    expect((await c.attempt('exec_command', escalate('npm i -g tool'), 'once')).outcome).toBe('prompt');
+    // ADR 0055: "for session" remembers exactly this escalated command (Codex key includes sandbox_permissions) ...
+    expect((await c.attempt('exec_command', escalate('npm i -g tool'), 'once')).outcome).toBe('ran');
+    // ... not another command, and a plain run of the same text stays sandboxed.
+    expect((await c.attempt('exec_command', escalate('npm i -g other'), 'once')).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', exec('npm i -g tool'))).outcome).toBe('ran');
     expect(c.launches.at(-1)!.sandbox!.unsandboxed).toBeUndefined();
   });
@@ -727,4 +769,207 @@ describe('unparsed and ambiguous shell syntax is judged by the approval policy a
       expect(readFileSync(join(c.root, 'probe.txt'), 'utf8')).toBe('markermore');
     },
   );
+});
+
+describe('ADR 0055: ReviewDecision once/session/always, multi-turn network grants, network_access and Full Access', () => {
+  test('once / session / always for plain commands, network commands and require_escalated', async () => {
+    const c = await chain();
+    // 1. Plain commands under untrusted (`default`): once -> asks again; session -> remembers exact command; always -> Bash(npm test:*).
+    c.client.setPermissionMode('default');
+    const onceCmd = await c.attempt('exec_command', exec('npm test'), 'once');
+    expect(onceCmd.outcome).toBe('prompt');
+    expect(onceCmd.prompt?.decisions).toEqual(['once', 'session', 'always']);
+    expect(onceCmd.prompt?.alwaysRule).toBe('Bash(npm test:*)');
+    expect((await c.attempt('exec_command', exec('npm test'), 'session')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', exec('npm test'))).outcome).toBe('ran');
+    // Session grant covers only `npm test`, not `npm test --watch`; `always` generalizes to the prefix.
+    const alwaysCmd = await c.attempt('exec_command', exec('npm test --watch'), 'always');
+    expect(alwaysCmd.outcome).toBe('prompt');
+    expect(c.client.permissionRules().allow).toContain('Bash(npm test:*)');
+    expect((await c.attempt('exec_command', exec('npm test --bail'))).outcome).toBe('ran');
+    // Plain `Bash` allow rule never pre-approves network or unsandboxed escalation.
+    expect((await c.attempt('exec_command', exec('npm test', true))).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', escalate('npm test'))).outcome).toBe('prompt');
+
+    // 2. Network (`with_additional_permissions`) under on-request (`auto`): once, session, always -> Network(curl:*).
+    c.client.setPermissionMode('auto');
+    expect((await c.attempt('exec_command', exec('curl -s https://a.example', true), 'once')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', exec('curl -s https://a.example', true), 'session')).outcome).toBe(
+      'prompt',
+    );
+    expect((await c.attempt('exec_command', exec('curl -s https://a.example', true))).outcome).toBe('ran');
+    const alwaysNet = await c.attempt('exec_command', exec('curl -s https://b.example', true), 'always');
+    expect(alwaysNet.outcome).toBe('prompt');
+    expect(alwaysNet.prompt?.alwaysRule).toBe('Network(curl:*)');
+    expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
+    expect((await c.attempt('exec_command', exec('curl -s https://c.example', true))).outcome).toBe('ran');
+    // Bash deny rule still overrides Network allow rule.
+    c.client.addPermissionRule('deny', 'Bash(curl -s https://blocked.example)');
+    expect((await c.attempt('exec_command', exec('curl -s https://blocked.example', true))).outcome).toBe('refused');
+
+    // 3. Escalation (`require_escalated`): once, session, always -> Unsandboxed(cargo install:*); dangerous stays exact.
+    expect((await c.attempt('exec_command', escalate('cargo install ripgrep'), 'once')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', escalate('cargo install ripgrep'), 'session')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', escalate('cargo install ripgrep'))).outcome).toBe('ran');
+    const alwaysEsc = await c.attempt('exec_command', escalate('cargo install fd-find'), 'always');
+    expect(alwaysEsc.outcome).toBe('prompt');
+    expect(alwaysEsc.prompt?.alwaysRule).toBe('Unsandboxed(cargo install:*)');
+    expect(c.client.permissionRules().allow).toContain('Unsandboxed(cargo install:*)');
+    expect((await c.attempt('exec_command', escalate('cargo install bat'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox?.unsandboxed).toBe(true);
+    // Dangerous command with network or escalation never generalizes to `rm:*`.
+    const dangerousEsc = await c.attempt('exec_command', escalate('rm -rf build'));
+    expect(dangerousEsc.prompt?.alwaysRule).toBe('Unsandboxed(rm -rf build)');
+  });
+
+  test('request_permissions session network grant survives across multiple turns and implicitly enables network on plain commands', async () => {
+    const c = await chain();
+    c.client.setPermissionMode('auto');
+    c.setTurn('turn-1');
+    const grant = await c.attempt(
+      'request_permissions',
+      {permissions: {network: {enabled: true}}, reason: 'install dependencies'},
+      'session',
+    );
+    expect(grant.status).toBe('ok');
+    expect(grant.prompt?.decisions).toEqual(['once', 'session']);
+    expect(grant.prompt?.alwaysRule).toBeUndefined();
+    // Turn 1: both plain `exec_command` (Codex implicit_granted_permissions) and `with_additional_permissions` get network without prompting.
+    expect((await c.attempt('exec_command', exec('npm install'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox).toEqual({mode: 'workspace-write', network: true});
+
+    // Turn 2 and Turn 3: the session grant stays alive across turns, even after saving an `always` rule elsewhere.
+    c.setTurn('turn-2');
+    expect((await c.attempt('exec_command', exec('rm -rf dist'), 'always')).outcome).toBe('prompt');
+    expect((await c.attempt('exec_command', exec('bun install'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox).toEqual({mode: 'workspace-write', network: true});
+
+    c.setTurn('turn-3');
+    expect((await c.attempt('exec_command', exec('curl https://registry.npmjs.org', true))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox).toEqual({mode: 'workspace-write', network: true});
+
+    // Clearing the session grants revokes the session network grant.
+    c.grants.clear();
+    c.client.clearSessionView();
+    c.client.setPermissionMode('auto');
+    c.setTurn('turn-4');
+    expect((await c.attempt('exec_command', exec('curl https://registry.npmjs.org', true))).outcome).toBe('prompt');
+  });
+
+  test('user config (~/.futryn/config.toml) sets sandbox_mode, approval_policy and network_access; workspace config is ignored', async () => {
+    const savedEnv = {
+      mode: process.env.FUTRYN_SANDBOX_MODE,
+      policy: process.env.FUTRYN_APPROVAL_POLICY,
+      net: process.env.FUTRYN_SANDBOX_NETWORK,
+    };
+    delete process.env.FUTRYN_SANDBOX_MODE;
+    delete process.env.FUTRYN_APPROVAL_POLICY;
+    delete process.env.FUTRYN_SANDBOX_NETWORK;
+    cleanup.push(() => {
+      if (savedEnv.mode === undefined) delete process.env.FUTRYN_SANDBOX_MODE;
+      else process.env.FUTRYN_SANDBOX_MODE = savedEnv.mode;
+      if (savedEnv.policy === undefined) delete process.env.FUTRYN_APPROVAL_POLICY;
+      else process.env.FUTRYN_APPROVAL_POLICY = savedEnv.policy;
+      if (savedEnv.net === undefined) delete process.env.FUTRYN_SANDBOX_NETWORK;
+      else process.env.FUTRYN_SANDBOX_NETWORK = savedEnv.net;
+    });
+
+    const c = await chain({
+      configToml: `sandbox_mode = "workspace-write"\napproval_policy = "on-request"\n\n[sandbox_workspace_write]\nnetwork_access = true\n`,
+      // Planted workspace config attempting Full Access must have zero effect.
+      workspaceConfigToml: `sandbox_mode = "danger-full-access"\napproval_policy = "never"\n`,
+    });
+    expect(c.client.status()).toMatchObject({
+      permissionPreset: 'auto',
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'on-request',
+      sandboxNetwork: true,
+    });
+    // Network commands run in the workspace-write sandbox without asking; outside writes and .git writes stay denied.
+    expect((await c.attempt('exec_command', exec('curl https://example.com', true))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', exec('npm install'))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox).toEqual({mode: 'workspace-write', network: true});
+    expect((await c.attempt('write', {path: '../outside.txt', content: 'x'})).outcome).toBe('refused');
+    expect((await c.attempt('write', {path: '.git/config', content: 'x'})).outcome).toBe('refused');
+    // Escalation still asks because workspaceConfigToml was ignored.
+    expect((await c.attempt('exec_command', escalate('ls'))).outcome).toBe('prompt');
+
+    // Env overrides config, and invalid config values fail closed.
+    const invalid = loadHostPermissions({
+      sandbox_mode: 'bogus',
+      approval_policy: 'bogus',
+      sandbox_workspace_write: {network_access: 'yes'},
+    });
+    expect(invalid.sandboxMode).toBe('read-only');
+    expect(invalid.approvalPolicy).toBe('untrusted');
+    expect(invalid.networkAccess).toBeUndefined();
+    expect(invalid.diagnostics.length).toBe(3);
+    expect(sandboxSettingsFromEnv({FUTRYN_SANDBOX_NETWORK: '1'}, {networkAccess: false}).network).toBe(true);
+    expect(sandboxSettingsFromEnv({FUTRYN_SANDBOX_NETWORK: '0'}, {networkAccess: true}).network).toBe(false);
+    expect(approvalPolicyFromEnv({}, {approvalPolicy: 'never'})).toBe('never');
+    expect(permissionModeFromEnv({}, {approvalPolicy: 'never'})).toBe('bypassPermissions');
+  });
+
+  test('Full Access (danger-full-access + never) runs unsandboxed without prompts, project deny rules still win, and audit records everything', async () => {
+    const c = await chain();
+    const preset = c.client.setPermissionPreset('full-access');
+    expect(preset.id).toBe('full-access');
+    expect(c.client.status()).toMatchObject({
+      permissionPreset: 'full-access',
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'never',
+      permissionMode: 'bypassPermissions',
+      sandboxNetwork: false,
+    });
+
+    expect((await c.attempt('exec_command', exec('curl https://example.com', true))).outcome).toBe('ran');
+    expect(c.launches.at(-1)?.sandbox).toEqual({mode: 'danger-full-access', network: true, unsandboxed: true});
+    expect((await c.attempt('exec_command', escalate('npm i -g pkg'))).outcome).toBe('ran');
+    expect((await c.attempt('write', {path: 'ok.txt', content: 'hello\n'})).outcome).toBe('ran');
+    expect((await c.attempt('request_permissions', {permissions: {network: {enabled: true}}})).outcome).toBe('ran');
+
+    // Project deny rules still win over Full Access across Bash, Network, Unsandboxed, Edit and Read.
+    c.client.addPermissionRule('deny', 'Bash(git push:*)');
+    c.client.addPermissionRule('deny', 'Network(nc:*)');
+    c.client.addPermissionRule('deny', 'Unsandboxed(mkfs:*)');
+    c.client.addPermissionRule('deny', 'Edit(locked/**)');
+    c.client.addPermissionRule('deny', 'Read(private/**)');
+    mkdirSync(join(c.root, 'private'), {recursive: true});
+    writeFileSync(join(c.root, 'private', 'key.txt'), 'secret');
+
+    expect((await c.attempt('exec_command', exec('git push origin main'))).outcome).toBe('refused');
+    expect((await c.attempt('exec_command', exec('nc 1.2.3.4 80'))).outcome).toBe('refused');
+    expect((await c.attempt('exec_command', exec('mkfs /dev/null'))).outcome).toBe('refused');
+    expect((await c.attempt('write', {path: 'locked/a.txt', content: 'x'})).outcome).toBe('refused');
+    expect((await c.attempt('read', {path: 'private/key.txt'})).outcome).toBe('refused');
+
+    // Audit recorded requested, decided and completed phases for both allowed and denied calls.
+    expect(c.audits.some(r => r.target?.includes('curl https://example.com') && r.phase === 'completed')).toBe(true);
+    expect(
+      c.audits.some(r => r.target?.includes('git push origin main') && r.phase === 'decided' && r.decision === 'deny'),
+    ).toBe(true);
+
+    // Docker-like runtime that does not advertise danger-full-access refuses instead of downgrading.
+    const dockerLike = await chain({
+      sandboxMode: 'danger-full-access',
+      runtimeFactory: () => ({
+        id: 'docker-fixture',
+        label: 'docker',
+        availability: () => ({ok: true}),
+        capabilities: () => ({
+          modes: ['read-only', 'workspace-write'],
+          network: true,
+          tty: false,
+          shells: ['bash'],
+          tools: [],
+        }),
+        run: async () => {
+          throw new Error('must not run');
+        },
+      }),
+    });
+    const refused = await dockerLike.attempt('exec_command', exec('ls'));
+    expect(refused.status).toBe('error');
+    expect(refused.content).toContain('cannot enforce the configured sandbox');
+  });
 });

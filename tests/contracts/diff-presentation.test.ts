@@ -151,6 +151,7 @@ test('write approval uses colored proposed code and keeps denial selected', asyn
     createdAt: '2026-11-15T00:00:00Z',
     expiresAt: '2026-11-15T01:00:00Z',
     status: 'pending' as const,
+    decisions: ['once' as const, 'session' as const],
     diffPreview: diff,
   };
   const rendered = renderPermissionDialogOverlay({

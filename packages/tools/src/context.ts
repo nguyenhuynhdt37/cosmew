@@ -11,7 +11,12 @@ import {evaluateRead, type SessionGrants, type SandboxEscalation} from '@futryn/
 import type {LspManager} from '@futryn/code-intel';
 import type {WorkspaceRoot} from '@futryn/workspace';
 
-export type ApprovalDecision = 'once' | 'session' | 'deny';
+/**
+ * The answer to an approval prompt (ADR 0055, Codex `ReviewDecision`): `session` is
+ * ApprovedForSession; `always` is the persistent project Allow rule, which the approval adapter has
+ * already saved - for the dispatcher it authorizes exactly this call, like `once`.
+ */
+export type ApprovalDecision = 'once' | 'session' | 'always' | 'deny';
 
 export interface ApprovalRequest {
   tool: string;
@@ -29,6 +34,8 @@ export interface ApprovalRequest {
   network?: boolean;
   /** The command asks to run once WITHOUT the sandbox (`require_escalated`, ADR 0053). */
   unsandboxed?: boolean;
+  /** True when the command matched the dangerous-command heuristic (`forced-rm`), even if combined with network/escalation. */
+  dangerous?: boolean;
   /** Commands: parsed sub-commands for project rules, null when the script is unparsed (ADR 0040). */
   commands?: string[] | null;
   /** Model-supplied, user-facing reason for additional permissions. */
@@ -73,7 +80,7 @@ export interface ToolDispatcherOptions {
    * Configured command sandbox (ADR 0034). Read at prepare, authorization and revalidation, so a
    * change before launch invalidates the pending request. Defaults to read-only, on-request.
    */
-  sandbox?: () => {mode: CommandSandbox['mode']; escalation: SandboxEscalation};
+  sandbox?: () => SandboxConfig;
   /**
    * Identity of the running turn. `request_permissions` answered "once" grants for this turn only
    * (Codex); without it such grants cover only the request itself.
@@ -134,8 +141,26 @@ export function writeGranted(options: ToolDispatcherOptions, path: string): bool
   });
 }
 
-export const sandboxConfig = (options: ToolDispatcherOptions) =>
+/**
+ * The session's configured sandbox, read per call: the mode (Read Only / Auto / Full Access presets,
+ * ADR 0055), whether the approval policy still allows escalating (`never`: no), and whether the
+ * user's config gives sandboxed commands network (`network_access`, `FUTRYN_SANDBOX_NETWORK`;
+ * applies to `workspace-write` only, like Codex).
+ */
+export interface SandboxConfig {
+  mode: CommandSandbox['mode'];
+  escalation: SandboxEscalation;
+  network?: boolean;
+}
+
+export const sandboxConfig = (options: ToolDispatcherOptions): SandboxConfig =>
   options.sandbox?.() ?? {mode: 'read-only' as const, escalation: 'on-request' as const};
+
+/** Configured network for sandboxed commands: only the workspace-write sandbox has the setting. */
+export const networkConfigured = (options: ToolDispatcherOptions): boolean => {
+  const config = sandboxConfig(options);
+  return config.network === true && config.mode === 'workspace-write';
+};
 
 /** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
 export function commandGrantTarget(
@@ -165,6 +190,8 @@ export function effectiveSandboxMode(
 ): CommandSandbox['mode'] | undefined {
   const modes = runtime.capabilities?.().modes ?? ['read-only'];
   const configured = sandboxConfig(options).mode;
+  // Full Access is never downgraded silently: a runtime that cannot run unsandboxed refuses (ADR 0055).
+  if (configured === 'danger-full-access') return modes.includes(configured) ? configured : undefined;
   return modes.includes(configured) ? configured : modes.includes('read-only') ? 'read-only' : undefined;
 }
 

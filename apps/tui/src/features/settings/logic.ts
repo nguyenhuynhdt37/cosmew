@@ -182,7 +182,7 @@ export function configurationRows(
       },
       {
         label: 'Approval policy',
-        value: `${client.permissionMode()} (${APPROVAL_POLICY_FOR_MODE[client.permissionMode()]})`,
+        value: `${client.permissionPreset()} · ${client.sandboxMode()} sandbox · ${client.permissionMode()} (${APPROVAL_POLICY_FOR_MODE[client.permissionMode()]})`,
         action: 'permissions',
         source: 'session only',
       },

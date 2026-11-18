@@ -1,5 +1,12 @@
 import type {CommandRequest, CommandRuntime, CommandSandbox} from '@futryn/contracts';
-import {effectiveSandboxMode, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {
+  effectiveSandboxMode,
+  networkConfigured,
+  networkGranted,
+  sandboxConfig,
+  type ToolDispatcherOptions,
+  type ToolOutput,
+} from '../context';
 import {EXEC_LIMITS, clampYield, execDescriptor, execInput, shellOf, type ExecInput} from '../exec/command';
 import {runCommand} from '../runtimes/process';
 import type {ToolHandler} from './types';
@@ -36,14 +43,23 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
 
       const permissionError = checkPermissionRequest(input);
       if (permissionError) return permissionError;
-      const network = input.sandbox_permissions === 'with_additional_permissions';
       const escalated = input.sandbox_permissions === 'require_escalated';
 
       const mode = effectiveSandboxMode(options, runtime);
       if (!mode)
         return refuse('SANDBOX_UNAVAILABLE', 'This runtime cannot enforce the configured sandbox. Nothing was run.');
-      // `unsandboxed` means this one command only; the orchestrator asks the user before it can run.
-      const sandbox: CommandSandbox = {mode, network, ...(escalated ? {unsandboxed: true} : {})};
+      // Full Access (ADR 0055, Codex `danger-full-access`): the session has no sandbox and the
+      // network is open, so a request for more changes nothing and needs no approval.
+      const fullAccess = mode === 'danger-full-access';
+      // Network comes from an approved request, an active `request_permissions` grant (Codex
+      // `implicit_granted_permissions`), or the user's `network_access` setting (workspace-write only).
+      const network =
+        fullAccess ||
+        input.sandbox_permissions === 'with_additional_permissions' ||
+        networkConfigured(options) ||
+        (!escalated && networkGranted(options));
+      // `unsandboxed` otherwise means this one command only; the orchestrator asks the user before it can run.
+      const sandbox: CommandSandbox = {mode, network, ...(escalated || fullAccess ? {unsandboxed: true} : {})};
 
       const shell = shellOf(input.shell);
       const capabilityError = checkCapabilities(runtime, input, shell, sandbox);
@@ -62,7 +78,7 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       const label = options.redact(`${file.relative === '.' ? '' : file.relative + ': '}${input.cmd}`).slice(0, 1024);
       const request = buildRequest(input, file.absolute, sandbox, shell!, sessions);
       // A sandbox failure may be retried unsandboxed only when the user can still be asked (Codex).
-      const canEscalate = !escalated && sandboxConfig(options).escalation !== 'never';
+      const canEscalate = !escalated && !fullAccess && sandboxConfig(options).escalation !== 'never';
       // The approval scope binds everything that changes authority or lifetime, not just the text.
       const executionKey = JSON.stringify({
         timeoutMs: request.timeoutMs,

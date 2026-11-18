@@ -1,5 +1,5 @@
 import {TranscriptLayout} from '../transcript/layout';
-import {PERMISSION_MODE_HINTS} from '@futryn/contracts';
+import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import {FutrynError, type ToolCall} from '@futryn/contracts';
 import {acceptSlashSelection, parseSlashCommand} from '@futryn/sdk';
 import {nextGrapheme, previousGrapheme, verticalCursor} from '../../input/text';
@@ -580,8 +580,11 @@ export class ChatController {
       return;
     }
     if (key === 'Shift+Tab') {
-      const next = this.host.client.cyclePermissionMode();
-      this.banner = `Permission mode: ${next}. ${PERMISSION_MODE_HINTS[next]}`;
+      const preset = this.host.client.cyclePermissionPreset();
+      this.banner =
+        preset.id === 'full-access'
+          ? `${FULL_ACCESS_WARNING} (Shift+Tab: Read Only)`
+          : `Permissions: ${preset.label}. ${preset.description}`;
       return;
     }
 

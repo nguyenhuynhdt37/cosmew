@@ -196,7 +196,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     aliases: ['/perm'],
     title: 'Permissions',
     description:
-      'Pending prompts; /permissions default|acceptEdits|auto|plan|bypassPermissions sets the mode (Shift+Tab cycles)',
+      'Pending prompts; /permissions read-only|auto|full-access (or mode) sets permissions; Shift+Tab cycles presets',
     category: 'Workspace & Security',
   },
   {

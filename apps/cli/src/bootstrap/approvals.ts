@@ -1,3 +1,4 @@
+import {suggestPermissionRule, type PermissionRuleTool} from '@futryn/contracts';
 import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
 import type {ApprovalRequest} from '@futryn/tools';
 import type {WorkspaceRoot} from '@futryn/workspace';
@@ -26,7 +27,7 @@ const APPROVAL_REASONS: Record<string, string> = {
   'shell-parser-unavailable':
     'Futryn could not load its shell parser, so it cannot check this command. It still runs inside the sandbox.',
   'unsandboxed-escalation':
-    'WITHOUT THE SANDBOX: this one command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason.',
+    'WITHOUT THE SANDBOX: this command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason. "For session" remembers exactly this command in this directory; "always" saves an Unsandboxed rule for this project.',
   'outside-writable-roots':
     'The session sandbox is read-only here: approving lets Futryn write this file anyway (workspace policy still applies).',
   'request-permissions':
@@ -38,6 +39,26 @@ const APPROVAL_REASONS: Record<string, string> = {
 };
 
 const reasonText = (reason: string) => APPROVAL_REASONS[reason] ?? reason;
+
+type Offer = Pick<PermissionInput, 'decisions' | 'alwaysRule'>;
+/**
+ * The approvals a prompt offers (ADR 0055, Codex `available_decisions`): once and session always;
+ * `always` only when a project Allow rule can stand for the request (Codex: an execpolicy amendment).
+ */
+function offer(rule: string | null): Offer {
+  return rule ? {decisions: ['once', 'session', 'always'], alwaysRule: rule} : {decisions: ['once', 'session']};
+}
+
+/** A command prompt's `always` rule: only for exactly one parsed sub-command; an unparsed script never matches an allow rule. */
+function commandRule(tool: PermissionRuleTool, request: ApprovalRequest): string | null {
+  if (!request.commands || request.commands.length !== 1) return null;
+  return suggestPermissionRule({
+    tool,
+    target: request.commands[0]!,
+    // A dangerous command is never generalized to a prefix (`rm -rf build` is not `Bash(rm:*)`).
+    exact: Boolean(request.dangerous) || request.reason === 'dangerous-command',
+  });
+}
 
 /** The dialog request for a Futryn tool call (read of a secret, patch, command or terminal input). */
 export function toolPermissionRequest(request: ApprovalRequest): PermissionInput {
@@ -66,6 +87,8 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       reason: reasonText(request.reason) + justification,
       riskLevel: 'high',
       scopeKey: request.scopeKey,
+      // Codex offers a turn grant and a session grant only; nothing persists.
+      ...offer(null),
     };
   }
   if (request.capability === 'fs.write') {
@@ -81,6 +104,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       riskLevel: 'high',
       scopeKey: request.scopeKey,
       diffPreview: request.diffPreview,
+      ...offer(suggestPermissionRule({tool: 'Edit', target: request.target})),
     };
   }
   if (request.capability === 'process.execute') {
@@ -91,19 +115,20 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       : request.unsandboxed
         ? ' The model gave no reason.'
         : '';
-    const gated = request.network || request.unsandboxed;
+    const tool: PermissionRuleTool = request.network ? 'Network' : request.unsandboxed ? 'Unsandboxed' : 'Bash';
     return {
       capability: request.network ? 'network.connect' : request.capability,
       ...(request.network
-        ? {kind: 'network' as const, ruleTarget: null}
+        ? {kind: 'network' as const}
         : request.unsandboxed
-          ? {kind: 'escalation' as const, ruleTarget: null}
+          ? {kind: 'escalation' as const}
           : kind
             ? {kind}
             : {}),
       // Project rules judge Codex's parsed sub-commands; an unparsed script never matches an allow rule.
-      // Escalations carry no segments: deny/ask rules still apply, an allow rule never pre-approves one.
-      ...(!gated && request.commands !== undefined ? {ruleSegments: request.commands} : {}),
+      // Network and unsandboxed runs are allowed only by their own rule tool (`Network`, `Unsandboxed`).
+      ...(request.commands !== undefined ? {ruleSegments: request.commands} : {}),
+      ruleTool: tool,
       action: request.unsandboxed
         ? `Run WITHOUT SANDBOX in ${(request.workdir ?? '.').slice(0, 60)}`
         : `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
@@ -111,6 +136,7 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
       reason: (reasonText(request.reason) + justification).slice(0, 400),
       riskLevel: 'high',
       scopeKey: request.scopeKey,
+      ...offer(commandRule(tool, request)),
     };
   }
   return {
@@ -119,6 +145,13 @@ export function toolPermissionRequest(request: ApprovalRequest): PermissionInput
     target: request.target,
     reason: reasonText(request.reason),
     riskLevel: 'medium',
+    ...offer(
+      request.capability === 'fs.read'
+        ? suggestPermissionRule({tool: 'Read', target: request.target})
+        : request.capability === 'network.connect'
+          ? suggestPermissionRule({tool: 'WebFetch', target: request.target})
+          : null,
+    ),
   };
 }
 

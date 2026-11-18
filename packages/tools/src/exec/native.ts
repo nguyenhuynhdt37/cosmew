@@ -241,7 +241,7 @@ export class NativeCommandRuntime implements CommandRuntime {
 
   capabilities(): CommandRuntimeCapabilities {
     return {
-      modes: ['read-only', 'workspace-write'],
+      modes: ['read-only', 'workspace-write', 'danger-full-access'],
       network: true,
       tty: true,
       unsandboxed: true,

@@ -1,15 +1,17 @@
 import type {FutrynClient} from '@futryn/sdk';
 import {
+  FULL_ACCESS_WARNING,
   PERMISSION_MODE_HINTS,
-  PERMISSION_MODES,
+  PERMISSION_PRESETS,
   type BorderStyle,
   type PermissionMode,
+  type PermissionPresetId,
   type PermissionPromptRequest,
   type PermissionRuleSet,
   type ThemeTokens,
 } from '@futryn/contracts';
 import {Modal, clampIndex, type RenderedBoxLine} from '../../ui';
-import {PERMISSION_RULE_TABS, suggestedRule, type PermissionDialogState, type PermissionRulesState} from './types';
+import {MODE_ENTRIES, PERMISSION_RULE_TABS, type PermissionDialogState, type PermissionRulesState} from './types';
 import {parseUnifiedDiff, renderDiffCodeLine} from '../diff/code-lines';
 
 export function renderPermissionDialogOverlay(options: {
@@ -59,10 +61,14 @@ export function renderPermissionDialogOverlay(options: {
     wrap(
       request.capability === 'fs.write'
         ? 'Once applies this exact diff. Session remembers only this patch and original file versions.'
-        : command
+        : command || request.action.startsWith('Run ')
           ? 'Once runs it now. Session allows this exact command in this directory until revoked.'
-          : 'Once applies to this request. Session allows this target until revoked.',
+          : request.action === 'Grant additional permissions'
+            ? 'Once grants it for the rest of this turn. Session grants it until the session ends.'
+            : 'Once applies to this request. Session allows this target until revoked.',
     );
+    if (request.alwaysRule)
+      wrap(`Always saves the Allow rule ${request.alwaysRule} for this project (edit it in /permissions).`);
     if (request.diffPreview) {
       wrap('Preview · proposed changes (not applied):');
       const diff = parseUnifiedDiff(request.diffPreview);
@@ -99,13 +105,15 @@ export function renderPermissionDialogOverlay(options: {
           .join(', ')}`,
       );
   }
-  const rule = request ? suggestedRule(request) : null;
+  // Exactly the answers the request offers (ADR 0055, Codex `available_decisions`).
   const actions = request
     ? ([
         ['once', '[1] Yes'],
-        ['session', '[2] Yes, for this session'],
+        ...(request.decisions.includes('session') ? [['session', '[2] Yes, for this session']] : []),
         ['deny', '[3] No'],
-        ...(rule ? [['rule', `[4] Yes, and don't ask again for ${rule}`]] : []),
+        ...(request.decisions.includes('always') && request.alwaysRule
+          ? [['always', `[4] Yes, and always allow ${request.alwaysRule} in this project`]]
+          : []),
       ] as const)
     : [];
   // Tiny terminals keep at least two body rows: show only the selected choice (←/→ changes it).
@@ -147,7 +155,7 @@ const TAB_HELP = {
   allow: 'Futryn will not ask before using these.',
   ask: 'Futryn asks first, even in auto mode; bypass (never) refuses instead.',
   deny: 'Futryn refuses these without asking.',
-  mode: 'How requests without a rule are answered. Shift+Tab cycles.',
+  mode: 'Read Only, Auto and Full Access are Codex presets (sandbox + approval). Shift+Tab cycles them.',
 } as const;
 
 /**
@@ -159,12 +167,14 @@ export function renderPermissionRulesOverlay(options: {
   height: number;
   rules: PermissionRuleSet;
   mode: PermissionMode;
+  preset?: PermissionPresetId | 'custom';
   grants: string[];
   state: PermissionRulesState;
   tokens: ThemeTokens;
   borderStyle: BorderStyle;
 }): RenderedBoxLine[] {
   const {width, height, rules, mode, state, tokens, borderStyle} = options;
+  const preset = options.preset ?? 'custom';
   const modal = new Modal({width, height, minInner: 1, tokens, borderStyle, borderColor: tokens.borderFocused});
   modal.top(' Permissions ');
   // Tab strip: the active tab is bold accent and underlined by a rule on the next row.
@@ -196,15 +206,27 @@ export function renderPermissionRulesOverlay(options: {
       bold: selected,
     });
   if (state.tab === 'mode') {
-    PERMISSION_MODES.forEach((entry, index) => {
+    MODE_ENTRIES.forEach((entry, index) => {
+      const selected = index === state.selectedIndex;
+      const current = entry.kind === 'preset' ? entry.id === preset : preset === 'custom' && entry.mode === mode;
+      const info = entry.kind === 'preset' ? PERMISSION_PRESETS.find(item => item.id === entry.id)! : undefined;
+      const label = info ? info.label : entry.kind === 'mode' ? entry.mode : '';
       row(
-        index === state.selectedIndex,
-        `${entry === mode ? '●' : '○'} ${entry}`,
-        entry === mode ? tokens.accent : tokens.foregroundMuted,
+        selected,
+        `${current ? '●' : '○'} ${label}${info ? ` (${info.sandbox} + ${info.mode === 'bypassPermissions' ? 'never' : 'on-request'})` : ' (approval only)'}`,
+        info?.id === 'full-access' ? tokens.error : current ? tokens.accent : tokens.foregroundMuted,
       );
-      if (index === state.selectedIndex)
-        modal.text(`     ${PERMISSION_MODE_HINTS[entry]}`.slice(0, modal.innerWidth), {fg: tokens.foregroundSubtle});
+      if (selected) {
+        const text = info ? info.description : entry.kind === 'mode' ? PERMISSION_MODE_HINTS[entry.mode] : '';
+        for (let i = 0; i < text.length && i < 3 * (modal.innerWidth - 5); i += modal.innerWidth - 5)
+          modal.text(`     ${text.slice(i, i + modal.innerWidth - 5)}`, {fg: tokens.foregroundSubtle});
+      }
     });
+    if (state.confirmFullAccess) {
+      for (let i = 0; i < FULL_ACCESS_WARNING.length; i += modal.innerWidth - 2)
+        modal.text(` ${FULL_ACCESS_WARNING.slice(i, i + modal.innerWidth - 2)}`, {fg: tokens.error, bold: true});
+      modal.text(' Press Enter again to enable Full Access, any other key cancels.', {fg: tokens.warning});
+    }
   } else {
     const list = rules[state.tab];
     if (state.input !== null) {

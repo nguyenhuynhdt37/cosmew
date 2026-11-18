@@ -1,6 +1,13 @@
 import {parseSlashCommand} from '@futryn/sdk';
 import type {TuiHost} from '../../core/feature';
-import {PERMISSION_MODES, PERMISSION_MODE_HINTS, type PermissionMode} from '@futryn/contracts';
+import {
+  FULL_ACCESS_WARNING,
+  PERMISSION_MODES,
+  PERMISSION_MODE_HINTS,
+  PERMISSION_PRESETS,
+  findPermissionPreset,
+  type PermissionMode,
+} from '@futryn/contracts';
 import {planEffort} from './logic';
 import {compactionNotice} from '../../ui/compaction-notice';
 
@@ -42,13 +49,24 @@ export class CommandRouter {
             host.openOverlay(definition.overlay!);
             return;
           }
+          // A preset (Read Only / Auto / Full Access, ADR 0055) or an approval-only mode.
+          const preset = findPermissionPreset(args);
+          if (preset) {
+            client.setPermissionPreset(preset.id);
+            host.setBanner(
+              preset.id === 'full-access' ? FULL_ACCESS_WARNING : `Permissions: ${preset.label}. ${preset.description}`,
+            );
+            return;
+          }
           const mode = PERMISSION_MODES.find(
             value =>
               value.toLowerCase() === args.toLowerCase() ||
               (value === 'bypassPermissions' && args.toLowerCase() === 'bypass'),
           );
           if (!mode) {
-            host.setBanner(`Permission modes: ${PERMISSION_MODES.join(', ')}.`);
+            host.setBanner(
+              `Presets: ${PERMISSION_PRESETS.map(entry => entry.id).join(', ')}. Modes: ${PERMISSION_MODES.join(', ')}.`,
+            );
             return;
           }
           client.setPermissionMode(mode as PermissionMode);

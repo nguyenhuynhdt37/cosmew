@@ -160,7 +160,14 @@ describe('real Seatbelt', () => {
   });
 });
 
-function harness(options: {answer?: ApprovalDecision; escalation?: 'on-request' | 'never'} = {}) {
+function harness(
+  options: {
+    answer?: ApprovalDecision;
+    escalation?: 'on-request' | 'never';
+    mode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+    network?: boolean;
+  } = {},
+) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-escal-')));
   const runtime = new NativeCommandRuntime({workspaceRoot: root});
   clean.push(
@@ -174,7 +181,11 @@ function harness(options: {answer?: ApprovalDecision; escalation?: 'on-request' 
     workspace: new WorkspaceRoot(root),
     grants,
     commands: runtime,
-    sandbox: () => ({mode: 'workspace-write', escalation: options.escalation ?? 'on-request'}),
+    sandbox: () => ({
+      mode: options.mode ?? 'workspace-write',
+      escalation: options.escalation ?? 'on-request',
+      ...(options.network !== undefined ? {network: options.network} : {}),
+    }),
     redact: s => s,
     approve: async r => {
       prompts.push(r);
@@ -193,42 +204,50 @@ function harness(options: {answer?: ApprovalDecision; escalation?: 'on-request' 
 }
 
 describe('escalation (require_escalated)', () => {
-  nativeTest('asks first, names the missing sandbox, runs that one command unsandboxed, and never again', async () => {
-    const h = harness();
-    // Outside the workspace: impossible in the sandbox, so success proves it ran unsandboxed.
-    const target = join(tmpdir(), `fyn-escalated-${crypto.randomUUID()}`);
-    clean.push(() => rmSync(target, {force: true}));
-    const input = {
-      cmd: `touch ${target}`,
-      sandbox_permissions: 'require_escalated',
-      justification: 'write a marker outside the project',
-    };
-    const sandboxed = await h.exec({cmd: `touch ${target}`});
-    expect(sandboxed.code).toBe('SANDBOX_DENIED');
-    expect(sandboxed.content).toContain('require_escalated');
-    expect(existsSync(target)).toBe(false);
+  nativeTest(
+    'asks first, names the missing sandbox, runs that command unsandboxed; a session answer covers exactly that command',
+    async () => {
+      const h = harness();
+      // Outside the workspace: impossible in the sandbox, so success proves it ran unsandboxed.
+      const target = join(tmpdir(), `fyn-escalated-${crypto.randomUUID()}`);
+      clean.push(() => rmSync(target, {force: true}));
+      const input = {
+        cmd: `touch ${target}`,
+        sandbox_permissions: 'require_escalated',
+        justification: 'write a marker outside the project',
+      };
+      const sandboxed = await h.exec({cmd: `touch ${target}`});
+      expect(sandboxed.code).toBe('SANDBOX_DENIED');
+      expect(sandboxed.content).toContain('require_escalated');
+      expect(existsSync(target)).toBe(false);
 
-    h.prompts.length = 0;
-    h.setAnswer('session');
-    const done = await h.exec(input);
-    expect(done.status).toBe('ok');
-    expect(existsSync(target)).toBe(true);
-    expect(h.prompts).toHaveLength(1);
-    expect(h.prompts[0]).toMatchObject({
-      unsandboxed: true,
-      reason: 'unsandboxed-escalation',
-      sandbox: 'NO SANDBOX',
-      justification: 'write a marker outside the project',
-    });
-    // "Allow for session" is not a reusable grant for an escalation: the same call asks again.
-    rmSync(target);
-    await h.exec(input);
-    expect(h.prompts).toHaveLength(2);
-    expect(existsSync(target)).toBe(true);
-    // And a plain sandboxed run of the same text is still sandboxed.
-    rmSync(target);
-    expect((await h.exec({cmd: `touch ${target}`})).code).toBe('SANDBOX_DENIED');
-  });
+      h.prompts.length = 0;
+      h.setAnswer('session');
+      const done = await h.exec(input);
+      expect(done.status).toBe('ok');
+      expect(existsSync(target)).toBe(true);
+      expect(h.prompts).toHaveLength(1);
+      expect(h.prompts[0]).toMatchObject({
+        unsandboxed: true,
+        reason: 'unsandboxed-escalation',
+        sandbox: 'NO SANDBOX',
+        justification: 'write a marker outside the project',
+      });
+      // ADR 0055 (reverses 0053): "for session" is remembered for exactly this command, directory and
+      // sandbox, like Codex's UnifiedExecApprovalKey which includes `sandbox_permissions`.
+      rmSync(target);
+      await h.exec(input);
+      expect(h.prompts).toHaveLength(1);
+      expect(existsSync(target)).toBe(true);
+      // A different escalated command is a different key and asks again.
+      await h.exec({...input, cmd: `touch ${target}.other`});
+      clean.push(() => rmSync(`${target}.other`, {force: true}));
+      expect(h.prompts).toHaveLength(2);
+      // And a plain sandboxed run of the same text is still sandboxed.
+      rmSync(target);
+      expect((await h.exec({cmd: `touch ${target}`})).code).toBe('SANDBOX_DENIED');
+    },
+  );
 
   nativeTest('denied runs nothing; the "never" policy refuses without asking', async () => {
     const target = join(tmpdir(), `fyn-escalated-${crypto.randomUUID()}`);
@@ -247,6 +266,38 @@ describe('escalation (require_escalated)', () => {
     const hint = await never.exec({cmd: `touch ${target}`});
     expect(hint.code).toBe('SANDBOX_DENIED');
     expect(hint.content).not.toContain('require_escalated');
+  });
+
+  nativeTest(
+    'network_access opens outbound network without asking while still blocking outside and .git writes',
+    async () => {
+      const h = harness({mode: 'workspace-write', escalation: 'on-request', network: true});
+      mkdirSync(join(h.root, '.git'), {recursive: true});
+      writeFileSync(join(h.root, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+      const outside = join(tmpdir(), `fyn-netcfg-out-${crypto.randomUUID()}`);
+      clean.push(() => rmSync(outside, {force: true}));
+      // Plain command gets outbound network (not immediately ECONNREFUSED by Seatbelt); `approve` is
+      // called only for the normal `process-execute` check (answered `once` in this bare harness).
+      const probe = await h.exec({
+        cmd: `bun -e 'const c=require("node:net").connect(443,"192.0.2.1");c.on("connect",()=>{console.log("CONNECTED");process.exit(0)});c.on("error",e=>{console.log("ERR",e.code);process.exit(1)});setTimeout(()=>{console.log("TIMEOUT");process.exit(0)},1200)'`,
+      });
+      expect(probe.content).not.toContain('ERR ECONNREFUSED');
+      expect(h.prompts[0]?.reason).toBe('process-execute');
+      // Writes outside the workspace and under .git stay blocked by Seatbelt.
+      expect((await h.exec({cmd: `touch ${outside}`})).code).toBe('SANDBOX_DENIED');
+      expect(existsSync(outside)).toBe(false);
+      await h.exec({cmd: 'touch .git/blocked || true'});
+      expect(existsSync(join(h.root, '.git', 'blocked'))).toBe(false);
+    },
+  );
+
+  nativeTest('Full Access (danger-full-access) runs commands outside the OS sandbox', async () => {
+    const h = harness({mode: 'danger-full-access', escalation: 'never'});
+    const outside = join(tmpdir(), `fyn-fullaccess-${crypto.randomUUID()}`);
+    clean.push(() => rmSync(outside, {force: true}));
+    const result = await h.exec({cmd: `touch ${outside}`});
+    expect(result.status).toBe('ok');
+    expect(existsSync(outside)).toBe(true);
   });
 });
 

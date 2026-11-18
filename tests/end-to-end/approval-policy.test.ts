@@ -143,3 +143,82 @@ test.skipIf(process.platform !== 'darwin')(
     expect(readdirSync(c.root)).toEqual(['source.ts']);
   },
 );
+
+test('request_permissions answered [2] "for this session" stays active across later turns without prompting again', async () => {
+  const launches: {command: string; network?: boolean}[] = [];
+  let turnNumber = 1;
+  const c = await make(
+    view => {
+      const results = view.results;
+      if (turnNumber === 1) {
+        if (!results.some(r => r.name === 'request_permissions'))
+          return {
+            calls: [{name: 'request_permissions', input: {permissions: {network: {enabled: true}}, reason: 'deps'}}],
+          };
+        if (!results.some(r => r.name === 'exec_command' && r.input.cmd === 'npm install'))
+          return {calls: [{name: 'exec_command', input: {cmd: 'npm install'}}]};
+        return {text: 'TURN1_DONE'};
+      }
+      const turn2Execs = results.filter(r => r.name === 'exec_command' && String(r.input.cmd).startsWith('curl'));
+      if (!turn2Execs.length)
+        return {
+          calls: [
+            {
+              name: 'exec_command',
+              input: {
+                cmd: 'curl -s https://example.com',
+                sandbox_permissions: 'with_additional_permissions',
+                additional_permissions: {network: {enabled: true}},
+                justification: 'fetch metadata',
+              },
+            },
+          ],
+        };
+      return {text: 'TURN2_DONE'};
+    },
+    () => ({
+      id: 'net-session-e2e',
+      label: 'fixture',
+      availability: () => ({ok: true}),
+      capabilities: () => ({
+        modes: ['read-only', 'workspace-write', 'danger-full-access'],
+        network: true,
+        tty: false,
+        unsandboxed: true,
+        shells: ['bash'],
+        tools: [],
+      }),
+      run: async request => {
+        launches.push({command: request.command, network: request.sandbox?.network});
+        return {kind: 'exited', exitCode: 0, signal: null, output: 'ok\n', omittedBytes: 0, durationMs: 1};
+      },
+    }),
+  );
+
+  const turn1 = c.tui.submitPrompt('Install dependencies');
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !c.client.listPendingPermissions().length) await Bun.sleep(5);
+  expect(c.client.listPendingPermissions()).toHaveLength(1);
+  c.tui.advanceStartupGate();
+  // Press [2] Yes, for this session.
+  await c.tui.handleKey('2');
+  await turn1;
+  expect(launches).toEqual([{command: 'npm install', network: true}]);
+
+  // Turn 2: network grant survives into the new turn with zero prompts.
+  turnNumber = 2;
+  let extraPrompts = 0;
+  c.client.onInteractionEvent(e => {
+    if (e.type === 'permission.requested') extraPrompts++;
+  });
+  await c.tui.submitPrompt('Fetch metadata in turn 2');
+  expect(extraPrompts).toBe(0);
+  expect(launches).toEqual([
+    {command: 'npm install', network: true},
+    {command: 'curl -s https://example.com', network: true},
+  ]);
+
+  // `/new` clears the session and revokes the session grant.
+  await c.tui.submitPrompt('/new');
+  expect(c.client.listToolGrants()).toEqual([]);
+});

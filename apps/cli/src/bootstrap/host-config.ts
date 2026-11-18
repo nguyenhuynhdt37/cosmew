@@ -14,6 +14,8 @@ import {FutrynError, type Provider} from '@futryn/contracts';
 import {
   appendProvider,
   loadHostConfig,
+  loadHostPermissions,
+  type HostPermissionConfig,
   removeProvider,
   type HostConfigDiagnostic,
   type HostProviderEntry,
@@ -30,6 +32,8 @@ const MAX_BYTES = 256 * 1024;
 export interface LoadedHostConfig {
   path: string;
   providers: HostProviderEntry[];
+  /** Permission defaults (`sandbox_mode`, `approval_policy`, `[sandbox_workspace_write]`; ADR 0055). */
+  permissions: HostPermissionConfig;
   diagnostics: HostConfigDiagnostic[];
   /** False when the file exists but could not be used as a whole (unsafe, unreadable, not TOML). */
   usable: boolean;
@@ -65,7 +69,12 @@ export class HostConfigStore {
   }
 
   load(): LoadedHostConfig {
-    const base = {path: this.path, providers: [], diagnostics: [] as HostConfigDiagnostic[]};
+    const base = {
+      path: this.path,
+      providers: [],
+      permissions: {diagnostics: []} as HostPermissionConfig,
+      diagnostics: [] as HostConfigDiagnostic[],
+    };
     const read = this.readText();
     if (!read) return {...base, usable: true};
     if ('error' in read) return {...base, diagnostics: [{message: read.error}], usable: false};
@@ -76,7 +85,14 @@ export class HostConfigStore {
       return {...base, diagnostics: [{message: 'config.toml is not valid TOML'}], usable: false};
     }
     const config = loadHostConfig(parsed, this.reserved);
-    return {path: this.path, providers: config.providers, diagnostics: config.diagnostics, usable: true};
+    const permissions = loadHostPermissions(parsed);
+    return {
+      path: this.path,
+      providers: config.providers,
+      permissions,
+      diagnostics: [...config.diagnostics, ...permissions.diagnostics],
+      usable: true,
+    };
   }
 
   private write(text: string): void {

@@ -1,34 +1,67 @@
-import {FutrynError, MODE_FOR_APPROVAL_POLICY, type ApprovalPolicy, type PermissionMode} from '@futryn/contracts';
+import {
+  FutrynError,
+  MODE_FOR_APPROVAL_POLICY,
+  type ApprovalPolicy,
+  type PermissionMode,
+  type SandboxModeSetting,
+} from '@futryn/contracts';
 import {UnsupportedRuntime, commandBackendFromEnv, platformCommandRuntime, type CommandRuntime} from '@futryn/tools';
 
+type Env = Record<string, string | undefined>;
+/** Permission defaults from the user-level config (ADR 0055); the environment and CLI flags override them. */
+export interface PermissionDefaults {
+  sandboxMode?: SandboxModeSetting;
+  approvalPolicy?: ApprovalPolicy;
+  networkAccess?: boolean;
+}
+
 /**
- * Codex approval policy (ADR 0040): FUTRYN_APPROVAL_POLICY = untrusted | on-request (default) | never.
- * The legacy FUTRYN_SANDBOX_ESCALATION=never means `never`. An invalid value fails closed to `untrusted`.
+ * Codex approval policy (ADR 0040): FUTRYN_APPROVAL_POLICY = untrusted | on-request (default) | never,
+ * else the config `approval_policy`. The legacy FUTRYN_SANDBOX_ESCALATION=never means `never`. An
+ * invalid environment value fails closed to `untrusted`.
  */
-export function approvalPolicyFromEnv(env: Record<string, string | undefined> = process.env): ApprovalPolicy {
+export function approvalPolicyFromEnv(env: Env = process.env, config: PermissionDefaults = {}): ApprovalPolicy {
   const value = env.FUTRYN_APPROVAL_POLICY;
-  if (value === undefined || value === '')
+  if (value === undefined || value === '') {
+    if (config.approvalPolicy) return config.approvalPolicy;
     return env.FUTRYN_SANDBOX_ESCALATION !== undefined && env.FUTRYN_SANDBOX_ESCALATION !== 'on-request'
       ? 'never'
       : 'on-request';
+  }
   return value === 'on-request' || value === 'never' ? value : 'untrusted';
 }
 
 /** The permission mode a session starts in for the configured approval policy. */
-export function permissionModeFromEnv(env: Record<string, string | undefined> = process.env): PermissionMode {
-  return MODE_FOR_APPROVAL_POLICY[approvalPolicyFromEnv(env)];
+export function permissionModeFromEnv(env: Env = process.env, config: PermissionDefaults = {}): PermissionMode {
+  return MODE_FOR_APPROVAL_POLICY[approvalPolicyFromEnv(env, config)];
 }
 
-/** Configured command sandbox (ADR 0034): FUTRYN_SANDBOX_MODE and FUTRYN_SANDBOX_ESCALATION. Invalid values fail closed. */
-export function sandboxSettingsFromEnv(env: Record<string, string | undefined> = process.env): {
-  mode: 'read-only' | 'workspace-write';
+/** `FUTRYN_SANDBOX_NETWORK`: 1/true opens the network for sandboxed commands, 0/false closes it; else the config decides. */
+function networkFromEnv(env: Env, config: PermissionDefaults): boolean {
+  const value = env.FUTRYN_SANDBOX_NETWORK?.trim().toLowerCase();
+  if (value === undefined || value === '') return config.networkAccess === true;
+  return value === '1' || value === 'true';
+}
+
+/**
+ * Configured command sandbox (ADR 0034/0055): FUTRYN_SANDBOX_MODE (else config `sandbox_mode`, else
+ * workspace-write), FUTRYN_SANDBOX_NETWORK (else config `network_access`) and FUTRYN_SANDBOX_ESCALATION.
+ * An unknown mode fails closed to read-only.
+ */
+export function sandboxSettingsFromEnv(
+  env: Env = process.env,
+  config: PermissionDefaults = {},
+): {
+  mode: SandboxModeSetting;
   escalation: 'on-request' | 'never';
+  network: boolean;
 } {
-  const mode = env.FUTRYN_SANDBOX_MODE ?? 'workspace-write';
+  const mode = env.FUTRYN_SANDBOX_MODE || config.sandboxMode || 'workspace-write';
   const escalation = env.FUTRYN_SANDBOX_ESCALATION ?? 'on-request';
   return {
-    mode: mode === 'workspace-write' ? 'workspace-write' : 'read-only',
-    escalation: escalation === 'on-request' && approvalPolicyFromEnv(env) !== 'never' ? 'on-request' : 'never',
+    mode: mode === 'workspace-write' || mode === 'danger-full-access' ? mode : 'read-only',
+    escalation: escalation === 'on-request' && approvalPolicyFromEnv(env, config) !== 'never' ? 'on-request' : 'never',
+    network: networkFromEnv(env, config),
   };
 }
 

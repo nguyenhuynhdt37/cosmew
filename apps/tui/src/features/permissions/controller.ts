@@ -1,12 +1,12 @@
 import type {OverlayFeature, ThemeFrame, TuiHost} from '../../core/feature';
 import {stepIndex} from '../../ui';
-import {PERMISSION_MODES} from '@futryn/contracts';
+import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import {
+  MODE_ENTRIES,
   PERMISSION_ACTIONS,
   PERMISSION_RULE_TABS,
   createInitialPermissionDialogState,
   createInitialRulesState,
-  suggestedRule,
   type PermissionDialogState,
   type PermissionRulesState,
 } from './types';
@@ -65,6 +65,7 @@ export class PermissionsFeature implements OverlayFeature {
         ...size,
         rules: client.permissionRules(),
         mode: client.permissionMode(),
+        preset: client.permissionPreset(),
         grants: client.listToolGrants(),
         state: this.rules,
         tokens: theme.tokens,
@@ -125,57 +126,53 @@ export class PermissionsFeature implements OverlayFeature {
     }
     if (key === 'ArrowLeft' || key === 'ArrowRight') {
       const delta = key === 'ArrowRight' ? 1 : -1;
-      // "Don't ask again" exists only when a rule can be suggested for this request.
-      const actions = PERMISSION_ACTIONS.filter(action => action !== 'rule' || suggestedRule(current));
+      // Only the answers this request offers (ADR 0055): `always` needs a rule that can stand for it.
+      const actions = PERMISSION_ACTIONS.filter(action => action === 'deny' || current.decisions.includes(action));
       const next =
         actions[(Math.max(0, actions.indexOf(state.selectedAction)) + delta + actions.length) % actions.length]!;
       this.state = {...state, selectedAction: next};
       return;
     }
-    const rule = current ? suggestedRule(current) : null;
-    if (key === '1') this.state = {...state, selectedAction: 'once'};
-    else if (key === '2') this.state = {...state, selectedAction: 'session'};
+    const offered = (action: 'once' | 'session' | 'always') => current.decisions.includes(action);
+    if (key === '1' && offered('once')) this.state = {...state, selectedAction: 'once'};
+    else if (key === '2' && offered('session')) this.state = {...state, selectedAction: 'session'};
     else if (key === '3') this.state = {...state, selectedAction: 'deny'};
-    else if (key === '4' && rule) this.state = {...state, selectedAction: 'rule'};
-    if (state.selectedAction === 'rule' && !rule) this.state = {...this.state, selectedAction: 'deny'};
+    else if (key === '4' && offered('always') && current.alwaysRule) this.state = {...state, selectedAction: 'always'};
 
-    if (
-      (key === 'Enter' || key === '1' || key === '2' || key === '3' || (key === '4' && rule)) &&
-      current &&
-      current.status === 'pending'
-    ) {
-      const choice =
-        key === '1'
-          ? 'once'
-          : key === '2'
-            ? 'session'
-            : key === '3'
-              ? 'deny'
-              : key === '4'
-                ? 'rule'
-                : this.state.selectedAction;
-      // "Don't ask again" saves an Allow rule for this project, then approves this request once.
-      if (choice === 'rule' && rule) {
-        try {
-          host.client.addPermissionRule('allow', rule);
-        } catch {
-          host.setBanner(`Could not save rule ${rule}.`);
-          return;
-        }
+    const chosen =
+      key === '1'
+        ? 'once'
+        : key === '2'
+          ? 'session'
+          : key === '3'
+            ? 'deny'
+            : key === '4'
+              ? 'always'
+              : key === 'Enter'
+                ? this.state.selectedAction
+                : null;
+    if (chosen && current.status === 'pending') {
+      // A key for an answer the request does not offer is ignored; Enter on one denies.
+      if (chosen !== 'deny' && !offered(chosen)) {
+        if (key === 'Enter') this.state = {...this.state, selectedAction: 'deny'};
+        return;
       }
-      if (choice === 'rule' && !rule) return;
-      const decision = choice === 'rule' ? 'once' : choice;
       try {
-        host.client.resolvePermission(current.approvalId, current.scopeHash, decision);
+        // `always` saves the request's Allow rule for this project first, then approves (Codex amendment).
+        host.client.resolvePermission(current.approvalId, current.scopeHash, chosen);
       } catch {
-        host.setBanner('Permission request expired or changed; review the current request.');
+        host.setBanner(
+          chosen === 'always'
+            ? `Could not save rule ${current.alwaysRule ?? ''}; the request is still waiting.`
+            : 'Permission request expired or changed; review the current request.',
+        );
         if (!this.pending().length) host.closeOverlay();
         return;
       }
       host.setBanner(
-        choice === 'rule'
-          ? `Allowed and saved rule ${rule} for this project (/permissions to edit).`
-          : `Permission ${current.approvalId.slice(0, 8)}: ${decision.toUpperCase()}.`,
+        chosen === 'always'
+          ? `Allowed and saved rule ${current.alwaysRule} for this project (/permissions to edit).`
+          : `Permission ${current.approvalId.slice(0, 8)}: ${chosen.toUpperCase()}.`,
       );
       // The dialog was opened for this request; return to the chat once nothing else waits.
       if (!host.client.listPendingPermissions().length) host.closeOverlay();
@@ -237,22 +234,19 @@ export class PermissionsFeature implements OverlayFeature {
         ]!;
       this.rules = {
         tab,
-        selectedIndex: tab === 'mode' ? Math.max(0, PERMISSION_MODES.indexOf(client.permissionMode())) : 0,
+        selectedIndex: tab === 'mode' ? this.currentModeIndex() : 0,
         input: null,
       };
       return;
     }
-    const size = rules.tab === 'mode' ? PERMISSION_MODES.length : client.permissionRules()[rules.tab].length + 1;
+    const size = rules.tab === 'mode' ? MODE_ENTRIES.length : client.permissionRules()[rules.tab].length + 1;
     if (key === 'ArrowDown' || key === 'ArrowUp') {
-      this.rules = {...rules, selectedIndex: stepIndex(rules.selectedIndex, key, size)};
+      this.rules = {...rules, selectedIndex: stepIndex(rules.selectedIndex, key, size), confirmFullAccess: false};
       return;
     }
     if (rules.tab === 'mode') {
-      if (key === 'Enter') {
-        const mode = PERMISSION_MODES[rules.selectedIndex]!;
-        client.setPermissionMode(mode);
-        host.setBanner(`Permission mode: ${mode}.`);
-      }
+      if (key === 'Enter') this.chooseMode(MODE_ENTRIES[rules.selectedIndex]!);
+      else if (rules.confirmFullAccess) this.rules = {...rules, confirmFullAccess: false};
       return;
     }
     if (key === 'Enter' && rules.selectedIndex === 0) {
@@ -266,5 +260,36 @@ export class PermissionsFeature implements OverlayFeature {
       host.setBanner(`Removed ${rules.tab} rule ${rule}.`);
       this.rules = {...rules, selectedIndex: Math.min(rules.selectedIndex, client.permissionRules()[rules.tab].length)};
     }
+  }
+
+  /** The Mode tab row of the session's current preset (or, for a custom pair, its approval mode). */
+  private currentModeIndex(): number {
+    const {client} = this.host;
+    const preset = client.permissionPreset();
+    const index = MODE_ENTRIES.findIndex(entry =>
+      preset === 'custom'
+        ? entry.kind === 'mode' && entry.mode === client.permissionMode()
+        : entry.kind === 'preset' && entry.id === preset,
+    );
+    return Math.max(0, index);
+  }
+
+  /** Apply a Mode tab row. Full Access asks for a second Enter, with the warning (ADR 0055). */
+  private chooseMode(entry: (typeof MODE_ENTRIES)[number]): void {
+    const {host} = this;
+    const client = host.client;
+    if (entry.kind === 'mode') {
+      client.setPermissionMode(entry.mode);
+      host.setBanner(`Permission mode: ${entry.mode}.`);
+      this.rules = {...this.rules, confirmFullAccess: false};
+      return;
+    }
+    if (entry.id === 'full-access' && !this.rules.confirmFullAccess && client.permissionPreset() !== 'full-access') {
+      this.rules = {...this.rules, confirmFullAccess: true};
+      return;
+    }
+    const preset = client.setPermissionPreset(entry.id);
+    host.setBanner(entry.id === 'full-access' ? FULL_ACCESS_WARNING : `Permissions: ${preset.label}.`);
+    this.rules = {...this.rules, confirmFullAccess: false};
   }
 }

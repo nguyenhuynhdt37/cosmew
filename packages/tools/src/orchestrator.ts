@@ -15,6 +15,7 @@ import {
   commandGrantTarget,
   readDecision,
   effectiveSandboxMode,
+  networkConfigured,
   networkGranted,
   PERMISSION_GRANT,
   sandboxConfig,
@@ -248,8 +249,9 @@ export class ToolOrchestrator {
     const answer = await this.options.approve(request, signal);
     signal?.throwIfAborted();
     audit({target, phase: 'decided', decision: answer, reason: 'user', scopeHash});
-    // Fail closed even if an injected approval adapter returns an unexpected value.
-    if (answer !== 'once' && answer !== 'session')
+    // Fail closed even if an injected approval adapter returns an unexpected value. `always` was
+    // saved as a project rule by the adapter; it authorizes this call like `once` (ADR 0055).
+    if (answer !== 'once' && answer !== 'session' && answer !== 'always')
       return {gate: {status: 'denied', code: 'DENIED', content: deniedByUser, target}, viaSession: false, scopeHash};
     if (answer === 'session') this.options.grants.grant(request.capability, grant);
     return {gate: null, viaSession: answer === 'session', scopeHash};
@@ -427,7 +429,29 @@ export class ToolOrchestrator {
       ...prepared.writable.map(path => `write ${path}`),
     ];
     const target = parts.join(', ').slice(0, 1024);
-    if (prepared.network && sandboxConfig(this.options).escalation === 'never') {
+    // ADR 0055: Full Access has no sandbox and the configured `network_access` already opens the
+    // network of the workspace-write sandbox, so there is nothing to grant and nothing to ask.
+    const config = sandboxConfig(this.options);
+    if (
+      config.mode === 'danger-full-access' ||
+      (prepared.network && !prepared.writable.length && networkConfigured(this.options))
+    ) {
+      audit({
+        target,
+        phase: 'decided',
+        decision: 'allow',
+        reason: config.mode === 'danger-full-access' ? 'full-access' : 'network-configured',
+      });
+      return {
+        status: 'ok',
+        content:
+          config.mode === 'danger-full-access'
+            ? 'Full Access is active: commands already run without a sandbox and with network. Nothing needed to be granted.'
+            : 'Network access is already enabled for sandboxed commands by the configuration. Commands still need sandbox_permissions "with_additional_permissions" only when it is off.',
+        target,
+      };
+    }
+    if (prepared.network && config.escalation === 'never') {
       audit({target, phase: 'decided', decision: 'deny', reason: 'escalation-forbidden'});
       return {
         status: 'denied',
@@ -476,9 +500,7 @@ export class ToolOrchestrator {
       status: 'ok',
       content:
         `Granted ${scope === 'session' ? 'for this session' : 'for the rest of this turn'}: ${parts.join('; ')}. ${
-          prepared.network
-            ? 'Commands still need sandbox_permissions "with_additional_permissions" with network enabled to use it.'
-            : ''
+          prepared.network ? 'Sandboxed commands now have network access.' : ''
         }`.trim(),
       target,
     };
@@ -492,7 +514,8 @@ export class ToolOrchestrator {
   ): Promise<Authorization> {
     const {plan} = prepared;
     // Codex assess_patch_safety: writes inside writable roots follow the approval policy; others escalate.
-    const workspaceWritable = sandboxConfig(this.options).mode === 'workspace-write';
+    const mode = sandboxConfig(this.options).mode;
+    const workspaceWritable = mode === 'workspace-write' || mode === 'danger-full-access';
     const decisions = plan.changes.map(c =>
       evaluateWrite(c.snapshot.path, join(this.options.workspace.root, c.snapshot.path), {
         stateDirectory: this.options.stateDirectory,
@@ -543,6 +566,8 @@ export class ToolOrchestrator {
         ...prepared.stdin,
         current: {mode: config.mode, network: false},
         escalation: config.escalation,
+        networkConfigured: networkConfigured(this.options),
+        networkGranted: networkGranted(this.options),
       });
     }
     return evaluateExec(prepared.command, file.relative, file.absolute, {
@@ -552,6 +577,7 @@ export class ToolOrchestrator {
       escalation: config.escalation,
       classification: prepared.classification,
       networkGranted: networkGranted(this.options),
+      networkConfigured: networkConfigured(this.options),
     });
   }
 
@@ -575,11 +601,14 @@ export class ToolOrchestrator {
     }
     const decision = this.commandDecision(prepared, file);
     const grant = commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, prepared.executionKey);
-    const unsandboxed = prepared.sandbox?.unsandboxed === true;
+    // An escalation (`require_escalated`) is one command outside the session sandbox; Full Access
+    // (ADR 0055) is the session mode itself and is no escalation.
+    const fullAccess = prepared.sandbox?.mode === 'danger-full-access';
+    const unsandboxed = prepared.sandbox?.unsandboxed === true && !fullAccess;
     const sandbox = unsandboxed
       ? 'NO SANDBOX'
       : prepared.sandbox
-        ? `${runtime.label} · ${prepared.sandbox.mode}${prepared.sandbox.network ? ' + network' : ''}`
+        ? `${runtime.label} · ${prepared.sandbox.mode}${prepared.sandbox.network && !fullAccess ? ' + network' : ''}`
         : runtime.label;
     const authorization = await this.permission(
       decision,
@@ -589,12 +618,14 @@ export class ToolOrchestrator {
         target: command,
         workdir: file.relative,
         sandbox,
-        // An escalation is never remembered: its prompt scope is unique to this one call.
-        scopeKey: unsandboxed ? `${grant}\0${crypto.randomUUID()}` : grant,
+        // Codex `UnifiedExecApprovalKey` includes `sandbox_permissions`: an escalation approved
+        // "for session" is remembered for exactly this command, directory and sandbox (ADR 0055).
+        scopeKey: grant,
         reason: decision.reason,
         // A request_permissions network grant turns the launch into an ordinary command decision.
         ...(prepared.sandbox?.network && decision.reason === 'network-escalation' ? {network: true} : {}),
         ...(unsandboxed ? {unsandboxed: true} : {}),
+        ...(prepared.classification?.dangerous ? {dangerous: true} : {}),
         ...(prepared.justification ? {justification: this.options.redact(prepared.justification)} : {}),
         ...(prepared.classification
           ? {commands: prepared.classification.commands?.map(commandText) ?? null}
@@ -615,11 +646,6 @@ export class ToolOrchestrator {
         : 'The user denied running this command. Nothing was run.',
       signal,
     );
-    // An escalation covers this one command: a "session" answer never becomes a reusable grant.
-    if (unsandboxed && authorization.viaSession) {
-      this.options.grants.revoke('process.execute', grant);
-      return {...authorization, viaSession: false};
-    }
     return authorization;
   }
 

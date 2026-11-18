@@ -1,7 +1,14 @@
 import {z} from 'zod';
 
-export const permissionScopeSchema = z.enum(['once', 'session', 'deny']);
+/**
+ * How a prompt is answered (ADR 0055, Codex `ReviewDecision`): `once` = Approved, `session` =
+ * ApprovedForSession, `always` = a persistent project allow rule (Codex's execpolicy amendment).
+ * `always` is only valid when the request offered it (`decisions`).
+ */
+export const permissionScopeSchema = z.enum(['once', 'session', 'always', 'deny']);
 export type PermissionResolutionScope = z.infer<typeof permissionScopeSchema>;
+export const permissionDecisionKindSchema = z.enum(['once', 'session', 'always']);
+export type PermissionDecisionKind = z.infer<typeof permissionDecisionKindSchema>;
 
 export const permissionPromptRequestSchema = z.strictObject({
   approvalId: z.string().uuid(),
@@ -22,7 +29,13 @@ export const permissionPromptRequestSchema = z.strictObject({
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
   diffPreview: z.string().optional(),
-  status: z.enum(['pending', 'approved_once', 'approved_session', 'denied', 'expired']).default('pending'),
+  /** The approvals this prompt may be answered with, in display order (Codex `available_decisions`). */
+  decisions: z.array(permissionDecisionKindSchema).min(1).max(3).default(['once', 'session']),
+  /** The project Allow rule `always` saves; present exactly when `decisions` includes `always`. */
+  alwaysRule: z.string().max(520).optional(),
+  status: z
+    .enum(['pending', 'approved_once', 'approved_session', 'approved_always', 'denied', 'expired'])
+    .default('pending'),
 });
 export type PermissionPromptRequest = z.infer<typeof permissionPromptRequestSchema>;
 
@@ -69,6 +82,74 @@ export const MODE_FOR_APPROVAL_POLICY: Record<ApprovalPolicy, PermissionMode> = 
 };
 /** Futryn's default, as Codex: workspace-write sandbox, `on-request` approvals (plan D3). */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
+
+/** Codex `SandboxMode` (`protocol/src/config_types.rs`, pinned 090be4df); `FUTRYN_SANDBOX_MODE`, config `sandbox_mode`. */
+export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
+export type SandboxModeSetting = z.infer<typeof sandboxModeSchema>;
+export const SANDBOX_MODES: readonly SandboxModeSetting[] = sandboxModeSchema.options;
+/** Strictness order: a running terminal cannot be tightened, only refused (`stdin-policy-tightened`). */
+export const SANDBOX_MODE_RANK: Record<SandboxModeSetting, number> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
+};
+
+/**
+ * Codex approval presets (`utils/approval-presets/src/lib.rs`, pinned 090be4df): the named pairs of
+ * sandbox and approval policy that `/approvals` offers. Codex labels the middle one "Default"
+ * (id `auto`); Futryn calls it Auto. A session whose sandbox or mode matches none of them is `custom`.
+ */
+export const permissionPresetIdSchema = z.enum(['read-only', 'auto', 'full-access']);
+export type PermissionPresetId = z.infer<typeof permissionPresetIdSchema>;
+export interface PermissionPreset {
+  id: PermissionPresetId;
+  label: string;
+  description: string;
+  sandbox: SandboxModeSetting;
+  /** The session mode that carries the preset's approval policy. */
+  mode: PermissionMode;
+}
+export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
+  {
+    id: 'read-only',
+    label: 'Read Only',
+    description:
+      'Futryn can read files in the workspace. Approval is required to edit files, run commands that write, or use the network.',
+    sandbox: 'read-only',
+    mode: 'auto',
+  },
+  {
+    id: 'auto',
+    label: 'Auto',
+    description:
+      'Futryn can read and edit files in the workspace and run commands in the sandbox. Approval is required for the network, for files outside the workspace and for commands outside the sandbox.',
+    sandbox: 'workspace-write',
+    mode: 'auto',
+  },
+  {
+    id: 'full-access',
+    label: 'Full Access',
+    description:
+      'No sandbox and no approval prompts: commands can change any file your user can and use the network. Project deny rules and the audit trail still apply. Exercise caution.',
+    sandbox: 'danger-full-access',
+    mode: 'bypassPermissions',
+  },
+];
+export const DEFAULT_PERMISSION_PRESET: PermissionPresetId = 'auto';
+/** Shown whenever Full Access is entered (Shift+Tab, `/permissions`, `fyn exec`): it removes the sandbox and the prompts. */
+export const FULL_ACCESS_WARNING =
+  'WARNING: Full Access runs commands WITHOUT the sandbox and WITHOUT approval prompts. They can change or delete any file your user can reach and use the network. Project deny rules and the audit trail still apply.';
+/** The preset a (sandbox, mode) pair equals, or `custom`. */
+export function permissionPresetFor(sandbox: SandboxModeSetting, mode: PermissionMode): PermissionPresetId | 'custom' {
+  return PERMISSION_PRESETS.find(preset => preset.sandbox === sandbox && preset.mode === mode)?.id ?? 'custom';
+}
+/** Resolve a preset id or its label (`full access`, case-insensitive). */
+export function findPermissionPreset(name: string): PermissionPreset | undefined {
+  const wanted = name.trim().toLowerCase().replace(/\s+/g, '-');
+  return PERMISSION_PRESETS.find(
+    preset => preset.id === wanted || preset.label.toLowerCase().replace(/\s+/g, '-') === wanted,
+  );
+}
 /**
  * What a permission request is about, as far as the approval policy is concerned:
  * - `execute`: an ordinary command inside the configured sandbox;
@@ -91,7 +172,7 @@ export type PermissionKind =
 export function decideApproval(
   policy: ApprovalPolicy,
   kind: PermissionKind,
-  options: {autoApproveEdits?: boolean} = {},
+  options: {autoApproveEdits?: boolean; fullAccess?: boolean} = {},
 ): 'allow' | 'ask' | 'deny' {
   switch (kind) {
     case 'read':
@@ -101,17 +182,30 @@ export function decideApproval(
     case 'execute':
     case 'stdin':
       return policy === 'untrusted' ? 'ask' : 'allow';
+    case 'network':
+    case 'escalation':
+      // ADR 0055: with no sandbox there is nothing to escalate out of (Codex `danger-full-access`
+      // is `Unrestricted`: network and file access need no approval) - unless the policy is `untrusted`.
+      if (options.fullAccess && policy !== 'untrusted') return 'allow';
+      return policy === 'never' ? 'deny' : 'ask';
     default:
       return policy === 'never' ? 'deny' : 'ask';
   }
 }
 
-export function permissionModeDecision(mode: PermissionMode, kind: PermissionKind): 'allow' | 'ask' | 'deny' {
+export function permissionModeDecision(
+  mode: PermissionMode,
+  kind: PermissionKind,
+  sandbox: SandboxModeSetting = 'workspace-write',
+): 'allow' | 'ask' | 'deny' {
   if (mode === 'plan') {
     if (kind === 'read') return 'allow';
     return ['edit', 'execute', 'dangerous', 'stdin'].includes(kind) ? 'deny' : 'ask';
   }
-  return decideApproval(APPROVAL_POLICY_FOR_MODE[mode], kind, {autoApproveEdits: mode === 'acceptEdits'});
+  return decideApproval(APPROVAL_POLICY_FOR_MODE[mode], kind, {
+    autoApproveEdits: mode === 'acceptEdits',
+    fullAccess: sandbox === 'danger-full-access',
+  });
 }
 
 /** One-line explanation shown when Shift+Tab or /permissions changes the mode (ADR 0027/0040). */
@@ -129,12 +223,19 @@ export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
  * `Read(src/**)`, `Edit(**\/*.ts)`, `WebFetch(domain:example.com)`, `Tool(name)`. They answer only
  * requests that would otherwise ask; hard denies (outside workspace, `.git`, Futryn state) stay.
  */
-export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool'] as const;
+export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool', 'Network', 'Unsandboxed'] as const;
 export type PermissionRuleTool = (typeof PERMISSION_RULE_TOOLS)[number];
+/**
+ * `Network(curl:*)` lets a matching command use the network without asking, `Unsandboxed(npm i:*)`
+ * lets it run once outside the sandbox when the model requests `require_escalated` (ADR 0055, the
+ * project form of Codex's execpolicy amendment for those prompts). They match like `Bash` rules.
+ * A plain `Bash` allow rule never grants either: it covers sandboxed commands only.
+ */
+export const COMMAND_RULE_TOOLS: readonly PermissionRuleTool[] = ['Bash', 'Network', 'Unsandboxed'];
 export const permissionRuleSchema = z
   .string()
   .max(520)
-  .regex(/^(Bash|Read|Edit|WebFetch|Tool)(\([^()\n\u0000-\u001f]{1,500}\))?$/);
+  .regex(/^(Bash|Read|Edit|WebFetch|Tool|Network|Unsandboxed)(\([^()\n\u0000-\u001f]{1,500}\))?$/);
 export const permissionRuleSetSchema = z.strictObject({
   allow: z.array(permissionRuleSchema).max(200),
   ask: z.array(permissionRuleSchema).max(200),
@@ -176,7 +277,7 @@ export function permissionRuleMatches(rule: string, request: PermissionRuleReque
   const pattern = parsed[2];
   if (pattern === undefined) return true;
   const target = request.target.trim();
-  if (request.tool === 'Bash') {
+  if (COMMAND_RULE_TOOLS.includes(request.tool)) {
     if (pattern.endsWith(':*')) return target === pattern.slice(0, -2) || target.startsWith(pattern.slice(0, -2) + ' ');
     if (pattern.includes('*'))
       return new RegExp(
@@ -214,7 +315,7 @@ export function permissionRuleDecision(
   request: PermissionRuleRequest,
 ): PermissionRuleEffect | undefined {
   if (!rules) return undefined;
-  const bash = request.tool === 'Bash';
+  const bash = COMMAND_RULE_TOOLS.includes(request.tool);
   const paths = request.tool === 'Read' || request.tool === 'Edit';
   // Paths are judged normalised: `src/../../.ssh/key` is not under `src/**`.
   const rawPaths = paths ? request.target.split(', ').filter(Boolean) : [];
@@ -269,4 +370,77 @@ export function normalizeRulePath(path: string): string | null {
     } else out.push(part);
   }
   return out.join('/') || null;
+}
+
+const RULE_INTERPRETERS = new Set([
+  'bash',
+  'sh',
+  'zsh',
+  'fish',
+  'dash',
+  'python',
+  'python3',
+  'node',
+  'bun',
+  'deno',
+  'perl',
+  'ruby',
+  'php',
+  'env',
+  'sudo',
+  'doas',
+  'xargs',
+  'eval',
+  'exec',
+  'nohup',
+  'timeout',
+  'npx',
+  'bunx',
+  'osascript',
+  'ssh',
+]);
+
+/**
+ * The project Allow rule an `always` answer saves (ADR 0028/0055), Claude style: a command prefix
+ * (`Bash(npm test:*)`) - or the exact command for an interpreter, wrapper or `exact` request such as
+ * a dangerous command - the exact file for edits and secret reads, the domain for web access.
+ * Null when no rule can safely stand for the request (chained, substituted or redirected commands
+ * never auto-allow, so none is offered).
+ */
+export function suggestPermissionRule(request: {
+  tool: PermissionRuleTool;
+  target: string;
+  /** Command tools: a rule for exactly this command, never a prefix. */
+  exact?: boolean;
+}): string | null {
+  const clean = (value: string) =>
+    value
+      .replace(/[()\n\u0000-\u001f]/g, '')
+      .trim()
+      .slice(0, 200);
+  if (COMMAND_RULE_TOOLS.includes(request.tool)) {
+    const command = clean(request.target);
+    if (!command || /[;&|<>`\n]|\$\(/.test(command)) return null;
+    const words = command.split(/\s+/).filter(Boolean);
+    if (request.exact || RULE_INTERPRETERS.has(words[0]!.replace(/^.*\//, ''))) return `${request.tool}(${command})`;
+    const prefix =
+      words.length > 1 && !words[1]!.startsWith('-') && /^[\w.:@/-]+$/.test(words[1]!)
+        ? `${words[0]} ${words[1]}`
+        : words[0]!;
+    return `${request.tool}(${prefix}:*)`;
+  }
+  if (request.tool === 'Edit' || request.tool === 'Read') {
+    const path = clean(request.target);
+    return path && !path.includes(', ') ? `${request.tool}(${path})` : null;
+  }
+  if (request.tool === 'WebFetch') {
+    let host = clean(request.target);
+    try {
+      host = new URL(request.target).hostname;
+    } catch {
+      /* plain host */
+    }
+    return host ? `WebFetch(domain:${host})` : null;
+  }
+  return null;
 }

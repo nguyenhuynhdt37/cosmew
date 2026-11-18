@@ -11,7 +11,12 @@ export interface CommandOutputChunk {
  * after the user approved exactly that command, and a runtime that cannot do it refuses.
  */
 export interface CommandSandbox {
-  mode: 'read-only' | 'workspace-write';
+  /**
+   * `danger-full-access` (ADR 0055, Codex `SandboxMode::DangerFullAccess`) is the session's Full
+   * Access preset: the command runs with `unsandboxed: true` and no prompt. Only a runtime that
+   * lists it in `capabilities().modes` can run it; Docker refuses.
+   */
+  mode: 'read-only' | 'workspace-write' | 'danger-full-access';
   network: boolean;
   unsandboxed?: boolean;
 }

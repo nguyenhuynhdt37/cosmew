@@ -250,3 +250,70 @@ test('review refresh cannot send its old request into a newly selected session',
   expect(c.client.listSessions().map(session => session.id)).toContain(source);
   expect(c.tui.getStatusBanner()).toContain('Review cancelled');
 });
+
+test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full Access with warning) and [4] saves Always rules', async () => {
+  const c = await context();
+  // `tests/preload.ts` sets `untrusted`, so starting state is `custom`; first Shift+Tab enters Auto.
+  expect(c.client.permissionPreset()).toBe('custom');
+  await c.tui.handleKey('Shift+Tab');
+  expect(c.client.permissionPreset()).toBe('auto');
+  expect(c.client.sandboxMode()).toBe('workspace-write');
+  expect(c.client.status().approvalPolicy).toBe('on-request');
+
+  // Next Shift+Tab enters Full Access and displays FULL_ACCESS_WARNING; next wraps to Read Only.
+  await c.tui.handleKey('Shift+Tab');
+  expect(c.client.permissionPreset()).toBe('full-access');
+  expect(c.client.sandboxMode()).toBe('danger-full-access');
+  expect(c.client.status().approvalPolicy).toBe('never');
+  expect(c.tui.getStatusBanner()).toContain('WARNING: Full Access');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Full Access');
+
+  await c.tui.handleKey('Shift+Tab');
+  expect(c.client.permissionPreset()).toBe('read-only');
+  expect(c.client.sandboxMode()).toBe('read-only');
+
+  // `/permissions` Mode tab requires a second Enter to confirm Full Access, and cancels on another key.
+  await c.tui.submitPrompt('/permissions');
+  expect(c.tui.getActiveOverlay()).toBe('permissions');
+  // Move across Allow -> Ask -> Deny -> Mode tabs.
+  await c.tui.handleKey('Tab');
+  await c.tui.handleKey('Tab');
+  await c.tui.handleKey('Tab');
+  // Currently on Read Only (index 0); move down twice to Full Access (index 2).
+  await c.tui.handleKey('ArrowDown');
+  await c.tui.handleKey('ArrowDown');
+  await c.tui.handleKey('Enter');
+  expect(c.client.permissionPreset()).toBe('read-only');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Press Enter again to enable Full Access');
+  // Any non-Enter key cancels the confirmation.
+  await c.tui.handleKey('ArrowUp');
+  expect(c.client.permissionPreset()).toBe('read-only');
+  await c.tui.handleKey('ArrowDown');
+  await c.tui.handleKey('Enter');
+  await c.tui.handleKey('Enter');
+  expect(c.client.permissionPreset()).toBe('full-access');
+  expect(c.tui.getStatusBanner()).toContain('WARNING: Full Access');
+  await c.tui.handleKey('Escape');
+
+  // Slash command arguments switch presets directly.
+  await c.tui.submitPrompt('/permissions auto');
+  expect(c.client.permissionPreset()).toBe('auto');
+
+  // Prompt dialog `[4]` saves `alwaysRule` into project Allow rules and resolves the request.
+  const waiting = c.client.requestPermission({
+    capability: 'network.connect',
+    kind: 'network',
+    ruleTool: 'Network',
+    action: 'Run in . · sandbox',
+    target: 'curl https://example.com',
+    reason: 'network',
+    decisions: ['once', 'session', 'always'],
+    alwaysRule: 'Network(curl:*)',
+  });
+  await Bun.sleep(10);
+  c.tui.openOverlay('permissions');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('[4] Yes, and always allow Network(curl:*)');
+  await c.tui.handleKey('4');
+  expect(await waiting).toBe('always');
+  expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
+});

@@ -18,7 +18,7 @@ export function renderHelpOverlay(options: {
   row('   Ctrl+P       Open Command Palette           Ctrl+B       Toggle Sidebar');
   for (const command of SLASH_COMMANDS.filter(command => command.shortcut && command.command !== '/exit'))
     row(`   ${command.shortcut!.padEnd(13)} ${command.command.padEnd(14)} ${command.title}`);
-  row('   Shift+Tab    Cycle permission mode; explicit deny rules still win');
+  row('   Shift+Tab    Cycle Read Only / Auto / Full Access presets; deny rules win');
   row('   /            Slash Command Autocomplete     @            Workspace File Autocomplete');
   row('   Esc          Close Dialog / Cancel Stream    Ctrl+C       Interrupt / Clear Draft / Exit');
   row('   !            Sandboxed shell command         Alt+Enter    Newline (also Ctrl+J)');

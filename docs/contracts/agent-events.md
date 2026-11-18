@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.26** (1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.27** (1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -10,32 +10,32 @@ report metadata/evidence and corrects usage aggregation; it adds no agent event 
 
 **Thiết kế contract v1; Not implemented.** Public wire format dự kiến JSON-compatible; IDs là opaque strings, thời gian UTC RFC3339, số sequence là integer không âm an toàn hoặc decimal string nếu vượt giới hạn. Không truyền Error/function/SDK instances. Bảng này là schema mô tả, chưa có TypeScript declarations.
 
-| Envelope field | Bắt buộc | Invariant |
-|---|---|---|
-| contractVersion | Có | Major/minor; reader từ chối major lạ |
-| eventId, type | Có | ID duy nhất; type phân biệt payload |
-| sessionId, sessionSeq | Durable | Seq tăng đơn điệu theo session, unique pair |
-| runId, stepId, attemptId | Theo phạm vi | Attempt thuộc đúng step/run |
-| correlationId, causationId | Có / khi có parent | Truy vết, không dùng thay authorization |
-| emittedAt | Có | Không dùng sắp thứ tự |
-| payload | Có | Validate theo type/version; giới hạn bytes |
-| streamId, streamSeq | Delta | Tăng trong một attempt; không có sessionSeq giả |
+| Envelope field             | Bắt buộc           | Invariant                                       |
+| -------------------------- | ------------------ | ----------------------------------------------- |
+| contractVersion            | Có                 | Major/minor; reader từ chối major lạ            |
+| eventId, type              | Có                 | ID duy nhất; type phân biệt payload             |
+| sessionId, sessionSeq      | Durable            | Seq tăng đơn điệu theo session, unique pair     |
+| runId, stepId, attemptId   | Theo phạm vi       | Attempt thuộc đúng step/run                     |
+| correlationId, causationId | Có / khi có parent | Truy vết, không dùng thay authorization         |
+| emittedAt                  | Có                 | Không dùng sắp thứ tự                           |
+| payload                    | Có                 | Validate theo type/version; giới hạn bytes      |
+| streamId, streamSeq        | Delta              | Tăng trong một attempt; không có sessionSeq giả |
 
-| Type | Payload chính | Trạng thái / nghĩa |
-|---|---|---|
-| session.created / message.accepted | workspaceId, messageId, role, contentRefs, revision | Message durable trước model request |
-| run.started | mode, configHash, budget, parentRunId? | idle → preparing |
-| step.started / model.requested | contextHash, modelRef, attemptId | preparing → streaming |
-| model.delta | kind(text/reasoning/tool-fragment), callId?, fragment | Ephemeral; reasoning có policy riêng |
-| model.completed | finishReason, normalizedCalls, usage, responseRef | Chỉ complete call mới dispatch |
-| tool.requested | invocationId, descriptorVersion, inputHash, target | validated request |
-| approval.requested / resolved | approvalId, scopeHash, expiry, policyRevision / decision, principal | waiting_approval → runnable/denied |
-| tool.started | invocationId, leaseId, targetRevision | Intent durable trước side effect |
-| tool.completed / failed | invocationId, resultRef / error, outcomeCertainty | Một logical outcome; unknown cần reconcile |
-| context.compacted | sourceRange, summaryRef, tokenEstimate, provenance | Không xóa bản gốc |
-| run.cancel_requested | reason, requestedBy | nonterminal → cancelling |
-| run.completed / failed / cancelled | finalMessageRef?, stopReason, usage, unresolvedInvocations | Terminal một lần |
-| capability.changed / extension.failed | registryGeneration, capabilityId / error | Không đổi descriptor đang chạy |
+| Type                                  | Payload chính                                                       | Trạng thái / nghĩa                         |
+| ------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------ |
+| session.created / message.accepted    | workspaceId, messageId, role, contentRefs, revision                 | Message durable trước model request        |
+| run.started                           | mode, configHash, budget, parentRunId?                              | idle → preparing                           |
+| step.started / model.requested        | contextHash, modelRef, attemptId                                    | preparing → streaming                      |
+| model.delta                           | kind(text/reasoning/tool-fragment), callId?, fragment               | Ephemeral; reasoning có policy riêng       |
+| model.completed                       | finishReason, normalizedCalls, usage, responseRef                   | Chỉ complete call mới dispatch             |
+| tool.requested                        | invocationId, descriptorVersion, inputHash, target                  | validated request                          |
+| approval.requested / resolved         | approvalId, scopeHash, expiry, policyRevision / decision, principal | waiting_approval → runnable/denied         |
+| tool.started                          | invocationId, leaseId, targetRevision                               | Intent durable trước side effect           |
+| tool.completed / failed               | invocationId, resultRef / error, outcomeCertainty                   | Một logical outcome; unknown cần reconcile |
+| context.compacted                     | sourceRange, summaryRef, tokenEstimate, provenance                  | Không xóa bản gốc                          |
+| run.cancel_requested                  | reason, requestedBy                                                 | nonterminal → cancelling                   |
+| run.completed / failed / cancelled    | finalMessageRef?, stopReason, usage, unresolvedInvocations          | Terminal một lần                           |
+| capability.changed / extension.failed | registryGeneration, capabilityId / error                            | Không đổi descriptor đang chạy             |
 
 Commands: SubmitMessage(commandId, sessionId, expectedRevision, content), CancelRun(commandId, runId), ResolveApproval(commandId, approvalId, scopeHash, decision), ResumeSession(commandId, checkpointId, expectedRevision). Server deduplicate commandId theo principal/session, trả cùng acknowledgement; payload khác cho cùng key là conflict. Unauthorized command không tạo domain action.
 
@@ -59,7 +59,7 @@ UAT now subscribes to these events instead of polling the pending lists; pending
 
 `fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
 the top level, typed interaction events, then exactly one terminal `turn.completed` or
-`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.26"`, `seq`
+`turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.27"`, `seq`
 starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
 means the entire run succeeded. `responseDiscarded` invalidates the current provisional response;
 plain output / `-o` keep only the final response. This stream is not the future durable domain
@@ -108,6 +108,7 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 - SDK: `submitWhileBusy` (steer or queue for the next turn), `takeQueuedMessage`, `queuedMessages`, `queuedInput`; port `queuedInput`.
 
 ## Generation limits (contract 1.17)
+
 See [ADR 0036](../adr/0036-codex-generation-limits.md): Codex values only (`GENERATION_LIMITS`, `codexBackoffMs`), optional `Provider.streamIdleTimeoutMs`, optional `ModelRequest.maxOutputTokens` (none sent by default), no size ceilings on messages/tool calls/diffs, `responseDiscarded.maxRetries` on every retry. Widening only; 1.16 data still parses.
 
 ## Unified exec terminal (contract 1.16)

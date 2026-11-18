@@ -1,4 +1,4 @@
-import type {PermissionDecision} from '@futryn/contracts';
+import {SANDBOX_MODE_RANK, type PermissionDecision} from '@futryn/contracts';
 
 /**
  * Built-in read policy for TOOLS1 (ADR 0017). Evaluation order is deny → ask → allow: the first
@@ -125,20 +125,27 @@ export function evaluateExec(
   const location = evaluateRead(workdirRelative === '.' ? '.' : workdirRelative + '/', workdirAbsolute, context);
   if (location.effect === 'deny') return location;
   const sandbox = context.sandbox;
+  // ADR 0055 (Codex `danger-full-access`, `FileSystemSandboxKind::Unrestricted`): the session itself
+  // runs without a sandbox, so a command in it is ordinary, not an escalation, and network needs no
+  // approval. The approval policy still judges the command (dangerous list, untrusted).
+  const fullAccess = sandbox?.mode === 'danger-full-access' && context.configuredMode === 'danger-full-access';
   // Codex `SandboxPermissions::RequireEscalated` (ADR 0053): running without the sandbox is always
   // a decision for the user (`untrusted`/`on-request`) and refused under `never`. No allow rule,
   // session grant or granted network permission can stand in for it.
-  if (sandbox?.unsandboxed) {
+  if (sandbox?.unsandboxed && !fullAccess) {
     if (context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
     return {effect: 'ask', reason: 'unsandboxed-escalation'};
   }
-  if (sandbox) {
+  if (sandbox && !fullAccess) {
     // A request may not loosen the configured mode (Codex: per-command overrides go through
     // additional permissions, and `never` forbids every escalation).
-    if (context.configuredMode === 'read-only' && sandbox.mode === 'workspace-write')
+    if (context.configuredMode && SANDBOX_MODE_RANK[sandbox.mode] > SANDBOX_MODE_RANK[context.configuredMode])
       return {effect: 'deny', reason: 'sandbox-mode'};
-    if (sandbox.network && context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
-    if (sandbox.network && !context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
+    // `[sandbox_workspace_write] network_access` (ADR 0055): the user already allowed the network.
+    if (sandbox.network && !context.networkConfigured) {
+      if (context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
+      if (!context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
+    }
   }
   // ADR 0053 (Codex exec_policy.rs `render_decision_for_unmatched_command`): the session's approval
   // policy answers these asks. Only commands on the dangerous list stay forbidden under `never`;
@@ -153,7 +160,7 @@ export function evaluateExec(
 
 export type SandboxEscalation = 'on-request' | 'never';
 export interface ExecSandbox {
-  mode: 'read-only' | 'workspace-write';
+  mode: 'read-only' | 'workspace-write' | 'danger-full-access';
   network: boolean;
   /** The one-off approved escalation to no sandbox (ADR 0053). */
   unsandboxed?: boolean;
@@ -168,6 +175,8 @@ export interface ExecPolicyContext extends ReadPolicyContext {
   classification?: {dangerous: string | null; parserUnavailable?: boolean};
   /** The user granted network for this turn or session through `request_permissions`. */
   networkGranted?: boolean;
+  /** The user's config gives sandboxed commands network (`network_access`, `FUTRYN_SANDBOX_NETWORK`). */
+  networkConfigured?: boolean;
 }
 
 /**
@@ -186,15 +195,27 @@ export function evaluateStdin(input: {
   launch: ExecSandbox;
   current: ExecSandbox;
   escalation?: SandboxEscalation;
+  /** Sandboxed commands get network by configuration, so a launch with network is not an escalation. */
+  networkConfigured?: boolean;
+  /** Network remains granted for this turn or session via `request_permissions`. */
+  networkGranted?: boolean;
 }): PermissionDecision {
   if (input.chars.includes('\u0000')) return {effect: 'deny', reason: 'invalid-input'};
   if (!input.chars && !input.interrupt) return {effect: 'allow', reason: 'stdin-poll'};
   if (input.interrupt || (!input.tty && input.chars === '\u0003')) return {effect: 'allow', reason: 'stdin-interrupt'};
-  // `current` is the configured session policy; network is never configured, only approved per command.
-  if (input.launch.mode === 'workspace-write' && input.current.mode === 'read-only')
+  // `current` is the configured session sandbox; a terminal cannot be tightened after launch.
+  if (SANDBOX_MODE_RANK[input.launch.mode] > SANDBOX_MODE_RANK[input.current.mode])
     return {effect: 'deny', reason: 'stdin-policy-tightened'};
-  if (input.launch.network && input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
-  if (input.launch.network) return {effect: 'ask', reason: 'stdin-retained-escalation'};
+  // A Full Access terminal (ADR 0055) holds nothing beyond what its session mode already is.
+  if (
+    input.launch.network &&
+    input.launch.mode !== 'danger-full-access' &&
+    !input.networkConfigured &&
+    !input.networkGranted
+  ) {
+    if (input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
+    return {effect: 'ask', reason: 'stdin-retained-escalation'};
+  }
   if (input.launch.mode !== input.current.mode) return {effect: 'ask', reason: 'stdin-policy-drift'};
   // The session keeps its launch sandbox, so what typed input does stays inside it. The approval
   // policy decides: `untrusted` asks, `on-request`/`never` let it through (decideApproval).

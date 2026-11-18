@@ -1,6 +1,6 @@
 import {composerVisualRows} from './layout';
 import {graphemes, textWidth, nextGrapheme} from '../../input/text';
-import type {BorderStyle, PermissionMode, ThemeTokens} from '@futryn/contracts';
+import type {BorderStyle, PermissionMode, PermissionPresetId, ThemeTokens} from '@futryn/contracts';
 import type {AgentMode} from '@futryn/sdk';
 import {getBorderGlyphs} from '../../theme/theme';
 import type {RenderedBoxLine, StyledSpan} from '../../ui';
@@ -20,12 +20,21 @@ export const PERMISSION_LABELS: Record<PermissionMode, string> = {
   bypassPermissions: 'Bypass',
 };
 
+/** Chip text for the Codex presets (ADR 0055). */
+export const PERMISSION_PRESET_LABELS: Record<PermissionPresetId, string> = {
+  'read-only': 'Read Only',
+  auto: 'Auto',
+  'full-access': 'Full Access',
+};
+
 export function renderPromptComposerLines(options: {
   width: number;
   state: ComposerState;
   mode: AgentMode;
   /** Shown instead of the view mode once known (ADR 0027). */
   permissionMode?: PermissionMode;
+  /** The named Codex preset (Read Only / Auto / Full Access) when the session matches one (ADR 0055). */
+  permissionPreset?: PermissionPresetId | 'custom';
   activeModelLabel: string;
   activeAccountLabel: string;
   isStreaming: boolean;
@@ -43,6 +52,7 @@ export function renderPromptComposerLines(options: {
     state,
     mode,
     permissionMode,
+    permissionPreset,
     activeModelLabel,
     activeAccountLabel,
     isStreaming,
@@ -244,27 +254,36 @@ export function renderPromptComposerLines(options: {
     ],
   });
 
-  const modeName = permissionMode
-    ? PERMISSION_LABELS[permissionMode]
-    : mode === 'plan'
-      ? 'Plan'
-      : mode === 'review'
-        ? 'Review'
-        : 'Chat';
+  const preset = permissionPreset && permissionPreset !== 'custom' ? permissionPreset : undefined;
+  const modeName = preset
+    ? PERMISSION_PRESET_LABELS[preset]
+    : permissionMode
+      ? PERMISSION_LABELS[permissionMode]
+      : mode === 'plan'
+        ? 'Plan'
+        : mode === 'review'
+          ? 'Review'
+          : 'Chat';
   const modeColor =
-    permissionMode === 'bypassPermissions'
+    preset === 'full-access'
       ? tokens.error
-      : permissionMode === 'auto' || permissionMode === 'acceptEdits'
-        ? tokens.warning
-        : permissionMode === 'plan'
-          ? tokens.info
-          : permissionMode
-            ? tokens.accent
-            : mode === 'plan'
+      : preset === 'read-only'
+        ? tokens.info
+        : preset === 'auto'
+          ? tokens.warning
+          : permissionMode === 'bypassPermissions'
+            ? tokens.error
+            : permissionMode === 'auto' || permissionMode === 'acceptEdits'
               ? tokens.warning
-              : mode === 'review'
+              : permissionMode === 'plan'
                 ? tokens.info
-                : tokens.accent;
+                : permissionMode
+                  ? tokens.accent
+                  : mode === 'plan'
+                    ? tokens.warning
+                    : mode === 'review'
+                      ? tokens.info
+                      : tokens.accent;
   const modeChip = ` ${modeName} `;
   const meta = `${activeModelLabel}${activeAccountLabel ? `  ·  ${activeAccountLabel}` : ''}`;
   const shortHints: StyledSpan[] = [
