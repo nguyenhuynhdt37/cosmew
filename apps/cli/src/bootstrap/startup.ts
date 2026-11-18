@@ -716,6 +716,7 @@ export function startup(
       return report;
     };
 
+    // Core delivers this catalog as untrusted user/project context, never host instructions.
     const skillPort: SkillsPort = {
       instructions: () => (toolsEnabled() ? renderSkillCatalog(skillReport().skills).instructions : ''),
       loadPrompt: async (prompt, signal) => {

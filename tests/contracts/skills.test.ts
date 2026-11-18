@@ -140,6 +140,36 @@ test('slash arguments and dollar mentions select once, including hidden skills',
   expect(skillInvocations('/demo x', skills, ['/demo'])).toEqual([]);
 });
 
+test('dollar mentions exclude common environment variables and Markdown code', () => {
+  const f = fixture();
+  f.put(f.project, '.futryn/skills/demo/SKILL.md', document('demo'));
+  const demo = f
+    .catalog()
+    .report()
+    .skills.find(s => s.name === 'demo')!;
+  const envNames = ['PATH', 'HOME', 'USER', 'SHELL', 'PWD', 'TMPDIR', 'TEMP', 'TMP', 'LANG', 'TERM', 'XDG_CONFIG_HOME'];
+  const skills = [demo, ...envNames.flatMap(name => [name, name.toLowerCase()].map(name => ({...demo, name})))];
+  for (const name of envNames) {
+    expect(skillInvocations(`Use $${name} and [$${name.toLowerCase()}](SKILL.md)`, skills)).toEqual([]);
+  }
+  for (const prompt of [
+    '`$demo`',
+    '``code `$demo` code``',
+    '```sh\n$demo\n```',
+    '~~~sh\n$demo\n~~~',
+    '````md\n```\n$demo\n```\n````',
+    '```sh\n$demo',
+    'prefix `$demo\nmore code`',
+    '$demo:other',
+  ]) {
+    expect(skillInvocations(prompt, skills)).toEqual([]);
+  }
+  expect(skillInvocations('`$demo` then $demo', skills)).toEqual([{name: 'demo', args: ''}]);
+  expect(skillInvocations('```\n$demo\n```\n$demo', skills)).toEqual([{name: 'demo', args: ''}]);
+  expect(skillInvocations('/demo `$PATH`', skills)).toEqual([{name: 'demo', args: '`$PATH`'}]);
+  expect(skillInvocations('/PATH', skills)).toEqual([{name: 'PATH', args: ''}]);
+});
+
 test('skill dispatcher permits only discovered files, audits/redacts and never grants allowed-tools', async () => {
   const f = fixture();
   const file = f.put(

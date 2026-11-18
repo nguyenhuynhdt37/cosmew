@@ -275,6 +275,9 @@ export class TurnRun {
         Buffer.byteLength(context.content) > context.budgetBytes);
     if (invalidBudget) throw new FutrynError('BUDGET');
     this.projectMessages = context?.content ? [messageSchema.parse({role: 'user', content: context.content})] : [];
+    // Catalog metadata shares the repository-context trust boundary, never host instructions.
+    const catalog = host.options.skills?.instructions();
+    if (catalog) this.projectMessages.push(messageSchema.parse({role: 'user', content: catalog}));
     const skillBodies: string[] = [];
     for (const message of [...this.carried, this.user])
       skillBodies.push(...((await host.options.skills?.loadPrompt(message.content, this.signal)) ?? []));
@@ -343,9 +346,7 @@ export class TurnRun {
               steps: budget.maxSteps,
               calls: budget.maxToolCalls,
             }),
-          ) +
-          estimateTokens(host.options.skills?.instructions() ?? '') +
-          80
+          ) + 80
         : 0;
     const measure = () => {
       const estimate = estimateTokens(history) + estimateTokens(offered) + guidanceEstimate;
@@ -502,14 +503,7 @@ export class TurnRun {
     if (offerTools) base = guidance;
     else if (stop || toolsUsed) base = [guidance, budgetExhaustedNotice(stop)].filter(Boolean).join('\n');
 
-    return [
-      base,
-      ...(offerTools ? [host.options.skills?.instructions()] : []),
-      this.progressNotice,
-      ...(recovering ? [RECOVERY_INSTRUCTION] : []),
-    ]
-      .filter(Boolean)
-      .join('\n');
+    return [base, this.progressNotice, ...(recovering ? [RECOVERY_INSTRUCTION] : [])].filter(Boolean).join('\n');
   }
 
   // -------------------------------------------------------------------------------------------

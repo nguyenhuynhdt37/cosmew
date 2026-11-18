@@ -179,8 +179,10 @@ optional `skillDirectory` là thư mục tài nguyên (informational, không ph�
 Core gắn directory vào tool message; wrappers dùng schema mới để nhận field optional này.
 Output skill tối đa 65.536 byte sau redact, các tool khác giữ bound cũ; truncation báo qua `truncated`.
 Metadata model 8.000 ký tự, ẩn disabled entries, cảnh báo khi rút/bỏ; tổng `instructions` tăng tới
-32.768 ký tự để chứa cả host guidance. Catalog là untrusted metadata trong instructions/developer,
-body từ explicit slash/mention là user-scoped context của lượt gọi; không trở thành system authority.
+32.768 ký tự cho host guidance. Toàn bộ catalog là untrusted project data trong user/project-context message, không đưa vào
+`ModelRequest.instructions` (chỉ host guidance). Body từ explicit slash/mention là user-scoped context
+của lượt gọi; không trở thành system authority. `$name` bỏ qua common environment variables
+(case-insensitive) và fenced/inline code; `/name` giữ nguyên.
 `SkillsPort` được inject vào core (`instructions`, `loadPrompt`), không thêm package dependency hay
 persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũng hoạt động ở `fyn exec`.
 `allowed-tools` không có semantics cấp quyền. Consumer JSONL dùng version 1.28; không thêm agent event.

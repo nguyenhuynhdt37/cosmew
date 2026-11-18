@@ -20,6 +20,7 @@ export interface SkillsReport {
 }
 /** Core only sees this injected port. Body text is user-scoped, turn-local data. */
 export interface SkillsPort {
+  /** Legacy method name: catalog metadata for untrusted user/project context, never ModelRequest.instructions. */
   instructions(): string;
   loadPrompt(prompt: string, signal?: AbortSignal): Promise<string[]>;
 }
