@@ -648,7 +648,9 @@ function renderAgentToolCall(options: {
   const toolCount = sub ? sub.toolCount : parsed.toolCount;
   const totalTokens = sub?.usage ? (sub.usage.inputTokens ?? 0) + (sub.usage.outputTokens ?? 0) : parsed.totalTokens;
   const steps = sub?.steps.length ? sub.steps : parsed.steps;
-  const summaryText = sub?.summary ?? parsed.summary;
+  const backgroundStarted =
+    sub?.background === true || /^\{"id":"[^"]+","status":"running"\}$/.test(result?.content ?? '');
+  const summaryText = backgroundStarted ? '' : (sub?.summary ?? parsed.summary);
 
   let statusLabel: string;
   let statusFg = tokens.foregroundMuted;
@@ -668,12 +670,14 @@ function renderAgentToolCall(options: {
     const code = result.code ?? sub?.errorCode;
     statusLabel = `Failed${code ? ` (${code})` : ''}`;
     statusFg = tokens.error;
+  } else if (backgroundStarted) {
+    statusLabel = 'Started in background';
   } else {
     statusLabel = 'Done';
   }
 
   const metrics = `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'} · ${totalTokens} tokens`;
-  const hasDetails = steps.length > 0 || Boolean(summaryText) || Boolean(result?.content);
+  const hasDetails = !backgroundStarted && (steps.length > 0 || Boolean(summaryText) || Boolean(result?.content));
   const expandHint = !expanded && hasDetails ? ' (click to expand)' : '';
   const progressLine = `[${agentType}] ${statusLabel} · ${metrics}${expandHint}`;
 

@@ -288,6 +288,8 @@ export class TurnRun {
     // Catalog metadata shares the repository-context trust boundary, never host instructions.
     const catalog = host.options.skills?.instructions();
     if (catalog) this.projectMessages.push(messageSchema.parse({role: 'user', content: catalog}));
+    for (const note of host.options.contextNotes?.() ?? [])
+      if (note.trim()) this.projectMessages.push(messageSchema.parse({role: 'user', content: note}));
     const memories = host.options.memories?.context();
     if (memories) this.projectMessages.push(messageSchema.parse({role: 'user', content: memories}));
     const skillBodies: string[] = [];

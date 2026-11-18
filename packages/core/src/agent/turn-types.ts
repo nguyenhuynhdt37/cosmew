@@ -39,6 +39,11 @@ export interface ConversationOptions {
   skills?: SkillsPort;
   /** Main sessions only; S5 subagents must omit this injected context port. */
   memories?: {context(): string};
+  /**
+   * Extra lower-trust context messages (custom agent catalog, a child's custom agent definition). They share the
+   * repository-context trust boundary: user-role data, never `ModelRequest.instructions`.
+   */
+  contextNotes?: () => string[];
   /** Optional user work budget, read at the start of every turn. */
   budget?: () => TurnBudget | undefined;
   /** Optional override for concurrent shared-slot tool executions. */

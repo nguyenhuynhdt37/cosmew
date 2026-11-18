@@ -7,10 +7,13 @@ export const DEFAULT_AGENT_MAX_THREADS = 6;
 export const DEFAULT_AGENT_MAX_DEPTH = 1;
 
 export const BUILTIN_SUBAGENT_TYPES = ['explore', 'worker', 'general', 'plan'] as const;
-export const subagentTypeSchema = z.enum(BUILTIN_SUBAGENT_TYPES);
-export type SubagentType = z.infer<typeof subagentTypeSchema>;
+export type BuiltinSubagentType = (typeof BUILTIN_SUBAGENT_TYPES)[number];
+/** Built-in role id or the name of a custom agent definition (S5b, `.futryn/agents/*.md`). */
+export const subagentTypeSchema = z.string().min(1).max(64);
+export type SubagentType = string;
 
 export const subagentStatusSchema = z.enum(['running', 'completed', 'failed', 'cancelled', 'interrupted', 'closed']);
+/** `completed` doubles as "idle after a turn": a finished child accepts `agent_message` follow-ups until closed. */
 export type SubagentStatus = z.infer<typeof subagentStatusSchema>;
 
 /**
@@ -28,6 +31,25 @@ export const agentToolInputSchema = z.strictObject({
   fork_context: z.boolean().optional(),
 });
 export type AgentToolInput = z.infer<typeof agentToolInputSchema>;
+
+/** `agent_message` (Codex `send_input`): append a follow-up to a running or finished child. */
+export const agentMessageInputSchema = z.strictObject({
+  id: z.string().min(1).max(200),
+  message: z.string().min(1).max(100_000),
+});
+export type AgentMessageInput = z.infer<typeof agentMessageInputSchema>;
+/** Codex `wait`: default 30 s, clamped to 10 s .. 1 h (`multi_agents_common.rs`, `config/mod.rs`). */
+export const AGENT_WAIT_DEFAULT_MS = 30_000;
+export const AGENT_WAIT_MIN_MS = 10_000;
+export const AGENT_WAIT_MAX_MS = 3_600_000;
+export const agentWaitInputSchema = z.strictObject({
+  ids: z.array(z.string().min(1).max(200)).max(64).optional(),
+  timeout_ms: z.number().int().optional(),
+});
+export type AgentWaitInput = z.infer<typeof agentWaitInputSchema>;
+export const agentCloseInputSchema = z.strictObject({id: z.string().min(1).max(200)});
+export type AgentCloseInput = z.infer<typeof agentCloseInputSchema>;
+export const AGENT_TOOL_NAMES = ['agent', 'agent_message', 'agent_wait', 'agent_close'] as const;
 
 export const subagentTranscriptStepSchema = z.strictObject({
   kind: z.enum(['text', 'tool']),
@@ -70,6 +92,7 @@ export type SubagentEvent =
       usage: Usage | null;
       /** Redacted, bounded transcript steps for UI disclosure. */
       steps?: SubagentTranscriptStep[];
+      background?: boolean;
     }
   | {
       type: 'subagent.finished';
@@ -84,6 +107,7 @@ export type SubagentEvent =
       summary?: string;
       errorCode?: string;
       steps?: SubagentTranscriptStep[];
+      background?: boolean;
     };
 
 export const subagentSessionRecordSchema = z.strictObject({
@@ -127,6 +151,13 @@ export interface SubagentPromptAttribution {
   description: string;
 }
 
+export interface SubagentToolOutcome {
+  status: 'ok' | 'denied' | 'error';
+  code?: string;
+  content: string;
+  target?: string;
+}
+
 export interface SubagentExecutionPort {
   available?(): boolean;
   description?(): string;
@@ -135,12 +166,49 @@ export interface SubagentExecutionPort {
     input: unknown,
     signal?: AbortSignal,
     onEvent?: (event: SubagentEvent) => void,
-  ): Promise<{
-    status: 'ok' | 'denied' | 'error';
-    code?: string;
-    content: string;
-    target?: string;
-  }>;
+  ): Promise<SubagentToolOutcome>;
+  /**
+   * S5b: true once this session has had a subagent; `agent_message`, `agent_wait` and `agent_close` are only
+   * offered then, which keeps every request without subagents byte-identical to S5a.
+   */
+  hasChildren?(): boolean;
+  /** S5b: `agent_message`, `agent_wait` and `agent_close` (Codex send_input / wait / close_agent). */
+  message?(input: unknown, signal?: AbortSignal): Promise<SubagentToolOutcome>;
+  wait?(input: unknown, signal?: AbortSignal): Promise<SubagentToolOutcome>;
+  close?(input: unknown, signal?: AbortSignal): Promise<SubagentToolOutcome>;
+}
+
+/** One agent type offered to `agent_type` (S5b): built-in role or a custom definition. */
+export interface AgentTypeView {
+  name: string;
+  source: 'builtin' | 'project' | 'user';
+  description: string;
+  /** Tool names the type is limited to; `null` means every tool a general subagent receives. */
+  tools: string[] | null;
+  model?: string;
+  reasoningEffort?: string;
+  /** Short display path (`.claude/agents/x.md`, `~/.futryn/agents/x.md`) of a custom definition. */
+  path?: string;
+}
+export interface AgentDefinitionDiagnostic {
+  path?: string;
+  code: string;
+}
+export interface AgentTypesReport {
+  types: AgentTypeView[];
+  errors: AgentDefinitionDiagnostic[];
+  warnings: AgentDefinitionDiagnostic[];
+}
+
+/** Out-of-turn notice for a background subagent that finished (S5b); the summary itself goes to the model. */
+export interface SubagentNotice {
+  agentId: string;
+  parentSessionId: string;
+  agentType: string;
+  description: string;
+  status: 'completed' | 'failed' | 'cancelled';
+  /** `steered`: joined the running parent turn; `queued`: durable input for the parent's next turn. */
+  delivery: 'steered' | 'queued' | 'consumed';
 }
 
 export interface SubagentSummaryView {
@@ -162,4 +230,23 @@ export interface SubagentSummaryView {
   errorCode?: string;
   steps: SubagentTranscriptStep[];
   summary: string;
+}
+
+/** A custom agent definition (`.futryn/agents/*.md`, `.claude/agents/*.md`, ...); all of it is untrusted data (S5b). */
+export interface CustomAgentDefinition {
+  name: string;
+  description: string;
+  /** Tool names as written in frontmatter; `null` when `tools` is absent (inherit). Only ever narrows. */
+  tools: string[] | null;
+  model?: string;
+  reasoningEffort?: string;
+  source: 'project' | 'user';
+  shortPath: string;
+  /** Markdown body: the child's task guidance. Never host instructions. */
+  body: string;
+}
+export interface AgentDefinitionsReport {
+  definitions: Omit<CustomAgentDefinition, 'body'>[];
+  errors: AgentDefinitionDiagnostic[];
+  warnings: AgentDefinitionDiagnostic[];
 }

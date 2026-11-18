@@ -62,6 +62,8 @@ import {
   type SessionSummary,
   type SettingsStore,
   type SteerOutcome,
+  type AgentTypesReport,
+  type SubagentNotice,
   type SubagentPromptAttribution,
   type SubagentSummaryView,
   type ThemeManifest,
@@ -168,6 +170,12 @@ export interface FutrynBackendPorts {
   subagents?(sessionId?: string): SubagentSummaryView[];
   /** Inspect a specific subagent by its conversation ID. */
   inspectSubagent?(agentId: string): SubagentSummaryView | undefined;
+  /** Agent types (built-in + custom definitions) with source and tools (S5b `/agents`). */
+  agentTypes?(): AgentTypesReport;
+  /** Abort a running subagent on the user's behalf; false when it is not running. */
+  stopSubagent?(agentId: string): boolean;
+  /** Out-of-turn notices of background subagents (S5b); returns the unsubscribe function. */
+  observeSubagentNotices?(listener: (notice: SubagentNotice) => void): () => void;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -297,6 +305,7 @@ export class FutrynClient {
 
   constructor(private readonly ports: FutrynBackendPorts) {
     this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
+    ports.observeSubagentNotices?.(notice => this.handleSubagentNotice(notice));
     this.permissionModeValue = this.initialPermissionMode();
     this.sandboxModeValue = this.initialSandboxMode();
   }
@@ -710,6 +719,40 @@ export class FutrynClient {
   inspectSubagent(agentId: string): SubagentSummaryView | undefined {
     const found = this.ports.inspectSubagent?.(agentId);
     return found ? structuredClone(found) : undefined;
+  }
+
+  /** Agent types the model may use (built-in and custom), with source/description/tools; empty before consent. */
+  agentTypes(): AgentTypesReport {
+    if (!this.toolsEnabled() || !this.ports.agentTypes) return {types: [], errors: [], warnings: []};
+    return structuredClone(this.ports.agentTypes());
+  }
+
+  /** `/agents` stop: abort a running subagent; it stays resumable via agent_message. Returns whether it was running. */
+  stopSubagent(agentId: string): boolean {
+    if (!this.toolsEnabled() || !this.ports.stopSubagent) throw new FutrynError('UNSUPPORTED');
+    return this.ports.stopSubagent(agentId);
+  }
+
+  private readonly subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
+  /** Subscribe to background subagent completions (summary delivery already happened; this is for the UI). */
+  onSubagentNotice(listener: (notice: SubagentNotice) => void): () => void {
+    this.subagentNoticeListeners.add(listener);
+    return () => this.subagentNoticeListeners.delete(listener);
+  }
+  private handleSubagentNotice(notice: SubagentNotice): void {
+    const clean: SubagentNotice = {
+      ...notice,
+      agentType: this.ports.sanitizeText(notice.agentType),
+      description: this.ports.sanitizeText(notice.description),
+    };
+    this.notify('subagent.finished', `${clean.agentType}: ${clean.description}`);
+    for (const listener of [...this.subagentNoticeListeners]) {
+      try {
+        listener(clean);
+      } catch {
+        /* observers cannot break the agent */
+      }
+    }
   }
 
   // ---- request_user_input (ADR 0042) -------------------------------------------------------

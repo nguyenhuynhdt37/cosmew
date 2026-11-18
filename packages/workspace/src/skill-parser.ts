@@ -11,7 +11,7 @@ export interface SkillDocument {
 const invalid = (): never => {
   throw new Error('INVALID_SKILL_FRONTMATTER');
 };
-function scalar(value: string): string | boolean | number | null {
+export function scalar(value: string): string | boolean | number | null {
   if (value.startsWith('"')) {
     try {
       const parsed: unknown = JSON.parse(value);

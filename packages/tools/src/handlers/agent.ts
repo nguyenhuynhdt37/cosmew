@@ -1,4 +1,12 @@
-import {BUILTIN_SUBAGENT_TYPES, agentToolInputSchema} from '@futryn/contracts';
+import {
+  AGENT_WAIT_MAX_MS,
+  AGENT_WAIT_MIN_MS,
+  agentCloseInputSchema,
+  agentMessageInputSchema,
+  agentToolInputSchema,
+  agentWaitInputSchema,
+  type SubagentToolOutcome,
+} from '@futryn/contracts';
 import type {ToolDispatcherOptions} from '../context';
 import type {ToolHandler} from './types';
 
@@ -7,6 +15,116 @@ const DEFAULT_AGENT_DESCRIPTION = [
   'Built-in agent_type values: "explore" (fast read-only codebase search), "worker" (focused implementation on assigned files), "general" (multi-step research and execution), "plan" (read-only architecture and step-by-step plan).',
   'Multiple independent agent calls in one response run in parallel (up to max_threads).',
 ].join(' ');
+
+const agentTarget = (value: unknown, key: string): string => {
+  const raw = value && typeof value === 'object' ? (value as Record<string, unknown>)[key] : undefined;
+  return typeof raw === 'string' ? raw.slice(0, 120) : '';
+};
+
+/** Shared shape of `agent_message`, `agent_wait` and `agent_close` (Codex send_input / wait / close_agent). */
+function agentControlHandler(
+  options: ToolDispatcherOptions,
+  spec: {
+    name: 'agent_message' | 'agent_wait' | 'agent_close';
+    description: string;
+    inputSchema: Record<string, unknown>;
+    parse(input: unknown): {ok: boolean; target: string};
+    method: 'message' | 'wait' | 'close';
+  },
+): ToolHandler {
+  return {
+    descriptor: {
+      name: spec.name,
+      capability: 'agent.spawn',
+      parallel: true,
+      description: spec.description,
+      inputSchema: spec.inputSchema,
+    },
+    available: () =>
+      !!options.subagents?.[spec.method] &&
+      options.subagents.available?.() !== false &&
+      options.subagents.hasChildren?.() !== false,
+    unavailable: {
+      status: 'error',
+      code: 'AGENT_UNAVAILABLE',
+      content: 'No subagent exists in this session (or subagents are unavailable); start one with agent first.',
+    },
+    prepare(input) {
+      const checked = spec.parse(input);
+      if (!checked.ok) {
+        return {status: 'error', code: 'INVALID_INPUT', content: `Invalid arguments for ${spec.name}.`};
+      }
+      return {
+        kind: 'agent',
+        target: `${spec.name}: ${checked.target}`.slice(0, 240),
+        agentType: spec.name,
+        async execute(signal): Promise<SubagentToolOutcome> {
+          return options.subagents![spec.method]!(input, signal);
+        },
+      };
+    },
+  };
+}
+
+export function agentControlHandlers(options: ToolDispatcherOptions): ToolHandler[] {
+  return [
+    agentControlHandler(options, {
+      name: 'agent_message',
+      method: 'message',
+      description:
+        'Send a follow-up to a subagent by id: a running child gets it at its next step; an idle child starts a new turn with its earlier context. Closed children cannot be messaged.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: {type: 'string', description: 'Subagent id returned by agent.'},
+          message: {type: 'string', description: 'The follow-up instruction or question for the subagent.'},
+        },
+        required: ['id', 'message'],
+        additionalProperties: false,
+      },
+      parse: input => {
+        const parsed = agentMessageInputSchema.safeParse(input);
+        return {ok: parsed.success, target: parsed.success ? parsed.data.id : ''};
+      },
+    }),
+    agentControlHandler(options, {
+      name: 'agent_wait',
+      method: 'wait',
+      description: `Wait until any listed background subagent (default: all) is final; returns statuses and summaries or {timed_out: true}. timeout_ms default 30000, clamped to ${AGENT_WAIT_MIN_MS}..${AGENT_WAIT_MAX_MS}.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ids: {
+            type: 'array',
+            items: {type: 'string'},
+            description: 'Subagent ids to wait for (default: all background children).',
+          },
+          timeout_ms: {type: 'integer', description: 'Maximum time to wait in milliseconds.'},
+        },
+        additionalProperties: false,
+      },
+      parse: input => {
+        const parsed = agentWaitInputSchema.safeParse(input);
+        return {ok: parsed.success, target: parsed.success ? (parsed.data.ids?.join(',') ?? 'all') : ''};
+      },
+    }),
+    agentControlHandler(options, {
+      name: 'agent_close',
+      method: 'close',
+      description: 'Stop a subagent and release it for good. Returns its previous status.',
+      inputSchema: {
+        type: 'object',
+        properties: {id: {type: 'string', description: 'Subagent id returned by agent.'}},
+        required: ['id'],
+        additionalProperties: false,
+      },
+      parse: input => {
+        const parsed = agentCloseInputSchema.safeParse(input);
+        return {ok: parsed.success, target: parsed.success ? parsed.data.id : agentTarget(input, 'id')};
+      },
+    }),
+  ];
+}
 
 export function agentHandler(options: ToolDispatcherOptions): ToolHandler {
   return {
@@ -20,9 +138,8 @@ export function agentHandler(options: ToolDispatcherOptions): ToolHandler {
         properties: {
           agent_type: {
             type: 'string',
-            enum: [...BUILTIN_SUBAGENT_TYPES],
             description:
-              'Subagent role to spawn: "explore" (read-only codebase search), "worker" (implementation on assigned files), "general" (multi-step research and execution), or "plan" (read-only step-by-step plan).',
+              'Subagent type to spawn: "explore" (read-only codebase search), "worker" (implementation on assigned files), "general" (multi-step research and execution), "plan" (read-only step-by-step plan), or the name of a custom agent listed in the project context.',
           },
           description: {
             type: 'string',
@@ -43,7 +160,8 @@ export function agentHandler(options: ToolDispatcherOptions): ToolHandler {
           },
           background: {
             type: 'boolean',
-            description: 'When false (default in S5a), wait for the subagent to finish and return its final summary.',
+            description:
+              'When false (default), wait for the subagent and return its final summary. When true, return {id} immediately and keep working; the result arrives later as a <subagent id=... status=...> message (or use agent_wait).',
           },
           fork_context: {
             type: 'boolean',

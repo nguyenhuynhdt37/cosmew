@@ -13,7 +13,7 @@ import {questionHandler} from './question';
 import {webFetchHandler} from './web-fetch';
 import {webSearchHandler} from './web-search';
 import {lspHandler, lspRenameHandler} from './lsp';
-import {agentHandler} from './agent';
+import {agentControlHandlers, agentHandler} from './agent';
 export function createHandlers(options: ToolDispatcherOptions, filesystem = new FileSystemRuntime(options)) {
   return [
     ...fileHandlers(options, filesystem),
@@ -32,5 +32,6 @@ export function createHandlers(options: ToolDispatcherOptions, filesystem = new 
     lspHandler(options),
     lspRenameHandler(options),
     agentHandler(options),
+    ...agentControlHandlers(options),
   ];
 }

@@ -382,6 +382,7 @@ export class ChatController {
             toolCount: 0,
             usage: null,
             steps: [],
+            ...(event.background ? {background: true} : {}),
           };
         } else if (event.type === 'subagent.progress') {
           assistantItem.subagents ??= {};

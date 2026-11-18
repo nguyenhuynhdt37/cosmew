@@ -26,6 +26,19 @@ export interface ActiveSubagentTask {
   usage: Usage | null;
   steps: SubagentTranscriptStep[];
   abortController: AbortController;
+  /** S5b: follow-ups queued for the child's next turn when steering was not accepted. */
+  inbox: string[];
+  /** `agent_wait` callers currently blocked on this child; a notification is skipped while > 0. */
+  waiters: number;
+  /** Resolves when the child's run loop has fully ended (turns done, slot released). */
+  done?: Promise<void>;
+  /** Why the run was aborted, so only a user stop notifies the parent. */
+  cancelReason?: 'user' | 'close' | 'shutdown' | 'parent';
+  /** Last turn's redacted summary / error code, for `agent_wait` and notifications. */
+  finalSummary?: string;
+  errorCode?: string;
+  /** Called whenever the child's status changes (turn started/finished). */
+  listeners: Set<() => void>;
 }
 
 export interface SlotReservation {
@@ -80,6 +93,11 @@ export class SubagentScheduler {
     };
   }
 
+  private shuttingDown = false;
+  get closed(): boolean {
+    return this.shuttingDown;
+  }
+
   registerTask(task: ActiveSubagentTask): void {
     this.liveTasks.set(task.agentId, task);
   }
@@ -102,14 +120,24 @@ export class SubagentScheduler {
     for (const task of this.liveTasks.values()) {
       if (task.parentConversationId !== parentConversationId) continue;
       if (parentTurnId !== undefined && task.parentTurnId !== parentTurnId) continue;
+      task.cancelReason ??= 'parent';
       task.abortController.abort();
     }
   }
 
   cancelAll(): void {
     for (const task of this.liveTasks.values()) {
+      task.cancelReason ??= 'shutdown';
       task.abortController.abort();
     }
     this.liveTasks.clear();
+  }
+
+  /** Session/application close: no new children, abort all running (including background) and await their loops. */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    const pending = [...this.liveTasks.values()].map(task => task.done).filter((p): p is Promise<void> => !!p);
+    this.cancelAll();
+    await Promise.allSettled(pending);
   }
 }

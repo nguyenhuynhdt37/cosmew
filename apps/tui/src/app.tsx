@@ -1,3 +1,4 @@
+import {AgentsFeature} from './features/agents';
 import {MemoryFeature} from './features/memory';
 import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import {commandForShortcut, type FutrynClient} from '@futryn/sdk';
@@ -186,6 +187,7 @@ export class FutrynTuiApp {
       new ReportsFeature(host),
       new EffortFeature(host),
       new MemoryFeature(host),
+      new AgentsFeature(host),
       new SettingsFeature(host),
       new ThemesFeature(host),
       new ThemeEditorFeature(host),
@@ -212,6 +214,25 @@ export class FutrynTuiApp {
         this.updateListener?.();
       }),
       this.themeEngine.subscribe(() => this.updateListener?.()),
+      this.client.onSubagentNotice(notice => {
+        const verb = notice.status === 'completed' ? 'finished' : notice.status;
+        this.chat.addNotice(
+          `Background subagent [${notice.agentType}] "${notice.description}" ${verb}; ${
+            notice.delivery === 'steered' ? 'its result joined the running turn' : 'its result is queued for the model'
+          }.`,
+        );
+        // Idle parent: the queued <subagent> message becomes the next turn so the model can act on it (Codex wakes the parent).
+        if (
+          notice.delivery === 'queued' &&
+          !this.chat.isStreaming &&
+          !this.gate.active &&
+          this.client.activeSession()?.id === notice.parentSessionId
+        ) {
+          const next = this.client.takeQueuedMessage();
+          if (next !== undefined) void this.chat.submit(next).catch(() => undefined);
+        }
+        this.updateListener?.();
+      }),
     );
     const warnings = this.themeEngine.getWarnings();
     if (this.client.sandboxMode() === 'danger-full-access') {

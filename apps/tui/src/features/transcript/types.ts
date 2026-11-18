@@ -14,6 +14,8 @@ export interface SubagentActivityState {
   summary?: string;
   errorCode?: string;
   steps: SubagentTranscriptStep[];
+  /** Started with `background: true`: its result arrives out of band (S5b). */
+  background?: boolean;
 }
 
 export interface TranscriptItem {

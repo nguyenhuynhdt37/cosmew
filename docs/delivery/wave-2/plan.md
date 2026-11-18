@@ -106,7 +106,7 @@ Theo W10. Bổ sung: `/memory` trong TUI; `hannes exec` vẫn nạp `MEMORY.md`;
 
 ### S5 — W9 Subagent
 
-**Trạng thái (2026-11-18): S5a đã triển khai** — [ADR 0058](../../adr/0058-synchronous-subagents.md), contract 1.32: tool `agent` chế độ chờ, `explore/worker/general/plan`, song song 6 / độ sâu 1, quyền thu hẹp, journal + recovery, sự kiện + TUI + `exec --json`. Còn lại: S5b (`background`, `send_input/wait/close/resume`), S5c (agent tuỳ chỉnh, `/agents`). Fixture verified, không claim live provider. Không commit/push.
+**Trạng thái (2026-11-18): S5a đã triển khai** — [ADR 0058](../../adr/0058-synchronous-subagents.md), contract 1.32: tool `agent` chế độ chờ, `explore/worker/general/plan`, song song 6 / độ sâu 1, quyền thu hẹp, journal + recovery, sự kiện + TUI + `exec --json`. **S5b đã triển khai** (contract 1.33): `background: true` + thông báo `<subagent>` bền cho cha, `agent_message/agent_wait/agent_close` (port Codex send_input/wait/close_agent), agent tuỳ chỉnh `.futryn|.claude|.agents/agents/*.md` + `~/.futryn|~/.claude/agents`, `/agents`, SDK `agentTypes()/stopSubagent()`; xem phần S5b của ADR 0058. Còn lại S5c (agent role TOML, resume tự động, mailbox). Fixture verified, không claim live provider. Không commit/push.
 
 Theo W9. Bổ sung: sự kiện `subagent.started/finished` (contract); subagent kế thừa approval policy nhưng **không** kế thừa grant phiên của cha trừ grant đọc; `explore` dùng model rẻ hơn nếu cấu hình `[agents.explore] model=...` trong `~/.futryn/config.toml`.
 

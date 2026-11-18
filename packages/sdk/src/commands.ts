@@ -10,6 +10,7 @@ export type CommandOverlay =
   | 'settings'
   | 'status'
   | 'help'
+  | 'agents'
   | 'connect';
 export type CommandHandler =
   | 'overlay'
@@ -167,6 +168,17 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     description: 'List, read or delete memories; /memory open opens the user memory folder',
     category: 'Workspace & Security',
     arguments: 'optional',
+  },
+  {
+    command: '/agents',
+    handler: 'overlay',
+    overlay: 'agents',
+    requires: 'workspace',
+    aliases: [],
+    title: 'Agents',
+    description: "List agent types (built-in and custom) and this session's subagents; view a transcript or stop one",
+    category: 'Workspace & Security',
+    duringRequest: true,
   },
   {
     command: '/skills',

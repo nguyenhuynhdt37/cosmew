@@ -803,7 +803,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(resumedFrame).toContain('⏺ Agent(check entrypoint)');
   expect(resumedFrame).toContain('• read src/index.ts [ok]');
 
-  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.32.
+  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.33.
   const lines: string[] = [];
   const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
     lines.push(String(chunk));
@@ -830,5 +830,5 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.32')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.33')).toBe(true);
 });

@@ -28,11 +28,13 @@ import {
   permissionRuleDecision,
   type PlanState,
   type Provider,
+  type SubagentNotice,
 } from '@futryn/contracts';
 import {Conversation} from '@futryn/core';
 import {
   SubagentManager,
   SubagentScheduler,
+  isBuiltinAgentName,
   effectiveSubagentSandbox,
   filterSubagentTools,
   isToolAllowedForProfile,
@@ -43,6 +45,7 @@ import {WebSearchClient, type SearchKeys} from '@futryn/mcp';
 import {LspManager} from '@futryn/code-intel';
 import {
   ProjectContextLoader,
+  AgentDefinitionCatalog,
   SkillCatalog,
   parseSkillDocument,
   renderSkillCatalog,
@@ -162,6 +165,8 @@ interface ConversationWiring {
   projectContext?: ProjectContextPort;
   skills?: SkillsPort;
   memories?: Pick<MemoriesPort, 'context'>;
+  /** Lower-trust context messages (custom agent catalog / definition), never ModelRequest.instructions. */
+  contextNotes?: () => string[];
   budget?: () => TurnBudget | undefined;
   /** Plan/review modes cannot be turned into mutating artifact recovery. */
   analysisOnly?: () => boolean;
@@ -202,6 +207,8 @@ export function startup(
   for (const value of Object.values(webKeys)) if (value) redactor.register(value);
   const webSearch = new WebSearchClient({keys: webKeys, redact: text => redactor.text(text), fetch: services.fetch});
   const languageServerManagers = new Set<LspManager>();
+  /** Background subagents are cancelled when the session closes (S5b): one hook per client. */
+  const subagentShutdowns = new Set<() => Promise<void>>();
   const conversations = new SqliteConversations(db, value => redactor.text(value));
   const toolAudit = new ToolAuditStore(db);
   const customThemes = new FileCustomThemeStore(directory);
@@ -392,6 +399,7 @@ export function startup(
       {
         skills: wiring.skills,
         memories: wiring.memories,
+        contextNotes: wiring.contextNotes,
         budget: wiring.budget ?? (() => undefined),
         // Parallel `agent` calls must reach the scheduler, which rejects the one beyond max_threads like
         // Codex; the generic shared-slot cap must therefore admit max_threads + 1 (ADR 0033/0058).
@@ -543,6 +551,25 @@ export function startup(
           ),
       }));
 
+    let agentCatalog: AgentDefinitionCatalog | undefined;
+    const agentDefinitions = () =>
+      (agentCatalog ??= new AgentDefinitionCatalog({
+        workspace: workspaceTree(),
+        home: services.skillsHome,
+        reserved: isBuiltinAgentName,
+        canRead: (relative, absolute) =>
+          evaluateRead(relative, absolute, {
+            stateDirectory:
+              relative.startsWith('~/.futryn/agents/') && absolute.startsWith(join(stateDirectory, 'agents') + '/')
+                ? undefined
+                : stateDirectory,
+          }).effect === 'allow' &&
+          !['ask', 'deny'].includes(
+            permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}) ?? '',
+          ),
+      }));
+    const subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
+
     const commands = () => {
       if (commandRuntimes.closed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
@@ -596,6 +623,7 @@ export function startup(
       return fresh.usable ? fresh.agents : hostLoaded.agents;
     };
     const subagentScheduler = new SubagentScheduler(() => currentAgentsConfig().maxThreads);
+    subagentShutdowns.add(() => subagentScheduler.shutdown());
 
     const resolveRootConversation = (): Conversation | undefined => {
       if (currentTurnConversation) return currentTurnConversation;
@@ -687,6 +715,30 @@ export function startup(
         store: conversations,
         addParentUsage: usage => {
           options.getParentConversation()?.addSubagentUsage(usage);
+        },
+        customAgents: {
+          report: () => {
+            if (!toolsEnabled()) return {definitions: [], errors: [], warnings: []};
+            try {
+              return agentDefinitions().report();
+            } catch {
+              return {definitions: [], errors: [{code: 'AGENT_DISCOVERY_FAILED'}], warnings: []};
+            }
+          },
+          load: name => (toolsEnabled() ? agentDefinitions().load(name) : undefined),
+        },
+        // Running children take the message as steering; the child's own turn journals it.
+        steerChild: (agentId, message) =>
+          activeConversations.get(agentId)?.steer(message) ?? {accepted: false, reason: 'no_active_turn'},
+        // The parent's running turn is steered; otherwise the notification is durable next-turn input.
+        deliverToParent: (parentId, text) => {
+          const outcome = activeConversations.get(parentId)?.steer(text);
+          if (outcome?.accepted) return 'steered';
+          conversations.enqueueNextTurn(parentId, text);
+          return 'queued';
+        },
+        onNotice: notice => {
+          for (const listener of [...subagentNoticeListeners]) listener(notice);
         },
         redact: text => terminalText(redactor.text(text)),
         runChildTurn: async function* (runContext: ChildRunContext, childSignal: AbortSignal) {
@@ -783,13 +835,18 @@ export function startup(
             },
           };
 
+          const storedChild = runContext.resume ? conversations.get(runContext.agentId) : undefined;
           childConv = createConversationForSelection(
             runContext.selection,
-            {id: runContext.agentId, messages: runContext.initialMessages},
+            {
+              id: runContext.agentId,
+              messages: storedChild ? committedMessages(storedChild) : runContext.initialMessages,
+            },
             {
               tools: childToolPort,
               skills: skillPort,
               memories: undefined,
+              contextNotes: () => runContext.contextNotes,
               workspaceRoot: resolve(workspaceRoot),
               projectContext,
               budget: () => client?.turnBudget(),
@@ -1040,6 +1097,12 @@ export function startup(
         : undefined,
       workspaceRoot: resolve(workspaceRoot),
       projectContext,
+      // Custom agent names/descriptions are untrusted project data: user-context channel, like the skills catalog.
+      contextNotes: () => {
+        if (!toolsEnabled()) return [];
+        const catalog = rootSubagents.catalogInstructions();
+        return catalog ? [catalog] : [];
+      },
       budget: () => client?.turnBudget(),
       analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
       modeInstructions: () =>
@@ -1110,6 +1173,12 @@ export function startup(
       },
       subagents: sessionId => (sessionId ? rootSubagents.listSubagents(sessionId) : []),
       inspectSubagent: agentId => rootSubagents.inspectSubagent(agentId),
+      agentTypes: () => rootSubagents.agentTypes(),
+      stopSubagent: agentId => rootSubagents.stopSubagent(agentId),
+      observeSubagentNotices: listener => {
+        subagentNoticeListeners.add(listener);
+        return () => subagentNoticeListeners.delete(listener);
+      },
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
@@ -1356,6 +1425,9 @@ export function startup(
     migrationCleanup,
     takeStartupNotices: () => outbox.takeNotices(),
     shutdownCommands: async () => {
+      // Background subagents never outlive the session: abort and await them before tearing down runtimes.
+      await Promise.allSettled([...subagentShutdowns].map(shutdown => shutdown()));
+      subagentShutdowns.clear();
       await Promise.allSettled([...languageServerManagers].map(manager => manager.shutdown()));
       languageServerManagers.clear();
       await webSearch.close();

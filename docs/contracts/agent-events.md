@@ -241,3 +241,8 @@ Thứ tự: started → progress* → finished, trước tool result của cha. 
 `steps` đã redact và bounded. `fyn exec --json` phát cùng envelope (`contractVersion` 1.32). SDK: `client.subagents(sessionId?)`,
 `client.inspectSubagent(agentId)`, `ReactiveAgentEventKind` thêm ba kind. Prompt quyền có `subagent {agentId, agentType, description}`.
 Persistence: bảng `subagent_sessions` (SQLite vẫn 8). Con ẩn khỏi `listSessions()`.
+
+### Subagents S5b (contract 1.33, ADR 0058)
+
+`agentType`/`SubagentType` là string (built-in hoặc tên agent tuỳ chỉnh). `subagent.progress/finished` có `background?: true` cho con nền; sự kiện của con nền sau khi tool call `agent` đã trả về không đi qua stream của lượt mà qua `client.onSubagentNotice(notice)` (`SubagentNotice {agentId, parentSessionId, agentType, description, status: completed|failed|cancelled, delivery: steered|queued}`) và `ReactiveAgentEvent` `subagent.finished`. Kết quả tới model là input `<subagent id status type description>` (steer vào lượt đang chạy hoặc next-turn input bền), không phải event.
+Tool mới (chỉ offer khi phiên đã có con; `agent.spawn`, parallel): `agent_message {id, message}`, `agent_wait {ids?, timeout_ms?}` (mặc định 30000, kẹp 10000..3600000), `agent_close {id}`. `agent` nhận `background: true` -> `{"id","status":"running"}`. SDK: `client.agentTypes()` (`AgentTypesReport {types: AgentTypeView[], errors, warnings}`), `client.stopSubagent(id)`, `client.onSubagentNotice()`. Slash `/agents`. SQLite vẫn 8.
