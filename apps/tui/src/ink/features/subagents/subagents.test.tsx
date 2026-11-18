@@ -1,0 +1,98 @@
+/** @jsxImportSource react */
+import {afterEach, expect, test} from 'bun:test';
+import {cleanup} from 'ink-testing-library';
+import {Text} from 'ink';
+import type {SubagentSummaryView} from '@futryn/contracts';
+import {renderInk, settle} from '../../testing';
+import {Subagents, tokenTotal, useSubagents} from './index';
+afterEach(cleanup);
+const child: SubagentSummaryView = {
+  id: 'child',
+  parentConversationId: 'parent',
+  parentTurnId: null,
+  callId: 'call',
+  depth: 1,
+  agentType: 'worker',
+  description: 'Implement feature',
+  selection: {accountId: '00000000-0000-4000-8000-000000000001', modelId: 'm'},
+  forkContext: false,
+  background: true,
+  status: 'running',
+  toolCount: 2,
+  usage: null,
+  createdAt: '2026-11-18T00:00:00Z',
+  finishedAt: null,
+  summary: '',
+  steps: [
+    {kind: 'tool', toolName: 'edit', target: 'a.ts', status: 'running', output: 'a\nb\nc\nd\nHIDDEN'},
+    {kind: 'text', text: '**child answer**'},
+  ],
+};
+test('unknown tokens remain unknown rather than fake zero', () => {
+  expect(tokenTotal(null)).toBeUndefined();
+  expect(tokenTotal({inputTokens: 5, outputTokens: 7, costUSD: null})).toBe(12);
+});
+test('tree renders truthful progress; Enter opens child; expansion is scoped to selected child', async () => {
+  let inspected = '';
+  const view = renderInk(
+    <Subagents
+      agents={[child, {...child, id: 'second', depth: 2, status: 'failed', errorCode: 'CANCELLED'}]}
+      isActive
+      width={90}
+      onInspect={id => {
+        inspected = id;
+        return undefined;
+      }}
+    />,
+  );
+  await settle();
+  expect(view.lastFrame()).toContain('1 running / 2');
+  expect(view.lastFrame()).toContain('tokens not reported');
+  expect(view.lastFrame()).toContain('2 tools');
+  view.stdin.write('\r');
+  await settle();
+  expect(inspected).toBe('child');
+  expect(view.lastFrame()).toContain('child answer');
+  expect(view.lastFrame()).not.toContain('HIDDEN');
+  view.stdin.write('\u000f');
+  await settle();
+  expect(view.lastFrame()).toContain('HIDDEN');
+  view.stdin.write('\u001b[B');
+  await settle();
+  view.stdin.write('\r');
+  await settle();
+  expect(inspected).toBe('second');
+});
+test('subagent hook reads SDK and unsupported inspect stays undefined', async () => {
+  let state: ReturnType<typeof useSubagents> | undefined;
+  function Harness() {
+    state = useSubagents();
+    return <Text>{state.agents.length} children</Text>;
+  }
+  const view = renderInk(<Harness />);
+  await settle();
+  expect(view.lastFrame()).toContain('0 children');
+  expect(state!.inspect('missing')).toBeUndefined();
+  expect(() => state!.stop('missing')).toThrow();
+});
+
+test('opened child transcript hides raw memory block and retains provenance line', async () => {
+  const view = renderInk(
+    <Subagents
+      agents={[
+        {
+          ...child,
+          summary:
+            'Done\n<oai-mem-citation>\n<citation_entries>\nchild-notes.md\n</citation_entries>\n</oai-mem-citation>',
+        },
+      ]}
+      isActive
+      width={90}
+    />,
+  );
+  await settle();
+  view.stdin.write('\r');
+  await settle();
+  expect(view.lastFrame()).toContain('Ký ức đã dùng: child-notes.md');
+  expect(view.lastFrame()).not.toContain('<oai-mem-citation>');
+});
