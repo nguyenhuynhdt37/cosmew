@@ -437,6 +437,11 @@ export class FutrynClient {
   }
   setSandboxMode(mode: SandboxModeSetting): SandboxModeSetting {
     if (!SANDBOX_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
+    if (mode !== this.sandboxModeValue) {
+      // Session grants were answered under the old sandbox; none may outlive a mode change.
+      this.denyPendingPermissions();
+      this.revokeToolGrants();
+    }
     this.sandboxModeValue = mode;
     this.notifyStateChange();
     return mode;
@@ -463,8 +468,10 @@ export class FutrynClient {
     if (!preset) throw new FutrynError('INVALID_INPUT');
     this.sandboxModeValue = preset.sandbox;
     this.permissionModeValue = preset.mode;
-    // A stricter preset leaves no stale prompt answerable under the looser one.
+    // A stricter preset leaves no stale prompt answerable, and no session grant (an unsandboxed
+    // escalation or network approved for the session) usable, under the looser one.
     this.denyPendingPermissions();
+    this.revokeToolGrants();
     this.notifyStateChange();
     return preset;
   }

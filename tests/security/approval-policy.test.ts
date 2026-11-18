@@ -1,4 +1,4 @@
-import {afterEach, beforeAll, describe, expect, test} from 'bun:test';
+import {afterEach, beforeAll, describe, expect, spyOn, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -477,6 +477,20 @@ describe('escalation to no sandbox (require_escalated, ADR 0053)', () => {
     expect((await c.attempt('exec_command', escalate('npm i -g other'), 'once')).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', exec('npm i -g tool'))).outcome).toBe('ran');
     expect(c.launches.at(-1)!.sandbox!.unsandboxed).toBeUndefined();
+  });
+
+  test('changing the preset or sandbox mode revokes session grants and pending prompts', async () => {
+    const c = await chain();
+    const revoke = spyOn(c.client, 'revokeToolGrants');
+    c.client.setPermissionPreset('full-access');
+    expect(revoke).toHaveBeenCalledTimes(1);
+    c.client.setPermissionPreset('read-only');
+    expect(revoke).toHaveBeenCalledTimes(2);
+    c.client.setSandboxMode('workspace-write');
+    expect(revoke).toHaveBeenCalledTimes(3);
+    // Setting the same sandbox mode again changes nothing and keeps grants.
+    c.client.setSandboxMode('workspace-write');
+    expect(revoke).toHaveBeenCalledTimes(3);
   });
 
   test('untrusted asks too; denying runs nothing', async () => {
