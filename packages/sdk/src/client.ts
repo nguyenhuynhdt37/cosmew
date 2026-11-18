@@ -14,6 +14,8 @@ import {
   type ToolResult,
   type SkillsReport,
   type MemoryInfo,
+  type MemoryWrite,
+  memoryWriteSchema,
   type ProjectContextReport,
   type Integration,
   type ProviderAuthChallenge,
@@ -140,7 +142,7 @@ export interface FutrynBackendPorts {
   memories?(): MemoryInfo[];
   memoryDirectory?(): string | null;
   openMemoryDirectory?(): Promise<void>;
-  memoryAction?(action: 'read' | 'delete', name: string): Promise<ToolResult>;
+  memoryAction?(action: 'read' | 'delete' | 'write', name: string, entry?: MemoryWrite): Promise<ToolResult>;
   terminalRuntime?(): TerminalRuntimeReport;
   /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
@@ -421,6 +423,14 @@ export class FutrynClient {
   }
   async deleteMemory(name: string): Promise<ToolResult> {
     return this.memoryAction('delete', name);
+  }
+  /** Explicit user memory writes use the same mediated tool as model writes (ADR 0057). */
+  async writeMemory(entry: MemoryWrite): Promise<ToolResult> {
+    if (this.currentMode !== 'chat' || this.sending) throw new FutrynError('POLICY');
+    if (!this.toolsEnabled() || !this.ports.memoryAction) throw new FutrynError('UNSUPPORTED');
+    const validated = memoryWriteSchema.safeParse(entry);
+    if (!validated.success) throw new FutrynError('INVALID_INPUT');
+    return this.ports.memoryAction('write', validated.data.name, validated.data);
   }
   private async memoryAction(action: 'read' | 'delete', name: string): Promise<ToolResult> {
     if (!this.toolsEnabled() || !this.ports.memoryAction) throw new FutrynError('UNSUPPORTED');

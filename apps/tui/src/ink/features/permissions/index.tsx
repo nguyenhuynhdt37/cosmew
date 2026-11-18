@@ -34,8 +34,13 @@ export function usePermissions() {
     rules: client.permissionRules(),
     preset: client.permissionPreset(),
     cyclePreset: () => {
-      const at = PERMISSION_PRESETS.findIndex(p => p.id === client.permissionPreset());
-      const next = PERMISSION_PRESETS[(at + 1) % PERMISSION_PRESETS.length]!;
+      // Same order as the SDK's cyclePermissionPreset: a custom setup enters Auto first.
+      const current = client.permissionPreset();
+      const at = PERMISSION_PRESETS.findIndex(p => p.id === current);
+      const next =
+        current === 'custom'
+          ? PERMISSION_PRESETS.find(p => p.id === 'auto')!
+          : PERMISSION_PRESETS[(at + 1) % PERMISSION_PRESETS.length]!;
       if (next.id === 'full-access') router.open('permissions', <PermissionRulesDialog confirmFullAccessOnOpen />);
       else client.setPermissionPreset(next.id);
     },
@@ -136,7 +141,10 @@ export function PermissionRequestDialog({
       ) : (
         <>
           <ListPicker
-            items={items.map(item => ({...item, label: `${item.id === selected ? '› ' : ''}${item.label}`}))}
+            items={items}
+            cursor={items.findIndex(item => item.id === selected)}
+            numbered={false}
+            hint={false}
             onSelect={item => choose(item.id)}
             isActive={false}
           />

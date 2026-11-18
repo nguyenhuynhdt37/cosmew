@@ -16,7 +16,7 @@ import {
   type PermissionResolutionScope,
   type SandboxModeSetting,
 } from '@futryn/contracts';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {SessionGrants, classifyCommand, dangerousCommandMatch, evaluateExec, evaluateStdin} from '@futryn/security';
 import {ToolDispatcher, NativeCommandRuntime, type ToolAuditRecord} from '@futryn/tools';
 import {WorkspaceRoot} from '@futryn/workspace';
@@ -1213,10 +1213,9 @@ describe('ADR 0055: ReviewDecision once/session/always, multi-turn network grant
     });
     expect(stderrChunks.join('')).toContain(FULL_ACCESS_WARNING);
 
-    const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
-    await tui.initialize();
+    const tui = await openInk(client, {width: 100, consent: false}); // no account: only the startup flags are under test
     cleanup.push(() => tui.shutdown());
-    expect(tui.getStatusBanner()).toBe(FULL_ACCESS_WARNING);
+    expect(tui.client.status().permissionPreset).toBe('full-access'); // the Full Access warning is shown by the Ink status line
 
     // Project deny rules still win, and a later launch without flags falls back to config defaults.
     client.addPermissionRule('deny', 'Bash(git push:*)');

@@ -4,6 +4,8 @@ Accepted 2026-11-18 theo [kế hoạch TUI v3](../delivery/tui-v3/plan.md).
 Phạm vi: Pha 0, `apps/tui`; không thay public SDK/agent-events contract,
 quyền, provider, persistence hoặc feature của renderer cũ.
 
+> **Cập nhật Pha 3 (2026-11-18):** mặc định đã đổi sang Ink cho `fyn`, `futryn`, `hannes`, `hannes tui` và chạy trần; cờ `FUTRYN_TUI` và toàn bộ renderer/feature cũ (`app.tsx`, `features/*`, `render/`, `ui/`, `core/`, `input/terminal-keys`) đã bị xoá. Giữ lại: theme engine (`src/theme/`), `input/text.ts`, `clipboard.ts`, `types.ts`.
+
 ## Quyết định
 
 Dùng React/Ink cho TUI mới trong `apps/tui/src/ink/`, ghim chính xác:
@@ -30,7 +32,7 @@ root typecheck/Bun nhận React mà không đổi renderer cũ.
    semantic theme adapter và UI primitives. API nội bộ version 0.1 tại
    [contracts](../delivery/tui-v3/contracts.md). Chỉ dùng public exports của
    `@futryn/sdk`/`@futryn/contracts`; reuse ThemeEngine của cùng app.
-2. Trong thời gian chuyển đổi, `FUTRYN_TUI=ink` lazy-load runtime mới; mọi giá trị
+2. [ĐÃ ĐỔI 2026-11-18, Pha 3] Ink là TUI duy nhất; `FUTRYN_TUI` và renderer cũ đã bị xoá. Nội dung gốc: trong thời gian chuyển đổi, `FUTRYN_TUI=ink` lazy-load runtime mới; mọi giá trị
    khác giữ runtime cũ. Không bật Ink mặc định ở Pha 0. Non-TTY in một frame
    rồi thoát; TTY dùng scrollback thường, không alternate buffer.
 3. Pha 1 giữ feature boundaries của ADR 0015 trong các React feature folders;

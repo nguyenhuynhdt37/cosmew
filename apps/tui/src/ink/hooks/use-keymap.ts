@@ -35,6 +35,7 @@ export function useKeymap(handlers: KeyHandlers, options: {isActive?: boolean} =
   const isActive = useInputEnabled(options.isActive);
   useInput(
     (input, key) => {
+      if (!isActive) return;
       const action = keyAction(input, key);
       if (action) handlers[action]?.();
     },

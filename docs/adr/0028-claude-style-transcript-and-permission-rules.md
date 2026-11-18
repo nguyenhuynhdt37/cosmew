@@ -1,5 +1,7 @@
 # ADR 0028 — Transcript kiểu Claude Code và rule quyền theo dự án
 
+> **Superseded in part (2026-11-18):** the renderer described here no longer exists. The Ink transcript renders `> prompt`, `✻ Thinking…`, `⏺ name(argument) · state` + `⎿ output` and `⏺ answer`; per-project Allow/Ask/Deny rules and precedence (deny > ask > allow > mode) are unchanged and are managed by the Ink `/permissions` dialog.
+
 Accepted 2026-11-16 theo yêu cầu của người dùng: các lệnh và giao diện theo chuẩn Claude CLI (`/permissions` để cài đặt; cách hiện bash và thinking), vì màu sắc và cách chia hiện tại khó nhìn. Người dùng chọn "Giống Claude Code" và "Rule như Claude". Thay phần trình bày của ADR 0021; timeline `parts` theo thứ tự đến vẫn giữ nguyên.
 
 ## Transcript

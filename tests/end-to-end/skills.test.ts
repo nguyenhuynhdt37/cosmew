@@ -3,10 +3,10 @@ import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {providerSchema} from '@futryn/contracts';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {memoryVault} from '../fixtures';
+import {memoryVault, probeResponse} from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
@@ -20,6 +20,8 @@ async function setup(defaultState = false) {
     const request = new Request(input, init);
     if (request.method === 'GET') return Response.json({data: [{id: 'fixture-model'}]});
     const body = await request.json();
+    // The startup gate's account check is a small non-streaming generation.
+    if (!body.stream) return probeResponse();
     requests.push({body});
     const base = {id: 'fixture', object: 'chat.completion.chunk', created: 123, model: 'fixture-model'};
     const callSkill =
@@ -154,15 +156,14 @@ test('TUI slash skill reaches a model turn and /skills lists source and errors w
   mkdirSync(bad, {recursive: true});
   writeFileSync(join(bad, 'SKILL.md'), 'missing frontmatter');
   h.client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client: h.client, cols: 120, rows: 40});
+  const tui = await openInk(h.client, {width: 120});
   cleanup.push(() => tui.shutdown());
-  await tui.initialize();
   await tui.submitPrompt('/s3-hidden selected-file.ts');
   const body = h.server.requests.filter(r => r.body?.stream).at(-1)!.body;
   expect(text(body)).toContain('S3_HIDDEN_BODY selected-file.ts');
   await tui.executeSlashCommand('/skills');
   const frame = tui.computeFrameSnapshot().plainText;
-  expect(frame).toContain('s3-hidden (project)');
+  expect(frame).toContain('/s3-hidden');
   expect(frame).toContain('INVALID_OR_UNREADABLE_SKILL');
   const before = h.server.requests.length;
   await tui.submitPrompt('/usage');
@@ -188,7 +189,7 @@ test('headless fyn exec resolves a dollar mention through the same dispatcher', 
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.34'});
+  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.35'});
 });
 
 test('default state and user skills coexist through production discovery and dispatcher', async () => {

@@ -9,7 +9,7 @@ import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {GENERATION_LIMITS} from '@futryn/contracts';
-import {messagesToTranscript} from '@futryn/tui';
+import {messagesToTranscript} from '../../apps/tui/src/ink/features/transcript/logic';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 import {setDefaultTimeout} from 'bun:test';
@@ -204,7 +204,7 @@ for (const protocol of ['chat', 'anthropic'] as const) {
     const resumed = c.app.createFutrynClient(c.root);
     resumed.resumeSession(id);
     resumed.setToolsEnabled(true);
-    const item = messagesToTranscript(resumed.activeSession()!.messages, {idPrefix: 'r'}).at(-1)!;
+    const item = messagesToTranscript(resumed.activeSession()!.messages, 'r').at(-1)!;
     expect(item.toolCalls?.[0]?.id).toBe(item.toolResults?.[0]?.callId); // call/result pairing survives
     phase = 'second';
     let answer = '';

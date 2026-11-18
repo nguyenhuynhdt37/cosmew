@@ -35,8 +35,7 @@ export function useDialogSize({width, visibleRows}: DialogProps) {
     };
   }, [stdout]);
   return {
-    // Phase 0 Shell adds a Panel around overlay content (four cells of border/padding).
-    width: Math.max(4, Math.min(width ?? 84, ((stdout as typeof stdout & {columns?: number}).columns || 88) - 4)),
+    width: Math.max(4, Math.min(width ?? 84, (stdout as typeof stdout & {columns?: number}).columns || 88)),
     visibleRows: Math.max(
       1,
       visibleRows ?? Math.min(8, Math.floor((((stdout as typeof stdout & {rows?: number}).rows || 24) - 10) / 2)),
@@ -64,19 +63,35 @@ export function PickerDialog<T extends PickerItem>({
   onSelect,
   message,
   children,
+  onHighlight,
   ...props
 }: DialogProps & {
   title: string;
+  onHighlight?: (item: T) => void;
   items: readonly T[];
   onSelect(item: T): void;
   message?: string;
   children?: ReactNode;
 }) {
   const size = useDialogSize(props);
+  const {selections} = useOverlay();
   return (
     <Dialog title={title} {...size} message={message}>
       {children}
-      <ListPicker key={title} items={items} onSelect={onSelect} visibleRows={size.visibleRows} />
+      <ListPicker
+        key={title}
+        items={items}
+        onSelect={onSelect}
+        initialCursor={Math.max(
+          0,
+          items.findIndex(item => item.id === selections.get(title)),
+        )}
+        onHighlight={item => {
+          selections.set(title, item.id);
+          onHighlight?.(item);
+        }}
+        visibleRows={size.visibleRows}
+      />
     </Dialog>
   );
 }
@@ -154,6 +169,7 @@ export function describeDialogError(error: unknown): string {
 }
 /** One task per dialog; close aborts work and late completions cannot mutate UI. */
 export function useDialogTask() {
+  const {tasks} = useOverlay();
   const active = useRef<AbortController | null>(null);
   const mounted = useRef(true);
   const [busy, setBusy] = useState(false);
@@ -171,11 +187,18 @@ export function useDialogTask() {
     active.current = controller;
     setBusy(true);
     setMessage('');
+    let finish!: () => void;
+    const pending = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    tasks.set(controller, pending);
     try {
       await task(controller.signal);
     } catch (error) {
       if (!controller.signal.aborted && mounted.current) setMessage(describeDialogError(error));
     } finally {
+      finish();
+      tasks.delete(controller);
       if (active.current === controller) active.current = null;
       if (mounted.current) setBusy(false);
     }

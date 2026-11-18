@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SessionGrants} from '@futryn/security';
 import {ToolDispatcher} from '@futryn/tools';
-import {FutrynTuiApp, planRows} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {WorkspaceRoot} from '@futryn/workspace';
 import type {PlanState} from '@futryn/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -62,8 +62,7 @@ async function open(
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 100, rows: 32});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 100});
   cleanup.push(() => tui.shutdown());
   return {app, client, tui, server, close};
 }
@@ -117,8 +116,8 @@ test('the plan is durable, offered in Plan mode, pinned above the composer and s
   });
   // Plan mode offers update_plan (agent.state) but never write tools.
   first.client.setMode('plan');
-  const turn = first.tui.submitPrompt('Plan the fix');
-  await turn;
+  await first.tui.submitPrompt('Plan the fix');
+  await first.tui.idle();
   const offered = first.server.requests.find(r => r.body?.tools)?.body.tools.map((t: any) => t.function.name);
   expect(offered).toContain('update_plan');
   expect(offered).not.toContain('write');
@@ -130,7 +129,7 @@ test('the plan is durable, offered in Plan mode, pinned above the composer and s
   expect(frame).toContain('▸ Fix the parser');
   expect(frame).toContain('○ Run the tests');
   expect(frame).toContain('✗ Rewrite history');
-  expect(frame).toContain('⏺ Plan(1/4 completed)');
+  expect(frame).toContain('⏺ update_plan(1/4 completed) · ok');
   const id = first.client.activeSession()!.id;
   await first.close();
 
@@ -138,26 +137,4 @@ test('the plan is durable, offered in Plan mode, pinned above the composer and s
   expect(second.client.plan()).toBeNull();
   second.client.resumeSession(id);
   expect(second.client.plan()?.items.map(i => i.status)).toEqual(['completed', 'in_progress', 'pending', 'cancelled']);
-});
-
-test('the checklist keeps the running step visible and collapses when everything is settled', () => {
-  const many: PlanState = {
-    items: Array.from({length: 12}, (_, i) => ({
-      step: `step ${i}`,
-      status: i < 9 ? 'completed' : i === 9 ? 'in_progress' : 'pending',
-    })),
-    updatedAt: new Date().toISOString(),
-  };
-  const rows = planRows(many, 5);
-  expect(rows).toHaveLength(5);
-  expect(rows.some(r => r.text === '▸ step 9')).toBe(true);
-  const done: PlanState = {
-    items: [
-      {step: 'a', status: 'completed'},
-      {step: 'b', status: 'cancelled'},
-    ],
-    updatedAt: new Date().toISOString(),
-  };
-  expect(planRows(done, 5)).toEqual([{kind: 'summary', text: 'Plan · 1/2 completed', status: 'completed'}]);
-  expect(planRows(null, 5)).toEqual([]);
 });

@@ -93,3 +93,13 @@ Kết quả Pha 1 (2026-11-18): 33 tests / 112 assertions pass trong 5 file;
 bị chặn tại `features/picker/dialogs.test.tsx:22` (TS6133: biến `model`
 không dùng, ngoài vùng sở hữu); không sửa file đó. Không chạy toàn suite,
 không commit/push.
+
+## Pha 2 integration (2026-11-18)
+
+Các mục nối host ở trên được triển khai trong `ink/integrated-shell.tsx` và runtime,
+router `ink/features/commands.ts`; API nền version 0.2 trong
+[contracts](../../../../../../docs/delivery/tui-v3/contracts.md).
+Evidence từng luồng và giới hạn tại
+[parity](../../../../../../docs/delivery/tui-v3/parity.md),
+`ink/testing/integration.test.tsx`, `tests/end-to-end/tui-ink-pty.test.ts` và
+`tests/contracts/sdk-memory-write.test.ts`. Default/golden legacy không đổi.

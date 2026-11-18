@@ -16,6 +16,8 @@ export interface ComposerOptions {
   onCommand?: (command: string) => SubmitAcceptance | Promise<SubmitAcceptance>;
   /** Optional until the SDK exposes a mediated memory-write API. Never writes files in the TUI. */
   onRemember?: (content: string) => SubmitAcceptance | Promise<SubmitAcceptance>;
+  onShellStart?: (command: string) => string | void;
+  onShellError?: (code: string) => void;
   onShellResult?: (result: Awaited<ReturnType<FutrynClient['runShellCommand']>>) => void;
   onShellOutput?: NonNullable<Parameters<FutrynClient['runShellCommand']>[1]>['onOutput'];
   onNotice?: (message: string) => void;
@@ -67,6 +69,7 @@ export function useComposer(options: ComposerOptions) {
   const [shellBusy, setShellBusy] = useState(false);
   const shellAbort = useRef<AbortController | null>(null);
   const accepting = useRef(false);
+  const pendingInput = useRef<Promise<void>>(Promise.resolve());
   const mounted = useRef(true);
   const sessionId = useRef(initialSession?.id);
   const menu = useAutocomplete();
@@ -157,7 +160,7 @@ export function useComposer(options: ComposerOptions) {
     history.record(content);
     if (draftRef.current === snapshot) change(createPasteState(), false);
   };
-  const submit = async (override?: string) => {
+  const submitInternal = async (override?: string) => {
     const snapshot = draftRef.current;
     const content = (override ?? expandPastes(snapshot)).trim();
     if (!content) return;
@@ -213,7 +216,12 @@ export function useComposer(options: ComposerOptions) {
         const abort = new AbortController();
         shellAbort.current = abort;
         setShellBusy(true);
-        const result = await client.runShellCommand(command, {signal: abort.signal, onOutput: options.onShellOutput});
+        const callId = options.onShellStart?.(command);
+        const result = await client.runShellCommand(command, {
+          signal: abort.signal,
+          onOutput: options.onShellOutput,
+          callId: callId || undefined,
+        });
         // A denied/failed command remains visible and is never reported as successful.
         if (mounted.current) options.onShellResult?.(result);
         if (result.status === 'ok') accepted(snapshot, content);
@@ -233,12 +241,23 @@ export function useComposer(options: ComposerOptions) {
         if ((await options.onRemember(memory)) !== false) accepted(snapshot, content);
       } else if ((await options.onSubmit(content)) !== false) accepted(snapshot, content);
     } catch (error) {
-      report(`Input failed [${error instanceof FutrynError ? error.code : 'ERROR'}]; draft kept.`);
+      const code = error instanceof FutrynError ? error.code : 'ERROR';
+      if (content.startsWith('!')) options.onShellError?.(code);
+      report(`Input failed [${code}]; draft kept.`);
     } finally {
       accepting.current = false;
       shellAbort.current = null;
       if (mounted.current) setShellBusy(false);
     }
+  };
+  const submit = (override?: string) => {
+    const task = submitInternal(override);
+    pendingInput.current = task;
+    return task;
+  };
+  const shutdown = async () => {
+    shellAbort.current?.abort();
+    await pendingInput.current;
   };
   const enter = () => {
     if (searchRef.current) {
@@ -388,6 +407,7 @@ export function useComposer(options: ComposerOptions) {
     submit,
     paste,
     interrupt,
+    shutdown,
   };
 }
 export type ComposerController = ReturnType<typeof useComposer>;

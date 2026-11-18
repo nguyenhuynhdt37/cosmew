@@ -7,7 +7,7 @@ public exports của `@futryn/tui` hay default runtime. Quyết định: [ADR 00
 ## Runtime và composition
 
 `src/runtime.tsx::runInteractiveTui(options)` lazy-load Ink chỉ khi
-`(options.env ?? process.env).FUTRYN_TUI === 'ink'`; giá trị khác dùng TUI cũ.
+(đã bỏ ở Pha 3) Ink là runtime duy nhất; `FUTRYN_TUI` không còn được đọc.
 `ink/runtime.tsx` export `selectTuiRuntime(env?)` và `runInkTui(options)`.
 Options kế thừa `FutrynTuiOptions`, thêm `initialCommand?`, `stdin?`, `stdout?`,
 `stderr?`, `slots?`. Streams có thể được inject để test. Non-TTY render đúng một
@@ -176,3 +176,27 @@ qua entry runtime thật trong subprocess, non-TTY một frame và golden TUI c�
 Pha 1/2 vẫn cần test generation/steering/cancellation, consent/auth, mọi dialog,
 PTY terminal teardown/resize, hiệu năng transcript >1000 dòng, và parity đầy đủ.
 Chưa nghiệm thu live-provider hay visual trên terminal người dùng.
+
+## Pha 2 amendment — version 0.2 (2026-11-18, ADR 0060)
+
+Phần này supersede các mô tả foundation-only ở trên. Không inject slots thì
+InkApp mount IntegratedShell; runtime truyền initialCommand và registerShutdown.
+Gate mounted suốt phiên; unlock sau consent + probe, initialCommand chạy một lần.
+Shutdown huỷ/drain probe, turn, shell và async command trước unmount; không đóng SDK/backend.
+Non-TTY giữ single-frame preview, tools/input tắt, không chạy command.
+
+Overlay content render trực tiếp, không bọc Panel. Input wrappers kiểm active cả
+khi callback chạy để event đã dispatch không lọt vào nền vừa mất focus. Ctrl+O mở
+history inspection có paging; transcript chính giữ mounted. Reset đổi Static key.
+ListPicker bổ sung optional `cursor`, `initialCursor`, `onCursorChange`, `onHighlight`,
+`numbered` (default true), `hint` (false ẩn). Cursor theo filtered list; highlight
+callback chỉ khi identity của item đổi. PickerDialog nhớ item theo title trong
+OverlayProvider; settings giữ section ở host; theme highlight preview và rollback
+khi đóng. Permission dùng controlled cursor, giữ nguyên số decision SDK.
+
+SDK contract **1.35** thêm writeMemory qua memory tool (ADR 0060). `#text` tạo note
+feedback với metadata rõ, chỉ accept khi tool ok. Không đường vòng filesystem/quyền.
+
+OverlayProvider giữ `tasks: Map<AbortController, Promise<unknown>>` cho tác vụ dialog;
+useDialogTask đăng ký/xóa task, abort khi unmount. Host shutdown abort rồi drain
+map này cùng gate/turn/shell/commands trước teardown, kể cả discovery/sign-in đang chạy.

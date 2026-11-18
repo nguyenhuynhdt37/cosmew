@@ -71,3 +71,13 @@ of full TUI parity or provider compatibility is made here.
 
 No Phase 0 API change is required. Phase 2 needs focus arbitration, inspection
 paging, session reset keys and host-owned command/cancellation lifecycle wiring.
+
+## Pha 2 integration (2026-11-18)
+
+Các mục nối host ở trên được triển khai trong `ink/integrated-shell.tsx` và runtime,
+router `ink/features/commands.ts`; API nền version 0.2 trong
+[contracts](../../../../../../docs/delivery/tui-v3/contracts.md).
+Evidence từng luồng và giới hạn tại
+[parity](../../../../../../docs/delivery/tui-v3/parity.md),
+`ink/testing/integration.test.tsx`, `tests/end-to-end/tui-ink-pty.test.ts` và
+`tests/contracts/sdk-memory-write.test.ts`. Default/golden legacy không đổi.

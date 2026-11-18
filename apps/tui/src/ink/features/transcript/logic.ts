@@ -50,13 +50,15 @@ function storedResult(message: Message): ToolResult {
   const exit = ['exec_command', 'write_stdin'].includes(message.toolName ?? '')
     ? /^Exit code: (-?\d+)\n/.exec(content)
     : null;
+  const signalled =
+    ['exec_command', 'write_stdin'].includes(message.toolName ?? '') && /^Process ended by signal/.test(content);
   return {
     callId: message.toolCallId ?? '',
     name: message.toolName ?? '',
     status: (prefix?.[1] as ToolResult['status']) ?? 'ok',
     content,
     ...(prefix?.[2] ? {code: prefix[2]} : {}),
-    ...(exit ? {exitCode: Number(exit[1])} : {}),
+    ...(exit ? {exitCode: Number(exit[1])} : signalled ? {exitCode: null} : {}),
   };
 }
 export function messagesToTranscript(messages: readonly Message[], idPrefix = 'history'): TranscriptItem[] {
@@ -89,6 +91,10 @@ export function messagesToTranscript(messages: readonly Message[], idPrefix = 'h
 }
 export function toolArgument(call: ToolCall): string {
   const input = call.input && typeof call.input === 'object' ? (call.input as Record<string, unknown>) : {};
+  if (call.name === 'update_plan' && Array.isArray(input.plan)) {
+    const steps = input.plan as {status?: unknown}[];
+    return `${steps.filter(step => step?.status === 'completed').length}/${steps.length} completed`;
+  }
   for (const key of ['cmd', 'path', 'pattern', 'description', 'url', 'name', 'id', 'session_id'])
     if (input[key] !== undefined) return String(input[key]);
   if (call.name === 'apply_patch' && typeof input.patch === 'string')

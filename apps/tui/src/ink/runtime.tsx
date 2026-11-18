@@ -1,12 +1,10 @@
 /** @jsxImportSource react */
 import {render, renderToString} from 'ink';
+import {FULL_ACCESS_WARNING} from '@futryn/contracts';
 import type {FutrynTuiOptions} from '../types';
 import {ThemeEngine} from '../theme/theme';
 import {FoundationNotice, InkApp, type AppSlots} from './app';
 
-export function selectTuiRuntime(env: Record<string, string | undefined> = process.env): 'ink' | 'legacy' {
-  return env.FUTRYN_TUI === 'ink' ? 'ink' : 'legacy';
-}
 export interface InkRuntimeOptions extends FutrynTuiOptions {
   initialCommand?: string;
   stdin?: NodeJS.ReadableStream & {isTTY?: boolean};
@@ -14,7 +12,7 @@ export interface InkRuntimeOptions extends FutrynTuiOptions {
   stderr?: NodeJS.WritableStream;
   slots?: AppSlots;
 }
-/** The Phase 0 shell never starts generation, reads the workspace or advertises unanswered dialogs. */
+/** Interactive host owns cancellation; CLI retains backend ownership. */
 export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
   const stdout = options.stdout ?? process.stdout;
   const stdin = options.stdin ?? process.stdin;
@@ -23,12 +21,30 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
   options.client.setToolsEnabled(false);
   options.client.setUserInputAvailable(false);
   await engine.initialize();
+  let shutdown = async () => {};
+  const registerShutdown = (fn: () => Promise<void>) => {
+    shutdown = fn;
+  };
   const tree = (
     <InkApp
       client={options.client}
       themeEngine={engine}
       width={options.cols}
-      slots={options.slots ?? {status: <FoundationNotice initialCommand={options.initialCommand} />}}
+      initialCommand={options.initialCommand}
+      registerShutdown={registerShutdown}
+      slots={
+        options.slots ??
+        (!interactive
+          ? {
+              status: (
+                <FoundationNotice
+                  initialCommand={options.initialCommand}
+                  warning={options.client.sandboxMode() === 'danger-full-access' ? FULL_ACCESS_WARNING : undefined}
+                />
+              ),
+            }
+          : undefined)
+      }
     />
   );
   if (!interactive) {
@@ -45,12 +61,15 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
     patchConsole: false,
     maxFps: 30,
   });
-  const stop = () => instance.unmount();
+  const stop = () => {
+    void shutdown().finally(() => instance.unmount());
+  };
   process.once('SIGTERM', stop);
   process.once('SIGINT', stop);
   try {
     await instance.waitUntilExit();
   } finally {
+    await shutdown();
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
     instance.unmount();

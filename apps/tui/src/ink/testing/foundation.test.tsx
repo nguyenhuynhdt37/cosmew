@@ -8,7 +8,7 @@ import {useOverlay} from '../core/overlay';
 import {useClientEvents, useStatus} from '../hooks';
 import {Panel, KeyHint, Spinner, TextLine, Truncate, Markdown, CodeBlock, Diff, ListPicker} from '../ui';
 import {createClientFixture, renderInk, settle} from './index';
-import {selectTuiRuntime, runInkTui} from '../runtime';
+import {runInkTui} from '../runtime';
 import {PassThrough} from 'node:stream';
 
 afterEach(cleanup);
@@ -153,10 +153,7 @@ test('SDK hooks observe updates, retain fresh callbacks and unsubscribe', async 
   expect(calls).toHaveLength(count);
 });
 
-test('runtime opt-in defaults to legacy and non-TTY writes one Ink frame then exits', async () => {
-  expect(selectTuiRuntime({})).toBe('legacy');
-  expect(selectTuiRuntime({FUTRYN_TUI: 'ink'})).toBe('ink');
-  expect(selectTuiRuntime({FUTRYN_TUI: 'other'})).toBe('legacy');
+test('non-TTY writes one Ink frame then exits', async () => {
   const fixture = createClientFixture();
   const stdout = new PassThrough();
   const stdin = new PassThrough();
@@ -329,23 +326,21 @@ test('hooks deliver interaction and subagent events, then remove both observers'
   expect(events).toHaveLength(count);
 });
 
-test('public runtime entry actually selects Ink only for the opt-in', async () => {
+test('public runtime entry is Ink without any opt-in and writes one frame without a TTY', async () => {
   const runtime = new URL('../../runtime.tsx', import.meta.url).pathname;
   const fixture = new URL('./client-fixture.ts', import.meta.url).pathname;
-  for (const mode of ['', 'ink']) {
-    const code = `import {runInteractiveTui} from ${JSON.stringify(runtime)}; import {createClientFixture} from ${JSON.stringify(fixture)}; await runInteractiveTui({client: createClientFixture().client, env: {FUTRYN_TUI: ${JSON.stringify(mode)}, NO_COLOR: '1', FUTRYN_THEME_MODE: 'dark'}, cols: 80, rows: 24});`;
-    const child = Bun.spawn([process.execPath, '--eval', code], {stdin: 'ignore', stdout: 'pipe', stderr: 'pipe'});
-    const [stdout, stderr, exit] = await Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]);
-    expect(stderr).toBe('');
-    expect(exit).toBe(0);
-    expect(stdout.includes('Ink foundation')).toBe(mode === 'ink');
-    expect(stdout).not.toContain('\u001b');
-    if (mode === 'ink') expect(stdout.trim().split('Futryn')).toHaveLength(2);
-  }
+  const code = `import {runInteractiveTui} from ${JSON.stringify(runtime)}; import {createClientFixture} from ${JSON.stringify(fixture)}; await runInteractiveTui({client: createClientFixture().client, env: {NO_COLOR: '1', FUTRYN_THEME_MODE: 'dark'}, cols: 80, rows: 24});`;
+  const child = Bun.spawn([process.execPath, '--eval', code], {stdin: 'ignore', stdout: 'pipe', stderr: 'pipe'});
+  const [stdout, stderr, exit] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  expect(stderr).toBe('');
+  expect(exit).toBe(0);
+  expect(stdout).toContain('Ink preview');
+  expect(stdout).not.toContain('\u001b');
+  expect(stdout.trim().split('Futryn')).toHaveLength(2);
 });
 
 test('keymap ignores releases and modified navigation', async () => {

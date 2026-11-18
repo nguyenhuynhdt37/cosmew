@@ -1,1 +1,0 @@
-export {renderTopHeaderBar} from './view';

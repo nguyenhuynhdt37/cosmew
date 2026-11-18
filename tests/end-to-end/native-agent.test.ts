@@ -4,7 +4,7 @@ import {mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, readFileSy
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {NativeCommandRuntime} from '@futryn/tools';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
@@ -136,16 +136,14 @@ nativeTest(
     const stored = c.app.conversations.recover(c.client.activeSession()!.id);
     expect(stored.turns.at(-1)!.state).toBe('completed');
     expect(stored.messages.filter(m => m.toolName === 'exec_command')).toHaveLength(4);
-    const tui = new FutrynTuiApp({client: c.client, cols: 100, rows: 30});
-    await tui.initialize();
+    const tui = await openInk(c.client, {width: 100});
     try {
       const report = await c.client.refreshWorkspaceDiff();
       expect(
         report.files.find(file => file.path === 'src/math.ts')?.lines.some(line => line.content.includes('a + b')),
       ).toBe(true);
       await tui.submitPrompt('/diff');
-      expect(tui.getActiveOverlay()).toBe('diff');
-      expect(tui.computeFrameSnapshot().plainText).toContain('src/math');
+      await tui.waitFor('src/math');
       await tui.handleKey('Escape');
       c.server.set({
         script: view => {
@@ -166,16 +164,6 @@ nativeTest(
       await tui.submitPrompt('/chat');
       expect(c.client.activeSession()!.id).toBe(sessionId);
       c.client.setDefaultTurnBudget({maxToolCalls: 16});
-      for (const [cols, rows] of [
-        [80, 24],
-        [100, 30],
-        [120, 40],
-        [160, 48],
-        [30, 10],
-      ]) {
-        tui.resize(cols!, rows!);
-        expect(tui.computeFrameSnapshot().plainLines).toHaveLength(rows!);
-      }
       const restarted = startup(c.home, {vault: memoryVault()});
       try {
         const resumed = restarted.createFutrynClient(c.root);

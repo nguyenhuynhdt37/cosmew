@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {CommandRuntime} from '@futryn/contracts';
 import {SeatbeltRuntime} from '@futryn/tools';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -49,8 +49,7 @@ async function make(
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 120, rows: 36});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 120});
   cleanup.push(() => tui.shutdown());
   return {client, tui, root};
 }
@@ -85,7 +84,7 @@ test('on-request default: `bun test` and a workspace edit run without a prompt; 
   }, fixtureRuntime(ran));
   expect(c.client.permissionMode()).toBe('auto');
   let prompts = 0;
-  const turn = c.tui.submitPrompt('Run the tests, note it, clean up');
+  await c.tui.submitPrompt('Run the tests, note it, clean up');
   const end = Date.now() + 6000;
   while (Date.now() < end && !c.client.listPendingPermissions().length) await Bun.sleep(5);
   const pending = c.client.listPendingPermissions();
@@ -95,12 +94,12 @@ test('on-request default: `bun test` and a workspace edit run without a prompt; 
   expect(pending[0]).toMatchObject({capability: 'process.execute', target: 'rm -rf build'});
   expect(ran).toEqual(['bun test']);
   expect(readFileSync(join(c.root, 'notes.md'), 'utf8')).toBe('ok\n');
-  c.tui.advanceStartupGate();
-  await c.tui.handleKey('3');
-  await turn;
+  await c.tui.nextPermission();
+  await c.tui.handleKey('Escape');
+  await c.tui.idle();
   expect(prompts).toBe(1);
   expect(ran).toEqual(['bun test']);
-});
+}, 20000);
 
 test.skipIf(process.platform !== 'darwin')(
   'on-request in the real Seatbelt sandbox: rg runs without a prompt and cannot write outside the workspace',
@@ -195,14 +194,14 @@ test('request_permissions answered [2] "for this session" stays active across la
     }),
   );
 
-  const turn1 = c.tui.submitPrompt('Install dependencies');
+  await c.tui.submitPrompt('Install dependencies');
   const deadline = Date.now() + 5000;
   while (Date.now() < deadline && !c.client.listPendingPermissions().length) await Bun.sleep(5);
   expect(c.client.listPendingPermissions()).toHaveLength(1);
   c.tui.advanceStartupGate();
   // Press [2] Yes, for this session.
   await c.tui.handleKey('2');
-  await turn1;
+  await c.tui.idle();
   expect(launches).toEqual([{command: 'npm install', network: true}]);
 
   // Turn 2: network grant survives into the new turn with zero prompts.

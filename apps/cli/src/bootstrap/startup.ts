@@ -1210,8 +1210,8 @@ export function startup(
         memories().prepareDirectory(); // Explicit user action: ensure/validate the fixed private folder.
         await (services.openMemoryFolder ?? (path => openExternalURL(pathToFileURL(path).href)))(memories().directory);
       },
-      memoryAction: async (action, name) =>
-        toolPort.invoke({id: crypto.randomUUID(), name: 'memory', input: {action, name}}),
+      memoryAction: async (action, name, entry) =>
+        toolPort.invoke({id: crypto.randomUUID(), name: 'memory', input: {...entry, action, name}}),
       skills: () => (toolsEnabled() ? skillReport() : {skills: [], errors: [], warnings: []}),
       availableTools: () =>
         toolsEnabled()

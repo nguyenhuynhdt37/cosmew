@@ -24,7 +24,7 @@ import {
 } from '@futryn/core';
 import {SLASH_COMMANDS} from '@futryn/sdk';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {compactionNotice} from '../../apps/tui/src/ui/compaction-notice';
+import {compactionNotice} from '../../apps/tui/src/ink/features/commands';
 import {memoryVault} from '../fixtures';
 
 const cleanup: (() => void)[] = [];

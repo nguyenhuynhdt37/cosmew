@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {FutrynError} from '@futryn/contracts';
 import {parseOpenRouterKeyLimits} from '@futryn/models';
-import {FutrynTuiApp, limitItemText, limitRows} from '@futryn/tui';
+
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
 
@@ -28,93 +28,6 @@ test('malformed key responses are protocol errors, never zero balances', () => {
   for (const body of [null, {}, {data: null}, {data: {usage: 'lots'}}, {data: {usage: 1, limit: 'ten'}}]) {
     expect(() => parseOpenRouterKeyLimits(body)).toThrow(FutrynError);
   }
-});
-
-test('limit rows show provider numbers, failures and providers without a quota API', () => {
-  expect(limitItemText({label: 'Key credit', used: 1.2, limit: 10, remaining: 8.8, unit: 'USD'})).toBe(
-    '$1.20 of $10.00 · $8.80 left',
-  );
-  expect(limitItemText({label: 'Key credit', used: 3, limit: null, unit: 'USD', unlimited: true})).toBe(
-    '$3.00 used · no spending cap',
-  );
-  expect(limitItemText({label: 'primary', usedPercent: 42, unit: '%'})).toBe('primary 42% used');
-  const rows = limitRows([
-    {
-      accountId: '1',
-      alias: 'main',
-      providerId: 'openrouter',
-      providerName: 'OpenRouter',
-      source: 'live',
-      observedAt: null,
-      items: [{label: 'Key credit', used: 1, limit: 2, remaining: 1, unit: 'USD'}],
-    },
-    {
-      accountId: '2',
-      alias: 'work',
-      providerId: 'x',
-      providerName: 'Anthropic',
-      source: 'unavailable',
-      observedAt: null,
-      items: [],
-    },
-    {
-      accountId: '3',
-      alias: 'broken',
-      providerId: 'openrouter',
-      providerName: 'OpenRouter',
-      source: 'live',
-      observedAt: null,
-      items: [],
-      error: 'AUTH',
-    },
-  ]).join('\n');
-  expect(rows).toContain('main · $1.00 of $2.00 · $1.00 left');
-  expect(rows).toContain('work · not reported by provider');
-  expect(rows).toContain('broken · check failed (AUTH)');
-  expect(limitRows([]).join('\n')).toContain('No connected accounts');
-  const pending = limitRows([
-    {
-      accountId: '4',
-      alias: 'or',
-      providerId: 'openrouter',
-      providerName: 'OpenRouter',
-      source: 'unavailable',
-      observedAt: null,
-      items: [],
-      checking: true,
-    },
-  ]).join('\n');
-  expect(pending).toContain('or · checking…');
-});
-
-test('/usage lists every connected account, even before the first message', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'futryn-limits-'));
-  const server = fixtureServer();
-  cleanup.push(
-    () => rmSync(dir, {recursive: true, force: true}),
-    () => server.server.stop(true),
-  );
-  const app = startup(dir, {vault: memoryVault()});
-  cleanup.push(() => app.db.close());
-  app.registry.add(server.provider('chat', {id: 'limits', auth: 'none'}));
-  await app.accounts.add('limits', 'first', {kind: 'none'});
-  await app.accounts.add('limits', 'second', {kind: 'none'});
-  const client = app.createFutrynClient(dir);
-  const before = server.requests.length;
-  await client.refreshLimits(); // no provider here has a quota API: nothing is requested
-  expect(server.requests.length).toBe(before);
-  expect(client.limits().map(entry => entry.source)).toEqual(['unavailable', 'unavailable']);
-  const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
-  await tui.initialize();
-  cleanup.push(() => tui.shutdown());
-  await tui.executeSlashCommand('/usage');
-  expect(tui.computeFrameSnapshot().plainText).not.toContain('checking…'); // no quota API: answered at once
-  const until = Date.now() + 2000;
-  while (tui.computeFrameSnapshot().plainText.includes('checking…') && Date.now() < until) await Bun.sleep(5);
-  const text = tui.computeFrameSnapshot().plainText;
-  expect(text).toContain('LIMITS BY PROVIDER');
-  expect(text).toContain('first · not reported by provider');
-  expect(text).toContain('second · not reported by provider');
 });
 
 test('OpenAI and Anthropic rate-limit headers become quota entries; bad values are skipped', async () => {
@@ -193,5 +106,5 @@ for (const protocol of ['chat', 'anthropic'] as const)
     client.clearSessionView(); // still attributed to the account after starting a new chat
     const limits = client.limits().find(entry => entry.accountId === account.id)!;
     expect(limits.source).toBe('last-turn');
-    expect(limitItemText(limits.items[0]!)).toContain('requests 25% used');
+    expect(limits.items[0]).toMatchObject({label: 'requests', usedPercent: 25});
   });

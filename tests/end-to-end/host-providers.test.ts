@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import type {ModelEvent} from '@futryn/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {fixtureServer, memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
 
 setDefaultTimeout(30_000);
@@ -313,14 +313,18 @@ test('fyn providers add writes the same config.toml a user edits by hand, and re
 test('/login custom provider form writes config.toml, validates it, and rejects a token typed as a header', async () => {
   const {dir, server} = home(() => '');
   const app = open(dir);
-  const tui = new FutrynTuiApp({client: app.createFutrynClient(dir), cols: 110, rows: 30});
-  await tui.initialize();
+  const tui = await openInk(app.createFutrynClient(dir), {width: 110, consent: false});
   cleanup.push(() => tui.shutdown());
   const type = async (text: string) => {
     for (const key of text) await tui.handleKey(key);
   };
-  await tui.executeSlashCommand('/login');
-  await type('zzzz'); // filter every vendor out; the custom provider row stays
+  // No account yet: consent, then the startup gate offers Sign in, which opens the shared connect dialog.
+  await tui.handleKey('Up');
+  await tui.handleKey('Enter');
+  await tui.waitFor('Sign in');
+  await tui.handleKey('Enter');
+  await tui.waitFor('Type to filter');
+  for (let i = 0; i < 7; i++) await tui.handleKey('Down'); // last row: the custom provider
   await tui.handleKey('Enter');
   await type('gw1');
   await tui.handleKey('Enter');
@@ -330,11 +334,10 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
   await tui.handleKey('ArrowDown');
   await tui.handleKey('Enter'); // no authentication
   await tui.handleKey('Enter'); // discover models via /models
-  expect(tui.computeFrameSnapshot().plainText).toContain('Extra headers');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Name=Value');
   await type('X-Title=Futryn; X-Custom=sk-abcdefghijklmnopqrstuvwxyz');
   await tui.handleKey('Enter');
-  expect(tui.computeFrameSnapshot().plainText).toContain('Not saved');
-  expect(tui.computeFrameSnapshot().plainText).toContain('looks like a credential');
+  expect(tui.computeFrameSnapshot().plainText).toContain('Provider configuration rejected');
   expect(app.registry.list()).toEqual([]);
   // Replace the draft with acceptable headers.
   for (let i = 0; i < 60; i++) await tui.handleKey('Backspace');

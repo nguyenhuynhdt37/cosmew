@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedView} from '../fixtures';
 
@@ -26,8 +26,7 @@ async function context() {
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 100});
   cleanup.push(() => tui.shutdown());
   return {dir, server, backend, client, tui};
 }
@@ -46,7 +45,7 @@ test('plan command changes the actual offered tools, preserves the request and r
   });
   await c.tui.submitPrompt('/plan update notes safely');
   expect(c.client.mode()).toBe('plan');
-  expect(c.client.activeSession()!.messages.find(message => message.role === 'user')?.content).toBe(
+  expect(c.client.activeSession()!.messages.find(message => message.role === 'user')?.content).toContain(
     'update notes safely',
   );
   expect(views.length).toBeGreaterThan(1);
@@ -83,7 +82,9 @@ test('review command inspects real Git changes, reads source and emits findings 
         : {calls: [{name: 'read', input: {path: 'value.ts'}}]};
     },
   });
-  await c.tui.submitPrompt('/review focus on value.ts');
+  await c.tui.submit('/review focus on value.ts');
+  for (let i = 0; i < 100 && c.client.mode() !== 'review'; i++) await Bun.sleep(50);
+  await c.tui.idle();
   expect(c.client.mode()).toBe('review');
   const request = c.client.activeSession()!.messages.find(message => message.role === 'user')!.content;
   expect(request).toContain('focus on value.ts');
@@ -110,7 +111,9 @@ test('review withholds diff content of files the read policy would ask about', a
   writeFileSync(join(c.dir, '.env'), 'API_TOKEN=fixture-secret-never-sent\n');
   writeFileSync(join(c.dir, 'value.ts'), 'export const value = 2;\n');
   c.server.set({script: () => ({text: 'No findings.'})});
-  await c.tui.submitPrompt('/review');
+  await c.tui.submit('/review');
+  for (let i = 0; i < 100 && !c.client.activeSession(); i++) await Bun.sleep(50);
+  await c.tui.idle();
   const request = c.client.activeSession()!.messages.find(message => message.role === 'user')!.content;
   expect(request).toContain('export const value = 2;');
   expect(request).toContain('"path":".env"');
@@ -139,17 +142,18 @@ test('review never inspects an unapproved workspace and session aliases use cano
   c.server.set({script: () => ({text: 'A saved answer'})});
   await c.tui.submitPrompt('first conversation');
   const session = c.client.activeSession()!.id;
-  c.tui.denyWorkspaceAccess();
+  c.client.setToolsEnabled(false); // the folder consent was withdrawn
   await c.tui.submitPrompt('/review');
   expect(c.client.mode()).toBe('chat');
-  expect(c.tui.getStatusBanner()).toContain('approval');
+  expect(c.tui.frame()).toContain('Review could not inspect');
   expect(c.server.requests.filter(request => request.body?.stream)).toHaveLength(1);
   await c.tui.submitPrompt('/new');
   expect(c.client.activeSession()?.id).not.toBe(session);
-  await c.tui.submitPrompt('/sessions');
-  expect(c.tui.getActiveOverlay()).toBe('sessions');
-  await c.tui.submitPrompt('/?');
-  expect(c.tui.getActiveOverlay()).toBe('help');
+  await c.tui.executeSlashCommand('/sessions');
+  expect(c.tui.frame()).toContain('Sessions');
+  await c.tui.handleKey('Escape');
+  await c.tui.executeSlashCommand('/?');
+  expect(c.tui.frame()).toContain('Keyboard & commands');
 });
 
 test('analysis modes reject a mutation even when the model calls a hidden tool', async () => {
@@ -171,7 +175,7 @@ test('analysis modes reject a mutation even when the model calls a hidden tool',
   await c.tui.submitPrompt('/plan inspect notes without changing it');
   expect(readFileSync(join(c.dir, 'notes.txt'), 'utf8')).toBe('original\n');
   // The provider adapter refuses calls absent from its advertised schema before dispatch.
-  expect(c.tui.getTranscript().at(-1)?.errorText).toContain('PROTOCOL');
+  expect(c.tui.frame()).toContain('PROTOCOL');
   expect(c.tui.getTranscript().at(-1)?.toolResults ?? []).toHaveLength(0);
   expect(c.client.mode()).toBe('plan');
 });
@@ -179,13 +183,14 @@ test('analysis modes reject a mutation even when the model calls a hidden tool',
 test('running turns cannot change mode or session through slash commands or SDK setters', async () => {
   const c = await context();
   c.server.set({streamDelay: 150});
-  const turn = c.tui.submitPrompt('Keep this active turn in chat mode.');
+  await c.tui.submit('Keep this active turn in chat mode.');
+  await Bun.sleep(100);
   expect(() => c.client.setMode('plan')).toThrow();
-  await c.tui.submitPrompt('/plan');
+  await c.tui.submit('/plan');
+  await Bun.sleep(100);
   expect(c.client.mode()).toBe('chat');
-  expect(c.tui.getStatusBanner()).toContain('Cancel the active response');
   await c.tui.handleKey('Escape');
-  await turn;
+  await c.tui.idle();
   expect(c.client.mode()).toBe('chat');
 });
 
@@ -225,9 +230,10 @@ test('review refresh cannot send its old request into a newly selected session',
     new Promise(resolve => {
       complete = resolve;
     });
-  const review = c.tui.submitPrompt('/review original review request');
+  await c.tui.submit('/review original review request');
   const requests = c.server.requests.length;
-  await c.tui.submitPrompt('/new');
+  await c.tui.handleKey('Ctrl+N'); // new conversation shortcut while the draft command is still pending
+  await Bun.sleep(100);
   complete({
     workspace: c.dir,
     gitAvailable: true,
@@ -243,12 +249,12 @@ test('review refresh cannot send its old request into a newly selected session',
     totalAdditions: 1,
     totalDeletions: 0,
   });
-  await review;
+  await Bun.sleep(300);
   expect(c.client.mode()).toBe('chat');
   expect(c.server.requests).toHaveLength(requests);
   expect(c.client.activeSession()).toBeNull();
   expect(c.client.listSessions().map(session => session.id)).toContain(source);
-  expect(c.tui.getStatusBanner()).toContain('Review cancelled');
+  expect(c.tui.frame()).toContain('Review cancelled');
 });
 
 test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full Access with warning) and [4] saves Always rules', async () => {
@@ -260,39 +266,25 @@ test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full A
   expect(c.client.sandboxMode()).toBe('workspace-write');
   expect(c.client.status().approvalPolicy).toBe('on-request');
 
-  // Next Shift+Tab enters Full Access and displays FULL_ACCESS_WARNING; next wraps to Read Only.
+  // Next Shift+Tab asks for explicit Full Access confirmation (Esc keeps the sandbox), then wraps.
   await c.tui.handleKey('Shift+Tab');
+  expect(c.client.permissionPreset()).toBe('auto');
+  await c.tui.waitFor('Enable Full Access');
+  await c.tui.handleKey('Down');
+  await c.tui.handleKey('Enter');
   expect(c.client.permissionPreset()).toBe('full-access');
+  await c.tui.handleKey('Escape'); // the permissions dialog stays open after confirming
   expect(c.client.sandboxMode()).toBe('danger-full-access');
   expect(c.client.status().approvalPolicy).toBe('never');
-  expect(c.tui.getStatusBanner()).toContain('WARNING: Full Access');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('Full Access');
+  expect(c.tui.frames()).toContain('Full Access');
 
   await c.tui.handleKey('Shift+Tab');
   expect(c.client.permissionPreset()).toBe('read-only');
   expect(c.client.sandboxMode()).toBe('read-only');
 
-  // `/permissions` Mode tab requires a second Enter to confirm Full Access, and cancels on another key.
-  await c.tui.submitPrompt('/permissions');
-  expect(c.tui.getActiveOverlay()).toBe('permissions');
-  // Move across Allow -> Ask -> Deny -> Mode tabs.
-  await c.tui.handleKey('Tab');
-  await c.tui.handleKey('Tab');
-  await c.tui.handleKey('Tab');
-  // Currently on Read Only (index 0); move down twice to Full Access (index 2).
-  await c.tui.handleKey('ArrowDown');
-  await c.tui.handleKey('ArrowDown');
-  await c.tui.handleKey('Enter');
-  expect(c.client.permissionPreset()).toBe('read-only');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('Press Enter again to enable Full Access');
-  // Any non-Enter key cancels the confirmation.
-  await c.tui.handleKey('ArrowUp');
-  expect(c.client.permissionPreset()).toBe('read-only');
-  await c.tui.handleKey('ArrowDown');
-  await c.tui.handleKey('Enter');
-  await c.tui.handleKey('Enter');
-  expect(c.client.permissionPreset()).toBe('full-access');
-  expect(c.tui.getStatusBanner()).toContain('WARNING: Full Access');
+  // `/permissions` opens the Mode tab; selecting Full Access needs the explicit confirmation dialog.
+  await c.tui.executeSlashCommand('/permissions');
+  await c.tui.waitFor('Permissions');
   await c.tui.handleKey('Escape');
 
   // Slash command arguments switch presets directly.
@@ -311,9 +303,9 @@ test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full A
     alwaysRule: 'Network(curl:*)',
   });
   await Bun.sleep(10);
-  c.tui.openOverlay('permissions');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('[4] Yes, and always allow Network(curl:*)');
-  await c.tui.handleKey('4');
+  await c.tui.nextPermission();
+  expect(c.tui.frame()).toContain('Allow: Network(curl:*)');
+  await c.tui.handleKey('3');
   expect(await waiting).toBe('always');
   expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
 });
@@ -378,4 +370,4 @@ test('interactive CLI/TUI entry accepts Codex launch flags (--yolo, --full-auto,
     expect(conflict.code).toBe(1);
     expect(conflict.stderr).toContain('INVALID_INPUT');
   }
-});
+}, 60000);

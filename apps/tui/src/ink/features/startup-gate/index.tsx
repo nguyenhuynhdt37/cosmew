@@ -148,7 +148,7 @@ export function useStartupGate(options: StartupGateOptions) {
         }
       },
     },
-    {isActive: phase === 'trust' || phase === 'choose'},
+    {isActive: !options.overlayOpen && (phase === 'trust' || phase === 'choose')},
   );
   return {
     phase,

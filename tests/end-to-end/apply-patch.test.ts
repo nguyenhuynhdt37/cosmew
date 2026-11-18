@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, scriptedView} from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -44,31 +44,28 @@ async function make(protocol: 'chat' | 'anthropic' = 'chat', repeat = false) {
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 120, rows: 36});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 120});
   cleanup.push(() => tui.shutdown());
   return {app, client, tui, root, server, protocol};
 }
 async function pending(c: Awaited<ReturnType<typeof make>>) {
-  const end = Date.now() + 4000;
-  while (!c.client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
+  await c.tui.nextPermission();
   expect(c.client.listPendingPermissions()).toHaveLength(1);
-  c.tui.advanceStartupGate();
 }
 for (const protocol of ['chat', 'anthropic'] as const)
   test(`${protocol}: approved patch diff reaches TUI, real filesystem, paired storage and model continuation`, async () => {
     const c = await make(protocol);
-    const turn = c.tui.submitPrompt('Update notes');
+    await c.tui.submitPrompt('Update notes');
     await pending(c);
     const permission = c.client.listPendingPermissions()[0]!;
     expect(permission).toMatchObject({capability: 'fs.write', target: 'notes.txt'});
     expect(permission.diffPreview).toContain('-old\n+PATCH_MARKER');
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('+ PATCH_MARKER');
+    expect(c.tui.frame()).toContain('+PATCH_MARKER');
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('old\n');
     await c.tui.handleKey('1');
-    await turn;
+    await c.tui.idle();
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('PATCH_MARKER\n');
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('notes.txt · applied diff');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('notes.txt · update · applied diff');
     const answer = c.tui.getTranscript().at(-1)!;
     expect(answer.content).toContain('MODEL_CONTINUED');
     expect(answer.content).toContain('PATCH_MARKER');
@@ -82,27 +79,27 @@ for (const protocol of ['chat', 'anthropic'] as const)
       const view = scriptedView(protocol, request.body);
       expect(view.orphanResults).toBe(0);
       expect(view.unansweredCalls).toBe(0);
-      expect(JSON.stringify(request.body.tools)).not.toContain('freeform');
+      expect(JSON.stringify(request.body.tools ?? [])).not.toContain('freeform');
     }
   });
 test('denied patch returns refusal to the model without changing files', async () => {
   const c = await make();
-  const turn = c.tui.submitPrompt('Update notes');
+  await c.tui.submitPrompt('Update notes');
   await pending(c);
   await c.tui.handleKey('Escape');
-  await turn;
+  await c.tui.idle();
   expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('old\n');
   expect(c.tui.getTranscript().at(-1)!.toolResults![0]).toMatchObject({status: 'denied'});
   expect(c.tui.getTranscript().at(-1)!.content).toContain('MODEL_CONTINUED [denied');
 });
 test('mutating calls with identical output are never replaced by the unchanged-read notice', async () => {
   const c = await make('chat', true);
-  const turn = c.tui.submitPrompt('Verify two patches');
+  await c.tui.submitPrompt('Verify two patches');
   for (let i = 0; i < 2; i++) {
     await pending(c);
     await c.tui.handleKey('1');
   }
-  await turn;
+  await c.tui.idle();
   const results = c.tui.getTranscript().at(-1)!.toolResults!;
   expect(results).toHaveLength(2);
   for (const result of results) {

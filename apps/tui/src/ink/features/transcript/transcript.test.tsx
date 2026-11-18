@@ -303,3 +303,13 @@ test('shell continuation and nonzero exit are never described as successful comp
     'error',
   );
 });
+test('a streaming answer shows a bounded tail; the finished item keeps every line', async () => {
+  const {liveTail} = await import('./index');
+  const text = Array.from({length: 2000}, (_, n) => `line ${n}`).join('\n');
+  const tail = liveTail(text, 20);
+  expect(tail.split('\n')).toHaveLength(21);
+  expect(tail).toContain('1980 earlier lines');
+  expect(tail).toContain('line 1999');
+  expect(tail).not.toContain('line 1000');
+  expect(liveTail('short\nanswer', 20)).toBe('short\nanswer');
+});

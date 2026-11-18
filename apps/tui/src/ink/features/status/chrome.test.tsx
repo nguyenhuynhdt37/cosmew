@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
+import {useState} from 'react';
 import {cleanup} from 'ink-testing-library';
 import {renderInk, createClientFixture, settle} from '../../testing';
 import {StatusLine, useStatusLine} from './index';
@@ -89,13 +90,17 @@ test('consent without account locks chat and routes sign-in to host', async () =
   const routes: string[] = [];
   let ready = 0;
   function Gate() {
+    const [overlayOpen, setOverlayOpen] = useState(false);
     const state = useStartupGate({
       onReady: () => {
         ready++;
       },
       onExit: () => {},
-      openOverlay: route => routes.push(route),
-      overlayOpen: true,
+      openOverlay: route => {
+        routes.push(route);
+        setOverlayOpen(true);
+      },
+      overlayOpen,
     });
     return <StartupGate state={state} />;
   }

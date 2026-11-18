@@ -193,19 +193,30 @@ test.skipIf(process.platform === 'win32')(
     };
     try {
       await wait(() => output.includes('Trust this folder?'));
-      terminal.write('\x1b[A\r');
+      await Bun.sleep(200);
+      terminal.write('\x1b[A');
+      await Bun.sleep(80);
+      terminal.write('\r');
+      await Bun.sleep(300);
       await wait(() => output.includes('Ask anything'));
-      terminal.write('Explain this project architecture\r');
-      await wait(() => output.includes('Completed turn'));
+      terminal.write('Explain this project architecture');
+      await Bun.sleep(80);
+      terminal.write('\r');
+      await wait(() => output.includes('Hello fixture'));
       const request = c.server.requests
         .filter(r => r.body?.messages?.some((m: any) => m.content === 'Explain this project architecture'))
         .at(-1)!.body;
       expect(contextual(request)).toHaveLength(1);
       expect(JSON.stringify(request).split('TASK01_PTY_V1')).toHaveLength(2);
       writeFileSync(join(c.ws, 'AGENTS.md'), 'Architecture: TASK01_PTY_V2 Use injected ports.');
-      const mark = output.length;
-      terminal.write('Explain the updated architecture\r');
-      await wait(() => output.slice(mark).includes('Completed turn'));
+      terminal.write('Explain the updated architecture');
+      await Bun.sleep(80);
+      terminal.write('\r');
+      await wait(() =>
+        c.server.requests.some(r =>
+          r.body?.messages?.some((m: any) => m.content === 'Explain the updated architecture'),
+        ),
+      );
       const updated = c.server.requests
         .filter(r => r.body?.messages?.some((m: any) => m.content === 'Explain the updated architecture'))
         .at(-1)!.body;

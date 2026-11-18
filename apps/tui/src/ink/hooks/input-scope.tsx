@@ -15,5 +15,10 @@ export function useInputEnabled(isActive = true): boolean {
 /** Use for text entry; named shortcuts should go through useKeymap. */
 export function useTextInput(handler: (input: string, key: Key) => void, options: {isActive?: boolean} = {}): void {
   const isActive = useInputEnabled(options.isActive);
-  useInput(handler, {isActive});
+  useInput(
+    (input, key) => {
+      if (isActive) handler(input, key);
+    },
+    {isActive},
+  );
 }

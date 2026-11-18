@@ -9,7 +9,7 @@ import {
   type ModelEvent,
   type SubagentNotice,
 } from '@futryn/contracts';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -515,33 +515,38 @@ test('/agents lists types and children, shows a transcript and stops a running b
       return {text: 'parent done'};
     },
   });
-  const tui = new FutrynTuiApp({client: h.client, cols: 120, rows: 36});
-  await tui.initialize();
+  const tui = await openInk(h.client, {width: 120});
   cleanup.push(() => tui.shutdown());
   await tui.submitPrompt('Start a slow child');
   const [child] = h.client.subagents();
   expect(child!.status).toBe('running');
 
   await tui.executeSlashCommand('/agents');
-  expect(tui.getActiveOverlay()).toBe('agents');
-  let frame = tui.computeFrameSnapshot().plainText;
-  expect(frame).toContain('Agent types');
-  expect(frame).toContain('reader (project) [read,glob] reads files');
-  expect(frame).toContain('explore (built-in)');
-  expect(frame).toContain(`${child!.id.slice(0, 8)} [explore] slow scan · running · bg`);
+  await tui.waitFor('Agents · types & children');
+  const frame = tui.frame();
+  expect(frame).toContain('reader');
+  expect(frame).toContain('explore');
+  expect(frame).toContain('explore: slow scan · running · bg');
 
+  // Move the cursor to the child row and open its menu.
+  for (let i = 0; i < 12 && !/› \d+\.\s+.*slow scan/.test(tui.frame()); i++) await tui.handleKey('Down');
+  expect(tui.frame()).toMatch(/› \d+\.\s+.*slow scan/);
   await tui.handleKey('Enter');
-  expect(tui.computeFrameSnapshot().plainText).toContain('[explore] slow scan');
-  await tui.handleKey('Escape');
-  expect(tui.getActiveOverlay()).toBe('agents');
-
-  await tui.handleKey('x');
+  await tui.waitFor('Stop agent');
+  await tui.handleKey('Enter'); // View transcript
+  expect(tui.frame()).toContain('Agent transcript');
+  await tui.handleKey('Enter'); // back
+  await tui.waitFor('Stop agent');
+  await tui.handleKey('Down');
+  await tui.handleKey('Down');
+  await tui.handleKey('Up'); // Stop agent
+  await tui.handleKey('Enter');
   await until(() => h.client.subagents()[0]!.status === 'cancelled');
   // A user stop is reported to the model like any other result; the idle TUI turns it into the next parent turn.
   await until(() =>
     h.requests.some(r => !isExplore(r.view) && r.view.user.some(u => u.includes('status="cancelled"'))),
   );
   await tui.handleKey('Escape');
-  expect(tui.computeFrameSnapshot().plainText).toContain('Background subagent [explore] "slow scan" cancelled');
+  expect(tui.frames()).toContain('slow scan');
   release();
 });

@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -32,19 +32,15 @@ async function make(script: (view: ScriptedView) => ScriptedReply) {
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 120, rows: 36});
-  await tui.initialize();
-  cleanup.push(() => tui.shutdown());
+  const tui = await openInk(client, {width: 120});
+  cleanup.push(() => tui.close());
   return {app, client, tui, root};
 }
 
 async function approveNext(c: Awaited<ReturnType<typeof make>>) {
-  const end = Date.now() + 4000;
-  while (!c.client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
+  const permission = await c.tui.nextPermission();
   expect(c.client.listPendingPermissions()).toHaveLength(1);
-  c.tui.advanceStartupGate();
-  const permission = c.client.listPendingPermissions()[0]!;
-  await c.tui.handleKey('1');
+  await c.tui.press('1');
   return permission;
 }
 
@@ -60,19 +56,19 @@ test('model reads, edits and writes through the agent loop; each write shows its
     return {text: 'DONE ' + applied.join(',')};
   });
   writeFileSync(join(c.root, 'app.ts'), 'export const answer = 41;\n');
-  const turn = c.tui.submitPrompt('Fix the answer and add notes');
+  await c.tui.submit('Fix the answer and add notes');
   const edit = await approveNext(c);
   expect(edit).toMatchObject({capability: 'fs.write', target: 'app.ts'});
   expect(edit.diffPreview).toContain('+export const answer = 42;');
   const write = await approveNext(c);
   expect(write).toMatchObject({capability: 'fs.write', target: 'docs/notes.md'});
-  await turn;
+  await c.tui.idle();
   expect(readFileSync(join(c.root, 'app.ts'), 'utf8')).toBe('export const answer = 42;\n');
   expect(readFileSync(join(c.root, 'docs/notes.md'), 'utf8')).toBe('# Notes\n');
-  expect(c.tui.getTranscript().at(-1)!.content).toContain('DONE edit,write');
-  const frame = c.tui.computeFrameSnapshot().plainText;
-  expect(frame).toContain('Update(app.ts)');
-  expect(frame).toContain('Write(docs/notes.md)');
+  const frame = c.tui.frames();
+  expect(frame).toContain('DONE edit,write');
+  expect(frame).toContain('edit(app.ts) · ok');
+  expect(frame).toContain('write(docs/notes.md) · ok');
 });
 
 test('an edit without a prior read is refused before any approval prompt', async () => {
@@ -82,8 +78,9 @@ test('an edit without a prior read is refused before any approval prompt', async
       : {calls: [{name: 'edit', input: {path: 'app.ts', old_string: '1', new_string: '2'}}]},
   );
   writeFileSync(join(c.root, 'app.ts'), 'x = 1\n');
-  await c.tui.submitPrompt('Change it');
+  await c.tui.submit('Change it');
+  await c.tui.idle();
   expect(c.client.listPendingPermissions()).toHaveLength(0);
-  expect(c.tui.getTranscript().at(-1)!.content).toContain('Read app.ts before changing it');
+  expect(c.tui.frames()).toContain('Read app.ts before changing it');
   expect(readFileSync(join(c.root, 'app.ts'), 'utf8')).toBe('x = 1\n');
 });

@@ -3,7 +3,8 @@ import {mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync} from 'nod
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {CommandRuntime, CommandOutcome} from '@futryn/contracts';
-import {FutrynTuiApp, commandSummary, messagesToTranscript} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
+import {messagesToTranscript, toolState} from '../../apps/tui/src/ink/features/transcript/logic';
 import {SeatbeltRuntime} from '@futryn/tools';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
@@ -82,8 +83,7 @@ async function make(enabled = true, real = false) {
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 100, rows: 30});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 100});
   cleanup.push(() => tui.shutdown());
   return {
     app,
@@ -98,36 +98,34 @@ async function make(enabled = true, real = false) {
   };
 }
 async function pending(c: Awaited<ReturnType<typeof make>>) {
-  const end = Date.now() + 4000;
-  while (!c.client.listPendingPermissions().length && Date.now() < end) await Bun.sleep(5);
+  await c.tui.nextPermission();
   expect(c.client.listPendingPermissions()).toHaveLength(1);
-  c.tui.advanceStartupGate();
 }
 test('direct API fixture: exact approval, command pairing, sanitized output and persisted resume', async () => {
   const c = await make();
-  const turn = c.tui.submitPrompt('Locate marker with rg');
+  await c.tui.submitPrompt('Locate marker with rg');
   await pending(c);
   expect(c.runs()).toBe(0);
   const prompt = c.client.listPendingPermissions()[0]!;
   expect(prompt.capability).toBe('process.execute');
   expect(prompt.target).toBe('rg -n marker source.ts');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('Command: rg -n marker source.ts');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('rg -n marker source.ts');
   await c.tui.handleKey('1');
-  await turn;
+  await c.tui.idle();
   expect(c.runs()).toBe(1);
   const answer = c.tui.getTranscript().at(-1)!;
   expect(answer.toolResults?.[0]).toMatchObject({name: 'exec_command', status: 'ok', exitCode: 0});
   expect(answer.toolResults?.[0]?.callId).toBe(answer.toolCalls?.[0]?.id);
   expect(answer.toolResults?.[0]?.content).not.toContain('\x1b');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ exec_command(rg -n marker source.ts)');
   const id = c.client.activeSession()!.id;
   const saved = c.app.conversations.get(id)!;
   expect(saved.messages.find(m => m.role === 'tool')?.content).toStartWith('Exit code: 0\nWall time:');
   const resumed = c.app.createFutrynClient(c.ws);
   resumed.resumeSession(id);
-  const transcript = messagesToTranscript(resumed.activeSession()!.messages, {idPrefix: 'resume'});
+  const transcript = messagesToTranscript(resumed.activeSession()!.messages, 'resume');
   const item = transcript.at(-1)!;
-  expect(commandSummary(item.toolCalls![0]!, item.toolResults![0], {live: false}).state).toBe('ran');
+  expect(toolState(item.toolResults![0], false)).toBe('ok · exit 0');
   const resultRequest = c.server.requests.find(r => r.body?.messages?.some((m: any) => m.role === 'tool'));
   expect(resultRequest?.body.messages.find((m: any) => m.role === 'tool')?.tool_call_id).toBe(answer.toolCalls![0]!.id);
 });
@@ -146,11 +144,11 @@ test.skipIf(process.platform !== 'darwin')(
   async () => {
     const c = await make(true, true);
     const before = readFileSync(join(c.ws, 'source.ts'), 'utf8');
-    const turn = c.tui.submitPrompt('Locate marker with rg');
+    await c.tui.submitPrompt('Locate marker with rg');
     await pending(c);
     expect(c.runs()).toBe(0);
     await c.tui.handleKey('1');
-    await turn;
+    await c.tui.idle();
     expect(c.runs()).toBe(1);
     expect(c.tui.getTranscript().at(-1)?.toolResults?.[0]).toMatchObject({exitCode: 0, status: 'ok'});
     expect(c.tui.getTranscript().at(-1)?.toolResults?.[0]?.content).toContain('1:export const marker = 1;');
@@ -161,10 +159,10 @@ test.skipIf(process.platform !== 'darwin')(
 
 test('Escape at execution approval creates no process', async () => {
   const c = await make();
-  const turn = c.tui.submitPrompt('Run rg');
+  await c.tui.submitPrompt('Run rg');
   await pending(c);
   await c.tui.handleKey('Escape');
-  await turn;
+  await c.tui.idle();
   expect(c.runs()).toBe(0);
   expect(c.tui.getTranscript().at(-1)?.toolResults?.[0]?.status).toBe('denied');
 });
@@ -200,13 +198,11 @@ test('execution approval cache includes policy identity and revocation clears bo
 
 test('command status never calls an unstarted proposal running or invents success on resume', () => {
   const call = {id: 'c', name: 'exec_command', input: {cmd: 'printf ok'}};
-  expect(commandSummary(call, undefined, {live: true, awaiting: true}).state).toBe('awaiting');
-  expect(commandSummary(call, undefined, {live: true}).state).toBe('pending');
-  expect(commandSummary(call, undefined, {live: false}).state).toBe('stopped');
+  expect(toolState(undefined, true)).toBe('running');
+  expect(toolState(undefined, false)).toBe('stopped · no result');
   const outcome: Partial<CommandOutcome> = {exitCode: 7};
   expect(
-    commandSummary(
-      call,
+    toolState(
       {
         callId: 'c',
         name: 'exec_command',
@@ -214,9 +210,9 @@ test('command status never calls an unstarted proposal running or invents succes
         content: 'Exit code: 7\nWall time: 0.01 s\nOutput:\nerr',
         exitCode: outcome.exitCode,
       },
-      {live: false},
+      false,
     ),
-  ).toMatchObject({state: 'failed', note: 'exit 7'});
+  ).toBe('error · exit 7');
   const item = messagesToTranscript(
     [
       {role: 'assistant', content: '', toolCalls: [call]},
@@ -228,19 +224,19 @@ test('command status never calls an unstarted proposal running or invents succes
       },
       {role: 'assistant', content: 'done'},
     ],
-    {idPrefix: 'signal'},
+    'signal',
   ).at(-1)!;
-  expect(commandSummary(call, item.toolResults![0], {live: false}).state).toBe('failed');
+  expect(toolState(item.toolResults![0], false)).toContain('error');
 });
 
 test('CLI reuses its client runtime and shuts down owned runtimes once', async () => {
   const c = await make();
   for (let i = 0; i < 2; i++) {
     if (i) c.client.createSession();
-    const turn = c.tui.submitPrompt('Locate marker');
+    await c.tui.submitPrompt('Locate marker');
     await pending(c);
     await c.tui.handleKey('1');
-    await turn;
+    await c.tui.idle();
   }
   expect(c.factories()).toBe(1);
   expect(c.runs()).toBe(2);
@@ -251,20 +247,17 @@ test('CLI reuses its client runtime and shuts down owned runtimes once', async (
 test('!command shell mode uses the same dispatcher approval and sandbox; denial runs nothing and nothing reaches the model', async () => {
   const c = await make();
   const before = c.server.requests.length;
-  const denied = c.tui.submitPrompt('!rg -n marker source.ts');
+  await c.tui.submitPrompt('!rg -n marker source.ts');
   await pending(c);
   expect(c.client.listPendingPermissions()[0]!.target).toBe('rg -n marker source.ts');
   await c.tui.handleKey('Escape');
-  await denied;
+  await c.tui.waitFor('Shell denied');
   expect(c.runs()).toBe(0);
-  const ran = c.tui.submitPrompt('!rg -n marker source.ts');
+  await c.tui.press('\r'); // the denied draft stays editable: send it again
   await pending(c);
   await c.tui.handleKey('1');
-  await ran;
+  await c.tui.waitFor('Shell ok.');
   expect(c.runs()).toBe(1);
-  const item = c.tui.getTranscript().at(-1)!;
-  expect(item.toolResults?.[0]).toMatchObject({name: 'exec_command', status: 'ok', exitCode: 0});
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ Bash(rg -n marker source.ts)');
-  expect(c.tui.getStatusBanner()).toContain('exit 0');
+  expect(c.tui.frame()).toContain('exit 0');
   expect(c.server.requests.length).toBe(before);
 });

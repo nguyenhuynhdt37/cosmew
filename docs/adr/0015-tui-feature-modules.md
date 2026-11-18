@@ -1,5 +1,7 @@
 # ADR 0015: TUI feature modules and shared UI kit
 
+> **Superseded in part (2026-11-18, ADR 0059/0060):** the renderer, `app.tsx` composition root, `features/*`, `render/`, `ui/`, `input/` and `core/` described here were deleted when the Ink TUI became the only TUI. The `features/<name>/` module idea survives under `apps/tui/src/ink/features/`; the folder layout, `TuiHost` and `OverlayFeature` described below no longer exist.
+
 Accepted 2026-11-15 at the user's request. Internal restructuring of `apps/tui`; no public contract, package boundary, dependency or storage change. `@futryn/tui` still exports the same names, now from `src/index.ts`.
 
 ## Decision
@@ -18,6 +20,7 @@ src/
 Each feature owns one function: overlays (`models`, `connect`, `sessions`, `permissions`, `diff`, `themes`, `theme-editor`, `settings`, `effort`, `reports`, `help`, `palette`), the startup gate, the chat screen (`chat`, `composer`, `transcript`, `companion`, `welcome`, `sidebar`, `header`, `context-meter`), and `commands` (slash routing). `types.ts` holds state shapes, `logic.ts` pure functions, `view.ts` rendering, `controller.ts` key handling and state; `index.ts` is the module's only public entry.
 
 Rules:
+
 - A feature never imports the app class or another feature's internals. It receives a `TuiHost` and may call only what that interface exposes. The two real cross-feature flows (switching account → choosing a model) go through the narrow `AccountWorkflow` and `ModelWorkflow` interfaces in `host.features`.
 - Overlays implement `OverlayFeature` (`open`, `close`, `handleKey`, `layout`, `render`, optional `interrupt`, `shutdown`). Adding one means adding a folder and registering it in `FutrynTuiApp.registerFeatures`; no switch statements elsewhere change.
 - Dialog frames, padding, clipping and selection arithmetic come from `ui/`. Renderers that fit the dialog pattern use `Modal`; flat renderers (theme picker, connect wizard) build on the shared span types.

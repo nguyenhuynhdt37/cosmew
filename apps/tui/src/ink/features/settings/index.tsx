@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {useFutrynClient, useTextInput} from '../../hooks';
 import {useTheme} from '../../theme';
 import {TextLine} from '../../ui';
@@ -10,6 +10,7 @@ export interface SettingsDialogProps extends DialogProps {
   onNavigate: (action: ConfigurationAction) => void;
   isStreaming?: boolean;
   initialSection?: SettingsSection;
+  onSectionChange?: (section: SettingsSection) => void;
 }
 export function useSettings() {
   const router = usePicker();
@@ -22,6 +23,7 @@ export function SettingsDialog({
   onNavigate,
   isStreaming = false,
   initialSection = 'General',
+  onSectionChange,
   ...props
 }: SettingsDialogProps) {
   const client = useFutrynClient();
@@ -29,6 +31,9 @@ export function SettingsDialog({
   const {refresh} = useDialogRefresh();
   const task = useDialogTask();
   const [section, setSection] = useState<SettingsSection>(initialSection);
+  useEffect(() => {
+    onSectionChange?.(section);
+  }, [section, onSectionChange]);
   const [scope, setScope] = useState<'global' | 'project'>('global');
   useTextInput((input, key) => {
     if (key.eventType === 'release') return;

@@ -56,6 +56,7 @@ export function ThemesDialog(props: DialogProps) {
   return (
     <PickerDialog
       title="Themes"
+      onHighlight={item => engine.previewTheme(item.id)}
       {...props}
       message={task.message}
       items={engine

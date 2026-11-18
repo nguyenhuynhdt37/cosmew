@@ -4,10 +4,10 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {providerSchema} from '@futryn/contracts';
 import {FileMemories} from '@futryn/persistence';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {memoryVault} from '../fixtures';
+import {memoryVault, probeResponse} from '../fixtures';
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -28,6 +28,7 @@ async function setup(config = '') {
     const request = new Request(input, init);
     if (request.method === 'GET') return Response.json({data: [{id: 'fixture-model'}]});
     const body = await request.json();
+    if (!body.stream) return probeResponse(); // startup-gate account check
     requests.push(body);
     const callMemory =
       body.messages?.some((m: any) => m.role === 'user' && m.content === 'READ_MEMORY') &&
@@ -187,17 +188,26 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   const h = await setup();
   h.put();
   h.client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client: h.client, cols: 110, rows: 30});
-  await tui.initialize();
+  const tui = await openInk(h.client, {width: 110});
   cleanup.push(() => tui.shutdown());
   await tui.executeSlashCommand('/memory');
-  expect(tui.computeFrameSnapshot().activeOverlay).toBe('memory');
-  expect(tui.computeFrameSnapshot().plainText).toContain('prior-choice (feedback)');
-  await tui.handleKey('Enter');
-  expect(tui.computeFrameSnapshot().plainText).toContain('S4_DETAIL_MARKER');
+
+  expect(tui.frame()).toContain('prior-choice');
+  expect(tui.frame()).toContain('feedback');
+  await tui.handleKey('Down');
+  await tui.handleKey('Enter'); // select prior-choice
+  await tui.handleKey('Enter'); // Read memory
+  expect(tui.frame()).toContain('S4_DETAIL_MARKER');
   await tui.handleKey('Escape');
-  await tui.handleKey('d');
+  await tui.executeSlashCommand('/memory');
+  await tui.handleKey('Down');
+  await tui.handleKey('Enter'); // select prior-choice
+  await tui.handleKey('Down');
+  await tui.handleKey('Enter'); // Delete memory
+  await tui.handleKey('Down');
+  await tui.handleKey('Enter'); // confirm deletion
   expect(h.client.memories()).toEqual([]);
+  await tui.handleKey('Escape');
   h.put();
   await tui.executeSlashCommand('/memory read prior-choice');
   await tui.executeSlashCommand('/memory delete prior-choice');
@@ -206,7 +216,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('fyn exec uses the same memory context and contract 1.34', async () => {
+test('fyn exec uses the same memory context and contract 1.35', async () => {
   const h = await setup();
   h.put();
   let stdout = '';
@@ -222,7 +232,7 @@ test('fyn exec uses the same memory context and contract 1.34', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.34"');
+  expect(stdout).toContain('"contractVersion":"1.35"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {
@@ -244,10 +254,9 @@ test('model memory read tracks usage; final citation renders compactly after tra
   const resumed = h.app.createFutrynClient(h.project);
   resumed.setToolsEnabled(true);
   resumed.resumeSession(session.id);
-  const tui = new FutrynTuiApp({client: resumed, cols: 120, rows: 40});
-  await tui.initialize();
+  const tui = await openInk(resumed, {width: 120});
   cleanup.push(() => tui.shutdown());
-  const frame = tui.computeFrameSnapshot().plainText;
+  const frame = tui.frames();
   expect(frame).toContain('Ký ức đã dùng: prior-choice.md');
   expect(frame).not.toContain('<oai-mem-citation>');
 });
@@ -263,8 +272,7 @@ test('user max_unused_days marks stale memories with a deletion suggestion; auto
   writeFileSync(path, JSON.stringify(state));
   expect(h.client.memories()[0]!.unused).toBe(true);
   expect(h.store.list()).toHaveLength(1);
-  const tui = new FutrynTuiApp({client: h.client, cols: 160, rows: 40});
-  await tui.initialize();
+  const tui = await openInk(h.client, {width: 160});
   cleanup.push(() => tui.shutdown());
   await tui.executeSlashCommand('/memory');
   const frame = tui.computeFrameSnapshot().plainText;

@@ -2,10 +2,10 @@
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {FutrynError, type Account, type AnimationConfig, type ModelInfo, type ThemeMode} from '@futryn/contracts';
-import {parseSlashCommand} from '@futryn/sdk';
+import {parseSlashCommand, SLASH_COMMANDS} from '@futryn/sdk';
 import {loadHostConfig, providerPresets, reservedProviderIds} from '@futryn/models';
 import {fetchModelsDev, terminalText} from '@futryn/security';
-import {reportRows, SLASH_COMMANDS, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
+import {reportRows, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
 import {loginOAuth} from './subscriptions/login';
 import {loginWizard} from './auth-wizard';
 import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';

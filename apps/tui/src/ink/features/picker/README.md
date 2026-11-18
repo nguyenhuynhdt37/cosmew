@@ -9,20 +9,20 @@ hook `open…` mở qua `OverlayRouter`, không tạo listener stdin riêng. Com
 màu qua theme, không có timer animation của feature. `usePicker` cung cấp
 `open(id, ReactNode)` và `close()` cho host composition.
 
-| Feature | Component / hook | Props bổ sung |
-| --- | --- | --- |
-| permissions | `PermissionsDialog`, `PermissionRequestDialog`, `PermissionRulesDialog` / `usePermissions` | `approvalId?`, `toolName?`, `onDenied?(reason, request)`; request component cần `request`; rules có `confirmFullAccessOnOpen?` |
-| question | `QuestionDialog`, `QuestionRequestDialog` / `useQuestion` | `questionId?`; request component cần `request` |
-| models | `ModelsDialog`, `EffortDialog` / `useModels` | `accountId?`, `isStreaming?`, `onChanged?` |
-| connect | `ConnectDialog` / `useConnect` | `initialStep?: provider\|accounts`, `accountId?`, `action?: switch\|logout`, `initialQuery?`, `isStreaming?`, `onChanged?` |
-| sessions | `SessionsDialog` / `useSessions` | `onChanged?` |
-| settings | `SettingsDialog` / `useSettings` | `onNavigate(action)` bắt buộc; `isStreaming?`, `initialSection?` |
-| themes | `ThemesDialog` / `useThemes` | common props |
-| help | `HelpDialog` / `useHelp` | `onCommand?(command)` |
-| memory | `MemoryDialog` / `useMemory` | common props |
-| agents | `AgentsDialog` / `useAgents` | common props |
-| skills | `SkillsDialog` / `useSkills` | `onInvoke?(command)`; thiếu callback thì invocation disabled |
-| picker | `Dialog`, `PickerDialog`, `TextEntry`, `Detail` / `usePicker`, `useDialogTask`, `useDialogRefresh`, `useDialogSize` | explicit interfaces trong `index.tsx`; `Detail.onBack?` cho Enter quay lại |
+| Feature     | Component / hook                                                                                                    | Props bổ sung                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| permissions | `PermissionsDialog`, `PermissionRequestDialog`, `PermissionRulesDialog` / `usePermissions`                          | `approvalId?`, `toolName?`, `onDenied?(reason, request)`; request component cần `request`; rules có `confirmFullAccessOnOpen?` |
+| question    | `QuestionDialog`, `QuestionRequestDialog` / `useQuestion`                                                           | `questionId?`; request component cần `request`                                                                                 |
+| models      | `ModelsDialog`, `EffortDialog` / `useModels`                                                                        | `accountId?`, `isStreaming?`, `onChanged?`                                                                                     |
+| connect     | `ConnectDialog` / `useConnect`                                                                                      | `initialStep?: provider\|accounts`, `accountId?`, `action?: switch\|logout`, `initialQuery?`, `isStreaming?`, `onChanged?`     |
+| sessions    | `SessionsDialog` / `useSessions`                                                                                    | `onChanged?`                                                                                                                   |
+| settings    | `SettingsDialog` / `useSettings`                                                                                    | `onNavigate(action)` bắt buộc; `isStreaming?`, `initialSection?`                                                               |
+| themes      | `ThemesDialog` / `useThemes`                                                                                        | common props                                                                                                                   |
+| help        | `HelpDialog` / `useHelp`                                                                                            | `onCommand?(command)`                                                                                                          |
+| memory      | `MemoryDialog` / `useMemory`                                                                                        | common props                                                                                                                   |
+| agents      | `AgentsDialog` / `useAgents`                                                                                        | common props                                                                                                                   |
+| skills      | `SkillsDialog` / `useSkills`                                                                                        | `onInvoke?(command)`; thiếu callback thì invocation disabled                                                                   |
+| picker      | `Dialog`, `PickerDialog`, `TextEntry`, `Detail` / `usePicker`, `useDialogTask`, `useDialogRefresh`, `useDialogSize` | explicit interfaces trong `index.tsx`; `Detail.onBack?` cho Enter quay lại                                                     |
 
 Hooks trả catalog/pending state từ SDK và hàm `openPermissions`, `openQuestion`,
 `openModels`/`openEffort`, `openConnect`, … tương ứng. `usePermissions.cyclePreset()`
@@ -75,9 +75,9 @@ bypass. Hook subscriptions được cleanup khi unmount.
    phần chừa 4 cell. Không thay app.tsx trong pha 1.
 5. ListPicker 0.1 chỉ có query nội bộ, cursor nội bộ, số thứ tự tương đối và hint
    cố định. Permission cần phím số cố định theo decision nên dùng picker read-only
-   + handler số/arrow/Enter riêng; dấu chọn nằm trong label. Đề xuất pha 0 thêm
-   controlled cursor hoặc numbered-choice mode và custom hint/ẩn số thứ tự để
-   bỏ hai bộ số/dấu chọn. Không mở rộng API nền trái contract trong pha này.
+   - handler số/arrow/Enter riêng; dấu chọn nằm trong label. Đề xuất pha 0 thêm
+     controlled cursor hoặc numbered-choice mode và custom hint/ẩn số thứ tự để
+     bỏ hai bộ số/dấu chọn. Không mở rộng API nền trái contract trong pha này.
 6. Theme preview bắt đầu khi Enter chọn theme, sau đó Apply hoặc Back. Nếu cần
    preview ngay khi di chuyển cursor như TUI cũ, ListPicker cần `onHighlight`;
    API 0.1 chưa có callback này. Không dùng listener để đoán cursor/filter.
@@ -96,3 +96,13 @@ session/memory failure, theme rollback, agent stop, settings và canonical help.
 Fixture không chứng minh OS sandbox hay provider tương thích live. Real PTY,
 resize/cancellation trên terminal người dùng, live ChatGPT/DeepSeek và parity
 end-to-end khi đã nối pha 2: **Needs verification**.
+
+## Pha 2 integration (2026-11-18)
+
+Các mục nối host ở trên được triển khai trong `ink/integrated-shell.tsx` và runtime,
+router `ink/features/commands.ts`; API nền version 0.2 trong
+[contracts](../../../../../../docs/delivery/tui-v3/contracts.md).
+Evidence từng luồng và giới hạn tại
+[parity](../../../../../../docs/delivery/tui-v3/parity.md),
+`ink/testing/integration.test.tsx`, `tests/end-to-end/tui-ink-pty.test.ts` và
+`tests/contracts/sdk-memory-write.test.ts`. Default/golden legacy không đổi.

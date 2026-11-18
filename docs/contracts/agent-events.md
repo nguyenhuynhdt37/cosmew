@@ -195,6 +195,10 @@ persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũn
 `memory {action: list|read|write|delete, name?, description?, type?, content?}` dùng `agent.state` cho list/read, `agent.state.write` cho write/delete (contract 1.31),
 không approval filesystem, vẫn qua dispatcher/audit/redact. Read/delete cần slug; write cần đủ field.
 File ≤16 KiB gồm frontmatter, directory ≤1 MiB/256 entries; secret-like input bị từ chối.
+SDK contract 1.35 ([ADR 0060](../adr/0060-ink-tui-integration-and-memory-write.md)) thêm
+`client.writeMemory(entry: MemoryWrite): Promise<ToolResult>`: consent + idle chat, schema validation,
+port `memoryAction(write, name, entry)` gọi memory tool qua dispatcher/audit/redact; plan/review,
+read-only và deny rule vẫn chặn ghi. Consumers read/delete giữ nguyên.
 SDK `client.memories()` trả metadata clone; `client.readMemory(name)`/`deleteMemory(name)` trả
 `Promise<ToolResult>` qua dispatcher. Backend không hỗ trợ trả list rỗng/UNSUPPORTED cho actions.
 `memoryDirectory()` và `openMemoryDirectory()` là đường UI/host cho folder cố định, không model tool.

@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {Canvas} from '@futryn/tui';
+import {safeText} from '../../apps/tui/src/ink/ui';
 import {computeWorkspaceGitDiff} from '../../apps/cli/src/bootstrap/startup';
 
 const cleanup: (() => void)[] = [];
@@ -32,10 +32,8 @@ test('workspace diff strips escape sequences from untrusted file contents', () =
   expect(report.files[0]!.lines.some(line => line.content.includes('owned'))).toBe(true); // text kept, bytes removed
 });
 
-test('the canvas never stores control characters, whatever the source of a span', () => {
-  const canvas = new Canvas(20, 1, '#fff', '#000');
-  canvas.spans(0, 0, [{text: 'a\x1b[2Jb\x07c\td\x9be', fg: '#fff'}]);
-  const row = canvas.cells[0]!.map(cell => cell.ch).join('');
+test('Ink text never carries control characters, whatever the source of a span', () => {
+  const row = safeText('a\x1b[2Jb\x07c\td\x9be');
   expect(CONTROL.test(row)).toBe(false);
-  expect(row.startsWith('a [2Jb c d e')).toBe(true); // width preserved: one cell per input character
+  expect(row).toBe('abc    de'); // commands removed, text kept
 });

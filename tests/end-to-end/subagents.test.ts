@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {providerSchema, type CommandRuntime, type CommandSandbox, type ModelEvent} from '@futryn/contracts';
 import {FileMemories} from '@futryn/persistence';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
@@ -551,34 +551,27 @@ test('child inherits fs.read session grants, does NOT inherit other session gran
   // Add a project deny rule on the parent: must apply to the child too.
   h.client.addPermissionRule('deny', 'Read(locked/**)');
 
-  const tui = new FutrynTuiApp({client: h.client, cols: 110, rows: 34});
-  await tui.initialize();
+  const tui = await openInk(h.client, {width: 110});
   cleanup.push(() => tui.shutdown());
 
   // Turn 1: approve parent's .env read and web_fetch for 'session'.
-  const warmupPromise = tui.submitPrompt('PARENT_WARMUP');
+  await tui.submitPrompt('PARENT_WARMUP');
   const approveNextForSession = async () => {
-    const deadline = Date.now() + 4000;
-    while (h.client.listPendingPermissions().length === 0 && Date.now() < deadline) {
-      await Bun.sleep(10);
-    }
+    await tui.nextPermission(8000);
     const pending = h.client.listPendingPermissions()[0]!;
     expect(pending).toBeDefined();
     h.client.resolvePermission(pending.approvalId, pending.scopeHash, 'session');
   };
   await approveNextForSession();
   await approveNextForSession();
-  await warmupPromise;
+  await tui.idle();
 
   // Turn 2: child runs.
   // - c-read-env (.env) MUST succeed without prompting because child inherits fs.read session grants!
   // - c-read-denied (locked/forbidden.txt) MUST be denied by parent's project deny rule without prompting!
   // - c-web (https://example.com/) MUST prompt because child does NOT inherit parent's web_fetch session grant!
   const childTurnPromise = tui.submitPrompt('RUN_CHILD');
-  const deadline = Date.now() + 4000;
-  while (h.client.listPendingPermissions().length === 0 && Date.now() < deadline) {
-    await Bun.sleep(10);
-  }
+  await tui.nextPermission(8000);
   const childPrompt = h.client.listPendingPermissions()[0]!;
   expect(childPrompt).toBeDefined();
   expect(childPrompt.capability).toBe('network.connect');
@@ -589,14 +582,13 @@ test('child inherits fs.read session grants, does NOT inherit other session gran
   });
 
   // Verify TUI permission dialog displays the subagent type and description.
-  tui.advanceStartupGate();
-  expect(tui.getActiveOverlay()).toBe('permissions');
   const overlayText = tui.computeFrameSnapshot().plainText;
-  expect(overlayText).toContain('Subagent: worker (check permissions and rules)');
+  expect(overlayText).toContain('Subagent: worker · check permissions and rules');
 
   // Deny the child's web_fetch prompt so the turn finishes cleanly.
   h.client.resolvePermission(childPrompt.approvalId, childPrompt.scopeHash, 'deny');
   await childTurnPromise;
+  await tui.idle();
 
   const workerLastView = h.requests.filter(r => r.view.system.includes('You are a worker subagent')).at(-1)!.view;
   expect(workerLastView.results.find(r => r.callId === 'c-read-env')?.content).toContain('allowed_after_parent_grant');
@@ -786,8 +778,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
     },
   });
 
-  const tui = new FutrynTuiApp({client: h.client, cols: 110, rows: 35});
-  await tui.initialize();
+  const tui = await openInk(h.client, {width: 110});
   cleanup.push(() => tui.shutdown());
 
   const observedSubagentEvents: string[] = [];
@@ -804,14 +795,13 @@ test('subagent events emit in order (started -> progress -> finished), render in
 
   // TUI collapsed view shows `⏺ Agent(check entrypoint)` and `[explore] Done · 1 tool · ... tokens`.
   const collapsedFrame = tui.computeFrameSnapshot().plainText;
-  expect(collapsedFrame).toContain('⏺ Agent(check entrypoint)');
-  expect(collapsedFrame).toContain('[explore] Done · 1 tool ·');
+  expect(collapsedFrame).toContain('⏺ agent(check entrypoint) · ok');
+  expect(collapsedFrame).toContain('explore: check entrypoint · completed');
 
   // Pressing Ctrl+O expands the subagent transcript to show child tool steps and summary.
   await tui.handleKey('Ctrl+O');
   const expandedFrame = tui.computeFrameSnapshot().plainText;
-  expect(expandedFrame).toContain('• read src/index.ts [ok]');
-  expect(expandedFrame).toContain('src/index.ts exports app = "futryn".');
+  expect(expandedFrame).toContain('read src/index.ts [ok]');
 
   // Session recovery after restart: child is not in listSessions(), but is inspectable and renders in resumed TUI.
   const sessionId = h.client.activeSession()!.id;
@@ -822,15 +812,14 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(resumedClient.subagents(sessionId)).toHaveLength(1);
   expect(resumedClient.subagents(sessionId)[0]!.status).toBe('completed');
 
-  const resumedTui = new FutrynTuiApp({client: resumedClient, cols: 110, rows: 35});
-  await resumedTui.initialize();
+  const resumedTui = await openInk(resumedClient, {width: 110});
   cleanup.push(() => resumedTui.shutdown());
   await resumedTui.handleKey('Ctrl+O');
   const resumedFrame = resumedTui.computeFrameSnapshot().plainText;
-  expect(resumedFrame).toContain('⏺ Agent(check entrypoint)');
-  expect(resumedFrame).toContain('• read src/index.ts [ok]');
+  expect(resumedFrame).toContain('agent(check entrypoint)');
+  expect(resumedFrame).toContain('read src/index.ts [ok]');
 
-  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.34.
+  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.35.
   const lines: string[] = [];
   const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
     lines.push(String(chunk));
@@ -857,7 +846,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.34')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.35')).toBe(true);
 });
 
 test('S5c: isolation worktree edits stay out of the main checkout; unchanged worktrees vanish; non-git is refused', async () => {

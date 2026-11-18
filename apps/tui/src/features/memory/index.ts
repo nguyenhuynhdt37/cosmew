@@ -1,1 +1,0 @@
-export {MemoryFeature} from './controller';

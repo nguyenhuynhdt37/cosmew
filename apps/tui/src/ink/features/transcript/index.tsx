@@ -21,6 +21,12 @@ export function activityIds(item: Item): string[] {
         : [],
   );
 }
+/** Last `rows` lines of a streaming answer, with a marker for the hidden head. */
+export function liveTail(text: string, rows: number): string {
+  const lines = text.split('\n');
+  if (lines.length <= rows) return text;
+  return `… ${lines.length - rows} earlier lines (shown in full when the answer completes)\n${lines.slice(-rows).join('\n')}`;
+}
 export interface TranscriptItemProps {
   item: Item;
   width?: number;
@@ -36,6 +42,8 @@ export const TranscriptItem = memo(function TranscriptItem({
   animate = true,
 }: TranscriptItemProps) {
   const {color} = useTheme();
+  const {rows} = useWindowSize();
+  const liveRows = Math.max(8, (rows || 24) - 12);
   const bodyWidth = Math.max(1, width - 2);
   const parts = transcriptParts(item);
   // Parse the joined assistant text once so a citation split between deltas is still hidden.
@@ -64,8 +72,11 @@ export const TranscriptItem = memo(function TranscriptItem({
           if (part.kind === 'text') {
             textPrefix += part.text;
             const cleanPrefix = parseMemoryCitations(textPrefix, true).content;
-            const text = cleanPrefix.slice(renderedTextLength);
+            const full = cleanPrefix.slice(renderedTextLength);
             renderedTextLength = cleanPrefix.length;
+            // A live item re-renders every frame: keep it to a viewport-sized tail so cost and latency stay bounded
+            // while a long answer streams; the finished item is committed in full.
+            const text = item.streaming ? liveTail(full, liveRows) : full;
             return text ? (
               <Box key={index} minWidth={0}>
                 <Text color={color('accent')}>⏺ </Text>

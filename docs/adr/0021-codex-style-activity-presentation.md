@@ -1,14 +1,16 @@
 # ADR 0021: Codex-style activity presentation in the TUI
 
+> **Superseded in part (2026-11-18):** the cell renderer (`transcript/view.ts`, exploration blocks, frame diffing) was deleted with the legacy TUI. Presentation is now the Ink transcript (`apps/tui/src/ink/features/transcript`); `parts` in arrival order is kept. Codex-style `• Exploring` cells are not reproduced.
+
 Accepted 2026-11-15 by explicit user request ("cách trình bày như Codex CLI"). The user chose inline, dim thinking (visible by default, Ctrl+R hides) over Codex's transcript-only thinking, and asked for the work to be done now. Scope: `apps/tui` rendering only. No contract, provider, persistence or permission change. Shell/"Ran" cells are **Not implemented** because Hannes has no shell tool (AGENTS.md).
 
 ## Upstream evidence
 
 Codex source, commit `ee344ca9458351a6ea102795fa73110ad3ede5dc`, accessed 2026-11-15, read only as design reference (nothing copied):
 
-- `codex-rs/tui/src/exec_cell/render.rs`: exploration cells: header `• Exploring` (active, animated marker) / `• Explored` (bold), rows prefixed `  └ ` then `    `, verbs `Read`/`List`/`Search` in the accent color, adjacent successful reads merged as `Read a, b`, a failing call gets its own row with a red status. Shell cells: `• Running` / `• Ran <command>`.
+- `codex-rs/tui/src/exec_cell/render.rs`: exploration cells: header `• Exploring` (active, animated marker) / `• Explored` (bold), rows prefixed ` └` then `    `, verbs `Read`/`List`/`Search` in the accent color, adjacent successful reads merged as `Read a, b`, a failing call gets its own row with a red status. Shell cells: `• Running` / `• Ran <command>`.
 - `codex-rs/tui/src/history_cell/messages.rs`: reasoning summaries are dim italic with `• `; completed reasoning is transcript-only (hidden from main scrollback). Agent messages start with `• `.
-- `codex-rs/tui/src/history_cell/dynamic.rs`: dynamic tool cells `• Calling|Called|Failed <name>` with `  └ ` output preview.
+- `codex-rs/tui/src/history_cell/dynamic.rs`: dynamic tool cells `• Calling|Called|Failed <name>` with ` └` output preview.
 - `codex-rs/tui/src/status_indicator_widget.rs`, `chatwidget/streaming.rs`, `chatwidget.rs` (`extract_first_bold`): status row `<marker> <header> (<elapsed> • esc to interrupt)`; header defaults to `Working` and switches to the latest bold title of the reasoning summary; elapsed `12s`, `1m 05s`, `1h 02m 03s`.
 
 Limits: one revision; the behavior of the installed Codex 0.167.0 binary was not compared on screen.

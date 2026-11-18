@@ -5,17 +5,25 @@ import {useFutrynClient, useStatus, useClientEvents} from '../../hooks';
 import {useReducer} from 'react';
 import {useTheme} from '../../theme';
 import type {FutrynClient} from '@futryn/sdk';
-export function useStatusLine(draft = '') {
+export function useStatusLine(draft = '', workspaceAccess = true) {
   const client = useFutrynClient();
   const status = useStatus();
   const [, update] = useReducer(n => n + 1, 0);
   useClientEvents({subagent: () => update()});
+  let branch: string | null | undefined;
+  if (workspaceAccess && client.toolsEnabled()) {
+    try {
+      branch = client.getWorkspaceDiff()?.branch;
+    } catch {
+      /* Backend may not expose Git. */
+    }
+  }
   return {
     status,
     context: client.context(draft),
     usage: client.usage(),
     runningAgents: client.subagents().filter(a => a.status === 'running').length,
-    branch: client.toolsEnabled() ? client.getWorkspaceDiff()?.branch : undefined,
+    branch,
   };
 }
 export interface StatusLineProps {

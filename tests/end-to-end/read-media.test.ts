@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -55,8 +55,7 @@ async function open(
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  const tui = new FutrynTuiApp({client, cols: 120, rows: 36});
-  await tui.initialize();
+  const tui = await openInk(client, {width: 120});
   cleanup.push(() => tui.shutdown());
   return {app, client, tui, server, close};
 }

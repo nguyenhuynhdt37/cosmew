@@ -4,7 +4,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {SessionGrants} from '@futryn/security';
 import {ToolDispatcher} from '@futryn/tools';
-import {FutrynTuiApp} from '@futryn/tui';
+import {openInk, type InkSession} from '../../apps/tui/src/ink/testing/ink-session';
 import {WorkspaceRoot} from '@futryn/workspace';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
@@ -75,10 +75,9 @@ async function open(
   await client.discoverModels();
   client.selectModel('fixture-model');
   client.setToolsEnabled(true);
-  let tui: FutrynTuiApp | undefined;
+  let tui: InkSession | undefined;
   if (options.tui !== false) {
-    tui = new FutrynTuiApp({client, cols: 110, rows: 34});
-    await tui.initialize();
+    tui = await openInk(client, {width: 110});
     cleanup.push(() => tui!.shutdown());
   }
   return {app, client, tui, server, close};
@@ -89,48 +88,54 @@ const askThenEcho = (view: ScriptedView): ScriptedReply => {
   return answer ? {text: 'GOT ' + answer.content} : {calls: [{name: 'request_user_input', input: QUESTIONS}]};
 };
 
+/** Moves the list cursor down `n` rows, then presses a key. */
+async function rows(tui: InkSession, n: number, key: string) {
+  for (let i = 0; i < n; i++) await tui.handleKey('Down');
+  await tui.handleKey(key);
+}
+
 async function waitForQuestion(c: Awaited<ReturnType<typeof open>>) {
   const end = Date.now() + 4000;
   while (!c.client.listPendingQuestions().length && Date.now() < end) await Bun.sleep(5);
   expect(c.client.listPendingQuestions()).toHaveLength(1);
-  c.tui!.advanceStartupGate();
-  expect(c.tui!.getActiveOverlay()).toBe('question');
+  await c.tui!.waitFor('Which database');
 }
 
 test('answers with a single choice, a multiple choice and free text reach the model as Codex JSON', async () => {
   const c = await open(dirs(), askThenEcho);
-  const turn = c.tui!.submitPrompt('Set up the service');
+  await c.tui!.submitPrompt('Set up the service');
   await waitForQuestion(c);
   const frame = c.tui!.computeFrameSnapshot().plainText;
   expect(frame).toContain('Which database should the service use?');
   expect(frame).toContain('Postgres (Recommended)');
-  expect(frame).toContain('Other:');
-  // Enter with nothing chosen on the second question jumps there and asks for an answer.
-  await c.tui!.handleKey('1');
-  await c.tui!.handleKey('Enter');
+  expect(frame).toContain('Nhập câu trả lời tự do');
+  // Submitting with the second question unanswered jumps there and asks for an answer.
+  await c.tui!.handleKey('Enter'); // Postgres
+  await rows(c.tui!, 3, 'Enter'); // Submit all answers
   expect(c.client.listPendingQuestions()).toHaveLength(1);
   expect(c.tui!.computeFrameSnapshot().plainText).toContain('Answer every question');
-  // Multiple: toggle both options, then add free text via Other.
-  await c.tui!.handleKey('1');
-  await c.tui!.handleKey('2');
-  await c.tui!.handleKey('3');
-  for (const ch of 'lint') await c.tui!.handleKey(ch);
+  // Multiple: toggle both options, then add free text via the free-text row.
+  await c.tui!.handleKey('Enter'); // Unit
+  await rows(c.tui!, 1, 'Enter'); // E2E
+  await rows(c.tui!, 1, 'Enter'); // free-text row
+  await c.tui!.type('lint');
   await c.tui!.handleKey('Enter');
-  await turn;
+  await rows(c.tui!, 3, 'Enter'); // Submit all answers (the list remounts at its first row)
+  await c.tui!.idle();
   const text = c.tui!.getTranscript().at(-1)!.content;
   expect(text).toContain('GOT {"answers":');
   const answers = JSON.parse(text.slice(4)).answers;
   expect(answers).toEqual({db: {answers: ['Postgres (Recommended)']}, checks: {answers: ['Unit', 'E2E', 'lint']}});
-  expect(c.tui!.getActiveOverlay()).toBe('none');
-  expect(c.tui!.computeFrameSnapshot().plainText).toContain('⏺ Ask(Database, Checks)');
+  expect(c.tui!.frame()).not.toContain('Answer every question');
+  expect(c.tui!.computeFrameSnapshot().plainText).toContain('⏺ request_user_input');
 });
 
 test('Esc dismisses: the model is told and continues; nothing is granted', async () => {
   const c = await open(dirs(), askThenEcho);
-  const turn = c.tui!.submitPrompt('Set up');
+  await c.tui!.submitPrompt('Set up');
   await waitForQuestion(c);
   await c.tui!.handleKey('Escape');
-  await turn;
+  await c.tui!.idle();
   expect(c.tui!.getTranscript().at(-1)!.content).toContain('The user dismissed this question');
   expect(c.client.listToolGrants()).toEqual([]);
 });
@@ -189,13 +194,13 @@ test('non-interactive runs never offer the tool; a direct call reports it unavai
 test('an answered question is history: a restarted session never asks it again', async () => {
   const d = dirs();
   const first = await open(d, askThenEcho);
-  const turn = first.tui!.submitPrompt('Set up');
+  await first.tui!.submitPrompt('Set up');
   await waitForQuestion(first);
-  await first.tui!.handleKey('2');
+  await rows(first.tui!, 1, 'Enter'); // SQLite
   await first.tui!.handleKey('ArrowRight');
-  await first.tui!.handleKey('1');
-  await first.tui!.handleKey('Enter');
-  await turn;
+  await first.tui!.handleKey('Enter'); // Unit
+  await rows(first.tui!, 3, 'Enter'); // Submit all answers
+  await first.tui!.idle();
   const id = first.client.activeSession()!.id;
   await first.close();
   const second = await open(d, view => ({text: view.results.length ? 'REMEMBERED' : 'FORGOT'}), {reuse: first.server});
@@ -266,13 +271,13 @@ test('a new project deny revokes dispatcher and prompt session grants before ano
     },
   );
   c.client.addPermissionRule('ask', 'Tool(web_search)');
-  const first = c.tui!.submitPrompt('search first');
+  await c.tui!.submitPrompt('search first');
   const until = Date.now() + 4000;
   while (!c.client.listPendingPermissions().length && Date.now() < until) await Bun.sleep(5);
   const permission = c.client.listPendingPermissions()[0]!;
   expect(permission).toBeDefined();
   c.client.resolvePermission(permission.approvalId, permission.scopeHash, 'session');
-  await first;
+  await c.tui!.idle();
   expect(networkCalls).toBe(1);
   expect(c.client.listToolGrants().length).toBeGreaterThan(0);
   c.client.addPermissionRule('deny', 'Tool(web_search)');

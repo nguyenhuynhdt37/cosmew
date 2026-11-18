@@ -6,7 +6,7 @@ import {ThemeEngine} from '../theme/theme';
 import {OverlayProvider, useOverlay} from './core/overlay';
 import {FutrynClientProvider, InputScope, useKeymap} from './hooks';
 import {ThemeProvider} from './theme';
-import {Panel} from './ui/panel';
+import {IntegratedShell, type IntegratedShellProps} from './integrated-shell';
 
 export interface AppSlots {
   transcript?: ReactNode;
@@ -14,7 +14,7 @@ export interface AppSlots {
   composer?: ReactNode;
   status?: ReactNode;
 }
-export interface InkAppProps {
+export interface InkAppProps extends IntegratedShellProps {
   client: FutrynClient;
   themeEngine?: ThemeEngine;
   slots?: AppSlots;
@@ -49,7 +49,7 @@ function Shell({slots = {}, width, onInterrupt}: Omit<InkAppProps, 'client' | 't
           {slots.status}
         </Box>
       </InputScope>
-      {active ? <Panel title={active.id}>{active.content}</Panel> : null}
+      {active?.content}
     </Box>
   );
 }
@@ -58,19 +58,20 @@ export function InkApp({client, themeEngine = defaultTheme, ...props}: InkAppPro
   return (
     <FutrynClientProvider client={client}>
       <ThemeProvider engine={themeEngine}>
-        <OverlayProvider>
-          <Shell {...props} />
-        </OverlayProvider>
+        <OverlayProvider>{props.slots ? <Shell {...props} /> : <IntegratedShell {...props} />}</OverlayProvider>
       </ThemeProvider>
     </FutrynClientProvider>
   );
 }
-export function FoundationNotice({initialCommand}: {initialCommand?: string}) {
+export function FoundationNotice({initialCommand, warning}: {initialCommand?: string; warning?: string}) {
   return (
     <Box flexDirection="column">
-      <Text>Futryn · Ink foundation</Text>
-      <Text>Folder consent and feature integration pending (Phase 1/2).</Text>
-      {initialCommand ? <Text>Initial command: Not implemented in the Ink foundation.</Text> : null}
+      <Text>Futryn · Ink preview</Text>
+      <Text>Non-TTY preview · workspace access and interactive input are disabled.</Text>
+      {warning ? <Text>{warning}</Text> : null}
+      {initialCommand ? (
+        <Text>Initial command skipped: folder consent and account verification require a TTY.</Text>
+      ) : null}
     </Box>
   );
 }

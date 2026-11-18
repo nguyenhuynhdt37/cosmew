@@ -734,3 +734,15 @@ export function fixtureServer() {
     },
   };
 }
+
+/** The Ink startup gate verifies the account with one small non-streaming generation; in-process fetch fixtures answer it with this. */
+export function probeResponse(): Response {
+  return Response.json({
+    id: 'probe',
+    object: 'chat.completion',
+    created: 123,
+    model: 'fixture-model',
+    choices: [{index: 0, message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}],
+    usage: {prompt_tokens: 1, completion_tokens: 1, total_tokens: 2},
+  });
+}

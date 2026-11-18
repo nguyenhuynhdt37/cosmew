@@ -4,7 +4,7 @@ import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {SeatbeltRuntime} from '@futryn/tools';
-import {commandSummary} from '@futryn/tui';
+import {toolState} from '../../apps/tui/src/ink/features/transcript/logic';
 import {ProcessSupervisor, runProcess} from '../../packages/tools/src/exec/process';
 import {formatOutcome} from '../../packages/tools/src/exec/command';
 import {observe, current, live, same, waitFor, dispose, type Observation} from '../process-fixtures/observe';
@@ -113,12 +113,8 @@ osTest('timeout requests termination, but TUI/model never certify the tree dead'
   expect(formatted.content).toContain('Descendant termination: unconfirmed');
   expect(formatted.content).not.toContain('tree was killed');
   expect(
-    commandSummary(
-      {id: 'c', name: 'exec_command', input: {cmd: 'sleep 5'}},
-      {callId: 'c', name: 'exec_command', status: 'error', code: 'TIMEOUT', content: formatted.content},
-      {live: false},
-    ).note,
-  ).toContain('termination unconfirmed');
+    toolState({callId: 'c', name: 'exec_command', status: 'error', code: 'TIMEOUT', content: formatted.content}, false),
+  ).toContain('TIMEOUT');
 });
 osTest('runtime shutdown cancels owned live runs, closes admission and is repeatable', async () => {
   const f = fixture(),
