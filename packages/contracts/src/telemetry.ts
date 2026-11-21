@@ -132,9 +132,9 @@ const latestQuota = (previous: UsageQuota[] | undefined, next: UsageQuota[] | un
   for (const snapshot of [...previous, ...next]) {
     const key = JSON.stringify([snapshot.name, snapshot.kind, snapshot.windowMinutes]);
     const existing = snapshots.get(key);
-    if (!existing || snapshot.observedAt >= existing.observedAt) snapshots.set(key, snapshot);
+    if (!existing || Date.parse(snapshot.observedAt) >= Date.parse(existing.observedAt)) snapshots.set(key, snapshot);
   }
-  return [...snapshots.values()].sort((a, b) => b.observedAt.localeCompare(a.observedAt)).slice(0, 20);
+  return [...snapshots.values()].sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt)).slice(0, 20);
 };
 const sumCounters = (previous: UsageBreakdown, next: UsageBreakdown): UsageBreakdown => ({
   ...next,

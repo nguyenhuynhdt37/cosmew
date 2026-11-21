@@ -129,4 +129,13 @@ test('source quota snapshots survive missing headers and ignore older observatio
   const result = combineUsage(combineUsage(first, older), attributeUsage(usage(1), identity));
   expect(result.breakdown?.[0]?.quota?.[0]?.usedPercent).toBe(40);
   expect(result.quota?.[0]?.usedPercent).toBe(40);
+  const millisecond = attributeUsage(
+    {...usage(1), quota: [{...quota('requests')[0]!, usedPercent: 45, observedAt: '2026-11-22T00:00:00.001Z'}]},
+    identity,
+  );
+  const noFraction = attributeUsage(
+    {...usage(1), quota: [{...quota('requests')[0]!, observedAt: '2026-11-22T00:00:00Z'}]},
+    identity,
+  );
+  expect(combineUsage(noFraction, millisecond).breakdown?.[0]?.quota?.[0]?.usedPercent).toBe(45);
 });
