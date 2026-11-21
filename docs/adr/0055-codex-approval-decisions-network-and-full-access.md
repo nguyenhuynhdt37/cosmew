@@ -1,6 +1,6 @@
 # ADR 0055 — Codex approval decisions, `network_access`, and Full Access presets
 
-Date: 2026-11-18. Status: accepted.
+Date: 2026-11-18. Status: accepted. **Superseded by [ADR 0061](0061-claude-code-permissions-and-sandbox.md)** (2026-11-18): presets, Full Access, `network_access` and `request_permissions` are removed; the once/session/always answers and the exact-command grant binding remain.
 
 ## Context
 

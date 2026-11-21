@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛝ Autocompact buffer: 0 tokens (0%)
+01|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+02|
+03|     Auto-compact window:  Not reported
+04|
+05|     MCP tools · /mcp
+06|     └ Not implemented
+07|
+08|     Custom agents · .cosmew/agents/
+09|     └ 0 agents
+10|
+11|     Skills · /skills
+12|     └ 111 skills
+13|
+14|     System prompt and tool schemas are not measured.
+15|
+16|❯ /rewind
+17|  ⎿  Rewind cancelled
+18|
+19|❯ /mcp
+20|  ⎿  Closed mcp
+21|
+22|❯ /hooks
+23|  ⎿  Closed hooks
+24|
+25|❯ /diff
+26|  ⎿  Diff panel hidden
+27|
+28|────────────────────────────────────────────────────────────────────────────────────────────────────
+29|  Showing detailed transcript · ctrl+o to toggle · ↑/↓ to scroll                           verbose

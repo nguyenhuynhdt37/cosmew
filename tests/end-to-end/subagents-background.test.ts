@@ -8,7 +8,7 @@ import {
   type CommandSandbox,
   type ModelEvent,
   type SubagentNotice,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
@@ -163,7 +163,7 @@ async function setup(options: SetupOptions) {
   }) as typeof globalThis.fetch;
 
   const app = startup(state, {
-    permissions: {sandbox: 'workspace-write', approval: 'on-request'},
+    permissions: {mode: 'acceptEdits'},
     vault: memoryVault(),
     fetch,
     skillsHome: home,
@@ -526,11 +526,11 @@ test('/agents lists types and children, shows a transcript and stops a running b
   const frame = tui.frame();
   expect(frame).toContain('reader');
   expect(frame).toContain('explore');
-  expect(frame).toContain('explore: slow scan · running · bg');
+  expect(frame).toContain('[explore] slow scan · running · bg');
 
   // Move the cursor to the child row and open its menu.
-  for (let i = 0; i < 12 && !/› \d+\.\s+.*slow scan/.test(tui.frame()); i++) await tui.handleKey('Down');
-  expect(tui.frame()).toMatch(/› \d+\.\s+.*slow scan/);
+  for (let i = 0; i < 12 && !/❯ +.*slow scan/.test(tui.frame()); i++) await tui.handleKey('Down');
+  expect(tui.frame()).toMatch(/❯ +.*slow scan/);
   await tui.handleKey('Enter');
   await tui.waitFor('Stop agent');
   await tui.handleKey('Enter'); // View transcript

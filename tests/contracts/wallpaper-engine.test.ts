@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test';
-import {WALLPAPER_PRESET_IDS, defaultAnimationConfig} from '@futryn/contracts';
-import {WALLPAPER_SCENES, WallpaperEngine} from '@futryn/tui';
+import {WALLPAPER_PRESET_IDS, defaultAnimationConfig} from '@cosmew/contracts';
+import {WALLPAPER_SCENES, WallpaperEngine} from '@cosmew/tui';
 
 describe('FUTRYN Live ASCII Wallpaper Engine', () => {
   test('implements all 12 declarative ASCII wallpaper presets and resolves clawd alias to futryn-spark', () => {
@@ -17,6 +17,8 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
 
     // Compatibility alias for upstream clawd scene
     expect(engine.getPreset('clawd')?.id).toBe('futryn-spark');
+    const sparkSprites = WALLPAPER_SCENES['futryn-spark'].sprites?.(80, 24, 0) ?? [];
+    expect(sparkSprites.some(sprite => sprite.art?.some(row => row.includes('▄█▀█▀█▀█▄')))).toBe(true);
     expect(engine.getPreset('non-existent')).toBeNull();
   });
 

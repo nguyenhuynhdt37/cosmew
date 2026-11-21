@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|✻ Crunched for 8s · done 11:00 PM                                 │1 file changed +1 -1               source: Current ▾
+02|                                                                  │
+03|❯ In a.txt replace the word hello with HELLO.                     │a.txt                                          +1 -1
+04|                                                                  │
+05|  Read 1 file                                                     │────────────────────────────────────────────────────
+06|                                                                  │a.txt                                        [ ask ]
+07|⏺ Update(a.txt)                                                   │────────────────────────────────────────────────────
+08|  ⎿  Added 1 line, removed 1 line                                 │ 1 -hello
+09|      1 -hello                                                    │ 1 +HELLO
+10|      1 +HELLO                                                    │ 2  world
+11|      2  world                                                    │
+12|                                                                  │
+13|⏺ I changed hello to HELLO in a.txt. It was the only "hello" in   │
+14|  the file, so the file now reads:                                │
+15|                                                                  │
+16|  HELLO                                                           │
+17|  world                                                           │
+18|                                                                  │
+19|✻ Crunched for 8s · done 11:02 PM                                 │
+20|                                                                  │
+21|❯ Use the AskUserQuestion tool to ask me which color I prefer,    │
+22|  red or blue, then reply with my choice.                         │
+23|                                                                  │
+24|⏺ Answered Claude's questions:                                    │
+25|  ⎿  · Which color do you prefer, red or blue? → Red              │
+26|                                                                  │
+27|⏺ You chose red.                                                  │
+28|                                                                  │
+29|✻ Brewed for 4s · done 11:02 PM                                   │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · ← 1 agent

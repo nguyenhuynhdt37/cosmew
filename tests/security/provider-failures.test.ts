@@ -7,11 +7,11 @@ import {
   type ModelPort,
   type ModelRequest,
   type Selection,
-} from '@futryn/contracts';
-import {Conversation} from '@futryn/core';
-import {AccountManager, ModelCatalog, ProviderAdapter, ProviderTransport, normalizeModel} from '@futryn/models';
-import {SqliteSettings} from '@futryn/persistence';
-import {ConfiguredNetworkPolicy, Redactor} from '@futryn/security';
+} from '@cosmew/contracts';
+import {Conversation} from '@cosmew/core';
+import {AccountManager, ModelCatalog, ProviderAdapter, ProviderTransport, normalizeModel} from '@cosmew/models';
+import {SqliteSettings} from '@cosmew/persistence';
+import {ConfiguredNetworkPolicy, Redactor} from '@cosmew/security';
 import {fixtureServer, memoryVault} from '../fixtures';
 
 const fixtures: ReturnType<typeof fixtureServer>[] = [];

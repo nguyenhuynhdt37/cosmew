@@ -1,10 +1,10 @@
 import {expect, test} from 'bun:test';
-import {JsonRpcConnection, LspClient, LspManager} from '@futryn/code-intel';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {JsonRpcConnection, LspClient, LspManager} from '@cosmew/code-intel';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {mkdtempSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {ServiceProcess} from '@futryn/contracts';
+import type {ServiceProcess} from '@cosmew/contracts';
 
 function wire() {
   let receive: (data: Uint8Array) => void = () => {};

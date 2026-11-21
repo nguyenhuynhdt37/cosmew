@@ -2,7 +2,7 @@
 import {TextLine} from '../../ui';
 import {useFutrynClient, useStatus} from '../../hooks';
 import {useTheme} from '../../theme';
-import type {FutrynClient} from '@futryn/sdk';
+import type {FutrynClient} from '@cosmew/sdk';
 export function useContextMeter(draft = '') {
   const client = useFutrynClient();
   useStatus();

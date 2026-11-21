@@ -1,0 +1,30 @@
+00|
+01| ▐▛███▛█   Claude Code v2.1.328
+02|▝▜██████▀  Opus 5.5 with medium effort · Claude Pro
+03| ▝▝   ▝▝   /…/<scratch>/demo2
+04|
+05|  ⎿  SessionStart:startup says: SonarQube plugin initialised.
+06|       sonarqube-cli: ✗ not found — run /sonarqube:sonar-integrate
+07|       SonarQube hooks: ✗ no hooks installed — run /sonarqube:sonar-integrate
+08|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+09|     protected, files are scanned as they are written
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|    + a.txt
+21|    + index.ts
+22|    + .git/
+23|    ◇ plugin:mongodb:mongodb:config…             Server configuration, supplied by the user eithe…
+24|    ◇ plugin:mongodb:mongodb:debug:…             Debugging information for MongoDB connectivity i…
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ @
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on

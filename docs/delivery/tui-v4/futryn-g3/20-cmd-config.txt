@@ -1,0 +1,30 @@
+00|❯ /help
+01|  ⎿  Closed help
+02|
+03|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+04|  Settings  Status   Config   Usage   Stats
+05|
+06|  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+07|  │ ⌕ Search settings…                                                                           │
+08|  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+09|  ❯ Workspace           /private/tmp/claude-502/-Users-huynh-codes-hannes/4898d007-8a7c-4c60-85cb…
+10|    Active directory    /private/tmp/claude-502/-Users-huynh-codes-hannes/4898d007-8a7c-4c60-85cb…
+11|    Shell               Runtime-selected shell
+12|    Notifications       Unavailable
+13|    Language            English interface
+14|    Terminal shortcuts  Esc: Close overlay / interrupt · Enter: Submit / select · Shift+Enter: Ne…
+15|    Provider            xAI Grok
+16|    Account             xai
+17|    Default model       grok-4.7
+18|    Reasoning effort    Provider default
+19|    Endpoint / sign-in  Use secure provider connection flow
+20|    Tools capability    unknown
+21|    Mode                chat
+22|    Available tools     read, glob, grep, skill, memory, tool_output, exec_command, write_stdin, …
+23|    Execution owner     Cosmew agent · Cosmew tools
+24|    Request rounds      Unlimited
+25|    Tool calls          Unlimited
+26|    Token budget        Unlimited
+27|      ↓ 30 more
+28|
+29|  ↓ to navigate · ↑ to switch tabs · Esc to go back · Ctrl+G appearance scope: global

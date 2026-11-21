@@ -13,7 +13,7 @@ import {
   memoryUsageStateSchema,
   type MemoryUsageState,
   type MemoryWrite,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {MemoryDirectory} from './memory-directory';
 
 const FILE_LIMIT = 16384,

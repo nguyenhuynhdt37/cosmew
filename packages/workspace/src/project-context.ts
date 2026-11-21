@@ -6,7 +6,7 @@ import {
   type ProjectContextDiagnostic,
   type ProjectInstructionSource,
   type ProjectInstructionReader,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {WorkspaceRoot, WorkspaceDenied} from './paths';
 import {ignoredDirectory} from './files';
 

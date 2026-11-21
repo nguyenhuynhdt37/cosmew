@@ -1,7 +1,7 @@
 import type {Database} from 'bun:sqlite';
 import {lstatSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
-import {FutrynError, type CredentialRef} from '@futryn/contracts';
+import {FutrynError, type CredentialRef} from '@cosmew/contracts';
 
 /**
  * Subscription runtimes that were chat-only and are removed (ADR 0045): Copilot CLI, Gemini CLI,
@@ -24,7 +24,7 @@ export function ensureMigrationTables(db: Database): void {
 }
 
 /**
- * The Codex app-server runtime is removed too (ADR 0049): Futryn only calls provider APIs and owns the
+ * The Codex app-server runtime is removed too (ADR 0049): Cosmew only calls provider APIs and owns the
  * loop and every tool. Its `chatgpt` accounts (runtime credentials) are deleted; `chatgpt-api` stays.
  */
 export const REMOVED_CODEX_RUNTIMES: readonly string[] = ['codex'];

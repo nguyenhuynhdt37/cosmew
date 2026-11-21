@@ -1,5 +1,5 @@
 import {realpathSync} from 'node:fs';
-import {decideApproval, type ApprovalPolicy, type PermissionKind} from '@futryn/contracts';
+import type {PermissionKind} from '@cosmew/contracts';
 
 /**
  * Command classification for the approval policy (ADR 0040), ported from Codex at
@@ -10,16 +10,15 @@ import {decideApproval, type ApprovalPolicy, type PermissionKind} from '@futryn/
  * - `shell-command/src/command_safety/is_dangerous_command.rs`: `rm` with force, through `sudo`,
  *   `env`, a `trap` action and the literal commands of a `bash|zsh|sh -c|-lc` script.
  *
- * The dangerous check is a best-effort guard, as in Codex, NOT a security boundary: the boundary
- * is the sandbox (workspace-write, `.git` read-only, Futryn state denied, home hidden, no network).
+ * The dangerous check is a best-effort display hint, as in Codex, NOT a security boundary: the
+ * boundary is the sandbox (writes only in the working directory, `.git` read-only, Cosmew state and
+ * credential directories denied, network only through the domain-filtering proxy).
  */
-
-export {decideApproval, type ApprovalPolicy};
 
 /** Codex `MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH`. */
 export const MAX_DANGEROUS_COMMAND_WRAPPER_DEPTH = 8;
 
-/** Tree-sitter parsers supplied by `@futryn/tools` (Codex `bash.rs`); null = cannot parse. */
+/** Tree-sitter parsers supplied by `@cosmew/tools` (Codex `bash.rs`); null = cannot parse. */
 export interface ShellParsers {
   /** `try_parse_word_only_commands_sequence`: allowlist; null when anything else appears. */
   plain(script: string): string[][] | null;
@@ -77,7 +76,7 @@ export function dangerousCommandMatch(argv: string[], parsers: ShellParsers, dep
 export const TRUSTED_SHELL_DIRECTORIES = ['/bin', '/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'] as const;
 
 /**
- * Futryn deviation from Codex (`shell_detect.rs:39` matches the file stem, so `./bash` counts): a
+ * Cosmew deviation from Codex (`shell_detect.rs:39` matches the file stem, so `./bash` counts): a
  * `-c` script is unwrapped for project rules only when the shell is the bare name `bash|zsh|sh`
  * or an absolute path whose real path is a `bash|zsh|sh` in a system directory outside the
  * workspace. A repository-planted `./bash` stays one opaque sub-command, so `Bash(npm test:*)`
@@ -259,19 +258,17 @@ export function commandText(argv: string[]): string {
   return argv.map(word => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)).join(' ');
 }
 
-/** Permission kind for a policy reason, so every tool shares one approval table. */
+/** Permission kind for a policy reason, so every tool shares one mode table (ADR 0061). */
 export const APPROVAL_KIND_FOR_REASON: Record<string, PermissionKind> = {
   'secret-file': 'secret',
   'workspace-patch': 'edit',
-  'outside-writable-roots': 'escalation',
-  'process-execute': 'execute',
-  'dangerous-command': 'dangerous',
-  'unverified-command': 'execute',
-  'shell-parser-unavailable': 'execute',
+  'outside-writable-roots': 'edit',
+  'sandboxed-command': 'sandboxed-command',
+  'process-execute': 'command',
+  'unsandboxed-session': 'command',
+  'excluded-command': 'command',
   'unsandboxed-escalation': 'escalation',
-  'network-escalation': 'network',
-  'stdin-input-approval-required': 'stdin',
-  'stdin-policy-drift': 'escalation',
-  'stdin-retained-escalation': 'network',
-  'request-permissions': 'escalation',
+  'stdin-sandboxed': 'sandboxed-command',
+  'stdin-process': 'command',
+  'stdin-unsandboxed': 'command',
 };

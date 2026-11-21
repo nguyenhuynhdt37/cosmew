@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
-import {evaluateRead} from '@futryn/security';
-import {WorkspaceRoot, looksBinary} from '@futryn/workspace';
+import {evaluateRead} from '@cosmew/security';
+import {WorkspaceRoot, looksBinary} from '@cosmew/workspace';
 import {LIMITS} from '../limits';
 import type {FileHits, GrepMode} from './ripgrep';
 
@@ -20,12 +20,14 @@ export interface GrepWorkerRequest {
   multiline?: boolean;
   mode: GrepMode;
   stateDirectory?: string;
+  /** Granted directories a candidate path may resolve into. The project root is always included. */
+  roots?: string[];
   /** Stop collecting line text after this many matching lines (counts stay exact). */
   maxLines: number;
 }
 
 self.onmessage = (event: MessageEvent<GrepWorkerRequest>) => {
-  const {root, files, pattern, ignoreCase, multiline, mode, stateDirectory, maxLines} = event.data;
+  const {root, files, pattern, ignoreCase, multiline, mode, stateDirectory, roots, maxLines} = event.data;
   const workspace = new WorkspaceRoot(root);
   const flags = (ignoreCase ? 'i' : '') + (multiline ? 'gs' : '');
   const regex = new RegExp(pattern, flags);
@@ -35,7 +37,7 @@ self.onmessage = (event: MessageEvent<GrepWorkerRequest>) => {
   for (const path of files) {
     let file;
     try {
-      file = workspace.resolve(path);
+      file = workspace.resolve(path, roots ?? []);
     } catch {
       continue;
     }

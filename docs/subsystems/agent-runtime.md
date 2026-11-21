@@ -82,3 +82,8 @@ Cases: single read rồi final answer; interleaved tool fragments chỉ execute 
 Chưa chốt default limits, behavior khi một tool trong batch deny, checkpoint frequency và detachable runs. Rủi ro: provider usage thiếu, tool không cancellable, unknown outcomes. Những giá trị này phải được chốt bằng ADR/config trước phase tương ứng.
 
 Tham chiếu: [contracts](../contracts/agent-events.md), [tools/permissions](../contracts/tools-and-permissions.md), [dependencies](../architecture/dependency-rules.md), [event flow và sequence diagram](../architecture/event-flow.md), [catalog](../delivery/dependency-catalog.md), [roadmap](../delivery/implementation-roadmap.md).
+
+
+## Context pressure and investigation (ADR 0063)
+
+Automatic compaction runs before tool withdrawal at the same 85% pressure threshold; a useful handoff is remeasured and tools remain available when it fits. Long tool output has scoped archived evidence through `tool_output` when the archive is configured. A preview or search match is not a complete file read. Guidance follows entry point → implementation → callers/tests, then checks changed behavior. This adds no hidden minimum call count, deliberate delay or provider reasoning setting. Live comparative model-quality parity remains Needs verification.

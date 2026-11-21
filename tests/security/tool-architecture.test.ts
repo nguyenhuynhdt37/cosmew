@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionGrants} from '@futryn/security';
-import {WorkspaceRoot} from '@futryn/workspace';
-import {ToolDispatcher, type CommandRuntime, type ToolAuditRecord} from '@futryn/tools';
+import {SessionGrants} from '@cosmew/security';
+import {WorkspaceRoot} from '@cosmew/workspace';
+import {ToolDispatcher, type CommandRuntime, type ToolAuditRecord} from '@cosmew/tools';
 import {ToolRegistry} from '../../packages/tools/src/registry';
 import {ToolRouter} from '../../packages/tools/src/router';
 import {createHandlers} from '../../packages/tools/src/handlers';
@@ -66,7 +66,6 @@ test('registry rejects duplicate identities, owns descriptor snapshots and route
     'apply_patch',
     'edit',
     'write',
-    'request_permissions',
     'web_fetch',
   ]);
   const descriptor = registry.descriptors()[0]!;

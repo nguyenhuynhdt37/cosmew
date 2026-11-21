@@ -10,9 +10,10 @@ import type {
   TurnBudget,
   SkillsPort,
   Usage,
-} from '@futryn/contracts';
-import {GENERATION_LIMITS} from '@futryn/contracts';
+} from '@cosmew/contracts';
+import {GENERATION_LIMITS} from '@cosmew/contracts';
 import {estimateContextTokens} from '../context/builder';
+import {AUTO_COMPACT_FRACTION} from '../context/model-compaction';
 import type {ContextCompactor} from '../context/compaction';
 
 /**
@@ -27,7 +28,7 @@ export const SAFETY_LIMITS = {
   /** Context window assumed when the model does not report one (conservative). */
   unknownContextTokens: 128000,
   /** Fraction of the usable window after which tools are withdrawn for a final answer. */
-  contextReserve: 0.85,
+  contextReserve: AUTO_COMPACT_FRACTION,
   /** Parallel-declared calls holding the shared execution slot at once (ADR 0033). Others run exclusively. */
   parallelTools: 4,
 } as const;

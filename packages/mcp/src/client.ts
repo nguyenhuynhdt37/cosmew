@@ -1,6 +1,6 @@
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 export const MCP_TIMEOUT_MS = 30_000;
 export const MAX_MCP_RESPONSE_BYTES = 256 * 1024;
@@ -46,7 +46,7 @@ export class McpClient {
     return (this.connecting ??= (async () => {
       const attempt = new AbortController();
       this.attempt = attempt;
-      const client = new Client({name: 'futryn', version: '0.1.0'}, {capabilities: {}});
+      const client = new Client({name: 'cosmew', version: '0.1.0'}, {capabilities: {}});
       this.pendingClient = client;
       const fetchImpl = this.options.fetch ?? fetch;
       const boundedFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -149,6 +149,46 @@ export class McpClient {
         throw new FutrynError('TIMEOUT');
       if (error instanceof FutrynError) throw error;
       // SDK errors may embed endpoint query credentials or remote response bodies. Never return them.
+      throw new FutrynError('TRANSPORT');
+    } finally {
+      this.activeCalls--;
+      if (!this.activeCalls && this.connecting) this.attempt?.abort();
+    }
+  }
+
+  /** Tool names and schemas. Same deadlines and error mapping as `call`. No sampling or filesystem host services. */
+  async listTools(
+    signal?: AbortSignal,
+  ): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>}[]> {
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
+    const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
+    const combined = AbortSignal.any([this.lifetime.signal, deadline, ...(signal ? [signal] : [])]);
+    this.activeCalls++;
+    try {
+      await abortable(this.connect(), combined);
+      if (combined.aborted || !this.client) throw new FutrynError('CANCELLED');
+      const tools: {name: string; description?: string; inputSchema?: Record<string, unknown>}[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 4 && tools.length < 64; page++) {
+        const listed = await this.client.listTools(cursor ? {cursor} : undefined, {
+          signal: combined,
+          timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
+        });
+        for (const tool of listed.tools) {
+          if (tool.execution?.taskSupport === 'required') continue;
+          tools.push({name: tool.name, description: tool.description, inputSchema: tool.inputSchema});
+          if (tools.length >= 64) break;
+        }
+        const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
+        if (!next || next === cursor) break;
+        cursor = next;
+      }
+      return tools;
+    } catch (error) {
+      if (signal?.aborted || this.lifetime.signal.aborted) throw new FutrynError('CANCELLED');
+      if (deadline.aborted || (error instanceof Error && /timed out/i.test(error.message)))
+        throw new FutrynError('TIMEOUT');
+      if (error instanceof FutrynError) throw error;
       throw new FutrynError('TRANSPORT');
     } finally {
       this.activeCalls--;

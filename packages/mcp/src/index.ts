@@ -6,6 +6,8 @@ export {
   type McpClientOptions,
   type McpTextResult,
 } from './client';
+export {parseMcpConfig, qualifiedMcpName, type McpConfigParse, type McpServerSpec} from './config';
+export {McpHub, type McpHubOptions, type McpServerStatus, type McpSnapshot, type McpToolRecord} from './servers';
 export {
   WebSearchClient,
   selectSearchProvider,

@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Custom agents: 4.7k tokens (0.5%)
+01|                                               ⛁ Skills: 9.9k tokens (1%)
+02|                                               ⛁ Messages: 2.1k tokens (0.2%)
+03|                                               ⛶ Free space: 931.3k tokens (93%)
+04|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+05|
+06|     Auto-compact window:  1m tokens
+07|
+08|     MCP tools · /mcp (loaded on-demand)
+09|     └ 155 tools · 669 tokens
+10|
+11|     Custom agents · .claude/agents/
+12|     └ 23 agents · 4.7k tokens
+13|
+14|     Skills · /skills
+15|     └ 220 skills · 9.9k tokens
+16|
+17|     /context all to expand
+18|
+19|❯ /export
+20|  ⎿  Export cancelled
+21|
+22|❯ /diff
+23|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on · ← 1 agent

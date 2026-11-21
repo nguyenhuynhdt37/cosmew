@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+01|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+02|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 3.1k tokens (0.3%)
+03|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System tools: 13.6k tokens (1%)
+04|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ MCP tools: 669 tokens (0.1%)
+05|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ MCP server instructions: 1.7k tokens (0.2%)
+06|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Custom agents: 4.7k tokens (0.5%)
+07|                                               ⛁ Skills: 9.9k tokens (1%)
+08|                                               ⛁ Messages: 2.1k tokens (0.2%)
+09|                                               ⛶ Free space: 931.3k tokens (93%)
+10|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+11|
+12|     Auto-compact window:  1m tokens
+13|
+14|     MCP tools · /mcp (loaded on-demand)
+15|     └ 155 tools · 669 tokens
+16|
+17|     Custom agents · .claude/agents/
+18|     └ 23 agents · 4.7k tokens
+19|
+20|     Skills · /skills
+21|     └ 220 skills · 9.9k tokens
+22|
+23|     /context all to expand
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on · ← 1 agent

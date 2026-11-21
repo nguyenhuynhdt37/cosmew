@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+14|  Help  General   Commands   Custom commands
+15|
+16|  Cosmew understands your codebase, makes edits with your permission, and runs commands — right
+17|  from your terminal.
+18|
+19|  Shortcuts
+20|  ! for shell mode        esc esc to clear input             ctrl+shift+_ to undo
+21|  / for commands          shift+tab to cycle modes           ctrl+z to suspend
+22|  @ for file paths        shift+↑/↓ to change effort         opt+p to switch model
+23|                          ctrl+o to see full transcript      ctrl+s to stash prompt
+24|                          ctrl+t to toggle tasks             ctrl+g to edit in $EDITOR
+25|                          \ then enter for newline
+26|
+27|  For more help: see the Cosmew documentation in the repository (docs/).
+28|
+29|  ←/→ to switch · Esc to close

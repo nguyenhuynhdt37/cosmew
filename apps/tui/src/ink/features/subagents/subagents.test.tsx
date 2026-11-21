@@ -2,7 +2,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {cleanup} from 'ink-testing-library';
 import {Text} from 'ink';
-import type {SubagentSummaryView} from '@futryn/contracts';
+import type {SubagentSummaryView} from '@cosmew/contracts';
 import {renderInk, settle} from '../../testing';
 import {Subagents, tokenTotal, useSubagents} from './index';
 afterEach(cleanup);
@@ -46,9 +46,12 @@ test('tree renders truthful progress; Enter opens child; expansion is scoped to 
     />,
   );
   await settle();
-  expect(view.lastFrame()).toContain('1 running / 2');
-  expect(view.lastFrame()).toContain('tokens not reported');
-  expect(view.lastFrame()).toContain('2 tools');
+  const frame = view.lastFrame()!;
+  expect(frame).toContain('❯ worker(Implement feature)');
+  expect(frame).toContain('⎿  Running in the background (2 tool uses');
+  expect(frame).toContain('Failed: CANCELLED');
+  // Unknown usage is omitted, never shown as a zero.
+  expect(frame).not.toContain('tokens');
   view.stdin.write('\r');
   await settle();
   expect(inspected).toBe('child');
@@ -95,4 +98,25 @@ test('opened child transcript hides raw memory block and retains provenance line
   await settle();
   expect(view.lastFrame()).toContain('Ký ức đã dùng: child-notes.md');
   expect(view.lastFrame()).not.toContain('<oai-mem-citation>');
+});
+
+test('finished children read like the reference: Done with real tool count, tokens and duration', async () => {
+  const view = renderInk(
+    <Subagents
+      agents={[
+        {
+          ...child,
+          background: false,
+          status: 'completed',
+          toolCount: 1,
+          usage: {inputTokens: 1000, outputTokens: 2300, costUSD: null},
+          finishedAt: '2026-11-18T00:00:08Z',
+        },
+      ]}
+      width={90}
+    />,
+  );
+  await settle();
+  expect(view.lastFrame()).toContain('⏺ worker(Implement feature)');
+  expect(view.lastFrame()).toContain('⎿  Done (1 tool use · 3.3k tokens · 8s)');
 });

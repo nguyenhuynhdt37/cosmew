@@ -1,13 +1,35 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import type {PromptHistoryEntry, PromptHistoryScope} from '@cosmew/sdk';
+import {useEffect, useMemo, useReducer, useRef, useState} from 'react';
 import {usePaste, type Key} from 'ink';
-import {FutrynError} from '@futryn/contracts';
-import {SLASH_COMMANDS, acceptSlashSelection, type FutrynClient} from '@futryn/sdk';
-import {useClientEvents, useFutrynClient, useInputEnabled, useKeymap, useTextInput, keyAction} from '../../hooks';
+import {FutrynError} from '@cosmew/contracts';
+import {SLASH_COMMANDS, acceptSlashSelection, type FutrynClient} from '@cosmew/sdk';
+import {
+  useClientEvents,
+  useFutrynClient,
+  useInputEnabled,
+  useKeybindings,
+  useStatus,
+  type Keystroke,
+} from '../../hooks';
 import {safeText} from '../../ui';
 import {completionContext, getCompletions, useAutocomplete, type Completion} from '../autocomplete';
-import {recordHistory, searchHistory, useHistory} from '../history';
+import {recordHistory, useHistory} from '../history';
 import {createPasteState, expandPastes, insertPaste, replaceRange, type PasteState} from '../paste';
-import {edit, insertText, moveCursor, verticalMove} from './logic';
+import {footerShortcutColumns} from '../help/logic';
+import {
+  edit,
+  editSpan,
+  emojiShortcode,
+  insertText,
+  lineEdge,
+  moveCursor,
+  moveTo,
+  spanText,
+  verticalMove,
+  wordLeft,
+  wordRight,
+  type EditAction,
+} from './logic';
 
 export type SubmitAcceptance = void | boolean;
 export interface ComposerOptions {
@@ -20,6 +42,24 @@ export interface ComposerOptions {
   onShellError?: (code: string) => void;
   onShellResult?: (result: Awaited<ReturnType<FutrynClient['runShellCommand']>>) => void;
   onShellOutput?: NonNullable<Parameters<FutrynClient['runShellCommand']>[1]>['onOutput'];
+  onToggleTasks?: () => void;
+  /** Esc Esc on an empty input: the host opens the rewind list. Without it the key reports "Not implemented". */
+  onRewind?: () => void;
+  /** Ctrl+G, Ctrl+Z and Ctrl+V need a host bridge; without one they report "Not implemented" and change nothing. */
+  onEditor?: () => void;
+  onSuspend?: () => void;
+  onPasteImage?: () => void;
+  onReadClipboardImage?: () => Promise<Parameters<FutrynClient['attachImage']>[0] | undefined>;
+  onBackgroundTask?: () => void;
+  onOpenBackgroundTasks?: () => void;
+  /** Ctrl+X Ctrl+S: the host transfers/interrupts the turn through SDK sendQueuedNow and drains the inbox. */
+  onSendQueuedNow?: () => void;
+  /** Ctrl+L: repaint the whole screen. */
+  onRedraw?: () => void;
+  /** Footer: Enter / ↓ on the selected agent opens the agents panel. */
+  onOpenAgents?: () => void;
+  /** Optional extra shells owned by a legacy host; SDK backgroundTasks supplies the normal count. */
+  backgroundShells?: number;
   onNotice?: (message: string) => void;
   busy?: boolean;
   isActive?: boolean;
@@ -32,8 +72,11 @@ export interface ComposerOptions {
 }
 interface SearchState {
   query: string;
-  index: number;
+  /** Position in the newest-first list of matches. */
+  selected: number;
   draft: PasteState;
+  scope: PromptHistoryScope;
+  entries: PromptHistoryEntry[];
 }
 function sessionHistory(client: FutrynClient): string[] {
   return (
@@ -45,6 +88,36 @@ function sessionHistory(client: FutrynClient): string[] {
 }
 export function useComposer(options: ComposerOptions) {
   const client = useFutrynClient();
+  const status = useStatus();
+  const [shortcuts, setShortcuts] = useState(false);
+  const shortcutsRef = useRef(false);
+  const dismissShortcuts = () => {
+    if (!shortcutsRef.current) return false;
+    shortcutsRef.current = false;
+    setShortcuts(false);
+    return true;
+  };
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+  /** Text removed by Ctrl+K/U/W/Alt+D, Ctrl+C and Esc Esc, newest first; Ctrl+Y pastes the newest, Alt+Y cycles. */
+  const killRing = useRef<string[]>([]);
+  const yank = useRef<{start: number; length: number; index: number} | null>(null);
+  /** True while the previous command was a kill: the next kill joins the same ring entry (Emacs/readline). */
+  const lastKill = useRef(false);
+  /** Transient message right above the input's top rule (where the effort line sits). */
+  const [slotNotice, setSlotNotice] = useState('');
+  const slotTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const killAt = useRef<number | null>(null);
+  const exitDAt = useRef<number | null>(null);
+  const noticeTtl = useRef(2500);
+  /** Selected running agent of the footer (`← 1 agent · ↓ to manage`), or null when the input has focus. */
+  const [footer, setFooter] = useState<number | null>(null);
+  const [deletedHint, setDeletedHint] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<number | null>(null);
+  const attaching = useRef(false);
+  const undo = useRef<PasteState[]>([]);
+  const stash = useRef<PasteState | null>(null);
+  const escapeAt = useRef<number | null>(null);
+  const exitAt = useRef<number | null>(null);
   const [draft, setDraft] = useState(() => createPasteState(safeText(options.initialValue ?? '')));
   const draftRef = useRef(draft);
   const update = (next: PasteState) => {
@@ -66,14 +139,21 @@ export function useComposer(options: ComposerOptions) {
   const searchRef = useRef(search);
   searchRef.current = search;
   const [notice, setNotice] = useState('');
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(''), noticeTtl.current);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const [shellBusy, setShellBusy] = useState(false);
   const shellAbort = useRef<AbortController | null>(null);
   const accepting = useRef(false);
+  const acceptanceSequence = useRef(0);
   const pendingInput = useRef<Promise<void>>(Promise.resolve());
   const mounted = useRef(true);
   const sessionId = useRef(initialSession?.id);
   const menu = useAutocomplete();
   const busy = !!options.busy || shellBusy;
+  useEffect(() => client.onBackgroundTaskEvent(() => rerender()), [client]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -82,6 +162,7 @@ export function useComposer(options: ComposerOptions) {
     };
   }, []);
   useClientEvents({
+    subagent: () => rerender(),
     reactive: event => {
       // Session changes emit idle. Do not clone the full SDK session for token events.
       if (event.kind !== 'idle') return;
@@ -94,8 +175,18 @@ export function useComposer(options: ComposerOptions) {
       }
     },
   });
-  const report = (message: string) => {
+  /** Short footer message that disappears after `ms` (the default is the usual notice time). */
+  const flashSlot = (message: string, ms = 2500) => {
+    clearTimeout(slotTimer.current);
+    setSlotNotice(message);
+    slotTimer.current = setTimeout(() => setSlotNotice(''), ms);
+  };
+  const flash = (message: string, ms = 2500) => {
+    noticeTtl.current = ms;
     if (mounted.current) setNotice(message);
+  };
+  const report = (message: string) => {
+    flash(message);
     options.onNotice?.(message);
   };
   const context = useMemo(() => completionContext(draft.value, draft.cursor), [draft.value, draft.cursor]);
@@ -114,7 +205,16 @@ export function useComposer(options: ComposerOptions) {
   }, [client, context, menu.dismissed, search, options.workspaceAccess]);
   const items = completionData.items;
   const selected = Math.min(menu.selected, Math.max(0, items.length - 1));
-  const change = (next: PasteState, showMenu = true) => {
+  const change = (next: PasteState, showMenu = true, keepYank = false, keepKill = false) => {
+    if (!keepYank) yank.current = null;
+    if (!keepKill) lastKill.current = false;
+    const previous = draftRef.current;
+    if (previous.value !== next.value || previous.pastes !== next.pastes) {
+      undo.current.push(previous);
+      if (undo.current.length > 100) undo.current.shift();
+    }
+    escapeAt.current = null;
+    if (previous.value !== next.value) setDeletedHint(false);
     update(next);
     navigation.current = null;
     menu.setSelected(0);
@@ -127,23 +227,62 @@ export function useComposer(options: ComposerOptions) {
     }
     change(insertPaste(draftRef.current, text), false);
   };
-  const find = (query: string, before: number, saved: PasteState) => {
-    const index = searchHistory(entriesRef.current, query, before);
-    const next = {query, index, draft: saved};
+  const searchEntries = () => searchRef.current?.entries ?? [];
+  const matchesFor = (query: string) =>
+    searchEntries()
+      .map((e, i) => ({e, i}))
+      .filter(({e}) => e.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()))
+      .map(({i}) => i);
+  const loadSearch = (scope: PromptHistoryScope): PromptHistoryEntry[] => {
+    try {
+      return client.promptHistory({scope});
+    } catch {
+      return scope === 'session'
+        ? entriesRef.current
+            .slice()
+            .reverse()
+            .map((content, i) => ({
+              id: `local:${i}`,
+              sessionId: client.activeSession()?.id ?? '',
+              content,
+              timestamp: '',
+            }))
+        : [];
+    }
+  };
+  const setSearchState = (next: SearchState) => {
     searchRef.current = next;
     setSearch(next);
-    if (index >= 0) update(createPasteState(entriesRef.current[index]!));
   };
-  const searchQuery = (query: string) =>
-    find(query, entriesRef.current.length, searchRef.current?.draft ?? draftRef.current);
-  const searchOlder = () => {
+  const searchQuery = (query: string) => {
     const current = searchRef.current;
+    if (current) setSearchState({...current, query, selected: 0});
+  };
+  const searchMove = (step: number) => {
+    const current = searchRef.current;
+    if (!current) return;
+    const count = matchesFor(current.query).length;
+    setSearchState({...current, selected: Math.max(0, Math.min(count - 1, current.selected + step))});
+  };
+  const searchOpen = () => {
     menu.setDismissed(true);
-    find(
-      current?.query ?? '',
-      current && current.index >= 0 ? current.index : entriesRef.current.length,
-      current?.draft ?? draftRef.current,
-    );
+    if (searchRef.current) searchMove(1);
+    // The search starts from what is typed (first line), like the reference; Esc restores the draft.
+    else {
+      let scope: PromptHistoryScope = 'everywhere';
+      try {
+        client.promptHistory({scope});
+      } catch {
+        scope = 'session';
+      }
+      setSearchState({
+        query: expandPastes(draftRef.current).split('\n')[0] ?? '',
+        selected: 0,
+        draft: draftRef.current,
+        scope,
+        entries: loadSearch(scope),
+      });
+    }
   };
   const closeSearch = (restore: boolean) => {
     if (restore && searchRef.current) update(searchRef.current.draft);
@@ -157,13 +296,24 @@ export function useComposer(options: ComposerOptions) {
   };
   const accepted = (snapshot: PasteState, content: string) => {
     if (!mounted.current) return;
+    acceptanceSequence.current++;
     history.record(content);
-    if (draftRef.current === snapshot) change(createPasteState(), false);
+    undo.current = [];
+    setNotice('');
+    if (draftRef.current === snapshot) update(createPasteState());
   };
   const submitInternal = async (override?: string) => {
     const snapshot = draftRef.current;
     const content = (override ?? expandPastes(snapshot)).trim();
-    if (!content) return;
+    if (!content && !client.imageAttachments().length) return;
+    if (attaching.current) {
+      report('Image paste is still being prepared; draft kept.');
+      return;
+    }
+    if (client.imageAttachments().length && (busy || /^[/!#]/.test(content))) {
+      report('Images need an idle chat message; draft kept.');
+      return;
+    }
     if (content.startsWith('/') && !client.isSkillCommand(content)) {
       if (!options.onCommand) {
         report('Slash command routing is not connected; draft kept.');
@@ -192,6 +342,7 @@ export function useComposer(options: ComposerOptions) {
           return;
         }
         accepted(snapshot, content);
+        rerender();
         report(
           outcome.disposition === 'steered' ? 'Steering accepted.' : `Queued for next turn (${outcome.position}).`,
         );
@@ -225,8 +376,10 @@ export function useComposer(options: ComposerOptions) {
         // A denied/failed command remains visible and is never reported as successful.
         if (mounted.current) options.onShellResult?.(result);
         if (result.status === 'ok') accepted(snapshot, content);
-        report(
-          `Shell ${result.status}${result.code ? ` [${result.code}]` : ''}${result.sessionId ? ` · running session ${result.sessionId}` : ''}.`,
+        setNotice(
+          result.status === 'ok' && options.onShellResult
+            ? ''
+            : `Shell ${result.status}${result.code ? ` [${result.code}]` : ''}${result.sessionId ? ` · running session ${result.sessionId}` : ''}.`,
         );
       } else if (content.startsWith('#')) {
         const memory = content.slice(1).trim();
@@ -260,8 +413,16 @@ export function useComposer(options: ComposerOptions) {
     await pendingInput.current;
   };
   const enter = () => {
+    if (dismissShortcuts()) return;
     if (searchRef.current) {
-      closeSearch(searchRef.current.index < 0);
+      const found = matchesFor(searchRef.current.query)[searchRef.current.selected];
+      if (found === undefined) closeSearch(true);
+      else {
+        const text = searchEntries()[found]!.content;
+        searchRef.current = null;
+        setSearch(null);
+        change(createPasteState(text), false);
+      }
       return;
     }
     const current = draftRef.current;
@@ -284,24 +445,39 @@ export function useComposer(options: ComposerOptions) {
         return;
       }
       const definition = SLASH_COMMANDS.find(command => command.command === chosen.label);
-      void submit(acceptSlashSelection(expandPastes(current), definition));
+      const typed = expandPastes(current);
+      // A complete alias (`/cost`, `/stats`) is run as typed: the host maps it to its own panel tab.
+      const alias = definition?.aliases.some(name => name.toLowerCase() === typed.trim().toLowerCase());
+      void submit(alias ? typed : acceptSlashSelection(typed, definition));
       return;
     }
     void submit();
   };
+  const queued = () => client.queuedInput().map(input => input.content);
   const navigate = (direction: -1 | 1) => {
-    if (searchRef.current) {
-      if (direction < 0) searchOlder();
-      return;
-    }
-    if (items.length) {
-      menu.setSelected((selected + direction + items.length) % items.length);
-      return;
-    }
     const current = draftRef.current;
+    // Multi-line input: the caret moves between lines first; history starts at the first/last line.
     const vertical = verticalMove(current, direction, options.inputWidth ?? 74);
-    if (vertical && !navigation.current) {
+    if (vertical) {
       update(vertical);
+      return;
+    }
+    const waiting = queued();
+    if (direction < 0 && waiting.length) {
+      try {
+        // The store checks eligibility and removes only unclaimed text in the same transaction.
+        // With an empty draft a sole shell can also be reclaimed, retaining its ! mode prefix.
+        const entries = client.retractQueuedEntries({includeShell: !current.value, shellOnlyWhenAlone: true});
+        const reclaimed = entries.map(e => e.content).join('\n');
+        if (reclaimed) change(createPasteState([reclaimed, expandPastes(current)].filter(Boolean).join('\n')), false);
+        else {
+          if (waiting.some(text => text.startsWith('!')))
+            report('Queued shell commands stay queued while other input is present.');
+          rerender();
+        }
+      } catch {
+        report('Queued input could not be retracted; draft kept.');
+      }
       return;
     }
     const entries = entriesRef.current;
@@ -312,68 +488,427 @@ export function useComposer(options: ComposerOptions) {
     update(index === entries.length ? nav.draft : createPasteState(entries[index]!));
     menu.setDismissed(true);
   };
-  useKeymap(
-    {
-      submit: enter,
-      newline: () => change(insertText(draftRef.current, '\n'), false),
-      previous: () => navigate(-1),
-      next: () => navigate(1),
-      history: searchOlder,
-    },
-    {isActive: options.isActive},
-  );
-  const input = (text: string, key: Key) => {
-    if (key.eventType === 'release' || keyAction(text, key)) return;
-    if (searchRef.current) {
-      if (key.ctrl && text === 'g') closeSearch(true);
-      else if (key.backspace || key.delete)
-        searchQuery(edit(createPasteState(searchRef.current.query), 'backspace').value);
-      else if (!key.ctrl && !key.meta && text) searchQuery(searchRef.current.query + safeText(text));
-      return;
-    }
-    if (key.super || key.hyper) return;
+  const pushKill = (text: string, backward = false) => {
+    if (!text) return;
+    const [top, ...rest] = killRing.current;
+    killRing.current =
+      lastKill.current && top !== undefined
+        ? [backward ? text + top : top + text, ...rest]
+        : [text, ...killRing.current].slice(0, 10);
+  };
+  const kill = (action: EditAction) => {
     const current = draftRef.current;
-    if ((key.meta && key.return) || (key.ctrl && text === 'j')) {
-      change(insertText(current, '\n'), false);
-      return;
-    }
-    if (key.tab && !key.shift) {
-      const item = items[selected];
-      if (item) acceptCompletion(item);
-      return;
-    }
-    if (key.ctrl) {
-      const action = ({a: 'start', e: 'end', k: 'killEnd', u: 'killStart', w: 'killWord'} as const)[text as 'a'];
-      if (action) change(edit(current, action), false);
-      return;
-    }
-    if (key.meta && (key.leftArrow || key.rightArrow)) {
-      const cursor = key.leftArrow
-        ? current.value.slice(0, current.cursor).replace(/\S+\s*$/, '').length
-        : current.cursor +
-          (/^\s*\S+\s*/.exec(current.value.slice(current.cursor))?.[0].length ?? current.value.length - current.cursor);
-      // Word movement snaps across paste markers as one unit.
-      const paste = current.pastes.find(item => cursor > item.start && cursor < item.end);
-      change(
-        {...current, cursor: paste ? (key.leftArrow ? paste.start : paste.end) : cursor, selectionAnchor: undefined},
-        false,
-      );
-    } else if (key.meta) return;
-    else if (key.leftArrow || key.rightArrow) change(moveCursor(current, key.leftArrow ? -1 : 1, key.shift), false);
-    else if (key.home || key.end) {
-      if (!current.value) options.onEmptyHomeEnd?.(key.home ? 'start' : 'end');
-      else change(edit(current, key.home ? 'start' : 'end'), false);
-    } else if (key.backspace || key.delete) change(edit(current, key.backspace ? 'backspace' : 'delete'));
-    else if (text) {
-      if (text.length > 1 && /[\r\n]/.test(text)) paste(text);
-      else change(insertText(current, safeText(text)));
+    const span = editSpan(current, action);
+    if (!span) return;
+    pushKill(spanText(current, span[0], span[1]), action !== 'killEnd' && action !== 'killWordForward');
+    change(replaceRange(current, span[0], span[1], ''), false, false, true);
+    lastKill.current = true;
+    // Killing a line part (Ctrl+U / Ctrl+K) offers Ctrl+Y in the slot, like clearing the input does.
+    if (action === 'killStart' || action === 'killEnd') setDeletedHint(true);
+  };
+  const yankText = () => {
+    const current = draftRef.current;
+    const text = killRing.current[0];
+    if (!text) return;
+    const start = Math.min(current.cursor, current.selectionAnchor ?? current.cursor);
+    change(insertText(current, text), false, true);
+    yank.current = {start, length: text.length, index: 0};
+  };
+  const yankPop = () => {
+    const current = draftRef.current;
+    const last = yank.current;
+    const ring = killRing.current;
+    if (!last || ring.length < 2 || current.cursor !== last.start + last.length) return;
+    const index = (last.index + 1) % ring.length;
+    change(replaceRange(current, last.start, last.start + last.length, ring[index]!), false, true);
+    yank.current = {start: last.start, length: ring[index]!.length, index};
+  };
+  const nowMs = () => Date.now();
+  const undoEdit = () => {
+    const previous = undo.current.pop();
+    if (previous) {
+      update(previous);
+      menu.setDismissed(true);
     }
   };
-  useTextInput(input, {isActive: options.isActive});
+  const stashPrompt = () => {
+    const current = draftRef.current;
+    if (current.value) {
+      if (stash.current) {
+        report('A prompt is already stashed; restore it from an empty input first.');
+        return;
+      }
+      stash.current = current;
+      change(createPasteState(), false);
+      report('Prompt stashed. Press Ctrl+S on empty input to restore.');
+    } else if (stash.current) {
+      change(stash.current, false);
+      stash.current = null;
+      report('Prompt restored.');
+    }
+  };
+  const bridge = (handler: (() => void) | undefined, feature: string) => {
+    if (handler) handler();
+    else report(`Not implemented: ${feature}.`);
+  };
+  /** Ctrl+X Ctrl+K: stop every running background subagent; the first press asks, a second within 3 s stops them. */
+  const killAgents = () => {
+    const running = client.subagents().filter(agent => agent.status === 'running' && agent.background);
+    if (!running.length) {
+      flash('No background agents are running.');
+      return;
+    }
+    const now = nowMs();
+    if (killAt.current === null || now - killAt.current > 3000) {
+      killAt.current = now;
+      flashSlot('Press ctrl+x ctrl+k again to stop background agents', 3000);
+      return;
+    }
+    killAt.current = null;
+    let stopped = 0;
+    try {
+      for (const agent of running) if (client.stopSubagent(agent.id)) stopped++;
+      report(`Stopped ${stopped} background agent${stopped === 1 ? '' : 's'}.`);
+    } catch {
+      report('Not implemented: this backend cannot stop subagents.');
+    }
+  };
+  /** Ctrl+Enter / Ctrl+X Ctrl+S: send what is queued plus the draft now (the turn is interrupted by the host). */
+  const sendNow = () => {
+    const current = draftRef.current;
+    const hasDraft = !!current.value.trim() || client.imageAttachments().length > 0;
+    if (!busy && hasDraft) {
+      void submit();
+      return;
+    }
+    if (!options.onSendQueuedNow) {
+      report('Not implemented: sending queued messages now needs a host bridge.');
+      return;
+    }
+    if (hasDraft) {
+      const before = acceptanceSequence.current;
+      void submit().then(() => {
+        if (acceptanceSequence.current > before) options.onSendQueuedNow?.();
+      });
+    } else options.onSendQueuedNow();
+  };
+  const cycleEffort = (up: boolean) => {
+    const efforts = status.activeModel?.reasoningEfforts ?? [];
+    if (!efforts.length) return false;
+    const at = efforts.indexOf(status.reasoningEffort ?? '');
+    const next = Math.max(0, Math.min(efforts.length - 1, at + (up ? 1 : -1)));
+    try {
+      client.setReasoningEffort(efforts[next]!);
+    } catch {
+      report('Effort change rejected; current effort kept.');
+    }
+    return true;
+  };
+  const runningTasks = () => {
+    const tasks = client.backgroundTasks().filter(task => task.status === 'running');
+    // Foreground children still have footer controls, even before they become background tasks.
+    return [
+      ...tasks,
+      ...client
+        .subagents()
+        .filter(agent => agent.status === 'running' && !tasks.some(task => task.id === agent.id))
+        .map(agent => ({...agent, kind: 'agent' as const})),
+    ];
+  };
+  const runningAgents = runningTasks;
+  const footerAgent = () => {
+    const list = runningAgents();
+    return footer === null || !list.length ? undefined : list[Math.min(footer, list.length - 1)];
+  };
+  /** Footer keys apply only while an agent is selected; otherwise the key falls through to the input. */
+  const inFooter = (fn: () => void) => () => {
+    if (footer === null || searchRef.current) return false;
+    if (!runningAgents().length) {
+      setFooter(null);
+      return false;
+    }
+    fn();
+  };
+  const moveFooter = (step: number) => {
+    const count = runningAgents().length;
+    setFooter(at => ((((at ?? 0) + step) % count) + count) % count);
+  };
+  /** Every composer binding first closes the `?` table and is ignored while the history search owns the keys. */
+  const guarded = (fn: (stroke: Keystroke) => void) => (stroke: Keystroke) => {
+    if (dismissShortcuts() || searchRef.current) return;
+    fn(stroke);
+  };
+  const acceptSearch = () => {
+    const current = searchRef.current;
+    if (!current) return false;
+    const found = matchesFor(current.query)[current.selected];
+    if (found === undefined) closeSearch(true);
+    else {
+      const text = searchEntries()[found]!.content;
+      searchRef.current = null;
+      setSearch(null);
+      change(createPasteState(text), false);
+    }
+  };
+  const searching =
+    <T extends unknown[]>(fn: (...args: T) => void) =>
+    (...args: T) => {
+      if (!searchRef.current) return false;
+      fn(...args);
+    };
+  const listing = (fn: () => void) => () => {
+    if (!items.length || searchRef.current) return false;
+    fn();
+  };
+  /** Everything no binding wants: typing, cursor keys and the readline-style editing keys. Returns true when consumed. */
+  const onKey = (text: string, key: Key): boolean => {
+    if (key.eventType === 'release') return true;
+    if (shortcutsRef.current) {
+      dismissShortcuts();
+      return true;
+    }
+    const current = draftRef.current;
+    if (searchRef.current) {
+      if (key.backspace || key.delete) searchQuery(edit(createPasteState(searchRef.current.query), 'backspace').value);
+      else if (!key.ctrl && !key.meta && !key.escape && !key.return && !key.tab && text)
+        searchQuery(searchRef.current.query + safeText(text));
+      return true;
+    }
+    if (selectedImage !== null) {
+      const images = client.imageAttachments();
+      if (key.leftArrow || key.rightArrow)
+        setSelectedImage(at => Math.max(0, Math.min(images.length - 1, (at ?? 0) + (key.leftArrow ? -1 : 1))));
+      else if (key.backspace || key.delete) {
+        const image = images[selectedImage];
+        if (image) client.removeImageAttachment(image.id);
+        setSelectedImage(images.length > 1 ? Math.min(selectedImage, images.length - 2) : null);
+        rerender();
+      } else {
+        setSelectedImage(null);
+        if (key.escape || key.downArrow) return true;
+      }
+      if (key.leftArrow || key.rightArrow || key.backspace || key.delete) return true;
+    }
+    if (!key.ctrl && !key.meta && key.leftArrow && current.cursor === 0 && client.imageAttachments().length) {
+      setSelectedImage(client.imageAttachments().length - 1);
+      return true;
+    }
+    if (key.super || key.hyper) return true;
+    if (!key.ctrl && !key.meta && text === '?' && !current.value) {
+      shortcutsRef.current = true;
+      setShortcuts(true);
+      return true;
+    }
+    if (key.escape || key.return || key.tab) return true;
+    if (key.shift && (key.upArrow || key.downArrow) && !key.ctrl && !key.meta) {
+      if (cycleEffort(key.upArrow)) return true;
+      // A model without effort levels: Shift+↑/↓ extends the selection by a line.
+      const vertical = verticalMove(current, key.upArrow ? -1 : 1, options.inputWidth ?? 74);
+      const target = vertical ? vertical.cursor : key.upArrow ? 0 : current.value.length;
+      change(moveTo(current, target, true), false);
+      return true;
+    }
+    if (key.meta || key.ctrl) {
+      const letter = text.toLowerCase();
+      if (key.backspace || (key.meta && key.delete)) kill('deleteWordBack');
+      else if (key.leftArrow || key.rightArrow || (key.meta && (letter === 'b' || letter === 'f'))) {
+        const left = key.leftArrow || letter === 'b';
+        const cursor = left ? wordLeft(current.value, current.cursor) : wordRight(current.value, current.cursor);
+        change(moveTo(current, cursor, key.shift), false);
+      } else if (key.meta && letter === 'd') kill('killWordForward');
+      else if (key.meta && letter === 'y') yankPop();
+      else if (key.ctrl && letter === 'y') yankText();
+      else if (key.ctrl && letter === 'a') change(edit(current, 'start'), false);
+      else if (key.ctrl && letter === 'e') change(edit(current, 'end'), false);
+      else if (key.ctrl && letter === 'k') kill('killEnd');
+      else if (key.ctrl && letter === 'u') kill('killStart');
+      else if (key.ctrl && letter === 'w') kill('killWord');
+      return true;
+    }
+    if (key.leftArrow || key.rightArrow) change(moveCursor(current, key.leftArrow ? -1 : 1, key.shift), false);
+    else if (key.home || key.end) {
+      if (key.shift) change(moveTo(current, lineEdge(current, key.home ? 'start' : 'end'), true), false);
+      else if (!current.value) options.onEmptyHomeEnd?.(key.home ? 'start' : 'end');
+      else change(edit(current, key.home ? 'start' : 'end'), false);
+    } else if (key.upArrow || key.downArrow || key.pageUp || key.pageDown) return true;
+    else if (key.backspace || key.delete) change(edit(current, key.backspace ? 'backspace' : 'delete'));
+    else if (text) {
+      if (text.length > 1 && /[\r\n]/.test(text)) paste(text);
+      else {
+        const next = insertText(current, safeText(text));
+        const code = text === ':' ? emojiShortcode(next.value, next.cursor) : undefined;
+        change(code ? replaceRange(next, code.from, next.cursor, code.emoji) : next);
+      }
+    }
+    return true;
+  };
+  const closeFooter = inFooter(() => {
+    const agent = footerAgent();
+    if (!agent) return;
+    try {
+      const stopping =
+        agent.kind === 'agent' && !client.backgroundTasks().some(task => task.id === agent.id)
+          ? Promise.resolve(client.stopSubagent(agent.id))
+          : client.stopBackgroundTask(agent.id);
+      void stopping
+        .then(stopped => {
+          report(stopped ? 'Stopping task…' : 'Task is not running.');
+        })
+        .catch(() => report('Task could not be stopped.'));
+    } catch {
+      report('Not implemented: this backend cannot stop subagents.');
+    }
+  });
+  useKeybindings(
+    {
+      Global: {
+        'history:search': () => {
+          if (!dismissShortcuts()) searchOpen();
+        },
+        'app:toggleTodos': guarded(() => bridge(options.onToggleTasks, 'task visibility is not connected')),
+      },
+      Chat: {
+        'chat:submit': guarded(() => enter()),
+        'chat:queueSubmit': guarded(() => void submit()),
+        'chat:sendNow': guarded(sendNow),
+        'chat:newline': guarded(() => change(insertText(draftRef.current, '\n'), false)),
+        'chat:modelPicker': guarded(() => {
+          if (options.onCommand) {
+            void (async () => {
+              try {
+                await options.onCommand!('/model');
+              } catch {
+                report('Model picker failed; draft kept.');
+              }
+            })();
+          } else report('Not implemented: model picker is not connected.');
+        }),
+        'chat:fastMode': guarded(() => flashSlot('Not implemented: fast mode (no provider API for it)')),
+        'chat:thinkingToggle': guarded(() =>
+          flashSlot('Not implemented: extended-thinking toggle (use /effort for the reasoning effort)'),
+        ),
+        'chat:clearInput': guarded(() => bridge(options.onRedraw, 'screen redraw bridge')),
+        'chat:undo': guarded(undoEdit),
+        'chat:externalEditor': guarded(() => bridge(options.onEditor, '$EDITOR bridge')),
+        'chat:stash': guarded(stashPrompt),
+        'chat:imagePaste': guarded(() => {
+          if (!options.onPasteImage && !options.onReadClipboardImage) {
+            flashSlot('Not implemented: image clipboard is unavailable on this host');
+            return;
+          }
+          if (attaching.current) return;
+          if (busy) {
+            report('Wait for the active turn before attaching an image.');
+            return;
+          }
+          attaching.current = true;
+          const owner = [
+            client.activeSession()?.id,
+            client.status().activeAccount?.id,
+            client.status().activeModel?.id,
+          ].join(':');
+          void (async () => {
+            try {
+              const image = options.onReadClipboardImage ? await options.onReadClipboardImage() : undefined;
+              if (!options.onReadClipboardImage) options.onPasteImage?.();
+              if (image) {
+                const currentOwner = [
+                  client.activeSession()?.id,
+                  client.status().activeAccount?.id,
+                  client.status().activeModel?.id,
+                ].join(':');
+                if (!mounted.current || owner !== currentOwner) {
+                  report('Image paste cancelled because the session changed.');
+                  return;
+                }
+                await client.attachImage(image);
+                rerender();
+              }
+            } catch (error) {
+              report(`Image paste failed [${error instanceof FutrynError ? error.code : 'ERROR'}]; draft kept.`);
+            } finally {
+              attaching.current = false;
+            }
+          })();
+        }),
+        'chat:suspend': guarded(() => bridge(options.onSuspend, 'terminal suspend bridge')),
+        'chat:killAgents': guarded(killAgents),
+        'task:background': guarded(() => {
+          try {
+            if (options.onBackgroundTask) options.onBackgroundTask();
+            else
+              report(
+                client.backgroundCurrentTask()
+                  ? 'Task moved to background.'
+                  : 'No foreground task can be moved to background.',
+              );
+          } catch {
+            report('Task could not be moved to background.');
+          }
+        }),
+        'history:previous': guarded(() => navigate(-1)),
+        'history:next': guarded(() => {
+          // Down on an empty input with nothing to scroll to moves focus to the footer's agent entry.
+          if (!draftRef.current.value && !navigation.current && !queued().length && runningAgents().length)
+            setFooter(0);
+          else navigate(1);
+        }),
+      },
+      Footer: {
+        'footer:next': inFooter(() => moveFooter(1)),
+        'footer:previous': inFooter(() => moveFooter(-1)),
+        'footer:up': inFooter(() => setFooter(null)),
+        'footer:clearSelection': inFooter(() => setFooter(null)),
+        'footer:down': inFooter(() =>
+          bridge(
+            footerAgent()?.kind === 'shell' ? options.onOpenBackgroundTasks : options.onOpenAgents,
+            'task panel is not connected',
+          ),
+        ),
+        'footer:open': inFooter(() =>
+          bridge(
+            footerAgent()?.kind === 'shell' ? options.onOpenBackgroundTasks : options.onOpenAgents,
+            'task panel is not connected',
+          ),
+        ),
+        'footer:close': closeFooter,
+        'footer:stop': closeFooter,
+      },
+      Autocomplete: {
+        'autocomplete:accept': listing(() => acceptCompletion(items[selected]!)),
+        'autocomplete:dismiss': listing(() => menu.setDismissed(true)),
+        'autocomplete:previous': listing(() => menu.setSelected((selected - 1 + items.length) % items.length)),
+        'autocomplete:next': listing(() => menu.setSelected((selected + 1) % items.length)),
+      },
+      HistorySearch: {
+        'historySearch:previous': searching(() => searchMove(1)),
+        'historySearch:next': searching(() => searchMove(-1)),
+        'historySearch:accept': searching(acceptSearch),
+        'historySearch:cancel': searching(() => closeSearch(true)),
+        'historySearch:scope': searching(() => {
+          const current = searchRef.current;
+          if (!current) return;
+          const scopes: PromptHistoryScope[] = ['session', 'project', 'everywhere'];
+          const scope = scopes[(scopes.indexOf(current.scope) + 1) % scopes.length]!;
+          setSearchState({...current, scope, entries: loadSearch(scope), selected: 0});
+          setNotice('');
+        }),
+      },
+    },
+    {isActive: options.isActive, onKey},
+  );
   // Ink 8 separates bracketed paste from keystrokes. Respect the phase-0 input scope.
   usePaste(paste, {isActive: useInputEnabled(options.isActive)});
+  const remember = (state: PasteState) => {
+    pushKill(expandPastes(state));
+  };
   /** Wire to InkApp.onInterrupt; Shell is the sole owner of Esc. */
   const interrupt = () => {
+    if (dismissShortcuts()) return true;
+    if (selectedImage !== null) {
+      setSelectedImage(null);
+      return true;
+    }
     if (shellAbort.current) {
       shellAbort.current.abort();
       return true;
@@ -387,19 +922,96 @@ export function useComposer(options: ComposerOptions) {
       menu.setDismissed(true);
       return true;
     }
-    if (draftRef.current.value) {
-      change(createPasteState(), false);
-      return true;
+    const now = Date.now();
+    if (escapeAt.current !== null && now - escapeAt.current < 1500) {
+      escapeAt.current = null;
+      if (draftRef.current.value) {
+        // The cleared draft goes to the history (Up brings it back) and to the kill ring (Ctrl+Y).
+        history.record(expandPastes(draftRef.current));
+        remember(draftRef.current);
+        change(createPasteState(), false);
+        setNotice('');
+        setDeletedHint(true);
+      } else if (options.onRewind) options.onRewind();
+      else report('Not implemented: conversation rewind is not connected.');
+    } else {
+      escapeAt.current = now;
+      flash('Esc again to clear', 1500);
     }
-    return false;
+    return true;
   };
   return {
+    status,
+    context: client.context(),
+    shortcuts,
+    shortcutColumns: footerShortcutColumns(!!status.activeModel?.reasoningEfforts?.length),
+    /** Shell must call this before exit; its startup/teardown lifecycle stays authoritative. */
+    confirmExit: () => {
+      dismissShortcuts();
+      if (searchRef.current) {
+        closeSearch(true);
+        return false;
+      }
+      if (draftRef.current.value) {
+        // Ctrl+C on text clears it (Ctrl+Y brings it back); it does not arm the exit.
+        remember(draftRef.current);
+        change(createPasteState(), false);
+        setNotice('');
+        setDeletedHint(true);
+        exitAt.current = null;
+        return false;
+      }
+      const now = Date.now();
+      if (exitAt.current !== null && now - exitAt.current < 800) {
+        exitAt.current = null;
+        return true;
+      }
+      exitAt.current = now;
+      flash('Press Ctrl-C again to exit', 800);
+      return false;
+    },
+    /**
+     * Ctrl+D: with text it deletes the character after the cursor; on an empty input the first press shows a hint and a
+     * second one within 800 ms returns true (the shell then exits).
+     */
+    pressEof: () => {
+      dismissShortcuts();
+      const current = draftRef.current;
+      if (current.value) {
+        exitDAt.current = null;
+        change(edit(current, 'delete'));
+        return false;
+      }
+      const now = nowMs();
+      if (exitDAt.current !== null && now - exitDAt.current < 800) {
+        exitDAt.current = null;
+        return true;
+      }
+      exitDAt.current = now;
+      flash('Press Ctrl-D again to exit', 800);
+      return false;
+    },
+    flash,
+    /** Right-aligned hint above the input: set after Ctrl+C / Esc Esc removed text. */
+    pasteDeletedHint: deletedHint,
+    /** Messages waiting behind the running turn, oldest first. */
+    queued: queued(),
+    agents: client.backgroundTasks().filter(task => task.kind === 'agent' && task.status === 'running').length,
+    backgroundShells:
+      client.backgroundTasks().filter(task => task.kind === 'shell' && task.status === 'running').length +
+      (options.backgroundShells ?? 0),
+    images: client.imageAttachments(),
+    selectedImage,
     draft,
     setDraft: change,
     content: useMemo(() => expandPastes(draft), [draft]),
     history: history.entries,
     search,
-    notice,
+    slotNotice,
+    notice:
+      footer !== null && footerAgent()
+        ? `${footerAgent()!.kind} ${Math.min(footer, runningAgents().length - 1) + 1}/${runningAgents().length}: ${safeText(footerAgent()!.description).slice(0, 40)} · enter to open · x to stop · esc to leave`
+        : notice,
     busy,
     items,
     selected,

@@ -133,22 +133,22 @@ test('SDK hooks observe updates, retain fresh callbacks and unsubscribe', async 
   function Probe({label}: {label: string}) {
     const status = useStatus();
     useClientEvents({reactive: () => calls.push(label)});
-    return <Text>{status.permissionPreset}</Text>;
+    return <Text>{status.permissionMode}</Text>;
   }
   const view = renderInk(<Probe label="first" />, {fixture});
   await settle();
-  fixture.client.setPermissionPreset('read-only');
+  fixture.client.setPermissionMode('plan');
   await settle();
-  expect(view.lastFrame()).toContain('read-only');
+  expect(view.lastFrame()).toContain('plan');
   view.rerender(<Probe label="second" />);
   await settle();
-  fixture.client.setPermissionPreset('auto');
+  fixture.client.setPermissionMode('acceptEdits');
   await settle();
   expect(calls.at(-1)).toBe('second');
   view.unmount();
   await settle();
   const count = calls.length;
-  fixture.client.setPermissionPreset('read-only');
+  fixture.client.setPermissionMode('plan');
   await settle();
   expect(calls).toHaveLength(count);
 });
@@ -162,9 +162,9 @@ test('non-TTY writes one Ink frame then exits', async () => {
     output += chunk.toString();
   });
   await runInkTui({client: fixture.client, stdout, stdin, env: {NO_COLOR: '1'}});
-  expect(output).toContain('Futryn');
+  expect(output).toContain('Cosmew');
   expect(output).not.toContain('\u001b');
-  expect(output.trim().split('Futryn')).toHaveLength(2);
+  expect(output.trim().split('Cosmew')).toHaveLength(2);
   expect(fixture.client.status().toolsEnabled).toBe(false);
   expect(stdin.listenerCount('data')).toBe(0);
 });
@@ -230,7 +230,7 @@ test('overlay input never reaches the background composer', async () => {
   await settle();
   view.stdin.write('x');
   await settle();
-  expect(view.lastFrame()).toContain('Filter: x');
+  expect(view.lastFrame()).toContain('⌕ x');
   expect(view.lastFrame()).not.toContain('draft:x');
   view.stdin.write('\u001b');
   await settle();
@@ -263,8 +263,8 @@ test('theme updates propagate and no-color disables syntax color', async () => {
 });
 
 test('hooks deliver interaction and subagent events, then remove both observers', async () => {
-  const {FutrynClient} = await import('@futryn/sdk');
-  let emitNotice: ((notice: import('@futryn/contracts').SubagentNotice) => void) | undefined;
+  const {FutrynClient} = await import('@cosmew/sdk');
+  let emitNotice: ((notice: import('@cosmew/contracts').SubagentNotice) => void) | undefined;
   const fixture = createClientFixture({
     observeSubagentNotices: listener => {
       emitNotice = listener;
@@ -340,11 +340,11 @@ test('public runtime entry is Ink without any opt-in and writes one frame withou
   expect(exit).toBe(0);
   expect(stdout).toContain('Ink preview');
   expect(stdout).not.toContain('\u001b');
-  expect(stdout.trim().split('Futryn')).toHaveLength(2);
+  expect(stdout.trim().split('Cosmew')).toHaveLength(2);
 });
 
 test('keymap ignores releases and modified navigation', async () => {
-  const {keyAction, KEYMAP} = await import('../hooks');
+  const {fromInk, defaultKeymap, lookup} = await import('../hooks');
   const key: import('ink').Key = {
     upArrow: false,
     downArrow: false,
@@ -367,12 +367,16 @@ test('keymap ignores releases and modified navigation', async () => {
     capsLock: false,
     numLock: false,
   };
-  expect(keyAction('o', {...key, ctrl: true})).toBe('expand');
-  expect(keyAction('', {...key, tab: true, shift: true})).toBe('permissions');
-  expect(keyAction('', {...key, return: true, shift: true})).toBe('newline');
-  expect(keyAction('', {...key, escape: true, eventType: 'release'})).toBeUndefined();
-  expect(keyAction('', {...key, upArrow: true, meta: true})).toBeUndefined();
-  expect(new Set(KEYMAP.map(entry => entry.action)).size).toBe(KEYMAP.length);
+  const keymap = defaultKeymap();
+  const action = (context: 'Global' | 'Chat', input: string, k: import('ink').Key) => {
+    const stroke = fromInk(input, k);
+    return stroke ? lookup(keymap, context, [stroke]) : undefined;
+  };
+  expect(action('Global', 'o', {...key, ctrl: true})).toBe('app:toggleTranscript');
+  expect(action('Chat', '', {...key, tab: true, shift: true})).toBe('chat:cycleMode');
+  expect(action('Chat', '', {...key, return: true, shift: true})).toBe('chat:newline');
+  expect(fromInk('', {...key, escape: true, eventType: 'release'})).toBeUndefined();
+  expect(action('Chat', '', {...key, upArrow: true, meta: true})).toBeUndefined();
 });
 
 test('syntax highlighting uses theme colors and preserves code text', async () => {
@@ -392,7 +396,7 @@ test('picker sanitizes initial filter and placeholder terminal commands', async 
     <ListPicker items={[{id: 'a', label: 'Alpha'}]} initialQuery={'\u001b]52;c;evil\u0007Alpha'} onSelect={() => {}} />,
   );
   await settle();
-  expect(view.lastFrame()).toContain('1. Alpha');
+  expect(view.lastFrame()).toMatch(/❯ +Alpha/);
   expect(view.lastFrame()).not.toContain('\u001b');
   view.rerender(
     <ListPicker key="placeholder" items={[]} placeholder={'\u001b]52;c;evil\u0007Filter'} onSelect={() => {}} />,

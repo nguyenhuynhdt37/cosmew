@@ -1,3 +1,4 @@
+import {isCodingModel} from '@cosmew/contracts';
 import {parseSlashCommand} from './commands';
 import {summarizeUsage} from './telemetry';
 import {quotaItems, type AccountLimits, type FetchAccountLimits} from './limits';
@@ -9,7 +10,20 @@ import {
   partialAppearanceSchema,
   permissionPromptResolutionSchema,
   permissionPromptRequestSchema,
+  type HooksSnapshot,
+  type RetractQueuedOptions,
+  type QueuedInputEntry,
+  type PromptHistoryScope,
+  type PromptHistoryEntry,
+  type HookRanEvent,
+  type McpServersSnapshot,
+  type BackgroundTask,
+  type BackgroundTaskEvent,
   type Account,
+  type CheckpointView,
+  type RewindScope,
+  type RewindOutcome,
+  type Attachment,
   type CommandOutputChunk,
   type ToolResult,
   type SkillsReport,
@@ -33,20 +47,21 @@ import {
   type PermissionMode,
   type PermissionKind,
   type PlanState,
+  type PlanProposal,
+  type PlanApprovalResolution,
+  type PlanApprovalOutcome,
   type PendingQuestion,
   type UserAnswers,
   type UserInputOutcome,
   type UserQuestion,
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
-  APPROVAL_POLICY_FOR_MODE,
   COMMAND_RULE_TOOLS,
-  PERMISSION_PRESETS,
-  SANDBOX_MODES,
-  permissionPresetFor,
-  type PermissionPreset,
-  type PermissionPresetId,
-  type SandboxModeSetting,
+  PERMISSION_MODE_CYCLE,
+  PERMISSION_SETTINGS_SCOPES,
+  type PermissionSettingsPort,
+  type PermissionSettingsScope,
+  type PermissionSettingsSnapshot,
   turnBudgetSchema,
   type TurnBudget,
   executionBackendFor,
@@ -54,6 +69,8 @@ import {
   permissionRuleDecision,
   permissionRuleSchema,
   isSafeAlwaysRule,
+  DOMAIN_PATTERN,
+  domainAllowed,
   type CompactionOutcome,
   type PermissionRuleEffect,
   type PermissionRuleSet,
@@ -72,7 +89,17 @@ import {
   type Usage,
   type WorkspaceDiffFile,
   type WorkspaceDiffReport,
-} from '@futryn/contracts';
+  type WorkspaceDiffOptions,
+} from '@cosmew/contracts';
+
+export type ImageAttachmentInput = {mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'} & (
+  {data: string; path?: never} | {path: string; data?: never}
+);
+export interface ImageAttachmentView {
+  id: string;
+  label: string;
+  mediaType: ImageAttachmentInput['mediaType'];
+}
 
 export type AgentMode = 'chat' | 'plan' | 'review';
 
@@ -88,12 +115,18 @@ export type ReactiveAgentEventKind =
   | 'done'
   /** Wave 1 notifications (contract 1.19); they never replace the current activity state. */
   | 'plan.updated'
+  | 'plan.proposed'
+  | 'plan.resolved'
   | 'question.asked'
   | 'question.answered'
   /** Wave 2 S5a subagent notifications (contract 1.32); they never replace the current activity state. */
   | 'subagent.started'
   | 'subagent.progress'
-  | 'subagent.finished';
+  | 'subagent.finished'
+  | 'task.started'
+  | 'task.updated'
+  | 'task.finished'
+  | 'hook.ran';
 
 export interface ReactiveAgentEvent {
   seq: number;
@@ -110,7 +143,7 @@ export interface BackendCapabilitiesReport {
   workspaceDiff: 'implemented';
   permissionDialog: 'implemented';
   generalToolsExecution: 'not-implemented';
-  mcpIntegration: 'not-implemented';
+  mcpIntegration: 'partial' | 'not-implemented';
   pluginHost: 'not-implemented';
   delegatedSubagents: 'not-implemented';
 }
@@ -131,21 +164,45 @@ export interface TerminalRuntimeReport {
   label: string;
   available: boolean;
   reason?: string;
-  sandbox: SandboxModeSetting | 'unavailable';
-  escalation: 'on-request' | 'never';
+  /** `enabled`: OS sandbox with the domain-filtering proxy; `disabled`: `sandbox.enabled` is false in settings. */
+  sandbox: 'enabled' | 'disabled' | 'unavailable';
+  /** `sandbox.allowUnsandboxedCommands` is not false (the `dangerouslyDisableSandbox` escape hatch exists). */
+  unsandboxedAllowed: boolean;
   limitations: string[];
+}
+
+/** What `/mcp` may show. No command line, environment, URL or headers. */
+export interface McpStatusReport {
+  configPath: string;
+  servers: {name: string; transport: 'stdio' | 'http'; state: 'connected' | 'failed'; tools: number; error?: string}[];
+  problems: string[];
 }
 
 export interface FutrynBackendPorts {
   workspace: string;
+  checkpoints?(sessionId: string): CheckpointView[];
+  rewindCheckpoint?(
+    sessionId: string,
+    id: string,
+    scope: RewindScope,
+    signal?: AbortSignal,
+    instructions?: string,
+  ): Promise<RewindOutcome>;
+  prepareImage?(input: ImageAttachmentInput): Promise<Attachment>;
   skills?(): SkillsReport;
   memories?(): MemoryInfo[];
   memoryDirectory?(): string | null;
   openMemoryDirectory?(): Promise<void>;
   memoryAction?(action: 'read' | 'delete' | 'write', name: string, entry?: MemoryWrite): Promise<ToolResult>;
   terminalRuntime?(): TerminalRuntimeReport;
-  /** Names of the Futryn tools actually offered now (folder consent + runtime availability). */
+  /** Names of the Cosmew tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
+  /**
+   * User MCP servers (ADR 0068). Present when this process can connect `mcp.json`.
+   * Absent means the integration is not wired, which status reports as `not-implemented`.
+   */
+  mcpStatus?(): McpStatusReport;
+  searchMcpStatus?(): McpServersSnapshot['servers'];
   /** `!command` shell mode (ADR 0034): the same exec_command dispatcher, approval and sandbox as model calls. */
   runShellCommand?(
     command: string,
@@ -155,19 +212,24 @@ export interface FutrynBackendPorts {
   ): Promise<ToolResult>;
   getProjectContext?(): ProjectContextReport | null;
   /**
-   * Mode every session starts in (ADR 0040; `FUTRYN_APPROVAL_POLICY`). Defaults to `auto`
-   * (Codex `on-request` in the workspace-write sandbox).
+   * Mode this launch starts in (`--permission-mode`, `--dangerously-skip-permissions`). Without it
+   * `permissions.defaultMode` of the settings applies, else `default` (ADR 0061).
    */
   permissionMode?: PermissionMode;
   /**
-   * Sandbox every session starts in (ADR 0055; `FUTRYN_SANDBOX_MODE`, config `sandbox_mode`).
-   * Defaults to `workspace-write`. The session can change it with a preset; it is never persisted.
+   * Claude Code style settings (user, project, local), merged and trust-filtered by the
+   * composition root. Without a port the client keeps rules in memory only (tests, embedding).
    */
-  sandboxMode?: SandboxModeSetting;
-  /** Sandboxed commands get network without asking (`FUTRYN_SANDBOX_NETWORK`, config `network_access`). */
-  sandboxNetwork?: boolean;
+  permissionSettings?: PermissionSettingsPort;
+  /**
+   * The domain-filtering proxy asks the user about new network domains; headless runs turn this off
+   * together with prompts. Repository settings trust prompts follow the same switch.
+   */
+  interactivePermissions?: boolean;
   /** Durable plan of a session (ADR 0042). */
   getPlan?(sessionId: string): PlanState | null;
+  savePlanProposal?(sessionId: string, proposal: PlanProposal): PlanProposal | void;
+  getPlanProposal?(sessionId: string): PlanProposal | null;
   /** Subagents spawned in `sessionId` (Wave 2 S5a), including recovered ones from persistence. */
   subagents?(sessionId?: string): SubagentSummaryView[];
   /** Inspect a specific subagent by its conversation ID. */
@@ -178,6 +240,10 @@ export interface FutrynBackendPorts {
   stopSubagent?(agentId: string): boolean;
   /** Out-of-turn notices of background subagents (S5b); returns the unsubscribe function. */
   observeSubagentNotices?(listener: (notice: SubagentNotice) => void): () => void;
+  backgroundTasks?(sessionId: string): BackgroundTask[];
+  stopBackgroundTask?(id: string, sessionId: string): Promise<boolean>;
+  backgroundCurrentTask?(sessionId: string): BackgroundTask | undefined;
+  observeBackgroundTasks?(listener: (event: BackgroundTaskEvent) => void): () => void;
   settings: SettingsStore;
   listIntegrations?(): Integration[];
   beginProviderAuth?(providerId: string, methodId?: string, signal?: AbortSignal): Promise<ProviderAuthChallenge>;
@@ -214,6 +280,8 @@ export interface FutrynBackendPorts {
     account: Account,
     signal?: AbortSignal,
   ): Promise<{models: ModelInfo[]; stale: boolean; warning?: string}>;
+  /** Advisory refresh; undefined when fresh, offline, unavailable or already attempted. */
+  refreshModelMetadata?(account: Account, modelId: string): Promise<void> | undefined;
   cachedModels(account: Account): ModelInfo[];
   addManualModel(account: Account, modelId: string): ModelInfo;
   selectModel(account: Account, model: ModelInfo, project?: string): Selection;
@@ -222,7 +290,7 @@ export interface FutrynBackendPorts {
   getSession(id: string): SessionRecord | undefined;
   deleteSession(id: string): boolean;
   forkSession?(id: string, selection: Selection): {id: string; selection: Selection; messages: Message[]};
-  startSession(project?: string): {id: string; selection: Selection; messages: Message[]};
+  startSession(project?: string, selection?: Selection): {id: string; selection: Selection; messages: Message[]};
   resumeSession(id: string): {id: string; selection: Selection; messages: Message[]};
   sendTurn(
     sessionId: string,
@@ -232,6 +300,7 @@ export interface FutrynBackendPorts {
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
     queuedInputId?: string,
+    attachments?: Attachment[],
   ): AsyncIterable<ModelEvent>;
   /** Compact the idle conversation `sessionId` with its current model (ADR 0054). Absent when unsupported. */
   compactSession?(
@@ -242,6 +311,18 @@ export interface FutrynBackendPorts {
   /** Steer the active turn of `sessionId` (ADR 0033). Absent when the backend cannot steer. */
   steerTurn?(sessionId: string, content: string, expectedTurnId?: string): SteerOutcome;
   /** Accepted instructions of `sessionId` that no turn processed yet (durable; they open its next turn). */
+  retractQueuedInput?(sessionId: string): string;
+  retractQueuedEntries?(
+    sessionId: string,
+    options: RetractQueuedOptions & {claimedIds?: readonly string[]},
+  ): QueuedInputEntry[];
+  promptHistory?(input: {
+    scope: PromptHistoryScope;
+    sessionId?: string;
+    workspace: string;
+    limit?: number;
+  }): PromptHistoryEntry[];
+  queueSteeringForNextTurn?(sessionId: string): void;
   queuedInput?(sessionId: string): readonly {steerId: string; content: string}[];
   /** Finishing-turn input is durable before the SDK reports it accepted. */
   enqueueNextTurn?(sessionId: string, content: string): {id: string; content: string};
@@ -250,8 +331,8 @@ export interface FutrynBackendPorts {
   saveCustomTheme(manifest: ThemeManifest): ThemeManifest;
   removeCustomTheme(id: string): boolean;
   listWorkspaceFiles(query?: string): string[];
-  getWorkspaceDiff(): WorkspaceDiffReport;
-  refreshWorkspaceDiff?(): Promise<WorkspaceDiffReport>;
+  getWorkspaceDiff(options?: WorkspaceDiffOptions): WorkspaceDiffReport;
+  refreshWorkspaceDiff?(options?: WorkspaceDiffOptions): Promise<WorkspaceDiffReport>;
   /** True only when the read policy lets this workspace path's content reach the model without approval. */
   readAllowedWithoutApproval?(relativePath: string): boolean;
   sanitizeText(text: string): string;
@@ -273,18 +354,62 @@ function committedSessionMessages(stored: SessionRecord): Message[] {
 }
 
 export class FutrynClient {
+  private imageSequence = 0;
+  private imageGeneration = 0;
+  private pendingImages: {view: ImageAttachmentView; attachment: Attachment}[] = [];
+
+  /** Explicit user images are consumed by the next sendMessage, never inferred from prompt paths. */
+  async attachImage(input: ImageAttachmentInput): Promise<ImageAttachmentView> {
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.prepareImage) throw new FutrynError('UNSUPPORTED');
+    const generation = this.imageGeneration;
+    const attachment = await this.ports.prepareImage(input);
+    if (this.sending || generation !== this.imageGeneration) throw new FutrynError('POLICY');
+    if (this.pendingImages.length >= 8) throw new FutrynError('INVALID_INPUT');
+    const number = ++this.imageSequence;
+    const view: ImageAttachmentView = {
+      id: crypto.randomUUID(),
+      label: `[Image #${number}]`,
+      mediaType: attachment.mime as ImageAttachmentInput['mediaType'],
+    };
+    this.pendingImages.push({view, attachment});
+    this.notifyStateChange();
+    return {...view};
+  }
+  imageAttachments(): ImageAttachmentView[] {
+    return this.pendingImages.map(i => ({...i.view}));
+  }
+  removeImageAttachment(id: string): boolean {
+    const index = this.pendingImages.findIndex(i => i.view.id === id);
+    if (index < 0) return false;
+    this.pendingImages.splice(index, 1);
+    this.notifyStateChange();
+    return true;
+  }
+
   private currentSession: {id: string; selection: Selection; messages: Message[]} | null = null;
+  private sessionSelection: Selection | null = null;
+  private readonly sessionEfforts = new Map<string, string>();
+  private readonly transientSessionModes = new Map<string, AgentMode>();
   private currentMode: AgentMode = 'chat';
-  /** Session permission mode (ADR 0027/0040); never persisted, every session starts in the configured mode. */
+  /** Session permission mode (ADR 0027/0061); never persisted, every session starts in the configured mode. */
   private permissionModeValue: PermissionMode;
-  /** Session sandbox (ADR 0055): changed only by a preset/`setSandboxMode`, reset with the session. */
-  private sandboxModeValue: SandboxModeSetting;
+  private readonly settingsPort: PermissionSettingsPort;
+  /** Repository settings contents already offered to the user (hash), so a prompt is not repeated. */
+  private readonly trustOffered = new Set<string>();
+  /** Domains the user allowed for this session or once, with the time of a once-answer (ADR 0061). */
+  private readonly networkOnce = new Map<string, {allowed: boolean; at: number}>();
+  private readonly networkAsks = new Map<string, Promise<boolean>>();
+  private readonly trustPrompts = new Map<string, {path: string; hash: string}>();
+  private trustPromptsEnabled = true;
+  private promptsAvailable = true;
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
   private turnBudgetValue: TurnBudget | undefined;
   private lastUsage: Usage | null = null;
   /** Status is read on every UI frame; explicit usage reports remain fresh reads. */
   private statusUsage: ReturnType<FutrynClient['usage']> | null = null;
   private sending = false;
+  private sendAbort?: AbortController;
   /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
   private activeTurnId: string | undefined;
   /** Messages submitted while a turn was finishing (Codex start_or_steer → next turn), in order. */
@@ -308,23 +433,19 @@ export class FutrynClient {
   constructor(private readonly ports: FutrynBackendPorts) {
     this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
     ports.observeSubagentNotices?.(notice => this.handleSubagentNotice(notice));
+    ports.observeBackgroundTasks?.(event => this.handleBackgroundTaskEvent(event));
+    this.settingsPort = ports.permissionSettings ?? memoryPermissionSettings();
     this.permissionModeValue = this.initialPermissionMode();
-    this.sandboxModeValue = this.initialSandboxMode();
+    this.refreshModelMetadata();
   }
 
-  /** The configured starting sandbox (ADR 0055); `workspace-write` unless configured otherwise. */
-  initialSandboxMode(): SandboxModeSetting {
-    const mode = this.ports.sandboxMode;
-    return mode && SANDBOX_MODES.includes(mode) ? mode : 'workspace-write';
-  }
-
-  /** The configured starting mode (ADR 0040); `auto` = Codex on-request unless configured otherwise. */
+  /** The starting mode (ADR 0061): the launch flag, else `permissions.defaultMode`, else `default`. */
   initialPermissionMode(): PermissionMode {
-    const mode = this.ports.permissionMode;
+    const mode = this.ports.permissionMode ?? this.settingsPort.snapshot().defaultMode;
     return mode && PERMISSION_MODES.includes(mode) ? mode : DEFAULT_PERMISSION_MODE;
   }
 
-  /** Identity of the running turn, if any; turn-scoped grants (request_permissions "once") bind to it. */
+  /** Identity of the running turn, if any. */
   currentTurnId(): string | undefined {
     return this.sending ? this.activeTurnId : undefined;
   }
@@ -358,16 +479,21 @@ export class FutrynClient {
   }
 
   private clearSessionAuthorization(): void {
+    this.pendingImages = [];
+    this.imageGeneration++;
     this.permissionModeValue = this.initialPermissionMode();
-    this.sandboxModeValue = this.initialSandboxMode();
     this.sessionGrants.clear();
+    this.networkOnce.clear();
     this.ports.toolGrants?.clear();
     this.denyPendingPermissions();
   }
 
   /** A policy change makes every unresolved authorization prompt stale, never an approval. */
   private denyPendingPermissions(): void {
+    this.cancelPlanApproval();
     for (const request of this.permissions.values()) {
+      // A trust prompt is about a file's content, not about the policy that just changed.
+      if (request.capability === 'settings.trust') continue;
       if (request.status === 'pending') {
         request.status = 'denied';
         // Wake any tool call waiting on this prompt; a cleared session never grants.
@@ -385,12 +511,30 @@ export class FutrynClient {
 
   /** Allow or withhold workspace tools for this client (the TUI enables them after folder consent). */
   setToolsEnabled(enabled: boolean): void {
+    if (!enabled) this.cancelPlanApproval();
     this.toolsAllowed = enabled;
     this.notifyStateChange();
+    if (enabled) this.reviewSettingsTrust();
   }
 
   toolsEnabled(): boolean {
     return this.toolsAllowed;
+  }
+
+  /** Whether this canonical workspace has already received persistent interactive folder consent. */
+  workspaceTrusted(): boolean {
+    return this.ports.settings.read().trustedWorkspaces?.includes(this.ports.workspace) ?? false;
+  }
+
+  /** Persist explicit folder consent and enable workspace tools for this launch. */
+  trustWorkspace(): void {
+    const workspace = this.ports.workspace;
+    this.ports.settings.update(settings => {
+      const trusted = new Set(settings.trustedWorkspaces ?? []);
+      trusted.add(workspace);
+      settings.trustedWorkspaces = [...trusted].sort();
+    });
+    this.setToolsEnabled(true);
   }
 
   /** Files the user allowed tools to read for the rest of this session. */
@@ -404,6 +548,7 @@ export class FutrynClient {
     // asking. Clearing only the first let a revoked file or command be re-granted silently.
     this.ports.toolGrants?.clear();
     this.sessionGrants.clear();
+    this.networkOnce.clear();
     this.notifyStateChange();
   }
 
@@ -467,6 +612,7 @@ export class FutrynClient {
     if (!['chat', 'plan', 'review'].includes(mode)) throw new FutrynError('INVALID_INPUT');
     if (this.sending) throw new FutrynError('POLICY');
     if (this.currentSession) this.rememberSessionMode(this.currentSession.id, mode);
+    if (this.currentSession) this.transientSessionModes.delete(this.currentSession.id);
     this.currentMode = mode;
     this.notifyStateChange();
     return this.currentMode;
@@ -499,86 +645,70 @@ export class FutrynClient {
   }
   setPermissionMode(mode: PermissionMode): PermissionMode {
     if (!PERMISSION_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
+    // As in Claude Code, bypassPermissions can only be entered by starting in it.
+    if (mode === 'bypassPermissions' && this.initialPermissionMode() !== 'bypassPermissions')
+      throw new FutrynError('POLICY');
+    if (mode !== this.permissionModeValue) {
+      // Answers given under the old mode (prompts, session grants) never outlive a mode change.
+      this.denyPendingPermissions();
+      this.revokeToolGrants();
+    }
     this.permissionModeValue = mode;
     this.notifyStateChange();
     return mode;
   }
 
-  /** The session sandbox (ADR 0055): the preset's sandbox, or the configured one at session start. */
-  sandboxMode(): SandboxModeSetting {
-    return this.sandboxModeValue;
-  }
-  setSandboxMode(mode: SandboxModeSetting): SandboxModeSetting {
-    if (!SANDBOX_MODES.includes(mode)) throw new FutrynError('INVALID_INPUT');
-    if (mode !== this.sandboxModeValue) {
-      // Session grants were answered under the old sandbox; none may outlive a mode change.
-      this.denyPendingPermissions();
-      this.revokeToolGrants();
-    }
-    this.sandboxModeValue = mode;
-    this.notifyStateChange();
-    return mode;
-  }
   /**
-   * What the command dispatcher reads for every call: the session sandbox, whether escalating is
-   * still possible (`never` refuses it), and whether the user's config gives sandboxed commands
-   * network. Reading it here makes a preset change take effect on the next call (ADR 0055).
+   * Shift+Tab: default -> acceptEdits -> plan -> default (bypassPermissions joins the cycle only
+   * when the session started in it, as Claude Code does).
    */
-  sandboxConfig(): {mode: SandboxModeSetting; escalation: 'on-request' | 'never'; network: boolean} {
-    return {
-      mode: this.sandboxModeValue,
-      escalation: APPROVAL_POLICY_FOR_MODE[this.permissionModeValue] === 'never' ? 'never' : 'on-request',
-      network: this.ports.sandboxNetwork === true,
-    };
+  cyclePermissionMode(): PermissionMode {
+    const order: PermissionMode[] =
+      this.initialPermissionMode() === 'bypassPermissions'
+        ? [...PERMISSION_MODE_CYCLE, 'bypassPermissions']
+        : [...PERMISSION_MODE_CYCLE];
+    const index = order.indexOf(this.permissionModeValue);
+    return this.setPermissionMode(order[(index + 1) % order.length]!);
   }
-  /** Read Only / Auto / Full Access (Codex approval presets), or `custom` for any other pair. */
-  permissionPreset(): PermissionPresetId | 'custom' {
-    return permissionPresetFor(this.sandboxModeValue, this.permissionModeValue);
+
+  /** The merged, trust-filtered settings every decision reads (ADR 0061). */
+  permissionSettings(): PermissionSettingsSnapshot {
+    return this.settingsPort.snapshot();
   }
-  /** Apply a Codex preset: its sandbox and approval policy together. Never persisted; a new session resets it. */
-  setPermissionPreset(id: PermissionPresetId): PermissionPreset {
-    const preset = PERMISSION_PRESETS.find(entry => entry.id === id);
-    if (!preset) throw new FutrynError('INVALID_INPUT');
-    this.sandboxModeValue = preset.sandbox;
-    this.permissionModeValue = preset.mode;
-    // A stricter preset leaves no stale prompt answerable, and no session grant (an unsandboxed
-    // escalation or network approved for the session) usable, under the looser one.
-    this.denyPendingPermissions();
-    this.revokeToolGrants();
-    this.notifyStateChange();
-    return preset;
-  }
-  /** Rules saved for this workspace (ADR 0028). */
+
+  /** Effective rules of the working directory: user + project + local settings (deny > ask > allow). */
   permissionRules(): PermissionRuleSet {
-    const saved = this.ports.settings.read().projectPermissionRules?.[this.ports.workspace];
-    return {allow: [...(saved?.allow ?? [])], ask: [...(saved?.ask ?? [])], deny: [...(saved?.deny ?? [])]};
+    const {rules} = this.settingsPort.snapshot();
+    return {allow: [...rules.allow], ask: [...rules.ask], deny: [...rules.deny]};
   }
-  addPermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
+
+  /** Save a rule in one settings file (default: the local, uncommitted one). */
+  addPermissionRule(
+    effect: PermissionRuleEffect,
+    rule: string,
+    scope: PermissionSettingsScope = 'local',
+  ): PermissionRuleSet {
     const parsed = permissionRuleSchema.safeParse(rule.trim());
-    if (!parsed.success) throw new FutrynError('INVALID_INPUT');
-    this.ports.settings.update(settings => {
-      const all = (settings.projectPermissionRules ??= {});
-      const set = (all[this.ports.workspace] ??= {allow: [], ask: [], deny: []});
-      // One rule lives in one list; adding it elsewhere moves it.
-      for (const key of ['allow', 'ask', 'deny'] as const) set[key] = set[key].filter(entry => entry !== parsed.data);
-      if (set[effect].length >= 200) throw new FutrynError('POLICY');
-      set[effect].push(parsed.data);
-    });
+    if (!parsed.success || !PERMISSION_SETTINGS_SCOPES.includes(scope)) throw new FutrynError('INVALID_INPUT');
+    this.settingsPort.addRule(scope, effect, parsed.data);
     // Tightening policy invalidates old prompts and session grants. Adding Allow is a relaxation
     // (including the `always` prompt answer), so active prompts and session grants stay intact.
     if (effect !== 'allow') {
       this.denyPendingPermissions();
       this.revokeToolGrants();
     }
+    this.notifyStateChange();
     return this.permissionRules();
   }
-  removePermissionRule(effect: PermissionRuleEffect, rule: string): PermissionRuleSet {
-    this.ports.settings.update(settings => {
-      const set = settings.projectPermissionRules?.[this.ports.workspace];
-      if (set) set[effect] = set[effect].filter(entry => entry !== rule);
-    });
+  removePermissionRule(
+    effect: PermissionRuleEffect,
+    rule: string,
+    scope: PermissionSettingsScope = 'local',
+  ): PermissionRuleSet {
+    this.settingsPort.removeRule(scope, effect, rule);
     if (effect === 'allow') this.denyPendingPermissions();
     this.revokeToolGrants();
+    this.notifyStateChange();
     return this.permissionRules();
   }
 
@@ -591,21 +721,13 @@ export class FutrynClient {
       .join(', ');
   }
 
-  /** Shift+Tab: Read Only → Auto → Full Access → Read Only. A custom pair starts the cycle at Auto. */
-  cyclePermissionPreset(): PermissionPreset {
-    const current = this.permissionPreset();
-    const order = PERMISSION_PRESETS.map(preset => preset.id);
-    const next = current === 'custom' ? 'auto' : order[(order.indexOf(current) + 1) % order.length]!;
-    return this.setPermissionPreset(next);
-  }
-
   cycleMode(): AgentMode {
     const order: AgentMode[] = ['chat', 'plan', 'review'];
     const idx = order.indexOf(this.currentMode);
     return this.setMode(order[(idx + 1) % order.length]!);
   }
 
-  /** Futryn tools offered right now; exec_command appears only when its OS containment is proven. */
+  /** Cosmew tools offered right now; exec_command appears only when its OS containment is proven. */
   /**
    * Run a user-typed `!command` through the workspace exec_command tool. There is no second shell
    * path: without folder consent, a backend or an available sandbox, nothing runs.
@@ -624,22 +746,65 @@ export class FutrynClient {
     }
     const session = this.currentSession;
     this.sending = true;
+    const shellAbort = new AbortController();
+    this.sendAbort = shellAbort;
+    const shellSignal = options.signal ? AbortSignal.any([options.signal, shellAbort.signal]) : shellAbort.signal;
     try {
-      return await this.ports.runShellCommand(command, options.signal, options.onOutput, {
+      return await this.ports.runShellCommand(command, shellSignal, options.onOutput, {
         sessionId: session.id,
         callId: options.callId ?? `shell-${crypto.randomUUID()}`,
       });
     } finally {
       this.sending = false;
+      this.sendAbort = undefined;
       const stored = this.ports.getSession(session.id);
       if (stored) session.messages = committedSessionMessages(stored);
       this.notifyStateChange();
     }
   }
   /**
-   * Futryn tools the selected backend really offers the model: none unless folder consent holds, the
-   * backend runs Futryn tools (Futryn agent or Codex bridge) and the model supports tools.
+   * Cosmew tools the selected backend really offers the model: none unless folder consent holds, the
+   * backend runs Cosmew tools (Cosmew agent or Codex bridge) and the model supports tools.
    */
+  /** Connected user MCP servers, or an empty report when this process has no MCP port. */
+  mcpStatus(): McpStatusReport {
+    try {
+      return this.ports.mcpStatus?.() ?? {configPath: '', servers: [], problems: []};
+    } catch {
+      return {configPath: '', servers: [], problems: ['MCP status is unavailable.']};
+    }
+  }
+
+  hooks(): HooksSnapshot {
+    return {supported: false, hooks: []};
+  }
+
+  mcpServers(): McpServersSnapshot {
+    const report = this.mcpStatus();
+    return {
+      servers: [
+        ...report.servers.map(server => ({
+          name: this.ports.sanitizeText(server.name),
+          status: server.state,
+          toolCount: server.tools,
+          source: this.ports.sanitizeText(report.configPath),
+        })),
+        ...(this.ports.searchMcpStatus?.() ?? []).map(server => ({
+          ...server,
+          name: this.ports.sanitizeText(server.name),
+          source: this.ports.sanitizeText(server.source),
+        })),
+      ],
+      supported: {stdioManagement: false, oauthManagement: false},
+    };
+  }
+
+  private readonly hookListeners = new Set<(event: HookRanEvent) => void>();
+  onHookRan(listener: (event: HookRanEvent) => void): () => void {
+    this.hookListeners.add(listener);
+    return () => this.hookListeners.delete(listener);
+  }
+
   availableTools(): string[] {
     if (!this.toolsReachModel()) return [];
     try {
@@ -649,7 +814,7 @@ export class FutrynClient {
     }
   }
 
-  /** Same condition the status reports: consent + a backend that runs Futryn tools + a tools-capable model. */
+  /** Same condition the status reports: consent + a backend that runs Cosmew tools + a tools-capable model. */
   private toolsReachModel(): boolean {
     try {
       return this.status().toolsEnabled;
@@ -667,7 +832,7 @@ export class FutrynClient {
       workspaceDiff: 'implemented',
       permissionDialog: 'implemented',
       generalToolsExecution: 'not-implemented',
-      mcpIntegration: 'not-implemented',
+      mcpIntegration: this.ports.mcpStatus ? 'partial' : 'not-implemented',
       pluginHost: 'not-implemented',
       delegatedSubagents: 'not-implemented',
     };
@@ -725,6 +890,84 @@ export class FutrynClient {
     return structuredClone(this.ports.subagents?.(sessionId) ?? []);
   }
 
+  /** Shell sessions and background subagents belonging to this conversation. Snapshots carry no authority. */
+  backgroundTasks(sessionId = this.currentSession?.id): BackgroundTask[] {
+    if (!sessionId || !this.toolsEnabled()) return [];
+    const shell = this.ports.backgroundTasks?.(sessionId) ?? [];
+    const agents: BackgroundTask[] = this.subagents(sessionId)
+      .filter(agent => agent.background)
+      .map(agent => ({
+        id: agent.id,
+        kind: 'agent',
+        description: agent.description,
+        status:
+          agent.status === 'completed'
+            ? 'done'
+            : agent.status === 'failed'
+              ? 'failed'
+              : ['cancelled', 'closed', 'interrupted'].includes(agent.status)
+                ? 'stopped'
+                : 'running',
+        startedAt: agent.createdAt,
+        outputTail: (agent.summary || agent.steps.map(step => step.text ?? step.output ?? '').join('\n')).slice(-8192),
+      }));
+    return structuredClone(
+      [...shell, ...agents].map(task => ({
+        ...task,
+        description: this.ports.sanitizeText(task.description),
+        outputTail: this.ports.sanitizeText(task.outputTail),
+      })),
+    );
+  }
+
+  async stopBackgroundTask(id: string): Promise<boolean> {
+    const sessionId = this.currentSession?.id;
+    const task = this.backgroundTasks(sessionId).find(task => task.id === id);
+    if (!sessionId || !task || task.status !== 'running') return false;
+    return task.kind === 'agent' ? this.stopSubagent(id) : (this.ports.stopBackgroundTask?.(id, sessionId) ?? false);
+  }
+
+  backgroundCurrentTask(): BackgroundTask | undefined {
+    const sessionId = this.currentSession?.id;
+    if (!sessionId || !this.toolsEnabled()) return undefined;
+    const task = this.ports.backgroundCurrentTask?.(sessionId);
+    return task
+      ? structuredClone({
+          ...task,
+          description: this.ports.sanitizeText(task.description),
+          outputTail: this.ports.sanitizeText(task.outputTail),
+        })
+      : undefined;
+  }
+
+  private readonly backgroundTaskListeners = new Set<(event: BackgroundTaskEvent) => void>();
+  onBackgroundTaskEvent(listener: (event: BackgroundTaskEvent) => void): () => void {
+    this.backgroundTaskListeners.add(listener);
+    return () => this.backgroundTaskListeners.delete(listener);
+  }
+  private handleBackgroundTaskEvent(event: BackgroundTaskEvent): void {
+    const clean = {
+      ...event,
+      task: {
+        ...event.task,
+        description: this.ports.sanitizeText(event.task.description),
+        outputTail: this.ports.sanitizeText(event.task.outputTail),
+      },
+    };
+    const detail =
+      clean.type === 'task.finished' && clean.task.kind === 'shell'
+        ? `Background command "${clean.task.description}" ${clean.task.status === 'done' ? 'completed' : clean.task.status}${clean.task.exitCode === undefined ? '' : ` (exit code ${clean.task.exitCode})`}`
+        : clean.task.description;
+    this.notify(clean.type, detail);
+    for (const listener of [...this.backgroundTaskListeners]) {
+      try {
+        listener(structuredClone(clean));
+      } catch {
+        /* observers cannot break execution */
+      }
+    }
+  }
+
   /** Inspect one subagent session by its conversation ID. */
   inspectSubagent(agentId: string): SubagentSummaryView | undefined {
     const found = this.ports.inspectSubagent?.(agentId);
@@ -756,6 +999,14 @@ export class FutrynClient {
       description: this.ports.sanitizeText(notice.description),
     };
     this.notify('subagent.finished', `${clean.agentType}: ${clean.description}`);
+    const agentTask = this.backgroundTasks(clean.parentSessionId).find(task => task.id === clean.agentId);
+    if (agentTask)
+      this.handleBackgroundTaskEvent({
+        type: 'task.finished',
+        task: agentTask,
+        parentSessionId: clean.parentSessionId,
+        ...(clean.delivery === 'steered' || clean.delivery === 'queued' ? {delivery: clean.delivery} : {}),
+      });
     for (const listener of [...this.subagentNoticeListeners]) {
       try {
         listener(clean);
@@ -763,6 +1014,165 @@ export class FutrynClient {
         /* observers cannot break the agent */
       }
     }
+  }
+
+  private planApproval:
+    | {
+        request: PlanProposal;
+        signal?: AbortSignal;
+        resolve: (outcome: PlanApprovalOutcome) => void;
+        reject: (error: unknown) => void;
+        cleanup: () => void;
+      }
+    | undefined;
+  private readonly planListeners = new Set<(proposal: PlanProposal) => void>();
+
+  pendingPlanApproval(): PlanProposal | null {
+    return this.planApproval ? structuredClone(this.planApproval.request) : null;
+  }
+  /** Durable review history; unlike pendingPlanApproval it may survive restart. */
+  planProposal(): PlanProposal | null {
+    const id = this.currentSession?.id;
+    const proposal = id ? this.ports.getPlanProposal?.(id) : null;
+    return proposal ? structuredClone(proposal) : null;
+  }
+  onPlanProposed(listener: (proposal: PlanProposal) => void): () => void {
+    this.planListeners.add(listener);
+    return () => this.planListeners.delete(listener);
+  }
+  canProposePlan(): boolean {
+    return this.toolsEnabled() && this.permissionModeValue === 'plan' && this.currentMode !== 'review';
+  }
+  /** Called only through the dispatcher; approval does not replay any tool. */
+  proposePlan(plan: string, signal?: AbortSignal): Promise<PlanApprovalOutcome> {
+    if (!this.canProposePlan()) return Promise.reject(new FutrynError('POLICY'));
+    if (!this.userInputAvailable)
+      return Promise.resolve({kind: 'unavailable', reason: 'no interactive user is attached'});
+    if (signal?.aborted) return Promise.reject(new FutrynError('CANCELLED'));
+    if (!this.currentSession || this.planApproval) return Promise.reject(new FutrynError('POLICY'));
+    if (typeof plan !== 'string' || !plan.trim() || plan.length > 32000)
+      return Promise.reject(new FutrynError('INVALID_INPUT'));
+    let request: PlanProposal = {
+      id: crypto.randomUUID(),
+      sessionId: this.currentSession.id,
+      plan: this.ports.sanitizeText(plan.trim()),
+      createdAt: new Date().toISOString(),
+      status: 'proposed',
+      revision: 1,
+    };
+    request = this.ports.savePlanProposal?.(request.sessionId, request) ?? request;
+    return new Promise((resolve, reject) => {
+      const onAbort = () => this.cancelPlanApproval();
+      this.planApproval = {
+        request,
+        signal,
+        resolve,
+        reject,
+        cleanup: () => signal?.removeEventListener('abort', onAbort),
+      };
+      signal?.addEventListener('abort', onAbort, {once: true});
+      this.notify('plan.proposed');
+      for (const listener of [...this.planListeners]) {
+        try {
+          listener(structuredClone(request));
+        } catch {
+          /* observers have no authority */
+        }
+      }
+    });
+  }
+  /** Update only a live pending review. Editing never changes permission mode or grants tools. */
+  editPlanProposal(text: string, expected?: {id: string; expectedRevision: number}): PlanProposal {
+    const pending = this.requirePlanApproval();
+    if (typeof text !== 'string' || !text.trim() || text.length > 32000) throw new FutrynError('INVALID_INPUT');
+    if (
+      expected &&
+      (expected.id !== pending.request.id || expected.expectedRevision !== (pending.request.revision ?? 1))
+    )
+      throw new FutrynError('POLICY');
+    const plan = this.ports.sanitizeText(text.trim());
+    if (!plan || plan.length > 32000) throw new FutrynError('INVALID_INPUT');
+    if (plan === pending.request.plan) return structuredClone(pending.request);
+    const record: PlanProposal = {...pending.request, plan, revision: (pending.request.revision ?? 1) + 1};
+    delete record.path;
+    const saved = this.ports.savePlanProposal?.(record.sessionId, record) ?? record;
+    if (this.requirePlanApproval() !== pending) throw new FutrynError('POLICY');
+    pending.request = saved;
+    this.notify('plan.proposed');
+    for (const listener of [...this.planListeners]) {
+      try {
+        listener(structuredClone(saved));
+      } catch {
+        /* observers have no authority */
+      }
+    }
+    return structuredClone(saved);
+  }
+  private requirePlanApproval() {
+    const pending = this.planApproval;
+    if (!pending) throw new FutrynError('NOT_FOUND');
+    if (pending.signal?.aborted || !this.canProposePlan() || pending.request.sessionId !== this.currentSession?.id) {
+      this.cancelPlanApproval();
+      throw new FutrynError('POLICY');
+    }
+    return pending;
+  }
+  resolvePlanApproval(resolution: PlanApprovalResolution): void {
+    const pending = this.requirePlanApproval();
+    const object = typeof resolution === 'object' && resolution !== null ? resolution : undefined;
+    const mode = typeof resolution === 'string' ? resolution : object && 'mode' in object ? object.mode : undefined;
+    const feedback = object?.feedback;
+    if (
+      (mode !== undefined && mode !== 'manual' && mode !== 'acceptEdits') ||
+      (object && (typeof feedback !== 'string' || !feedback.trim() || feedback.length > 4000)) ||
+      (!mode && !object)
+    )
+      throw new FutrynError('INVALID_INPUT');
+    const cleanFeedback = feedback === undefined ? undefined : this.ports.sanitizeText(feedback.trim());
+    const outcome: PlanApprovalOutcome = mode
+      ? {
+          kind: 'approved',
+          mode,
+          ...(pending.request.revision! > 1 ? {plan: pending.request.plan} : {}),
+          ...(cleanFeedback !== undefined ? {feedback: cleanFeedback} : {}),
+        }
+      : {
+          kind: 'feedback',
+          feedback: cleanFeedback!,
+          ...(pending.request.revision! > 1 ? {plan: pending.request.plan} : {}),
+        };
+    const record: PlanProposal = {
+      ...pending.request,
+      status: outcome.kind === 'feedback' ? 'feedback' : 'approved',
+      ...(cleanFeedback !== undefined ? {feedback: cleanFeedback} : {}),
+      ...(outcome.kind === 'approved' ? {resolution: outcome.mode} : {}),
+    };
+    // Persist before granting a mode transition. Storage failure leaves the dialog pending.
+    this.ports.savePlanProposal?.(record.sessionId, record);
+    if (this.requirePlanApproval() !== pending) throw new FutrynError('POLICY');
+    if (outcome.kind === 'approved') this.rememberSessionMode(record.sessionId, 'chat');
+    if (this.requirePlanApproval() !== pending) throw new FutrynError('POLICY');
+    this.planApproval = undefined;
+    pending.cleanup();
+    if (outcome.kind === 'approved') {
+      this.setPermissionMode(outcome.mode === 'manual' ? 'default' : 'acceptEdits');
+      this.currentMode = 'chat';
+    }
+    pending.resolve(outcome);
+    this.notify('plan.resolved');
+  }
+  private cancelPlanApproval(): void {
+    const pending = this.planApproval;
+    if (!pending) return;
+    this.planApproval = undefined;
+    pending.cleanup();
+    try {
+      this.ports.savePlanProposal?.(pending.request.sessionId, {...pending.request, status: 'cancelled'});
+      pending.reject(new FutrynError('CANCELLED'));
+    } catch (error) {
+      pending.reject(error);
+    }
+    this.notify('plan.resolved');
   }
 
   // ---- request_user_input (ADR 0042) -------------------------------------------------------
@@ -774,6 +1184,7 @@ export class FutrynClient {
 
   /** An interactive UI is attached and can answer questions (the TUI sets it; `exec` never does). */
   setUserInputAvailable(available: boolean): void {
+    if (!available) this.cancelPlanApproval();
     this.userInputAvailable = available;
     if (!available) for (const id of [...this.questions.keys()]) this.settleQuestion(id, {kind: 'dismissed'});
   }
@@ -889,7 +1300,6 @@ export class FutrynClient {
     const account = this.currentAccountId();
     const elevated =
       this.permissionModeValue !== this.initialPermissionMode() ||
-      this.sandboxModeValue !== this.initialSandboxMode() ||
       this.listToolGrants().length > 0 ||
       this.sessionGrants.size > 0;
     if (!elevated) {
@@ -904,7 +1314,6 @@ export class FutrynClient {
     this.guarding = true;
     try {
       this.permissionModeValue = this.initialPermissionMode();
-      this.sandboxModeValue = this.initialSandboxMode();
       this.ports.toolGrants?.clear();
       this.sessionGrants.clear();
       this.elevatedFor = undefined;
@@ -944,7 +1353,7 @@ export class FutrynClient {
       label: 'Unavailable',
       available: false,
       sandbox: 'unavailable',
-      escalation: 'never',
+      unsandboxedAllowed: false,
       limitations: [],
     };
     if (!this.toolsAllowed) return {...unavailable, label: 'Disabled', reason: 'Folder consent required.'};
@@ -958,7 +1367,7 @@ export class FutrynClient {
   status(projectScoped = false) {
     const project = projectScoped ? this.ports.workspace : undefined;
     const state = this.ports.settings.read();
-    const selection = this.currentSession?.selection ?? this.ports.resolveSelection(project);
+    const selection = this.currentSession?.selection ?? this.sessionSelection ?? this.ports.resolveSelection(project);
     const activeAccount = selection
       ? (state.accounts.find(a => a.id === selection.accountId) ?? null)
       : state.activeAccountId
@@ -986,13 +1395,21 @@ export class FutrynClient {
       workspace: this.ports.workspace,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
-      approvalPolicy: APPROVAL_POLICY_FOR_MODE[this.permissionModeValue],
-      /** Session sandbox, preset and whether sandboxed commands get network by configuration (ADR 0055). */
-      sandboxMode: this.sandboxModeValue,
-      permissionPreset: this.permissionPreset(),
-      sandboxNetwork: this.ports.sandboxNetwork === true && this.sandboxModeValue === 'workspace-write',
+      /** `sandbox.*` of the merged settings (ADR 0061). */
+      sandbox: (() => {
+        const {sandbox, additionalDirectories} = this.settingsPort.snapshot();
+        return {
+          enabled: sandbox.enabled,
+          autoAllowBashIfSandboxed: sandbox.autoAllowBashIfSandboxed,
+          allowUnsandboxedCommands: sandbox.allowUnsandboxedCommands,
+          allowedDomains: sandbox.allowedDomains.length,
+          excludedCommands: sandbox.excludedCommands.length,
+          additionalDirectories: additionalDirectories.length,
+        };
+      })(),
+      bypassAvailable: this.initialPermissionMode() === 'bypassPermissions',
       executionBackend,
-      /** Futryn tools reach the model: folder consent AND a backend that runs them AND a capable model. */
+      /** Cosmew tools reach the model: folder consent AND a backend that runs them AND a capable model. */
       toolsEnabled: workspaceReadStatus === 'read-only',
       providers: state.providers,
       accounts: state.accounts,
@@ -1110,7 +1527,9 @@ export class FutrynClient {
       }
       this.ports.useAccount(refreshed.id);
       const models = this.ports.cachedModels(refreshed);
-      const chosen = models.find(m => m.id === (input.manualModelId ?? refreshed.defaultModel)) ?? models[0];
+      const chosen =
+        models.find(m => m.id === (input.manualModelId ?? refreshed.defaultModel)) ??
+        models.find(m => isCodingModel(m));
       if (chosen) this.ports.selectModel(refreshed, chosen);
       this.clearSessionAuthorization();
       this.currentSession = null;
@@ -1137,7 +1556,7 @@ export class FutrynClient {
     let configProblems = '';
     try {
       const problems = this.ports.hostConfigDiagnostics?.() ?? [];
-      if (problems.length) configProblems = `\nHost config problems (~/.futryn/config.toml): ${problems.join('; ')}`;
+      if (problems.length) configProblems = `\nHost config problems (~/.cosmew/config.toml): ${problems.join('; ')}`;
     } catch {
       /* diagnostics must never break /doctor */
     }
@@ -1187,6 +1606,7 @@ export class FutrynClient {
   async discoverModels(options?: {
     accountId?: string;
     offline?: boolean;
+    all?: boolean;
     query?: string;
     capability?: keyof ModelInfo['capabilities'];
     signal?: AbortSignal;
@@ -1198,7 +1618,10 @@ export class FutrynClient {
     const base = options?.offline
       ? {models: this.ports.cachedModels(account), stale: true, warning: 'Offline cache; availability unverified.'}
       : await this.ports.discoverModels(account, options?.signal);
-    let models = base.models;
+    const selected = this.status().selection;
+    let models = options?.all
+      ? base.models
+      : base.models.filter(m => isCodingModel(m, selected?.accountId === accountId ? selected.modelId : undefined));
     if (options?.query?.trim()) {
       const q = options.query.trim().toLowerCase();
       models = models.filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q));
@@ -1211,9 +1634,48 @@ export class FutrynClient {
     return {...base, models, account};
   }
 
+  private readonly metadataRefreshes = new Map<string, Promise<void> | null>();
+
+  /** Starts advisory work without blocking input/turns; consumers share its completion. */
+  refreshModelMetadata(
+    options: {accountId?: string; modelId?: string; effortOnly?: boolean; offline?: boolean} = {},
+  ): Promise<void> | undefined {
+    if (options.offline || !this.ports.refreshModelMetadata) return;
+    try {
+      const status = this.status();
+      const accountId = options.accountId ?? status.activeAccount?.id;
+      const modelId = options.modelId ?? status.selection?.modelId;
+      if (!accountId || !modelId) return;
+      const account = this.ports.getAccount(accountId);
+      const model = this.ports.cachedModels(account).find(model => model.id === modelId);
+      if (!model || model.reasoningEfforts?.length || model.capabilities.reasoning === 'unsupported') return;
+      if (
+        options.effortOnly &&
+        !this.effort(accountId, model) &&
+        !this.ports.settings.read().reasoningPreferences?.[accountId + ':' + modelId]
+      )
+        return;
+      const key = accountId + ':' + modelId;
+      if (this.metadataRefreshes.has(key)) return this.metadataRefreshes.get(key) ?? undefined;
+      const refresh = this.ports.refreshModelMetadata(account, modelId);
+      if (!refresh) return;
+      const pending = refresh
+        .catch(() => {})
+        .finally(() => {
+          this.metadataRefreshes.set(key, null);
+          this.notifyStateChange();
+        });
+      this.metadataRefreshes.set(key, pending);
+      return pending;
+    } catch {
+      // Advisory lookup must never prevent selecting or using an account.
+      return;
+    }
+  }
+
   cachedModels(accountId?: string): ModelInfo[] {
     const state = this.ports.settings.read();
-    const targetId = accountId ?? state.activeAccountId;
+    const targetId = accountId ?? this.status().activeAccount?.id ?? state.activeAccountId;
     if (!targetId) return [];
     try {
       const account = this.ports.getAccount(targetId);
@@ -1225,7 +1687,7 @@ export class FutrynClient {
 
   addManualModel(modelId: string, accountId?: string): ModelInfo {
     const state = this.ports.settings.read();
-    const targetId = accountId ?? state.activeAccountId;
+    const targetId = accountId ?? this.status().activeAccount?.id ?? state.activeAccountId;
     if (!targetId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(targetId);
     const model = this.ports.addManualModel(account, modelId);
@@ -1233,9 +1695,10 @@ export class FutrynClient {
     return model;
   }
 
-  selectModel(modelId: string, options?: {accountId?: string; projectScoped?: boolean}): Selection {
+  selectModel(modelId: string, options?: {accountId?: string; projectScoped?: boolean; scope?: 'session'}): Selection {
+    if (options?.scope !== undefined && options.scope !== 'session') throw new FutrynError('INVALID_INPUT');
     const state = this.ports.settings.read();
-    const targetId = options?.accountId ?? state.activeAccountId;
+    const targetId = options?.accountId ?? this.status().activeAccount?.id ?? state.activeAccountId;
     if (!targetId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(targetId);
     const models = this.ports.cachedModels(account);
@@ -1243,6 +1706,24 @@ export class FutrynClient {
     if (!model) throw new FutrynError('NOT_FOUND');
     const previousSelection = this.currentSession?.selection;
     if (this.sending) throw new FutrynError('POLICY');
+    if (options?.scope === 'session') {
+      const selection = {accountId: account.id, modelId: model.id};
+      if (
+        this.currentSession &&
+        (previousSelection?.accountId !== account.id || previousSelection?.modelId !== model.id)
+      ) {
+        if (!this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
+        const fork = this.ports.forkSession(this.currentSession.id, selection);
+        this.transientSessionModes.set(fork.id, this.currentMode);
+        this.clearSessionAuthorization();
+        this.currentSession = fork;
+        this.lastUsage = null;
+      }
+      this.sessionSelection = this.currentSession ? null : selection;
+      this.notifyStateChange();
+      return {...selection};
+    }
+    this.sessionSelection = null;
     const selection = this.ports.selectModel(account, model, options?.projectScoped ? this.ports.workspace : undefined);
     // Conversation adapters and durable selections are pinned. Starting fresh
     // avoids advertising one model while the backend still invokes another.
@@ -1269,10 +1750,24 @@ export class FutrynClient {
 
   createSession(projectScoped = false): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
-    const session = this.ports.startSession(projectScoped ? this.ports.workspace : undefined);
+    const session = this.ports.startSession(
+      projectScoped ? this.ports.workspace : undefined,
+      !this.currentSession ? (this.sessionSelection ?? undefined) : undefined,
+    );
     this.rememberSessionMode(session.id, this.currentMode);
     this.clearSessionAuthorization();
+    const pendingKey = `pending:${session.selection.accountId}:${session.selection.modelId}`;
+    const pendingEffort = !this.currentSession ? this.sessionEfforts.get(pendingKey) : undefined;
+    if (pendingEffort !== undefined) {
+      this.sessionEfforts.set(
+        `${session.id}:${session.selection.accountId}:${session.selection.modelId}`,
+        pendingEffort,
+      );
+      this.sessionEfforts.delete(pendingKey);
+    }
     this.currentSession = session;
+    this.sessionSelection = null;
+    this.refreshModelMetadata();
     this.lastUsage = null;
     this.notifyStateChange();
     return {
@@ -1284,12 +1779,14 @@ export class FutrynClient {
 
   resumeSession(id: string): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
-    const mode = this.ports.settings.read().sessionModes?.[id] ?? 'chat';
+    const mode = this.transientSessionModes.get(id) ?? this.ports.settings.read().sessionModes?.[id] ?? 'chat';
     const stored = this.ports.getSession(id);
     const session = this.ports.resumeSession(id);
     if (this.currentSession) this.claimedNextTurn.delete(this.currentSession.id);
     this.clearSessionAuthorization();
     this.currentSession = session;
+    this.sessionSelection = null;
+    this.refreshModelMetadata();
     this.currentMode = mode;
     this.lastUsage = stored?.turns?.at(-1)?.usage ?? null;
     this.notifyStateChange();
@@ -1309,7 +1806,9 @@ export class FutrynClient {
     if (!source) throw new FutrynError('NOT_FOUND');
     // Validate/create the copy first, so an invalid target leaves the active conversation intact.
     const mode =
-      id === this.currentSession?.id ? this.currentMode : (this.ports.settings.read().sessionModes?.[id] ?? 'chat');
+      id === this.currentSession?.id
+        ? this.currentMode
+        : (this.transientSessionModes.get(id) ?? this.ports.settings.read().sessionModes?.[id] ?? 'chat');
     const fork = this.ports.forkSession(id, source.selection);
     this.rememberSessionMode(fork.id, mode);
     this.clearSessionAuthorization();
@@ -1325,6 +1824,7 @@ export class FutrynClient {
     const deleted = this.ports.deleteSession(id);
     if (!deleted) return false;
     this.claimedNextTurn.delete(id);
+    this.transientSessionModes.delete(id);
     if (this.currentSession?.id === id) {
       this.clearSessionAuthorization();
       this.currentSession = null;
@@ -1345,6 +1845,8 @@ export class FutrynClient {
     if (this.currentSession) this.claimedNextTurn.delete(this.currentSession.id);
     this.clearSessionAuthorization();
     this.currentSession = null;
+    this.sessionSelection = null;
+    this.sessionEfforts.clear();
     this.lastUsage = null;
     this.notifyStateChange();
   }
@@ -1358,22 +1860,86 @@ export class FutrynClient {
     };
   }
 
+  checkpoints(): CheckpointView[] {
+    return this.currentSession ? (this.ports.checkpoints?.(this.currentSession.id) ?? []) : [];
+  }
+
+  async rewind(
+    input: {checkpointId: string; scope: RewindScope; instructions?: string},
+    signal?: AbortSignal,
+  ): Promise<RewindOutcome> {
+    const {checkpointId: id, scope} = input;
+    if (
+      input.instructions !== undefined &&
+      (typeof input.instructions !== 'string' || input.instructions.length > 4000)
+    )
+      throw new FutrynError('INVALID_INPUT');
+    if (
+      !['conversation', 'code', 'both', 'summarize'].includes(scope) ||
+      !this.currentSession ||
+      !this.ports.rewindCheckpoint
+    )
+      throw new FutrynError('INVALID_INPUT');
+    if (this.sending) throw new FutrynError('POLICY');
+    if (this.backgroundTasks().some(t => t.status === 'running')) throw new FutrynError('POLICY');
+    const session = this.currentSession;
+    this.sending = true;
+    try {
+      const outcome = await this.ports.rewindCheckpoint(
+        session.id,
+        id,
+        scope,
+        signal,
+        input.instructions === undefined ? undefined : this.ports.sanitizeText(input.instructions.trim()),
+      );
+      if (outcome.restored && outcome.sessionId && outcome.sessionId !== session.id) {
+        const next = this.ports.resumeSession(outcome.sessionId);
+        this.clearSessionAuthorization();
+        this.currentSession = next;
+        this.rememberSessionMode(next.id, this.currentMode);
+      }
+      this.notifyStateChange();
+      return outcome;
+    } finally {
+      this.sending = false;
+    }
+  }
+
   async *sendMessage(
     content: string,
     options?: {signal?: AbortSignal; maxOutputTokens?: number; maxEstimatedCostUSD?: number; projectScoped?: boolean},
   ): AsyncIterable<ModelEvent> {
-    const trimmed = content.trim();
+    const trimmed = [content.trim(), ...this.pendingImages.map(i => i.view.label)].filter(Boolean).join('\n');
     if (!trimmed) throw new FutrynError('INVALID_INPUT');
     if (this.sending) throw new FutrynError('POLICY');
     if (!this.currentSession) {
-      const session = this.ports.startSession(options?.projectScoped ? this.ports.workspace : undefined);
+      const session = this.ports.startSession(
+        options?.projectScoped ? this.ports.workspace : undefined,
+        this.sessionSelection ?? undefined,
+      );
       this.rememberSessionMode(session.id, this.currentMode);
       this.currentSession = session;
+      this.sessionSelection = null;
+      this.refreshModelMetadata();
+      const pendingKey = `pending:${session.selection.accountId}:${session.selection.modelId}`;
+      const pendingEffort = this.sessionEfforts.get(pendingKey);
+      if (pendingEffort !== undefined) {
+        this.sessionEfforts.set(
+          `${session.id}:${session.selection.accountId}:${session.selection.modelId}`,
+          pendingEffort,
+        );
+        this.sessionEfforts.delete(pendingKey);
+      }
     }
+    const images = this.pendingImages.splice(0).map(i => i.attachment);
+    this.imageGeneration++;
     const session = this.currentSession;
     const claimed = this.claimedNextTurn.get(session.id);
     const queuedInputId = claimed?.content === trimmed ? claimed.id : undefined;
     this.sending = true;
+    const sendAbort = new AbortController();
+    this.sendAbort = sendAbort;
+    const turnSignal = options?.signal ? AbortSignal.any([options.signal, sendAbort.signal]) : sendAbort.signal;
     this.streamingText = '';
     this.streamingSteps = [];
     this.lastUsage = null;
@@ -1385,11 +1951,12 @@ export class FutrynClient {
       for await (const event of this.ports.sendTurn(
         session.id,
         trimmed,
-        options?.signal,
+        turnSignal,
         options?.maxOutputTokens,
         options?.maxEstimatedCostUSD,
         this.status().reasoningEffort ?? undefined,
         queuedInputId,
+        images.length ? images : undefined,
       )) {
         switch (event.type) {
           case 'started':
@@ -1446,10 +2013,38 @@ export class FutrynClient {
             this.streamingText = '';
             this.notifyStateChange();
             break;
+          case 'hook.ran': {
+            const clean = {
+              ...event,
+              name: this.ports.sanitizeText(event.name),
+              summary: this.ports.sanitizeText(event.summary),
+            };
+            this.notify('hook.ran', clean.summary);
+            for (const listener of [...this.hookListeners]) {
+              try {
+                listener({...clean});
+              } catch {}
+            }
+            break;
+          }
           case 'subagent.started':
           case 'subagent.progress':
           case 'subagent.finished':
             this.notify(event.type, `${event.agentType}: ${event.description}`);
+            if (event.background) {
+              const task = this.backgroundTasks(session.id).find(task => task.id === event.agentId);
+              if (task)
+                this.handleBackgroundTaskEvent({
+                  type:
+                    event.type === 'subagent.started'
+                      ? 'task.started'
+                      : event.type === 'subagent.finished'
+                        ? 'task.finished'
+                        : 'task.updated',
+                  task,
+                  parentSessionId: session.id,
+                });
+            }
             break;
           case 'completed': {
             this.lastUsage = event.usage;
@@ -1474,6 +2069,7 @@ export class FutrynClient {
       // If acceptance failed, the durable row remains available for a later explicit retry.
       this.claimedNextTurn.delete(session.id);
       this.sending = false;
+      this.sendAbort = undefined;
       this.statusUsage = null;
       this.activeTurnId = undefined;
       this.streamingText = '';
@@ -1550,14 +2146,72 @@ export class FutrynClient {
   }
   /** Accepted instructions the last turn could not process; the next sent message delivers them first. */
   queuedInput(): readonly {steerId: string; content: string}[] {
-    return this.currentSession ? (this.ports.queuedInput?.(this.currentSession.id) ?? []) : [];
+    if (!this.currentSession) return [];
+    const id = this.currentSession.id;
+    return [
+      ...(this.ports.queuedInput?.(id) ?? []),
+      ...(this.ports.listNextTurn?.(id) ?? []).map(p => ({steerId: p.id, content: p.content})),
+    ].map(p => ({...p}));
+  }
+
+  /** Move the shell lease when possible; otherwise interrupt. The durable inbox delivers next. */
+  sendQueuedNow(): 'backgrounded' | 'interrupted' | 'idle' {
+    if (!this.sending) return 'idle';
+    const sessionId = this.currentSession?.id;
+    if (sessionId) this.ports.queueSteeringForNextTurn?.(sessionId);
+    if (this.backgroundCurrentTask()) return 'backgrounded';
+    this.sendAbort?.abort();
+    return 'interrupted';
+  }
+
+  retractQueuedInput(): string {
+    const id = this.currentSession?.id;
+    if (!id) return '';
+    if (this.ports.retractQueuedEntries)
+      return this.retractQueuedEntries()
+        .map(entry => entry.content)
+        .join('\n');
+    // A legacy backend cannot exclude the input already handed to its delivery caller.
+    if (this.claimedNextTurn.has(id)) throw new FutrynError('POLICY');
+    if (!this.ports.retractQueuedInput) throw new FutrynError('UNSUPPORTED');
+    const text = this.ports.retractQueuedInput(id);
+    this.notifyStateChange();
+    return this.ports.sanitizeText(text);
+  }
+
+  /** Atomic selective take-back. A snapshot is never delivery or retraction authority. */
+  retractQueuedEntries(options: RetractQueuedOptions = {}): QueuedInputEntry[] {
+    const id = this.currentSession?.id;
+    if (!id) return [];
+    if (!this.ports.retractQueuedEntries) throw new FutrynError('UNSUPPORTED');
+    const claimed = this.claimedNextTurn.get(id);
+    const entries = this.ports.retractQueuedEntries(id, {
+      ...options,
+      // Only this client owns the reservation. Callers cannot replace or hide its identity.
+      claimedIds: claimed ? [claimed.id] : [],
+    });
+    this.notifyStateChange();
+    return entries.map(e => ({...e, content: this.ports.sanitizeText(e.content)}));
+  }
+  promptHistory(input: {scope: PromptHistoryScope; limit?: number} = {scope: 'everywhere'}): PromptHistoryEntry[] {
+    if (
+      !['session', 'project', 'everywhere'].includes(input.scope) ||
+      (input.limit !== undefined && (!Number.isFinite(input.limit) || input.limit < 1))
+    )
+      throw new FutrynError('INVALID_INPUT');
+    if (!this.ports.promptHistory) throw new FutrynError('UNSUPPORTED');
+    const limit = Math.min(200, Math.floor(input.limit ?? 100));
+    return this.ports
+      .promptHistory({...input, limit, workspace: this.ports.workspace, sessionId: this.currentSession?.id})
+      .slice(0, limit)
+      .map(e => ({...e, content: this.ports.sanitizeText(e.content).slice(0, 16000)}));
   }
 
   steerMessage(content: string): SteerOutcome {
     const trimmed = content.trim();
     if (!trimmed) return {accepted: false, reason: 'empty_input'};
     if (!this.sending || !this.currentSession) return {accepted: false, reason: 'no_active_turn'};
-    // Codex steer_input refuses Review tasks; Futryn's review mode is the same non-steerable kind.
+    // Codex steer_input refuses Review tasks; Cosmew's review mode is the same non-steerable kind.
     if (this.mode() === 'review' || !this.ports.steerTurn) return {accepted: false, reason: 'not_steerable'};
     const outcome = this.ports.steerTurn(this.currentSession.id, trimmed, this.activeTurnId);
     this.emitReactiveEvent(
@@ -1751,16 +2405,34 @@ export class FutrynClient {
   }
 
   private effort(accountId: string, model: ModelInfo): string | null {
+    const key = `${this.currentSession?.id ?? 'pending'}:${accountId}:${model.id}`;
+    const override = this.sessionEfforts.get(key);
+    if (override !== undefined) return override === 'default' ? (model.defaultReasoningEffort ?? null) : override;
     const stored = this.ports.settings.read().reasoningPreferences?.[accountId + ':' + model.id];
     return stored && model.reasoningEfforts?.includes(stored) ? stored : (model.defaultReasoningEffort ?? null);
   }
-  setReasoningEffort(value: string): void {
+  setReasoningEffort(value: string, options?: {scope: 'session'}): void {
+    if (options?.scope !== undefined && options.scope !== 'session') throw new FutrynError('INVALID_INPUT');
     if (this.sending) throw new FutrynError('POLICY');
     const status = this.status();
     const model = status.activeModel;
     const account = status.activeAccount;
-    if (!model || !account || !model.reasoningEfforts?.length) throw new FutrynError('UNSUPPORTED');
-    if (value !== 'default' && !model.reasoningEfforts.includes(value)) throw new FutrynError('INVALID_INPUT');
+    if (!model || !account) throw new FutrynError('UNSUPPORTED');
+    if (value !== 'default') {
+      const protocol = status.activeProvider?.protocol;
+      if (protocol === 'anthropic' || protocol === 'gemini')
+        throw new FutrynError('UNSUPPORTED', false, null, protocol);
+      if (!model.reasoningEfforts?.length || model.capabilities.reasoning === 'unsupported')
+        throw new FutrynError('UNSUPPORTED', false, null, 'levels');
+      if (!model.reasoningEfforts.includes(value)) throw new FutrynError('INVALID_INPUT');
+    }
+    const sessionKey = `${this.currentSession?.id ?? 'pending'}:${account.id}:${model.id}`;
+    if (options?.scope === 'session') {
+      this.sessionEfforts.set(sessionKey, value);
+      this.notifyStateChange();
+      return;
+    }
+    this.sessionEfforts.delete(sessionKey);
     this.ports.settings.update(settings => {
       settings.reasoningPreferences ??= {};
       const key = account.id + ':' + model.id;
@@ -1808,7 +2480,7 @@ export class FutrynClient {
       ? catalog.models.find(m => m.id === modelId)
       : (catalog.models.find(m => m.id === previousId) ??
         catalog.models.find(m => m.id === target.defaultModel) ??
-        (!source ? catalog.models[0] : undefined));
+        (!source ? catalog.models.find(m => isCodingModel(m)) : undefined));
     if (!model) throw new FutrynError('NOT_FOUND');
     const selection = {accountId: target.id, modelId: model.id};
     if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
@@ -1908,28 +2580,40 @@ export class FutrynClient {
     return this.ports.listWorkspaceFiles(query);
   }
 
-  getWorkspaceDiff(): WorkspaceDiffReport {
+  getWorkspaceDiff(options: WorkspaceDiffOptions = {}): WorkspaceDiffReport {
+    options = {base: options.base ?? 'session'};
     if (!this.toolsAllowed)
       return {
         workspace: this.workspace(),
         gitAvailable: false,
         state: 'denied',
         message: 'Folder consent required.',
+        base: options.base,
+        capabilities: {
+          session: {available: false, reason: 'Folder consent required.'},
+          uncommitted: {available: false, reason: 'Folder consent required.'},
+          branch: {available: false, reason: 'Folder consent required.'},
+        },
         files: [],
         totalAdditions: 0,
         totalDeletions: 0,
       };
-    return this.ports.getWorkspaceDiff();
+    return structuredClone(this.ports.getWorkspaceDiff(options));
   }
 
-  async refreshWorkspaceDiff(): Promise<WorkspaceDiffReport> {
-    if (!this.toolsAllowed) return this.getWorkspaceDiff();
-    return this.ports.refreshWorkspaceDiff ? this.ports.refreshWorkspaceDiff() : this.ports.getWorkspaceDiff();
+  async refreshWorkspaceDiff(options: WorkspaceDiffOptions = {}): Promise<WorkspaceDiffReport> {
+    options = {base: options.base ?? 'session'};
+    if (!this.toolsAllowed) return this.getWorkspaceDiff(options);
+    const report = await (this.ports.refreshWorkspaceDiff
+      ? this.ports.refreshWorkspaceDiff(options)
+      : this.ports.getWorkspaceDiff(options));
+    if (!this.toolsAllowed) return this.getWorkspaceDiff(options);
+    return structuredClone(report);
   }
 
   /**
-   * Diff files as `/review` may send them to the model. Content of a file the read policy would deny
-   * or ask about (secrets, Git internals, Futryn state) is withheld so review never bypasses the
+   * Diff files as `/code-review` (alias `/review`) may send them to the model. Content of a file the read policy would deny
+   * or ask about (secrets, Git internals, Cosmew state) is withheld so review never bypasses the
    * permission engine; the model can still request it through the read tool's approval flow.
    * Without a policy port every file's content is withheld.
    */
@@ -1974,8 +2658,15 @@ export class FutrynClient {
     subagent?: SubagentPromptAttribution;
   }): PermissionPromptRequest {
     const now = new Date();
-    const rule = input.alwaysRule && isSafeAlwaysRule(input.alwaysRule) ? input.alwaysRule : undefined;
-    const offered = (input.decisions ?? ['once', 'session']).filter(decision => decision !== 'always' || rule);
+    const domainRule =
+      input.capability === 'network.connect' &&
+      input.alwaysRule?.startsWith('domain:') &&
+      DOMAIN_PATTERN.test(input.alwaysRule.slice(7));
+    const rule = input.alwaysRule && (domainRule || isSafeAlwaysRule(input.alwaysRule)) ? input.alwaysRule : undefined;
+    // A settings trust prompt saves a content hash, not a rule, so it offers `always` without one.
+    const offered = (input.decisions ?? ['once', 'session']).filter(
+      decision => decision !== 'always' || rule || input.capability === 'settings.trust',
+    );
     const expires = new Date(now.getTime() + (input.ttlMs ?? 300_000));
     const scopeHash = createHash('sha256')
       .update(
@@ -2041,10 +2732,18 @@ export class FutrynClient {
     }
     // Only what the prompt offered can be answered (Codex `available_decisions`).
     if (decision !== 'deny' && !req.decisions.includes(decision)) throw new FutrynError('POLICY');
-    if (decision === 'always') {
-      // Persist the project Allow rule first: if it cannot be saved nothing is approved.
-      if (!req.alwaysRule || !isSafeAlwaysRule(req.alwaysRule)) throw new FutrynError('POLICY');
-      this.addPermissionRule('allow', req.alwaysRule);
+    const trust = this.trustPrompts.get(approvalId);
+    if (decision === 'always' && !trust) {
+      // Persist the Allow rule (or allowed domain) first: if it cannot be saved nothing is approved.
+      if (!req.alwaysRule) throw new FutrynError('POLICY');
+      if (req.capability === 'network.connect' && req.alwaysRule.startsWith('domain:')) {
+        const domain = req.alwaysRule.slice(7);
+        if (!DOMAIN_PATTERN.test(domain)) throw new FutrynError('POLICY');
+        this.settingsPort.addAllowedDomain('local', domain);
+      } else {
+        if (!isSafeAlwaysRule(req.alwaysRule)) throw new FutrynError('POLICY');
+        this.addPermissionRule('allow', req.alwaysRule);
+      }
     }
     req.status =
       decision === 'once'
@@ -2054,8 +2753,14 @@ export class FutrynClient {
           : decision === 'always'
             ? 'approved_always'
             : 'denied';
-    if (decision === 'session') {
+    if (decision === 'session' && !trust) {
       this.sessionGrants.add(req.scopeHash);
+    }
+    if (trust) {
+      this.trustPrompts.delete(approvalId);
+      if (decision === 'always' || decision === 'session')
+        this.settingsPort.trust(trust.path, trust.hash, decision === 'always');
+      this.notifyStateChange();
     }
     const resolution = permissionPromptResolutionSchema.parse({
       approvalId,
@@ -2073,8 +2778,10 @@ export class FutrynClient {
   }
 
   /**
-   * Ask the user and wait. Resolves 'deny' when the prompt is dismissed, expires, the session is
-   * cleared or `signal` aborts, so a waiting tool call can never hang or be granted by accident.
+   * Decide one request (ADR 0061): deny rules, then `plan` (refuses writes and execution), then
+   * ask/allow rules, then the permission mode; whatever remains `ask` goes to the user, who
+   * resolves 'deny' when the prompt is dismissed, expires, the session is cleared or `signal`
+   * aborts, so a waiting tool call can never hang or be granted by accident.
    */
   requestPermission(
     input: {
@@ -2088,98 +2795,96 @@ export class FutrynClient {
       kind?: PermissionKind;
       /** Approvals offered (ADR 0055); default once + session. */
       decisions?: PermissionPromptRequest['decisions'];
-      /** The project Allow rule an `always` answer saves. */
+      /** The rule (or `domain:host`) an `always` answer saves. */
       alwaysRule?: string;
-      /**
-       * Rule namespace whose Allow rules may answer this request: `Network` and `Unsandboxed`
-       * for a command that needs network or to leave the sandbox (ADR 0055). `Bash` deny and ask
-       * rules judge the same command either way. Defaults to the tool of the capability.
-       */
+      /** Rule namespace judging this request. Defaults to the tool of the capability. */
       ruleTool?: PermissionRuleTool;
-      /** Exact structured command/path for project rules; null skips rules (display-only request). Defaults to `target`. */
+      /** Exact structured command/path for rules; null skips rules (display-only request). Defaults to `target`. */
       ruleTarget?: string | null;
-      /** Bash: parsed sub-commands for project rules, or null for an unparsed script (ADR 0040). */
+      /** Bash: parsed sub-commands for rules, or null for an unparsed script (ADR 0040). */
       ruleSegments?: string[] | null;
+      /** Allow rules never answer this request (an escape from the sandbox); deny and ask rules still do. */
+      ignoreAllowRules?: boolean;
       /** Subagent attribution when the request comes from a nested subagent (Wave 2 S5a). */
       subagent?: SubagentPromptAttribution;
     },
     signal?: AbortSignal,
   ): Promise<PermissionResolutionScope> {
     if (signal?.aborted) return Promise.resolve('deny');
+    this.reviewSettingsTrust();
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
-    const {kind: explicitKind, ruleTarget, ruleSegments, ruleTool, ...prompt} = input;
+    const {kind: explicitKind, ruleTarget, ruleSegments, ruleTool, ignoreAllowRules, ...prompt} = input;
     const kind: PermissionKind =
       explicitKind ??
       (
-        {'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'execute', 'network.connect': 'network'} as Record<
+        {'fs.read': 'secret', 'fs.write': 'edit', 'process.execute': 'command', 'network.connect': 'network'} as Record<
           string,
           PermissionKind
         >
       )[input.capability] ??
       'other';
-    // Project rules first (deny > ask > allow), then the session mode.
     const tool: PermissionRuleTool =
       ruleTool ??
       (
-        {'process.execute': 'Bash', 'fs.write': 'Edit', 'fs.read': 'Read', 'network.connect': 'WebFetch'} as Record<
-          string,
-          PermissionRuleTool
-        >
+        {
+          'process.execute': 'Bash',
+          'fs.write': 'Edit',
+          'fs.read': 'Read',
+          'network.connect': 'WebFetch',
+          'network.search': 'WebSearch',
+          'mcp.call': 'Mcp',
+        } as Record<string, PermissionRuleTool>
       )[input.capability] ??
       'Tool';
     const commandRule = COMMAND_RULE_TOOLS.includes(tool);
     // Allow rules judge only structured targets (a real command or real paths), never display labels.
     const rules = this.permissionRules();
+    const judged: PermissionRuleSet = ignoreAllowRules ? {allow: [], ask: rules.ask, deny: rules.deny} : rules;
     const target =
       ruleTarget === null || (tool === 'Tool' && ruleTarget === undefined) ? null : (ruleTarget ?? input.target);
     const relative = (value: string) => (tool === 'Read' || tool === 'Edit' ? this.workspaceRelative(value) : value);
-    const judge = (set: PermissionRuleSet, ruleToolName: PermissionRuleTool) =>
-      permissionRuleDecision(set, {
-        tool: ruleToolName,
-        target: relative(target!),
-        ...(commandRule && ruleSegments !== undefined ? {segments: ruleSegments} : {}),
-      });
     let ruled: PermissionRuleEffect | undefined;
     if (target !== null) {
-      if (commandRule) {
-        // A command run with network or without a sandbox (including under `network_access` or Full
-        // Access) is also judged by `Network`/`Unsandboxed` deny and ask rules; only the request's
-        // own `tool` namespace can allow it (ADR 0055).
-        const restrict: PermissionRuleSet = {allow: [], ask: rules.ask, deny: rules.deny};
-        const extras: PermissionRuleTool[] = ['Bash'];
-        if (
-          tool === 'Network' ||
-          this.sandboxModeValue === 'danger-full-access' ||
-          (this.ports.sandboxNetwork === true && this.sandboxModeValue === 'workspace-write')
-        )
-          extras.push('Network');
-        if (tool === 'Unsandboxed' || this.sandboxModeValue === 'danger-full-access') extras.push('Unsandboxed');
-        const verdicts = [...new Set(extras)].map(name => judge(restrict, name));
-        ruled = verdicts.includes('deny')
-          ? 'deny'
-          : verdicts.includes('ask')
-            ? 'ask'
-            : judge({allow: rules.allow, ask: [], deny: []}, tool);
-      } else ruled = judge(rules, tool);
-    }
-    if (target === null) {
+      ruled = permissionRuleDecision(judged, {
+        tool,
+        target: relative(target),
+        ...(commandRule && ruleSegments !== undefined ? {segments: ruleSegments} : {}),
+      });
+    } else {
       // Fail closed: deny/ask rules still apply to the best text we have, and an unverifiable request
       // never slips past a deny/ask rule of its tool through a permissive mode such as bypass.
       ruled =
         permissionRuleDecision({allow: [], ask: rules.ask, deny: rules.deny}, {tool, target: relative(input.target)}) ??
         ([...rules.deny, ...rules.ask].some(rule => rule === tool || rule.startsWith(tool + '(')) ? 'ask' : undefined);
     }
-    let decision = ruled ?? permissionModeDecision(this.permissionModeValue, kind, this.sandboxModeValue);
-    // Codex `prompt_is_rejected_by_policy`: under `never` an ask rule (or any prompt) is refused, never shown.
-    if (decision === 'ask' && APPROVAL_POLICY_FOR_MODE[this.permissionModeValue] === 'never') decision = 'deny';
+    // Rules saved before `WebSearch` existed name the tool as `Tool(web_search)`; they keep working.
+    if (input.capability === 'network.search' && target !== null)
+      ruled = strongest(ruled, permissionRuleDecision(judged, {tool: 'Tool', target: 'web_search'}));
+    const mode = this.permissionModeValue;
+    let decision: 'allow' | 'ask' | 'deny';
+    if (ruled === 'deny') decision = 'deny';
+    // Plan mode refuses writes and execution whatever an allow rule says.
+    else if (mode === 'plan' && PLAN_REFUSED_KINDS.has(kind)) decision = 'deny';
+    else decision = ruled ?? permissionModeDecision(mode, kind);
+    // bypassPermissions means no prompts: even an ask rule is answered (deny rules and plan are not).
+    if (decision === 'ask' && mode === 'bypassPermissions') decision = 'allow';
     if (decision !== 'ask') {
       this.emitReactiveEvent(
         decision === 'allow' ? 'done' : 'error',
-        `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${ruled ? 'project rule' : `${this.permissionModeValue} mode`}: ${input.action}`,
+        `Permission ${decision === 'allow' ? 'approved' : 'denied'} by ${ruled ? 'rule' : `${mode} mode`}: ${input.action}`,
       );
       return Promise.resolve(decision === 'allow' ? 'once' : 'deny');
     }
-    input = prompt;
+    if (!this.promptsAvailable) return Promise.resolve('deny');
+    return this.askPermission(prompt, signal);
+  }
+
+  /** Show the prompt and wait for the answer; never auto-resolved by the mode. */
+  private askPermission(
+    input: Parameters<FutrynClient['enqueuePermissionRequest']>[0],
+    signal?: AbortSignal,
+  ): Promise<PermissionResolutionScope> {
+    if (signal?.aborted) return Promise.resolve('deny');
     const request = this.enqueuePermissionRequest(input);
     if (request.status === 'approved_session') return Promise.resolve('session');
     return new Promise(resolve => {
@@ -2191,6 +2896,7 @@ export class FutrynClient {
       const expire = () => {
         if (request.status === 'pending') request.status = 'expired';
         this.permissionWaiters.delete(request.approvalId);
+        this.trustPrompts.delete(request.approvalId);
         this.notifyStateChange();
         settle('deny');
       };
@@ -2202,6 +2908,96 @@ export class FutrynClient {
       signal?.addEventListener('abort', onAbort, {once: true});
       this.permissionWaiters.set(request.approvalId, resolution => settle(resolution.decision));
     });
+  }
+
+  /**
+   * The sandbox network gate (ADR 0061): may a command reach this host? Deny rules and `plan` refuse;
+   * `sandbox.network.allowedDomains`, `WebFetch(domain:...)` allow rules and session answers allow;
+   * anything else asks (bypassPermissions allows, a headless run denies). `always` saves the domain
+   * to `sandbox.network.allowedDomains` of the local settings.
+   */
+  authorizeNetwork(host: string, port: number, signal?: AbortSignal): Promise<boolean> {
+    const name = host.toLowerCase().replace(/\.$/, '');
+    const snapshot = this.settingsPort.snapshot();
+    const verdict = permissionRuleDecision(snapshot.rules, {tool: 'WebFetch', target: name});
+    if (verdict === 'deny' || this.permissionModeValue === 'plan') return Promise.resolve(false);
+    if (verdict !== 'ask' && (verdict === 'allow' || domainAllowed(name, snapshot.sandbox.allowedDomains)))
+      return Promise.resolve(true);
+    const cached = this.networkOnce.get(name);
+    if (cached && Date.now() - cached.at < NETWORK_ANSWER_TTL_MS) return Promise.resolve(cached.allowed);
+    const pending = this.networkAsks.get(name);
+    if (pending) return pending;
+    const ask = this.requestPermission(
+      {
+        capability: 'network.connect',
+        kind: 'network',
+        action: `Allow network access to ${name}`,
+        target: `${name}:${port}`,
+        reason:
+          'A sandboxed command is connecting to this host through the Cosmew proxy. "Always" saves it to sandbox.network.allowedDomains of the local settings.',
+        riskLevel: 'medium',
+        scopeKey: `network:${name}`,
+        decisions: ['once', 'session', 'always'],
+        alwaysRule: `domain:${name}`,
+        ruleTool: 'WebFetch',
+        ruleTarget: name,
+      },
+      signal,
+    )
+      .then(answer => {
+        const allowed = answer !== 'deny';
+        if (answer === 'once' || answer === 'deny') this.networkOnce.set(name, {allowed, at: Date.now()});
+        return allowed;
+      })
+      .finally(() => this.networkAsks.delete(name));
+    this.networkAsks.set(name, ask);
+    return ask;
+  }
+
+  /** Approve a pending repository settings file after the user reviewed it (`/permissions`). */
+  approvePendingSettings(path: string, persist: boolean): void {
+    const pending = this.settingsPort.snapshot().pendingTrust.find(entry => entry.path === path);
+    if (!pending) throw new FutrynError('NOT_FOUND');
+    this.settingsPort.trust(pending.path, pending.hash, persist);
+    this.notifyStateChange();
+  }
+
+  /**
+   * Whether anyone can answer a prompt. A headless run without a TTY turns it off: whatever would
+   * ask is denied at once, without a `permission.requested` event (like `claude -p`).
+   */
+  setPromptsAvailable(available: boolean): void {
+    this.promptsAvailable = available;
+  }
+
+  /** Headless runs never ask about repository settings; they stay untrusted (loosening ignored). */
+  setSettingsTrustPrompts(enabled: boolean): void {
+    this.trustPromptsEnabled = enabled;
+  }
+
+  /**
+   * Offer every repository settings file that would loosen something, once per exact content
+   * (ADR 0061). The user's answer is the only way it takes effect: `session` or `always` (saved by
+   * content hash); a changed file hashes differently and is asked again.
+   */
+  reviewSettingsTrust(): void {
+    if (!this.toolsAllowed || !this.trustPromptsEnabled) return;
+    for (const pending of this.settingsPort.snapshot().pendingTrust) {
+      const key = `${pending.path}\0${pending.hash}`;
+      if (this.trustOffered.has(key)) continue;
+      this.trustOffered.add(key);
+      const grants = pending.grants.join('; ');
+      const request = this.enqueuePermissionRequest({
+        capability: 'settings.trust',
+        action: `Trust repository ${pending.scope} settings`,
+        target: pending.path,
+        reason: `Repository settings are untrusted until you approve them. This file would: ${grants}`.slice(0, 400),
+        riskLevel: 'high',
+        scopeKey: `settings:${pending.hash}`,
+        decisions: ['session', 'always'],
+      });
+      this.trustPrompts.set(request.approvalId, {path: pending.path, hash: pending.hash});
+    }
   }
 
   /**
@@ -2221,6 +3017,78 @@ export class FutrynClient {
       resolvedAt: new Date().toISOString(),
     };
   }
+}
+
+/** The stricter of two rule verdicts (deny > ask > allow). */
+function strongest(
+  a: PermissionRuleEffect | undefined,
+  b: PermissionRuleEffect | undefined,
+): PermissionRuleEffect | undefined {
+  const rank = {deny: 3, ask: 2, allow: 1} as const;
+  return (a ? rank[a] : 0) >= (b ? rank[b] : 0) ? a : b;
+}
+
+/** Kinds `plan` mode refuses outright (ADR 0061). */
+const PLAN_REFUSED_KINDS: ReadonlySet<PermissionKind> = new Set([
+  'edit',
+  'sandboxed-command',
+  'command',
+  'escalation',
+  'network',
+]);
+/** A once/deny answer about a host is remembered this long so a command's connections do not re-prompt. */
+const NETWORK_ANSWER_TTL_MS = 30_000;
+
+/** In-memory settings for a client built without files (tests, embedding): no trust, no persistence. */
+function memoryPermissionSettings(): PermissionSettingsPort {
+  const scopes = PERMISSION_SETTINGS_SCOPES;
+  const files = new Map<PermissionSettingsScope, {rules: PermissionRuleSet; domains: string[]}>(
+    scopes.map(scope => [scope, {rules: {allow: [], ask: [], deny: []}, domains: []}]),
+  );
+  return {
+    snapshot() {
+      const union = (pick: (rules: PermissionRuleSet) => string[]) => [
+        ...new Set(scopes.flatMap(scope => pick(files.get(scope)!.rules))),
+      ];
+      return {
+        rules: {allow: union(r => r.allow), ask: union(r => r.ask), deny: union(r => r.deny)},
+        additionalDirectories: [],
+        sandbox: {
+          enabled: true,
+          autoAllowBashIfSandboxed: true,
+          excludedCommands: [],
+          allowUnsandboxedCommands: true,
+          allowedDomains: [...new Set(scopes.flatMap(scope => files.get(scope)!.domains))],
+        },
+        files: scopes.map(scope => ({
+          scope,
+          path: `(memory)/${scope}`,
+          exists: true,
+          trusted: true,
+          rules: structuredClone(files.get(scope)!.rules),
+          allowedDomains: [...files.get(scope)!.domains],
+          diagnostics: [],
+        })),
+        pendingTrust: [],
+        diagnostics: [],
+      };
+    },
+    addRule(scope, effect, rule) {
+      const set = files.get(scope)!.rules;
+      for (const key of ['allow', 'ask', 'deny'] as const) set[key] = set[key].filter(entry => entry !== rule);
+      if (set[effect].length >= 200) throw new FutrynError('POLICY');
+      set[effect].push(rule);
+    },
+    removeRule(scope, effect, rule) {
+      const set = files.get(scope)!.rules;
+      set[effect] = set[effect].filter(entry => entry !== rule);
+    },
+    addAllowedDomain(scope, domain) {
+      const domains = files.get(scope)!.domains;
+      if (!domains.includes(domain)) domains.push(domain);
+    },
+    trust() {},
+  };
 }
 
 export {FutrynClient as HannesClient};

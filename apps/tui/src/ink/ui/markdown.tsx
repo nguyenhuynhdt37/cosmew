@@ -5,6 +5,7 @@ import {Lexer, type Token, type Tokens} from 'marked';
 import {useTheme} from '../theme';
 import {CodeBlock} from './code-block';
 import {safeText, TextLine} from './text-line';
+import {useUiTheme} from './ui-theme';
 export interface MarkdownProps {
   text: string;
   width?: number;
@@ -19,6 +20,7 @@ function decode(text: string): string {
 }
 function Inline({tokens, depth = 0}: {tokens: Token[]; depth?: number}) {
   const {color} = useTheme();
+  const ui = useUiTheme();
   if (depth > 24) return <Text>…</Text>;
   return (
     <>
@@ -50,7 +52,7 @@ function Inline({tokens, depth = 0}: {tokens: Token[]; depth?: number}) {
             );
           case 'codespan':
             return (
-              <Text key={index} color={color('markdownCode')}>
+              <Text key={index} color={ui.color('path')}>
                 {safeText(decode(token.text))}
               </Text>
             );
@@ -81,6 +83,7 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
   const inline = (token: Tokens.Paragraph | Tokens.Heading | Tokens.Text): ReactNode => (
     <Inline tokens={token.tokens ?? Lexer.lexInline(token.text)} />
   );
+  const last = tokens.findLastIndex(token => token.type !== 'space');
   return (
     <Box flexDirection="column" minWidth={0}>
       {tokens.map((token, index) => {
@@ -89,18 +92,14 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
           case 'space':
             return null;
           case 'heading':
-            content = (
-              <Text bold color={color('markdownHeading')}>
-                {inline(token as Tokens.Heading)}
-              </Text>
-            );
+            content = <Text bold>{inline(token as Tokens.Heading)}</Text>;
             break;
           case 'paragraph':
           case 'text':
             content = <Text>{inline(token as Tokens.Paragraph)}</Text>;
             break;
           case 'code':
-            content = <CodeBlock code={token.text} language={token.lang} width={width} />;
+            content = <CodeBlock code={token.text} language={token.lang} width={width} label={false} />;
             break;
           case 'blockquote':
             content = (
@@ -124,7 +123,7 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
                 {list.items.map((item, at) => (
                   <Box key={at}>
                     <Text>
-                      {list.ordered ? `${Number(list.start) + at}. ` : '• '}
+                      {list.ordered ? `${Number(list.start || 1) + at}. ` : '- '}
                       {item.task ? `[${item.checked ? 'x' : ' '}] ` : ''}
                     </Text>
                     <Box flexGrow={1} flexShrink={1} minWidth={0}>
@@ -185,7 +184,12 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
             content = <TextLine>{decode(token.raw)}</TextLine>;
         }
         return (
-          <Box key={index} flexDirection="column" marginBottom={token.type === 'text' ? 0 : 1} minWidth={0}>
+          <Box
+            key={index}
+            flexDirection="column"
+            marginBottom={token.type === 'text' || index === last ? 0 : 1}
+            minWidth={0}
+          >
             {content}
           </Box>
         );

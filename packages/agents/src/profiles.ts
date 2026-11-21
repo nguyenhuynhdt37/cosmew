@@ -9,17 +9,9 @@ import {
   type SandboxModeSetting,
   type SubagentType,
   type ToolDescriptor,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
-const MUTATING_TOOLS = new Set([
-  'edit',
-  'write',
-  'apply_patch',
-  'lsp_rename',
-  'exec_command',
-  'write_stdin',
-  'request_permissions',
-]);
+const MUTATING_TOOLS = new Set(['edit', 'write', 'apply_patch', 'lsp_rename', 'exec_command', 'write_stdin']);
 const AGENT_TOOLS: ReadonlySet<string> = new Set(AGENT_TOOL_NAMES);
 
 export interface AgentProfile {
@@ -32,9 +24,9 @@ export interface AgentProfile {
   readOnly: boolean;
   /** Upper bound on the sandbox mode this role may run under (can only narrow the parent's sandbox). */
   maxSandboxMode: SandboxModeSetting;
-  /** Whether commands may escalate out of the sandbox (`require_escalated`) when parent policy allows. */
+  /** Whether commands may escalate out of the sandbox (`dangerouslyDisableSandbox`) when parent policy allows. */
   allowEscalation: boolean;
-  /** Whether commands may use pre-configured or granted sandbox network. */
+  /** Whether commands may use the domain-filtering sandbox proxy. */
   allowNetworkInSandbox: boolean;
   /** Explicit allowlist of tools; undefined means all parent tools except `forbiddenTools`. */
   allowedTools?: readonly string[];
@@ -46,9 +38,29 @@ export interface AgentProfile {
   custom?: {source: 'project' | 'user'; shortPath: string; guidance: string};
 }
 
-const EXPLORE_TOOLS = ['read', 'glob', 'grep', 'lsp', 'web_search', 'web_fetch', 'skill', 'exec_command'] as const;
+const EXPLORE_TOOLS = [
+  'read',
+  'glob',
+  'grep',
+  'lsp',
+  'web_search',
+  'web_fetch',
+  'skill',
+  'tool_output',
+  'exec_command',
+] as const;
 
-const PLAN_TOOLS = ['read', 'glob', 'grep', 'lsp', 'web_search', 'web_fetch', 'skill', 'update_plan'] as const;
+const PLAN_TOOLS = [
+  'read',
+  'glob',
+  'grep',
+  'lsp',
+  'web_search',
+  'web_fetch',
+  'skill',
+  'tool_output',
+  'update_plan',
+] as const;
 
 export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
   explore: {
@@ -77,7 +89,6 @@ export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
       'lsp_rename',
       'memory',
       'update_plan',
-      'request_permissions',
       'request_user_input',
       'agent',
     ],
@@ -145,7 +156,6 @@ export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
       'exec_command',
       'write_stdin',
       'memory',
-      'request_permissions',
       'request_user_input',
       'agent',
     ],
@@ -166,7 +176,7 @@ export function isBuiltinAgentName(name: string): boolean {
   );
 }
 
-/** Claude Code tool names (and Futryn names) a custom agent may list; anything else is ignored with a warning. */
+/** Claude Code tool names (and Cosmew names) a custom agent may list; anything else is ignored with a warning. */
 const TOOL_NAME_MAP: Record<string, readonly string[]> = {
   read: ['read'],
   grep: ['grep'],
@@ -189,6 +199,7 @@ const TOOL_NAME_MAP: Record<string, readonly string[]> = {
   skill: ['skill'],
   todowrite: ['update_plan'],
   update_plan: ['update_plan'],
+  tool_output: ['tool_output'],
 };
 /** Tools that exist but can never be granted to a custom agent (the host withholds them from every child). */
 const NEVER_GRANTED = new Set([
@@ -279,21 +290,32 @@ export function resolveAgentProfile(
   };
 }
 
+/** The parts of the session sandbox configuration a subagent role can narrow (ADR 0061). */
+export interface NarrowableSandbox {
+  enabled: boolean;
+  readOnly?: boolean;
+  allowUnsandboxed: boolean;
+  excludedCommands: string[];
+  additionalDirectories: string[];
+  network: boolean;
+}
+
 /**
- * Compute the effective sandbox mode for a subagent: a role can only narrow the parent's sandbox,
- * never widen it (e.g. a `worker` under a `read-only` parent stays `read-only`; an `explore`
- * under `workspace-write` or `danger-full-access` is narrowed to `read-only`).
+ * Compute the effective sandbox for a subagent: a role can only narrow the parent's sandbox, never
+ * widen it (a `worker` under a read-only parent stays read-only; an `explore` role is narrowed to a
+ * read-only OS sandbox, which also forces the sandbox on, drops excluded commands and extra
+ * writable directories, and refuses `dangerouslyDisableSandbox`).
  */
-export function effectiveSubagentSandbox(
-  parent: {mode: SandboxModeSetting; escalation: 'on-request' | 'never'; network: boolean},
-  profile: AgentProfile,
-): {mode: SandboxModeSetting; escalation: 'on-request' | 'never'; network: boolean} {
-  const mode =
-    SANDBOX_MODE_RANK[profile.maxSandboxMode] < SANDBOX_MODE_RANK[parent.mode] ? profile.maxSandboxMode : parent.mode;
-  const escalation =
-    parent.escalation === 'never' || !profile.allowEscalation || mode === 'read-only' ? 'never' : 'on-request';
-  const network = parent.network && profile.allowNetworkInSandbox && mode === 'workspace-write';
-  return {mode, escalation, network};
+export function effectiveSubagentSandbox<T extends NarrowableSandbox>(parent: T, profile: AgentProfile): T {
+  const readOnly =
+    parent.readOnly === true || SANDBOX_MODE_RANK[profile.maxSandboxMode] < SANDBOX_MODE_RANK['workspace-write'];
+  return {
+    ...parent,
+    ...(readOnly
+      ? {enabled: true, readOnly: true, excludedCommands: [], additionalDirectories: [], allowUnsandboxed: false}
+      : {allowUnsandboxed: parent.allowUnsandboxed && profile.allowEscalation}),
+    network: parent.network && profile.allowNetworkInSandbox,
+  };
 }
 
 /**
@@ -313,7 +335,7 @@ export function filterSubagentTools(
   if (options.depth >= options.maxDepth || profile.readOnly || profile.forbiddenTools.includes('agent'))
     for (const name of AGENT_TOOL_NAMES) forbidSet.add(name);
   if (options.parentAnalysisOnly || profile.readOnly) {
-    for (const writeTool of ['edit', 'write', 'apply_patch', 'lsp_rename', 'request_permissions']) {
+    for (const writeTool of ['edit', 'write', 'apply_patch', 'lsp_rename']) {
       forbidSet.add(writeTool);
     }
     if (options.parentAnalysisOnly) {
@@ -323,6 +345,11 @@ export function filterSubagentTools(
   }
   return parentDescriptors.filter(descriptor => {
     if (forbidSet.has(descriptor.name)) return false;
+    if (
+      (options.parentAnalysisOnly || profile.readOnly) &&
+      (descriptor.capability === 'mcp.call' || descriptor.name.startsWith('mcp__'))
+    )
+      return false;
     if (allowSet && !allowSet.has(descriptor.name)) return false;
     return true;
   });
@@ -343,7 +370,8 @@ export function isToolAllowedForProfile(
   if (profile.forbiddenTools.includes(toolName)) return false;
   if (profile.allowedTools && !profile.allowedTools.includes(toolName)) return false;
   if (options.parentAnalysisOnly || profile.readOnly) {
-    if (['edit', 'write', 'apply_patch', 'lsp_rename', 'request_permissions'].includes(toolName)) return false;
+    if (toolName.startsWith('mcp__')) return false;
+    if (['edit', 'write', 'apply_patch', 'lsp_rename'].includes(toolName)) return false;
     if (options.parentAnalysisOnly && (toolName === 'exec_command' || toolName === 'write_stdin')) return false;
   }
   return true;

@@ -3,7 +3,7 @@ import {request as httpRequest, type IncomingHttpHeaders} from 'node:http';
 import {request as httpsRequest} from 'node:https';
 import {isIP} from 'node:net';
 import TurndownService from 'turndown';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 export const MAX_WEB_BODY_BYTES = 5 * 1024 * 1024;
 export const MAX_WEB_REDIRECTS = 5;
@@ -175,7 +175,7 @@ export function requestPinned(
         headers: {
           Accept: 'text/html, text/plain, application/json;q=0.8, */*;q=0.1',
           'Accept-Encoding': 'identity',
-          'User-Agent': 'futryn/0.1.0',
+          'User-Agent': 'cosmew/0.1.0',
         },
         lookup: ((
           _host: unknown,

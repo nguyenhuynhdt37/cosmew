@@ -11,7 +11,7 @@ import {
   type RecoveredConversation,
   type StoredMessage,
   type TurnState,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {groupEvents, reconstructConversation, type EventRow, type TurnRow} from './journal-reconstruction';
 const owner = crypto.randomUUID();
 const alive = (pid: number) => {
@@ -164,7 +164,16 @@ export class ExecutionJournal {
             .all(id) as EventRow[];
 
           const turns = groupEvents(rows, records);
-          const {messages, pendingInput} = reconstructConversation(rows, turns, legacy);
+          const {messages, pendingInput} = reconstructConversation(
+            rows,
+            turns,
+            legacy,
+            new Set(
+              (this.db.query('SELECT id FROM input_retractions WHERE conversation=?').all(id) as {id: string}[]).map(
+                row => row.id,
+              ),
+            ),
+          );
           const saved = this.db
             .query('SELECT task,context FROM conversation_checkpoints WHERE conversation=?')
             .get(id) as {task: string | null; context: string | null} | null;

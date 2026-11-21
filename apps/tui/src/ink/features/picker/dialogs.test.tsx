@@ -2,7 +2,7 @@
 import {afterEach, expect, test} from 'bun:test';
 import {cleanup} from 'ink-testing-library';
 import {useEffect, type ReactNode} from 'react';
-import {FutrynError, FULL_ACCESS_WARNING, type MemoryInfo, type UserQuestion} from '@futryn/contracts';
+import {FutrynError, BYPASS_PERMISSIONS_WARNING, type MemoryInfo, type UserQuestion} from '@cosmew/contracts';
 import {InkApp} from '../../app';
 import {useOverlay} from '../../core';
 import {renderInk, settle} from '../../testing';
@@ -19,7 +19,7 @@ import {AgentsDialog} from '../agents';
 import {SkillsDialog} from '../skills';
 import {HelpDialog} from '../help';
 import {SettingsDialog} from '../settings';
-import {dialogFixture, provider, account, selection, session, child} from './test-fixture';
+import {dialogFixture, provider, account, model, selection, session, child} from './test-fixture';
 afterEach(cleanup);
 const down = '\u001b[B';
 const enter = '\r';
@@ -58,7 +58,8 @@ test('picker filters and clamps narrow Unicode content without ANSI controls', a
   expect(selected).toEqual(['y']);
   view.rerender(<PickerDialog title="Small" width={8} items={[]} onSelect={() => {}} />);
   await settle();
-  expect(view.lastFrame()).toContain('╭');
+  expect(view.lastFrame()).toContain('▔');
+  expect(view.lastFrame()).not.toContain('╭');
 });
 test('hidden input masks paste, removes a Unicode code point and submits once', async () => {
   const submitted: string[] = [];
@@ -124,7 +125,7 @@ test('permissions ignore unavailable numbered decisions and closing denies SDK w
   await settle();
   expect(view.lastFrame()).toContain('NO SANDBOX');
   expect(view.lastFrame()).not.toContain('Cả phiên');
-  await key(view, '2');
+  await key(view, '9');
   expect(fixture.client.listPendingPermissions()).toHaveLength(1);
   await key(view, esc);
   expect(fixture.client.listPermissions().find(r => r.approvalId === request.approvalId)?.status).toBe('denied');
@@ -163,7 +164,7 @@ test('always saves exactly the offered rule before approval', async () => {
   const view = routed(<PermissionsDialog />, fixture);
   await settle();
   expect(view.lastFrame()).toContain('Bash(npm test:*)');
-  await key(view, '3');
+  await key(view, '2');
   expect(fixture.client.permissionRules().allow).toContain('Bash(npm test:*)');
   expect(fixture.client.listPermissions()[0]?.status).toBe('approved_always');
 });
@@ -179,8 +180,10 @@ test('denial captures reason as host feedback after SDK denial', async () => {
   const reasons: string[] = [];
   const view = routed(<PermissionsDialog onDenied={reason => reasons.push(reason)} />, fixture);
   await settle();
-  expect(view.lastFrame()).toContain('not applied');
-  await key(view, '4');
+  expect(view.lastFrame()).toContain('1 -old');
+  expect(view.lastFrame()).toContain('1 +new');
+  expect(view.lastFrame()).toContain('Esc to cancel · Tab to amend');
+  await key(view, '\t');
   await key(view, 'Keep old behavior');
   await key(view, enter);
   expect(reasons).toEqual(['Keep old behavior']);
@@ -200,31 +203,26 @@ test('expired or tightened prompt cannot be approved by stale UI', async () => {
   await key(view, '1');
   expect(fixture.client.listPermissions()[0]?.status).toBe('denied');
 });
-test('Full Access requires explicit warning confirmation; Escape keeps sandbox', async () => {
+test('the permissions dialog lists the Claude Code modes; bypassPermissions is not offered unless launched in it', async () => {
   const fixture = dialogFixture();
   const view = routed(<PermissionRulesDialog />, fixture);
   await settle();
-  await key(view, 'Full Access');
+  for (let i = 0; i < 3; i++) await key(view, '\t'); // Allow -> Ask -> Deny -> Mode
+  expect(view.lastFrame()).toContain('accept edits');
+  expect(view.lastFrame()).toContain('plan mode');
+  expect(view.lastFrame()).not.toContain('bypass permissions');
+  expect(fixture.client.permissionMode()).toBe('default');
+  await key(view, down);
   await key(view, enter);
-  expect(view.lastFrame()).toContain('WITHOUT');
-  expect(fixture.client.permissionPreset()).toBe('auto');
-  await key(view, esc);
-  expect(fixture.client.permissionPreset()).toBe('auto');
-  const next = routed(<PermissionRulesDialog />, fixture);
-  await settle();
-  await key(next, 'Full Access');
-  await key(next, enter);
-  await key(next, down);
-  await key(next, enter);
-  expect(fixture.client.permissionPreset()).toBe('full-access');
-  expect(FULL_ACCESS_WARNING).toContain('WITHOUT');
+  expect(fixture.client.permissionMode()).toBe('acceptEdits');
+  expect(BYPASS_PERMISSIONS_WARNING).toContain('skips every permission prompt');
 });
 test('permission rules can be added and removed through SDK validation', async () => {
   const fixture = dialogFixture();
   const view = renderInk(<PermissionRulesDialog />, {fixture});
   await settle();
-  await key(view, '\t');
-  await key(view, enter);
+  await key(view, enter); // Allow tab: "Add a new rule…"
+  await key(view, enter); // settings file: local
   await key(view, 'bad-rule');
   await key(view, enter);
   expect(fixture.client.permissionRules().allow).toEqual([]);
@@ -249,29 +247,35 @@ const questions: UserQuestion[] = [
     ],
   },
 ];
-test('question selections require explicit submit; close dismisses', async () => {
-  const fixture = dialogFixture();
-  fixture.client.setUserInputAvailable(true);
-  const outcome = fixture.client.askUser(questions);
-  const view = routed(<QuestionDialog />, fixture);
-  await settle();
-  await key(view, enter);
-  expect(fixture.client.listPendingQuestions()).toHaveLength(1);
-  await key(view, esc);
-  expect(await outcome).toEqual({kind: 'dismissed'});
+test('a single question answers on Enter; Esc and "Chat about this" dismiss', async () => {
+  const cases: [string[], {kind: 'answered'; answers: {mode: {answers: string[]}}} | {kind: 'dismissed'}][] = [
+    [[enter], {kind: 'answered', answers: {mode: {answers: ['Fast']}}}],
+    [[esc], {kind: 'dismissed'}],
+    [[down, down, down, enter], {kind: 'dismissed'}],
+  ];
+  for (const [keys, expected] of cases) {
+    const fixture = dialogFixture();
+    fixture.client.setUserInputAvailable(true);
+    const outcome = fixture.client.askUser(questions);
+    const view = routed(<QuestionDialog />, fixture);
+    await settle();
+    expect(view.lastFrame()).toContain('❯ 1. Fast');
+    expect(view.lastFrame()).toContain('Chat about this');
+    for (const next of keys) await key(view, next);
+    expect(await outcome).toEqual(expected);
+    view.unmount();
+  }
 });
-test('question free text submits valid SDK answer', async () => {
+test('question free text is typed inline on the "Type something." row and submits a valid SDK answer', async () => {
   const fixture = dialogFixture();
   fixture.client.setUserInputAvailable(true);
   const outcome = fixture.client.askUser(questions);
   const view = routed(<QuestionDialog />, fixture);
   await settle();
-  await key(view, 'Nhập');
-  await key(view, enter);
+  await key(view, down);
+  await key(view, down);
   await key(view, 'Custom mode');
-  await key(view, enter);
-  // Text-entry completion remounts a fresh picker.
-  await key(view, 'Submit');
+  expect(view.lastFrame()).toContain('3. Custom mode');
   await key(view, enter);
   expect(await outcome).toEqual({kind: 'answered', answers: {mode: {answers: ['Custom mode']}}});
 });
@@ -284,11 +288,15 @@ test('multiple question tabs retain answers and reject incomplete submission', a
   ]);
   const view = routed(<QuestionDialog />, fixture);
   await settle();
-  await key(view, 'Submit');
+  expect(view.lastFrame()).toContain('☐ Mode');
+  await key(view, enter); // answers Mode and moves to the next question
+  expect(view.lastFrame()).toContain('☒ Mode');
+  expect(view.lastFrame()).toContain('Select all that apply.');
+  await key(view, '\u001b[C'); // -> Submit tab
+  expect(view.lastFrame()).toContain('Review your answers');
   await key(view, enter);
   expect(view.lastFrame()).toContain('Answer every');
-  await key(view, '\u007f'); // query remains editable; closing must settle every pending question
-  await key(view, esc);
+  await key(view, esc); // closing must settle every pending question
   expect(await outcome).toEqual({kind: 'dismissed'});
 });
 test('models select advertised effort through public SDK', async () => {
@@ -344,6 +352,22 @@ test('sessions resume from filtered catalog and revoke old grants', async () => 
   await key(view, enter);
   expect(fixture.client.status().activeSessionId).toBe(session.id);
 });
+test('sessions Ctrl+N starts a new session instead of moving the picker highlight', async () => {
+  let created = 0;
+  const fixture = dialogFixture({
+    listSessions: () => [session],
+    startSession: () => {
+      created++;
+      return {id: `new-${created}`, selection, messages: []};
+    },
+  });
+  const view = renderInk(<SessionsDialog />, {fixture});
+  await settle();
+  await key(view, '\x0e');
+  expect(created).toBe(1);
+  expect(fixture.client.status().activeSessionId).toBe('new-1');
+  view.unmount();
+});
 test('session deletion failure keeps item and reports honest error', async () => {
   const fixture = dialogFixture({listSessions: () => [session], deleteSession: () => false});
   const view = renderInk(<SessionsDialog />, {fixture});
@@ -361,8 +385,7 @@ test('theme preview rolls back on close and applies only after confirmation', as
   const target = original === 'light' ? 'dark' : 'light';
   const view = renderInk(<ThemesDialog />, {themeEngine: engine});
   await settle();
-  await key(view, target);
-  await key(view, enter);
+  await key(view, target); // highlighting a theme previews it
   expect(engine.isPreviewing()).toBe(true);
   expect(engine.getCommittedAppearance().theme).toBe(original);
   view.unmount();
@@ -370,8 +393,7 @@ test('theme preview rolls back on close and applies only after confirmation', as
   const applied = renderInk(<ThemesDialog />, {themeEngine: engine});
   await settle();
   await key(applied, target);
-  await key(applied, enter);
-  await key(applied, enter);
+  await key(applied, enter); // Enter applies; there is no second confirmation step
   expect(engine.getCommittedAppearance().theme).toBe(target);
 });
 const memory: MemoryInfo = {
@@ -481,7 +503,10 @@ test('skills retain source, explicit-only state and discovery diagnostics', asyn
 test('help renders canonical keymap and slash metadata', async () => {
   const view = renderInk(<HelpDialog visibleRows={40} />);
   await settle();
-  expect(view.lastFrame()).toContain('Shift+Tab');
+  expect(view.lastFrame()).toContain('Help  General   Commands   Custom commands');
+  expect(view.lastFrame()).toContain('shift+tab to cycle modes');
+  expect(view.lastFrame()).toContain('←/→ to switch · Esc to close');
+  await key(view, '\u001b[C');
   expect(view.lastFrame()).toContain('/permissions');
   expect(view.lastFrame()).toContain('/skills');
 });
@@ -675,14 +700,14 @@ test('custom provider wizard saves user config with environment-backed headers',
   expect(view.frames.join('')).not.toContain('Authorization=$GATEWAY_TOKEN');
 });
 
-test('preset cycling hook opens Full Access confirmation without granting authority', async () => {
+test('the mode cycling hook follows default -> acceptEdits -> plan -> default', async () => {
   function Cycle() {
     const permissions = usePermissions();
     return (
       <PickerDialog
         title="Cycle"
-        items={[{id: 'cycle', label: 'Cycle preset'}]}
-        onSelect={() => permissions.cyclePreset()}
+        items={[{id: 'cycle', label: 'Cycle mode'}]}
+        onSelect={() => permissions.cycleMode()}
       />
     );
   }
@@ -690,10 +715,11 @@ test('preset cycling hook opens Full Access confirmation without granting author
   const view = renderInk(<InkApp client={fixture.client} slots={{composer: <Cycle />}} />, {fixture});
   await settle();
   await key(view, enter);
-  expect(view.lastFrame()).toContain('WITHOUT');
-  expect(fixture.client.permissionPreset()).toBe('auto');
-  await key(view, esc);
-  expect(fixture.client.permissionPreset()).toBe('auto');
+  expect(fixture.client.permissionMode()).toBe('acceptEdits');
+  await key(view, enter);
+  expect(fixture.client.permissionMode()).toBe('plan');
+  await key(view, enter);
+  expect(fixture.client.permissionMode()).toBe('default');
 });
 
 test('closing while OAuth challenge is being created cancels a late challenge', async () => {
@@ -787,9 +813,10 @@ test('overlay scopes block background input and unmount dismisses the question',
   // Input is scoped to the overlay. Host input must not replace it while it is open.
   await key(view, 'Replace');
   await key(view, enter);
-  expect(fixture.client.listPendingQuestions()).toHaveLength(1);
+  // The overlay consumed Enter (answering its own option); the host picker never opened Help over it.
+  expect(await outcome).toEqual({kind: 'answered', answers: {mode: {answers: ['Fast']}}});
+  expect(view.lastFrame()).not.toContain('Shortcuts');
   view.unmount();
-  expect(await outcome).toEqual({kind: 'dismissed'});
 });
 
 test('dialog subscriptions ignore streaming deltas but refresh permission state', async () => {
@@ -815,3 +842,168 @@ test('dialog subscriptions ignore streaming deltas but refresh permission state'
   await settle();
   expect(renders).toBe(after);
 });
+
+test('model picker s and effort slider s apply only to this session without saving settings', async () => {
+  const fixture = dialogFixture({
+    selectModel: () => {
+      throw new Error('persistent selection forbidden');
+    },
+  });
+  const before = JSON.stringify(fixture.settings);
+  const view = routed(<ModelsDialog />, fixture);
+  await settle();
+  await key(view, '\u001b[C');
+  await key(view, 's');
+  expect(fixture.client.status().reasoningEffort).toBe('high');
+  expect(JSON.stringify(fixture.settings)).toBe(before);
+  expect(view.lastFrame()).not.toContain('Not implemented');
+  view.unmount();
+  const effort = routed(<EffortDialog />, fixture);
+  await settle();
+  await key(effort, '\u001b[D');
+  await key(effort, 's');
+  expect(fixture.client.status().reasoningEffort).toBe('low');
+  expect(JSON.stringify(fixture.settings)).toBe(before);
+});
+
+test('effort Auto without levels explains configuration and resets with Enter or s', async () => {
+  for (const input of [enter, 's']) {
+    const fixture = dialogFixture({cachedModels: () => [{...model, reasoningEfforts: undefined}]});
+    const keyName = account.id + ':' + model.id;
+    fixture.settings.reasoningPreferences = {[keyName]: 'high'};
+    const before = JSON.stringify(fixture.settings);
+    const view = routed(<EffortDialog />, fixture);
+    await settle();
+    const frame = view.lastFrame()!;
+    expect(frame).toContain('No effort levels known for');
+    expect(frame).toContain('sample-model');
+    expect(frame).toContain('~/.cosmew/config.toml');
+    expect(frame).not.toContain('←/→ to adjust');
+    await key(view, input);
+    expect(view.lastFrame()).not.toContain('Reasoning effort');
+    expect(view.lastFrame()).not.toContain('Action failed');
+    if (input === 's') expect(JSON.stringify(fixture.settings)).toBe(before);
+    else expect(fixture.settings.reasoningPreferences?.[keyName]).toBeUndefined();
+    view.unmount();
+  }
+});
+
+test('model panel and effort panel identify protocols with no effort wire mapping', async () => {
+  for (const protocol of ['anthropic', 'gemini'] as const) {
+    const fixture = dialogFixture();
+    fixture.settings.providers = [{...provider, protocol}];
+    const view = routed(<EffortDialog />, fixture);
+    await settle();
+    expect(view.lastFrame()).toContain(`${protocol} protocol`);
+    expect(view.lastFrame()).toContain('no wire mapping');
+    expect(view.lastFrame()).not.toContain('←/→ to adjust');
+    await key(view, enter);
+    expect(view.lastFrame()).not.toContain('Action failed');
+    view.unmount();
+    const models = routed(<ModelsDialog />, fixture);
+    await settle();
+    await key(models, enter);
+    expect(models.lastFrame()).toContain(`${protocol} protocol`);
+    models.unmount();
+  }
+});
+
+test('model panel explains unknown levels and its Auto option closes without error', async () => {
+  const fixture = dialogFixture({
+    cachedModels: () => [{...model, reasoningEfforts: undefined}],
+    selectModel: () => selection,
+  });
+  const view = routed(<ModelsDialog />, fixture);
+  await settle();
+  expect(view.lastFrame()).toContain('No effort levels known');
+  await key(view, enter);
+  expect(view.lastFrame()).toContain('~/.cosmew/config.toml');
+  await key(view, enter);
+  expect(view.lastFrame()).not.toContain('Model ·');
+  expect(view.lastFrame()).not.toContain('Action failed');
+});
+
+test('grok-4.7 discovered levels appear in effort and model panels and save xhigh', async () => {
+  const grok = {...model, id: 'grok-4.7', reasoningEfforts: ['low', 'medium', 'high', 'xhigh']};
+  const fixture = dialogFixture({
+    cachedModels: () => [grok],
+    resolveSelection: () => ({...selection, modelId: grok.id}),
+  });
+  const view = routed(<EffortDialog />, fixture);
+  await settle();
+  for (const level of ['Auto', 'low', 'medium', 'high', 'xhigh']) expect(view.lastFrame()).toContain(level);
+  for (let i = 0; i < 4; i++) await key(view, '\u001b[C');
+  await key(view, enter);
+  expect(fixture.client.status().reasoningEffort).toBe('xhigh');
+  view.unmount();
+  const panel = routed(<ModelsDialog />, fixture);
+  await settle();
+  expect(panel.lastFrame()).toContain('low · medium · high · xhigh');
+});
+test('model panel hides non-coding metadata and a reveals it without filtering the list', async () => {
+  const image = {...model, id: 'excluded-image', capabilities: {...model.capabilities, text: 'unsupported' as const}};
+  const fixture = dialogFixture({cachedModels: () => [model, image]});
+  const view = routed(<ModelsDialog />, fixture);
+  await settle();
+  expect(view.lastFrame()).toContain('1 non-coding models hidden');
+  expect(view.lastFrame()).not.toContain('excluded-image');
+  await key(view, 'a');
+  expect(view.lastFrame()).toContain('excluded-image');
+  await key(view, 'a');
+  expect(view.lastFrame()).not.toContain('excluded-image');
+});
+
+test('SDK discovery defaults to coding models and all restores the complete catalog', async () => {
+  const image = {...model, id: 'image', capabilities: {...model.capabilities, tools: 'unsupported' as const}};
+  const manual = {...image, id: 'manual', source: 'manual' as const};
+  const selected = {...image, id: model.id};
+  const fixture = dialogFixture({discoverModels: async () => ({models: [selected, image, manual], stale: false})});
+  expect((await fixture.client.discoverModels()).models.map(m => m.id)).toEqual([model.id, 'manual']);
+  expect((await fixture.client.discoverModels({all: true})).models).toHaveLength(3);
+});
+test('model effort subpanel s applies the highlighted effort only for this session', async () => {
+  const fixture = dialogFixture({selectModel: () => selection});
+  const before = structuredClone(fixture.settings);
+  const view = routed(<ModelsDialog />, fixture);
+  await settle();
+  await key(view, enter);
+  await key(view, down);
+  await key(view, 's');
+  expect(fixture.client.status().reasoningEffort).toBe('low');
+  expect(fixture.settings).toEqual(before);
+});
+
+for (const Panel of [EffortDialog, ModelsDialog]) {
+  for (const fails of [false, true]) {
+    test(`${Panel.name} refreshes missing effort levels silently (failure=${fails})`, async () => {
+      let finish!: () => void;
+      let current: typeof model = {...model, reasoningEfforts: undefined};
+      let calls = 0;
+      const fixture = dialogFixture({
+        cachedModels: () => [current],
+        refreshModelMetadata: () => {
+          calls++;
+          return new Promise<void>((resolve, reject) => {
+            finish = () => {
+              if (fails) reject(new Error('private transport error'));
+              else {
+                current = {...model};
+                resolve();
+              }
+            };
+          });
+        },
+      });
+      const view = routed(<Panel />, fixture);
+      await settle();
+      expect(view.lastFrame()).toContain('Loading effort levels…');
+      finish();
+      await settle();
+      expect(view.lastFrame()).not.toContain('Loading effort levels…');
+      expect(view.lastFrame()).not.toContain('private transport error');
+      expect(view.lastFrame()).toContain(fails ? 'No effort levels known' : 'high');
+      expect(calls).toBe(1);
+      view.unmount();
+    });
+  }
+}

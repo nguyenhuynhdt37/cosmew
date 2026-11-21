@@ -1,0 +1,30 @@
+00|
+01|     /context all to expand
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+03|  Hooks
+04|  53 hooks on 16 events
+05|
+06|  This menu is read-only. To add or change a hook, edit settings.json or ask Claude. Learn more
+07|
+08|    PreToolUse  before tool execution
+09|  ❯ [User]   if [ -z "${HOME-}" ]; then case "${OSTY…   * · command
+10|    [Plugin] python3 "${CLAUDE_PLUGIN_ROOT}/hooks/pr…   hookify@claude-plugins-official
+11|    [Plugin] "${CLAUDE_PLUGIN_ROOT}/scripts/hook" au…   semgrep@claude-plugins-official
+12|
+13|    PostToolUse  after tool execution
+14|    [User]   if [ -z "${HOME-}" ]; then case "${OSTY…   * · command
+15|    [Plugin] python3 "${CLAUDE_PLUGIN_ROOT}/hooks/po…   hookify@claude-plugins-official
+16|    [Plugin] node ${CLAUDE_PLUGIN_ROOT}/scripts/life…   stripe@claude-plugins-official · Agent
+17|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+18|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+19|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+20|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+21|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+22|    [Plugin] bash "${CLAUDE_PLUGIN_ROOT}/hooks/sg-py…   security-guidance@claude-plugins-offici…
+23|    [Plugin] node "${CLAUDE_PLUGIN_ROOT}/hooks/postt…   vercel@claude-plugins-official · Skill
+24|    [Plugin] node ${CLAUDE_PLUGIN_ROOT}/scripts/life…   stripe@claude-plugins-official · Skill
+25|    [Plugin] "${CLAUDE_PLUGIN_ROOT}/scripts/hook" au…   semgrep@claude-plugins-official
+26|
+27|    ↓ 39 more
+28|
+29|  ↑/↓ to navigate · Enter to view · Esc to close

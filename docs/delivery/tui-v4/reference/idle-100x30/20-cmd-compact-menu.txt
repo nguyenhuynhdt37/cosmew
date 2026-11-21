@@ -1,0 +1,30 @@
+00|
+01|     Skills · /skills
+02|     └ 220 skills · 9.9k tokens
+03|
+04|     /context all to expand
+05|
+06|❯ /export
+07|  ⎿  Export cancelled
+08|
+09|❯ /diff
+10|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+11|
+12|❯ /effort
+13|  ⎿  Cancelled
+14|
+15|❯ /keybindings
+16|
+17|✻ Imagining…
+18|  ⎿  Tip: Run /web-setup to use cloud sessions with the GitHub account gh is signed in to
+19|
+20|────────────────────────────────────────────────────────────────────────────────────────────────────
+21|❯ /statusline
+22|/tasks──────────────────────────────────────────────────────────────────────────────────────────────
+23|/ide
+24|/vim anual mode on · esc to interrupt · ← 1 agent
+25|/terminal-setup
+26|/privacy-settings
+27|/release-notes
+28|/add-dir
+29|/compact

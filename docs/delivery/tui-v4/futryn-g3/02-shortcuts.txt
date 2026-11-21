@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|
+21|────────────────────────────────────────────────────────────────────────────────────────────────────
+22|❯ Try "write a test for <filepath>"
+23|────────────────────────────────────────────────────────────────────────────────────────────────────
+24|  ! for shell mode        esc esc to clear input             ctrl+shift+_ to undo
+25|  / for commands          shift+tab to cycle modes           ctrl+z to suspend
+26|  @ for file paths        ctrl+o to see full transcript      opt+p to switch model
+27|                          ctrl+t to toggle tasks             ctrl+s to stash prompt
+28|                          backslash (\) then enter for       ctrl+g to edit in $EDITOR
+29|                          newline

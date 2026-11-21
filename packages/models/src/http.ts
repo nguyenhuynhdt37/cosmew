@@ -1,10 +1,20 @@
-import {FutrynError, type Account, type CredentialVault, type NetworkPolicy, type Provider} from '@futryn/contracts';
+import {FutrynError, type Account, type CredentialVault, type NetworkPolicy, type Provider} from '@cosmew/contracts';
 
 export function normalizeError(error: unknown, signal?: AbortSignal): FutrynError {
   if (signal?.aborted) return new FutrynError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
   if (error instanceof FutrynError) return error;
-  const status =
-    typeof error === 'object' && error !== null && 'statusCode' in error ? Number(error.statusCode) : undefined;
+  const status = (() => {
+    if (!error || typeof error !== 'object') return undefined;
+    const value = error as Record<string, unknown>;
+    const response = value.response;
+    const responseStatus =
+      response && typeof response === 'object' ? (response as Record<string, unknown>).status : undefined;
+    for (const candidate of [value.statusCode, value.status, responseStatus]) {
+      const n = typeof candidate === 'number' ? candidate : typeof candidate === 'string' ? Number(candidate) : NaN;
+      if (Number.isInteger(n) && n >= 100 && n <= 599) return n;
+    }
+    return undefined;
+  })();
   if (status) return statusError(status, null);
   return new FutrynError('PROTOCOL');
 }

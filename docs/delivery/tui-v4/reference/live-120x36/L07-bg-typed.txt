@@ -1,0 +1,36 @@
+00|       2 a heartbeat on an empty line;                            │                                                   ✕
+01|       3 it never hurries, never asks,                            │2 files changed +1 -1              source: Current ▾
+02|       4 it only waits for your design.                           │
+03|       5 The prompt is small, a dollar sign,                      │a.txt                                          +1 -1
+04|       6 a humble gate, a narrow door,                            │poem.txt
+05|       7 yet through it pour the oldest spells                    │
+06|       8 that ran on glass and tape before.                       │────────────────────────────────────────────────────
+07|       9 I type a word, the shell replies,                        │a.txt                                        [ ask ]
+08|      10 a pipe connects one thought to two,                      │────────────────────────────────────────────────────
+09|     … +50 lines                                                  │ 1 -hello
+10|                                                                  │ 1 +HELLO
+11|❯ also give it a title                                            │ 2  world
+12|                                                                  │
+13|⏺ Update(poem.txt)                                                │────────────────────────────────────────────────────
+14|  ⎿  Added 2 lines                                                │poem.txt (untracked)
+15|      1 +Exit Zero                                                │────────────────────────────────────────────────────
+16|      2 +                                                         │New file not yet staged.
+17|      3  A cursor blinks against the black,                       │Run `git add :/poem.txt` to see line counts.
+18|      4  a heartbeat on an empty line;                            │
+19|      5  it never hurries, never asks,                            │
+20|                                                                  │
+21|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it  │
+22|  the title "Exit Zero", which comes from its last line.          │
+23|                                                                  │
+24|  The poem has 15 four-line stanzas. They cover the blinking      │
+25|  cursor, pipes, standard in, out and error, man pages, command   │
+26|  history, Ctrl-C and Ctrl-D, and tmux panes. The title and a     │
+27|  blank line sit above the poem, so the file is 62 lines long.    │
+28|                                                                  │
+29|✻ Baked for 29s · done 11:05 PM                                   │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯ Run `sleep 40` as a background shell command (run_in_background) and then just reply 'started'.
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on

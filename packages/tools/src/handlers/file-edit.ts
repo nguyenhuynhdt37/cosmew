@@ -1,6 +1,6 @@
 import {z} from 'zod';
-import {WriteBoundaryError, contentHash} from '@futryn/workspace';
-import type {ToolDispatcherOptions, ToolOutput} from '../context';
+import {locateWriteTarget, WorkspaceDenied, WriteBoundaryError, contentHash, type WriteTarget} from '@cosmew/workspace';
+import {sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
 import {PatchError} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ReadLedger} from '../runtimes/read-ledger';
@@ -23,7 +23,11 @@ export const editDescriptor = {
   inputSchema: {
     type: 'object',
     properties: {
-      path: {type: 'string', description: 'File path relative to the workspace root.'},
+      path: {
+        type: 'string',
+        description:
+          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+      },
       old_string: {type: 'string', description: 'Exact text to replace.'},
       new_string: {type: 'string', description: 'Replacement text (must differ from old_string).'},
       replace_all: {type: 'boolean', description: 'Replace every occurrence instead of exactly one (default false).'},
@@ -41,7 +45,11 @@ export const writeDescriptor = {
   inputSchema: {
     type: 'object',
     properties: {
-      path: {type: 'string', description: 'File path relative to the workspace root.'},
+      path: {
+        type: 'string',
+        description:
+          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+      },
       content: {type: 'string', description: 'The complete new file content.'},
     },
     required: ['path', 'content'],
@@ -128,10 +136,24 @@ abstract class FileChangeHandler implements ToolHandler {
   };
   protected readonly runtime: ApplyPatchRuntime;
   constructor(
-    options: ToolDispatcherOptions,
+    private readonly options: ToolDispatcherOptions,
     protected readonly ledger: ReadLedger,
   ) {
     this.runtime = new ApplyPatchRuntime(options);
+  }
+  /** Ledger key for this path. A granted-directory file is keyed by its canonical absolute path. */
+  protected targetOf(input: string): WriteTarget | ToolOutput {
+    try {
+      return locateWriteTarget(this.options.workspace, input, sandboxConfig(this.options).additionalDirectories);
+    } catch (error) {
+      if (error instanceof WorkspaceDenied)
+        return {
+          status: 'denied',
+          code: 'DENIED',
+          content: 'Access denied: the path is outside the approved workspace.',
+        };
+      throw error;
+    }
   }
   available(): boolean {
     return this.runtime.available();
@@ -171,10 +193,12 @@ export class EditHandler extends FileChangeHandler {
         content: 'edit requires path, a non-empty old_string and new_string (optional replace_all).',
       };
     const input = parsed.data;
-    return this.planned(input.path, before => {
+    const located = this.targetOf(input.path);
+    if (!('key' in located)) return located;
+    return this.planned(located.key, before => {
       if (before === null)
-        throw new PatchError('NOT_FOUND', `${input.path} does not exist. Use write to create a new file.`);
-      requireCurrentRead(this.ledger, input.path, before);
+        throw new PatchError('NOT_FOUND', `${located.key} does not exist. Use write to create a new file.`);
+      requireCurrentRead(this.ledger, located.key, before);
       return replaceText(before, input);
     });
   }
@@ -187,8 +211,10 @@ export class WriteHandler extends FileChangeHandler {
     if (!parsed.success)
       return {status: 'error', code: 'INVALID_INPUT', content: 'write requires path and content strings.'};
     const input = parsed.data;
-    return this.planned(input.path, before => {
-      if (before !== null) requireCurrentRead(this.ledger, input.path, before);
+    const located = this.targetOf(input.path);
+    if (!('key' in located)) return located;
+    return this.planned(located.key, before => {
+      if (before !== null) requireCurrentRead(this.ledger, located.key, before);
       return input.content;
     });
   }

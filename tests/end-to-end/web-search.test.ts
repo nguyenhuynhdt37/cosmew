@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {McpClient, WebSearchClient, selectSearchProvider} from '@futryn/mcp';
+import {McpClient, WebSearchClient, selectSearchProvider} from '@cosmew/mcp';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {

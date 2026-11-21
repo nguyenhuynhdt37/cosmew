@@ -1,8 +1,8 @@
-import {existsSync} from 'node:fs';
+import {existsSync, statSync} from 'node:fs';
 import {join} from 'node:path';
-import type {CommandSandbox} from '@futryn/contracts';
-import {evaluateRead} from '@futryn/security';
-import {WorkspaceRoot, scanExecutionMasks, type MaskDecision} from '@futryn/workspace';
+import type {CommandSandbox} from '@cosmew/contracts';
+import {evaluateRead, SENSITIVE_HOME_PATHS} from '@cosmew/security';
+import {WorkspaceRoot, scanExecutionMasks, type MaskDecision} from '@cosmew/workspace';
 import type {NativeSandbox} from './native-sandbox';
 
 export interface BubblewrapOptions {
@@ -18,9 +18,9 @@ export interface BubblewrapOptions {
 
 /**
  * Linux bubblewrap sandbox (ADR 0035), modelled on Codex `sandboxing/src/bwrap.rs`: read-only
- * root, writable workspace bind (workspace-write), read-only `.git` with an empty config, home
- * hidden behind tmpfs, masked Futryn state, private /tmp, a PID namespace that dies with the
- * command, and no network namespace unless approved.
+ * root, writable workspace bind (workspace-write) plus `additionalDirectories`, read-only `.git` with
+ * an empty config, the default sensitive home directories hidden, masked Cosmew state, private /tmp,
+ * a PID namespace that dies with the command, and no network.
  *
  * IMPLEMENTED — NOT TESTED on a Linux host.
  */
@@ -42,7 +42,9 @@ export class BubblewrapSandbox implements NativeSandbox {
       '--new-session',
       '--unshare-pid',
       '--unshare-ipc',
-      ...(sandbox.network ? [] : ['--unshare-net']),
+      // No network namespace member can reach the host's loopback proxy: on Linux a sandboxed
+      // command has no network at all (ADR 0061; a socket bridge to the proxy is Needs verification).
+      '--unshare-net',
       '--ro-bind',
       '/',
       '/',
@@ -52,8 +54,7 @@ export class BubblewrapSandbox implements NativeSandbox {
       '/proc',
       '--tmpfs',
       '/tmp',
-      '--tmpfs',
-      home,
+      ...this.sensitiveHome(home),
       '--bind',
       join(scratch, 'home'),
       join(scratch, 'home'),
@@ -63,8 +64,11 @@ export class BubblewrapSandbox implements NativeSandbox {
       sandbox.mode === 'workspace-write' ? '--bind' : '--ro-bind',
       workspace.root,
       workspace.root,
+      ...(sandbox.mode === 'workspace-write'
+        ? (sandbox.writableRoots ?? []).filter(root => existsSync(root)).flatMap(root => ['--bind', root, root])
+        : []),
       ...masks.readOnly.flatMap(path => ['--ro-bind', inWorkspace(path), inWorkspace(path)]),
-      // Same as the Docker mask: git works with an empty repository config; credentials stay hidden.
+      // Git works with an empty repository config; credentials stay hidden.
       ...masks.readOnly.flatMap(path =>
         ['config', 'config.worktree']
           .filter(file => existsSync(join(inWorkspace(path), file)))
@@ -78,6 +82,15 @@ export class BubblewrapSandbox implements NativeSandbox {
       '--',
       ...argv,
     ];
+  }
+
+  /** Credential directories under the real home are hidden; the rest of the filesystem stays readable (ADR 0061). */
+  private sensitiveHome(home: string): string[] {
+    return SENSITIVE_HOME_PATHS.map(path => join(home, path))
+      .filter(
+        path => existsSync(path) && !(this.options.workspace === path || this.options.workspace.startsWith(path + '/')),
+      )
+      .flatMap(path => (statSync(path).isDirectory() ? ['--tmpfs', path] : ['--ro-bind', '/dev/null', path]));
   }
 
   private classify(workspace: WorkspaceRoot, path: string, directory: boolean): MaskDecision {

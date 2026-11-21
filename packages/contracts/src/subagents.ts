@@ -9,7 +9,7 @@ export const DEFAULT_AGENT_MAX_DEPTH = 1;
 
 export const BUILTIN_SUBAGENT_TYPES = ['explore', 'worker', 'general', 'plan'] as const;
 export type BuiltinSubagentType = (typeof BUILTIN_SUBAGENT_TYPES)[number];
-/** Built-in role id or the name of a custom agent definition (S5b, `.futryn/agents/*.md`). */
+/** Built-in role id or the name of a custom agent definition (S5b, `.cosmew/agents/*.md`). */
 export const subagentTypeSchema = z.string().min(1).max(64);
 export type SubagentType = string;
 
@@ -227,7 +227,7 @@ export interface AgentTypeView {
   tools: string[] | null;
   model?: string;
   reasoningEffort?: string;
-  /** Short display path (`.claude/agents/x.md`, `~/.futryn/agents/x.md`) of a custom definition. */
+  /** Short display path (`.cosmew/agents/x.md`, `~/.cosmew/agents/x.md`) of a custom definition. */
   path?: string;
 }
 export interface AgentDefinitionDiagnostic {
@@ -272,7 +272,7 @@ export interface SubagentSummaryView {
   summary: string;
 }
 
-/** A custom agent definition (`.futryn/agents/*.md`, `.claude/agents/*.md`, ...); all of it is untrusted data (S5b). */
+/** A custom agent definition (`.cosmew/agents/*.md`, `.futryn/agents/*.md`, `.claude/agents/*.md`, ...); all of it is untrusted data (S5b). */
 export interface CustomAgentDefinition {
   name: string;
   description: string;

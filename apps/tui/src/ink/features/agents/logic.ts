@@ -1,4 +1,4 @@
-import type {AgentTypeView, SubagentSummaryView, Usage} from '@futryn/contracts';
+import type {AgentTypeView, SubagentSummaryView, Usage} from '@cosmew/contracts';
 
 export function tokenTotal(usage: Usage | null): number {
   return (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
@@ -42,25 +42,4 @@ export function transcriptLines(child: SubagentSummaryView): string[] {
     }
   }
   return lines;
-}
-
-/** All rows of the list screen; `selectableOffsets` maps a child index to its row for scrolling. */
-export function listRows(
-  types: readonly AgentTypeView[],
-  warnings: readonly string[],
-  children: readonly SubagentSummaryView[],
-  index: number,
-  now = Date.now(),
-): {rows: string[]; childRowIndex: number[]} {
-  const rows: string[] = ['Agent types'];
-  for (const type of types) rows.push('  ' + typeRow(type));
-  for (const warning of warnings) rows.push(`  ! ${warning}`);
-  rows.push('', 'Subagents in this session');
-  const childRowIndex: number[] = [];
-  if (!children.length) rows.push('  none');
-  children.forEach((child, n) => {
-    childRowIndex.push(rows.length);
-    rows.push(childRow(child, n === index, now));
-  });
-  return {rows, childRowIndex};
 }

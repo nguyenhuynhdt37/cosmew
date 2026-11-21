@@ -1,4 +1,4 @@
-import type {FutrynClient} from '@futryn/sdk';
+import type {FutrynClient} from '@cosmew/sdk';
 import type {ThemeEngine} from './theme/theme';
 
 /** Options accepted by the interactive Ink host (`runInteractiveTui`). */

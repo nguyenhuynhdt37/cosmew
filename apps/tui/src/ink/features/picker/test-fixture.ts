@@ -4,8 +4,8 @@ import {
   providerSchema,
   type SessionSummary,
   type SubagentSummaryView,
-} from '@futryn/contracts';
-import type {FutrynBackendPorts} from '@futryn/sdk';
+} from '@cosmew/contracts';
+import type {FutrynBackendPorts} from '@cosmew/sdk';
 import {createClientFixture} from '../../testing';
 export const provider = providerSchema.parse({
   id: 'sample',

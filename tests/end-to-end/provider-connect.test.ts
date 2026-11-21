@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SLASH_COMMANDS} from '@futryn/sdk';
+import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer} from '../fixtures';
 

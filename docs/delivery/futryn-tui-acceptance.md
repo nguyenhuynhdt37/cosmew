@@ -1,4 +1,4 @@
-# FUTRYN TUI1 — Acceptance Evidence
+# COSMEW TUI1 — Acceptance Evidence
 
 > Slash-command interaction follows [ADR 0013](../adr/0013-canonical-slash-commands.md): `/theme` opens the picker without arguments. Prior direct `/theme auto|dark|light` forms in historical notes below are no longer supported.
 
@@ -12,7 +12,7 @@ Trạng thái: **TUI1 implemented (headless + unit/E2E verified)**. Chưa có x�
 | 30 semantic tokens + schema Zod | `packages/contracts/src/models.ts` | `tests/contracts/theme-engine.test.ts` |
 | 15 theme màu + 12 theme live | `apps/tui/src/theme/presets.ts` | cùng file test (contrast > 4.5 mọi theme) |
 | Theme Engine (preview/cancel/commit, global+project, editor ops, import/export/remove, recovery) | `apps/tui/src/theme/theme.ts` | cùng file test + `tests/end-to-end/tui.test.ts` |
-| Import FUTRYN / OpenCode / Claude Desktop + `CompatibilityReport`, từ chối JS/CSS nguy hiểm | `apps/tui/src/theme/compat.ts` | theme-engine test |
+| Import COSMEW / OpenCode / Claude Desktop + `CompatibilityReport`, từ chối JS/CSS nguy hiểm | `apps/tui/src/theme/compat.ts` | theme-engine test |
 | 12 wallpaper khai báo (không chạy JS ngoài), veil, reduced-motion, pause unfocused, tự tắt khi terminal nhỏ | `apps/tui/src/theme/wallpaper.ts` | `tests/contracts/wallpaper-engine.test.ts` |
 | Composer, transcript, tool card, diff, permission, sessions, models, connect, settings, status, help, palette | `apps/tui/src/components`, `apps/tui/src/screens`, `apps/tui/src/app.tsx` | E2E TUI |
 | SDK ranh giới (`apps/tui` chỉ phụ thuộc contracts + sdk) | `packages/sdk` | typecheck |
@@ -21,7 +21,7 @@ Trạng thái: **TUI1 implemented (headless + unit/E2E verified)**. Chưa có x�
 ## Upstream tham chiếu
 - OpenCode `024a1462f55aa64243b859729b2d0816b42b17e3` (MIT) — chỉ tham chiếu UX, không sao chép branding/asset.
 - claude-desktop-themes `1ac84ea764028dd1be6f8bc808ca18b622bcad2a` (0.8.0, MIT) — chuyển đổi palette/metadata; CSS/JS không được thực thi.
-- Chi tiết: [futryn-tui-upstream-research.md](futryn-tui-upstream-research.md), [ADR 0006](../adr/0006-futryn-tui-and-theme-engine.md).
+- Chi tiết: [cosmew-tui-upstream-research.md](cosmew-tui-upstream-research.md), [ADR 0006](../adr/0006-cosmew-tui-and-theme-engine.md).
 
 ## Giới hạn trung thực
 - Renderer là compositor khung ô tự viết (ANSI differential), **không dùng OpenTUI/SolidJS**; lý do ghi trong research doc. Không tuyên bố tương đương pixel với OpenCode.
@@ -47,7 +47,7 @@ Observed on this host: `bun run typecheck` and `bun run lint` pass; full opt-in 
 
 ## Auto, Dark and Light with semantic colors (2026-11-15)
 
-The canonical `/theme` picker and IDs are `auto`, `dark`, `light`; direct `/theme auto|dark|light` and the compatibility `/themes` alias are supported. `themes set auto|dark|light` and `themes mode auto|dark|light` share the same persisted state; `system`, `futryn-default`, `monochrome-dark`, and `monochrome-light` remain accepted compatibility inputs. Settings schema 1 is unchanged. On startup previous profile IDs are migrated for global and active project separately, without deleting custom files. `mode: system` remains the storage representation for Auto.
+The canonical `/theme` picker and IDs are `auto`, `dark`, `light`; direct `/theme auto|dark|light` and the compatibility `/themes` alias are supported. `themes set auto|dark|light` and `themes mode auto|dark|light` share the same persisted state; `system`, `cosmew-default`, `monochrome-dark`, and `monochrome-light` remain accepted compatibility inputs. Settings schema 1 is unchanged. On startup previous profile IDs are migrated for global and active project separately, without deleting custom files. `mode: system` remains the storage representation for Auto.
 
 Dark/light surfaces and normal text remain black/white; errors, warnings, success, information, emphasis, diff and syntax use semantic colors with contrast checked against both backgrounds. The chosen terminal color capability can affect actual colors; `NO_COLOR` continues to honor the terminal. The picker remains usable at small sizes, with preview/Enter/Esc semantics. System detection limits remain as documented in ADR 0011.
 

@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import {render} from 'ink-testing-library';
-import type {FutrynClient} from '@futryn/sdk';
+import type {FutrynClient} from '@cosmew/sdk';
 import {InkApp} from '../app';
 import {messagesToTranscript, type TranscriptItem} from '../features/transcript/logic';
 
@@ -15,6 +15,7 @@ const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
 export interface InkSessionOptions {
   width?: number;
+  rows?: number;
   initialCommand?: string;
   /** Skip the consent dialog: false leaves the startup gate in front of the test. */
   consent?: boolean;
@@ -67,7 +68,7 @@ const KEYS: Record<string, string> = {
 
 /**
  * Mounts the real Ink TUI over a real SDK client (ink-testing-library; no PTY). The startup gate is driven
- * through its own dialog: Allow for this session, then the real account verification request.
+ * through its own dialog: Yes, I trust this folder, then the real account verification request.
  */
 export async function openInk(client: FutrynClient, options: InkSessionOptions = {}): Promise<InkSession> {
   let open = 0;
@@ -89,6 +90,7 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
     <InkApp
       client={client}
       width={options.width ?? 110}
+      rows={options.rows}
       initialCommand={options.initialCommand}
       registerShutdown={fn => {
         shutdown = fn;
@@ -125,7 +127,10 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
       while (!client.listPendingPermissions().length && Date.now() < end) await sleep(5);
       const pending = client.listPendingPermissions();
       if (!pending.length) throw new Error(`No permission request arrived; last frame:\n${frame()}`);
-      await session.waitFor('4 Không', 3000);
+      await session.waitFor(
+        pending[0]!.capability === 'settings.trust' ? 'No, skip this settings file' : 'Esc to cancel · Tab to amend',
+        3000,
+      );
       await sleep(120); // the dialog subscribes to input after its first paint
       return pending[0]!;
     },
@@ -169,13 +174,14 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
   };
   try {
     if (options.consent !== false) {
-      await session.waitFor('Trust this folder?');
-      await session.press(UP);
-      await session.press(ENTER);
+      if (!client.workspaceTrusted()) {
+        await session.waitFor('Accessing workspace:');
+        await session.press(UP);
+        await session.press(ENTER);
+      }
       const end = Date.now() + 10000;
-      while (Date.now() < end && (frame().includes('Checking account') || !frame().includes('Ask anything')))
-        await sleep(10);
-      if (frame().includes('Checking account') || frame().includes('Trust this folder?'))
+      while (Date.now() < end && !client.userInputReady()) await sleep(10);
+      if (!client.userInputReady())
         throw new Error(
           `Startup gate did not open the composer:\n${frame()}\nhistory: ${session.frames().slice(-3000)}\nstderr: ${view.stderr.frames.join('\n')}`,
         );

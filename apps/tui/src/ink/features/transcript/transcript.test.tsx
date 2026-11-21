@@ -67,7 +67,8 @@ describe('transcript event presentation', () => {
     });
     expect(state.items.at(-1)?.toolOutput?.[call.id]?.length).toBe(262144);
     state = reduceTranscript(state, {type: 'finish', cancelled: true, now: 100});
-    expect(state.items.at(-1)?.notices).toContain('Generation cancelled by user.');
+    expect(state.items.at(-1)?.interrupted).toBe(true);
+    expect(state.items.at(-1)?.finishedAt).toBe(100);
     expect(state.items.at(-1)?.toolResults).toEqual([]);
     expect(toolState(undefined, false)).toContain('stopped');
   });
@@ -112,7 +113,7 @@ describe('Ink transcript', () => {
     );
     await settle();
     const frame = view.lastFrame()!;
-    expect(frame).toContain('> prompt');
+    expect(frame).toContain('❯ prompt');
     expect(frame).toContain('Answer');
     expect(frame).toContain('✻ Thinking…');
     expect(frame).not.toContain('secret thought');
@@ -226,7 +227,7 @@ describe('Ink transcript', () => {
     );
     await settle();
     expect(view.lastFrame()).toContain('changed tail');
-    expect(view.lastFrame()!.split('> settled-0').length - 1).toBe(1);
+    expect(view.lastFrame()!.split('❯ settled-0').length - 1).toBe(1);
   });
   test('hook feeds SDK event lifecycle without starting a provider request', async () => {
     let state: ReturnType<typeof useTranscript> | undefined;
@@ -275,9 +276,11 @@ test('real Static rendering exceeds 1000 lines and streaming updates retain hist
     await settle();
   }
   expect(view.lastFrame()).toContain('stream-3');
-  expect(view.lastFrame()!.split('> h0:0').length - 1).toBe(1);
+  expect(view.lastFrame()!.split('❯ h0:0').length - 1).toBe(1);
   expect(view.lastFrame()).toContain('h109:9');
-});
+  // This stress case renders 1,100 real terminal rows. Its assertions concern
+  // retention and once-only delivery; native PTY tests own the input latency budget.
+}, 15000);
 
 test('citation code examples are preserved and reasoning focus expands independently', async () => {
   const items: Item[] = [

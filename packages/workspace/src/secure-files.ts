@@ -64,6 +64,10 @@ export interface FileSnapshot {
   ino: number | null;
   mode: number;
   parents: {path: string; dev: number; ino: number}[];
+  /** Open root when the file is not in the project. Absent for project snapshots. */
+  base?: string;
+  /** Ledger and resolve key when it differs from `path` (a granted file's absolute path). */
+  identity?: string;
 }
 export const contentHash = (s: string) => createHash('sha256').update(s).digest('hex');
 export function writePath(path: string): string {
@@ -92,18 +96,20 @@ export class SecureFiles {
     path: string,
     create = false,
     expected?: FileSnapshot,
+    base = expected?.base ?? this.workspace.root,
   ): {fd: number; name: Buffer; parents: FileSnapshot['parents']; missing: boolean} {
     writePath(path);
     if (!native) fail('WRITE_UNAVAILABLE');
-    let fd = openSync(this.workspace.root, directoryFlags);
+    let fd = openSync(base, directoryFlags);
     const parents: FileSnapshot['parents'] = [];
     const parts = path.split('/'),
       name = c(parts.pop()!);
     let prefix = '';
+    const createdKey = (dir: string) => base + '\0' + dir;
     try {
       const record = (path: string) => {
         const st = fstatSync(fd);
-        const previous = expected?.parents.find(p => p.path === path) ?? this.created.get(path);
+        const previous = expected?.parents.find(p => p.path === path) ?? this.created.get(createdKey(path));
         if (previous && (st.dev !== previous.dev || st.ino !== previous.ino)) fail('STALE_CONTENT');
         parents.push({path, dev: st.dev, ino: st.ino});
       };
@@ -119,7 +125,7 @@ export class SecureFiles {
           next = native!.symbols.openat(fd, c(part), directoryFlags, 0);
           if (next < 0) fail();
           const st = fstatSync(next);
-          this.created.set(prefix, {dev: st.dev, ino: st.ino});
+          this.created.set(createdKey(prefix), {dev: st.dev, ino: st.ino});
         }
         closeSync(fd);
         fd = next;
@@ -189,8 +195,9 @@ export class SecureFiles {
       else closeSync(parent.fd);
     }
   }
-  snapshot(path: string): FileSnapshot {
-    const parent = this.parent(path);
+  snapshot(path: string, base = this.workspace.root): FileSnapshot {
+    const parent = this.parent(path, false, undefined, base);
+    const located = base !== this.workspace.root ? {base} : {};
     try {
       const empty: FileSnapshot = {
         path,
@@ -200,6 +207,7 @@ export class SecureFiles {
         ino: null,
         mode: 0o644,
         parents: parent.parents,
+        ...located,
       };
       if (parent.missing) return empty;
       const fd = native!.symbols.openat(
@@ -242,6 +250,7 @@ export class SecureFiles {
           ino: st.ino,
           mode: st.mode & 0o777,
           parents: parent.parents,
+          ...located,
         };
       } finally {
         closeSync(fd);
@@ -251,8 +260,10 @@ export class SecureFiles {
     }
   }
   revalidate(snapshot: FileSnapshot): void {
-    const now = this.snapshot(snapshot.path);
+    const base = snapshot.base ?? this.workspace.root;
+    const now = this.snapshot(snapshot.path, base);
     if (
+      (now.base ?? '') !== (snapshot.base ?? '') ||
       now.hash !== snapshot.hash ||
       now.dev !== snapshot.dev ||
       now.ino !== snapshot.ino ||

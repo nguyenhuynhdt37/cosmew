@@ -15,8 +15,8 @@ import {
   type ToolPort,
   type TurnBudget,
   type Usage,
-} from '@futryn/contracts';
-import {Conversation, SAFETY_LIMITS} from '@futryn/core';
+} from '@cosmew/contracts';
+import {Conversation, SAFETY_LIMITS} from '@cosmew/core';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault} from '../fixtures';
 

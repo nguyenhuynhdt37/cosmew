@@ -1,4 +1,4 @@
-import type {PendingQuestion, UserAnswers, UserQuestion} from '@futryn/contracts';
+import type {PendingQuestion, UserAnswers, UserQuestion} from '@cosmew/contracts';
 import type {QuestionAnswerState, QuestionDialogState} from './types';
 
 /** Fresh state for a newly shown request. */

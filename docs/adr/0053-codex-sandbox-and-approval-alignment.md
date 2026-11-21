@@ -1,6 +1,6 @@
 # ADR 0053 — Sandbox and approvals follow Codex exactly
 
-Date: 2026-11-17. Status: accepted (user decision after the S0 Next.js UAT, `docs/delivery/wave-2/uat-nextjs.md`: "follow Codex exactly on permissions and sandbox; remove Futryn's extra controls that are stricter than Codex").
+Date: 2026-11-17. Status: accepted (user decision after the S0 Next.js UAT, `docs/delivery/wave-2/uat-nextjs.md`: "follow Codex exactly on permissions and sandbox; remove Futryn's extra controls that are stricter than Codex"). **Superseded by [ADR 0061](0061-claude-code-permissions-and-sandbox.md)** (2026-11-18): the Codex sandbox/approval model was replaced by the Claude Code one.
 
 ## Context
 

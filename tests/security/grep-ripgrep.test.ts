@@ -2,9 +2,9 @@ import {afterEach, describe, expect, test} from 'bun:test';
 import {chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {locateRipgrep} from '../../packages/tools/src/builtin/ripgrep';
 
 const RG = Bun.which('rg');

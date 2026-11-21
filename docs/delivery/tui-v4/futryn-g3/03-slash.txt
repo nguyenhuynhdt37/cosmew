@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|  ❯ /usage                                  Per-turn and session usage with coverage and pricing
+21|                                            provenance
+22|    /context                                Model limits, output reserve, measured or estimated
+23|                                            context
+24|    /effort                                 Set an effort advertised by the active provider/model
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ /
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on

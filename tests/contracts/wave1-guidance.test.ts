@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {explorationGuidance} from '@futryn/core';
+import {explorationGuidance} from '@cosmew/core';
 
 test('wave 1 guidance describes only offered capabilities and actual configured approval boundaries', () => {
   const baseline = explorationGuidance(['read', 'grep']);

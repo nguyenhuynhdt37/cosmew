@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /private/tmp/fyn-g2-demo
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|  ❯ /usage                                  Per-turn and session usage with coverage and pricing
+18|                                            provenance
+19|    /context                                Model limits, output reserve, measured or estimated
+20|                                            context
+21|    /effort                                 Set an effort advertised by the active provider/model
+22|    /theme                                  Choose Auto, Dark, or Light
+23|    /model                                  Search and select active model from discovered or cached
+24|                                            provider catalog
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ /
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ? for shortcuts

@@ -1,7 +1,12 @@
 /** @jsxImportSource react */
+import {useTerminalSize} from '../../hooks/use-terminal-size';
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 import {useFutrynClient, useKeymap, useStatus} from '../../hooks';
+import {useTheme} from '../../theme';
+import {useUiTheme} from '../../ui/ui-theme';
+import {Box} from 'ink';
+import {wrapWords} from '../../../input/text';
 import {Panel, TextLine, Spinner} from '../../ui';
 import {
   CHECK_TIMEOUT_SECONDS,
@@ -20,8 +25,10 @@ export interface StartupGateOptions {
 export function useStartupGate(options: StartupGateOptions) {
   const client = useFutrynClient();
   const status = useStatus();
-  const [phase, setPhase] = useState<'trust' | 'checking' | 'choose' | 'login' | 'off'>('trust');
-  const [index, setIndex] = useState(1);
+  const [phase, setPhase] = useState<'trust' | 'checking' | 'choose' | 'login' | 'off'>(() =>
+    client.workspaceTrusted() ? 'checking' : 'trust',
+  );
+  const [index, setIndex] = useState(0);
   const [message, setMessage] = useState('');
   const request = useRef<AbortController | null>(null);
   const alive = useRef(true);
@@ -32,7 +39,7 @@ export function useStartupGate(options: StartupGateOptions) {
   callbacks.current = options;
   useEffect(() => {
     alive.current = true;
-    client.setToolsEnabled(false);
+    client.setToolsEnabled(client.workspaceTrusted());
     return () => {
       alive.current = false;
       request.current?.abort();
@@ -105,6 +112,7 @@ export function useStartupGate(options: StartupGateOptions) {
     }
   }, [client, choose]);
   useEffect(() => {
+    if (phase === 'checking' && !options.overlayOpen && !request.current) void verify();
     if (phase === 'login' && !options.overlayOpen) {
       if (!client.status().selection) choose('Choose a model or another account.');
       else void verify();
@@ -126,11 +134,11 @@ export function useStartupGate(options: StartupGateOptions) {
       next: () => setIndex((selected + 1) % count),
       submit: () => {
         if (phase === 'trust') {
-          if (selected !== 0) {
+          if (selected !== 1) {
             exit();
             return;
           }
-          client.setToolsEnabled(true);
+          client.trustWorkspace();
           void verify();
         } else if (phase === 'choose') {
           const account = accounts[selected];
@@ -169,35 +177,62 @@ export interface StartupGateProps {
   width?: number;
 }
 export function StartupGate({state, width}: StartupGateProps) {
+  const {color} = useTheme();
+  const ui = useUiTheme();
+  const {columns} = useTerminalSize();
+  const wrap = (text: string) => wrapWords(text, Math.max(1, (width ?? columns) - 2)).join('\n');
   if (state.phase === 'off' || state.phase === 'login') return null;
+  const choice = (label: string, i: number) => (
+    <TextLine key={`${i}:${label}`} color={state.index === i ? ui.color('selected') : undefined}>
+      {`${state.index === i ? '❯' : ' '} ${label}`}
+    </TextLine>
+  );
+  const muted = color('foregroundMuted');
   return (
-    <Panel width={width} title={state.phase === 'trust' ? 'Trust this folder?' : 'Checking account'}>
-      <TextLine>{state.status.workspace}</TextLine>
+    <Panel
+      width={width}
+      ruleStyle="dialog"
+      accent={state.phase === 'trust' ? color('warning') : undefined}
+      title={state.phase === 'trust' ? 'Accessing workspace:' : 'Checking account'}
+    >
       {state.phase === 'trust' ? (
         <>
+          <Box height={1} />
+          <TextLine bold>{state.status.workspace}</TextLine>
+          <Box height={1} />
           <TextLine>
-            Futryn may read files here and send them to the model. Consent lasts this session and does not grant tool
-            permissions.
+            {wrap(
+              "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what's in this folder first.",
+            )}
           </TextLine>
-          <TextLine>Account check sends a small, potentially billed request.</TextLine>
-          {['Allow for this session', 'Exit'].map((label, i) => (
-            <TextLine key={label}>{`${state.index === i ? '›' : ' '} ${label}`}</TextLine>
-          ))}
+          <Box height={1} />
+          <TextLine>Cosmew will be able to read, edit, and execute files here.</TextLine>
+          <Box height={1} />
+          <TextLine color={muted}>
+            {wrap('Consent is remembered for this workspace and does not grant individual tool permissions.') +
+              '\n' +
+              wrap('Account check sends a small, potentially billed request.')}
+          </TextLine>
+          <Box height={1} />
+          <TextLine color={muted}>Security guide</TextLine>
+          <Box height={1} />
+          {['No, exit', 'Yes, I trust this folder'].map(choice)}
         </>
       ) : state.phase === 'checking' ? (
         <>
+          <TextLine>{state.status.workspace}</TextLine>
           <Spinner verb="Checking account" />
           <TextLine>{`${state.status.activeAccount?.alias ?? ''} · ${state.status.selection?.modelId ?? 'Discovering models'} · timeout ${CHECK_TIMEOUT_SECONDS}s`}</TextLine>
         </>
       ) : (
         <>
+          <TextLine>{state.status.workspace}</TextLine>
           <TextLine>{state.message}</TextLine>
-          {[...state.accounts.map(a => `${a.alias} (${a.status})`), 'Sign in'].map((label, i) => (
-            <TextLine key={i}>{`${state.index === i ? '›' : ' '} ${label}`}</TextLine>
-          ))}
+          {[...state.accounts.map(a => `${a.alias} (${a.status})`), 'Sign in'].map(choice)}
         </>
       )}
-      <TextLine>↑↓ Select · Enter Confirm · Esc Exit</TextLine>
+      {state.phase === 'trust' ? <Box height={1} /> : null}
+      <TextLine color={muted}>Enter to confirm · Esc to cancel</TextLine>
     </Panel>
   );
 }

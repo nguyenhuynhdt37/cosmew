@@ -6,16 +6,6 @@ import {PickerDialog, useDialogRefresh, usePicker, type DialogProps} from '../pi
 export interface SkillsDialogProps extends DialogProps {
   onInvoke?: (command: string) => void;
 }
-export function useSkills() {
-  const client = useFutrynClient();
-  useDialogRefresh();
-  const router = usePicker();
-  return {
-    ...router,
-    report: client.skills(),
-    openSkills: (props: SkillsDialogProps = {}) => router.open('skills', <SkillsDialog {...props} />),
-  };
-}
 export function SkillsDialog({onInvoke, ...props}: SkillsDialogProps) {
   const client = useFutrynClient();
   const router = usePicker();

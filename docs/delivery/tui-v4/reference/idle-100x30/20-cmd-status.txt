@@ -1,0 +1,30 @@
+00|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+01|     protected, files are scanned as they are written
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+03|  Settings  Status   Config   Usage   Stats
+04|
+05|  Version:           2.1.328
+06|  Session name:      /rename to add a name
+07|  Session ID:        <uuid>
+08|  Session kind:      interactive
+09|  Peer address:      uds:<sock>
+10|  cwd:               /private/tmp/claude-502/-Users-huynh-codes-hannes/4898d007-8a7c-4c60-85cb-422
+11|                     ec87295f6/scratchpad/demo2
+12|  Login method:      Claude Pro account
+13|  Organization:      <email>'s Organization
+14|  Email:             <email>
+15|  Cloud sessions:    Not set up · /web-setup to connect GitHub
+16|
+17|  Model:             opus (claude-opus-5-5)
+18|  MCP servers:       9 connected, 12 need auth, 1 disabled, 3 failed · /mcp
+19|  Setting sources:   User settings
+20|  Auto mode server:  Disabled
+21|
+22|  ←/→ to switch · Esc to close
+23|
+24|
+25|
+26|
+27|
+28|
+29|

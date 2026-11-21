@@ -1,0 +1,30 @@
+00|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+01|     protected, files are scanned as they are written
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+03|  Settings  Status   Config   Usage   Stats
+04|
+05|  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+06|  │ ⌕ Search settings…                                                                           │
+07|  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+08|  ❯ Auto-compact                                    on
+09|    Idle compaction                                 on
+10|    Continue automatically at usage limit           on
+11|    Switch models when a message is flagged         Not asked yet ›
+12|    Show tips                                       on
+13|    Claude-drafted feedback                         notify
+14|    Reduce motion                                   off
+15|    Thinking mode                                   on
+16|    Thinking can't be turned off for Opus 5.5
+17|    Prompt suggestions                              on
+18|    Session recap                                   on
+19|    Rewind code (checkpoints)                       on
+20|    Dynamic workflows                               off
+21|    Ultracode keyword trigger                       on
+22|    Dynamic workflow size                           small (default)
+23|    Artifacts                                       on
+24|    Verbose output                                  off
+25|    Terminal progress bar                           on
+26|    Show turn duration                              on
+27|    ↓ 31 more
+28|
+29|  ↓ to navigate · ↑ to switch tabs · Esc to go back

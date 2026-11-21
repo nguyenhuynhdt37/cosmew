@@ -1,5 +1,5 @@
 {
-  "name": "@futryn/security",
+  "name": "@cosmew/security",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@futryn/contracts": "workspace:*",
+    "@cosmew/contracts": "workspace:*",
     "@napi-rs/keyring": "2.1.2"
   }
 }

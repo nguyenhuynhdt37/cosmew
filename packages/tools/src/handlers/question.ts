@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {userQuestionSchema, type ToolDescriptor} from '@futryn/contracts';
+import {userQuestionSchema, type ToolDescriptor} from '@cosmew/contracts';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import type {ToolHandler} from './types';
 

@@ -3,10 +3,10 @@ import {Database} from 'bun:sqlite';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {FutrynError, type ModelPort} from '@futryn/contracts';
-import {Conversation} from '@futryn/core';
-import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
-import {Redactor, redactModel} from '@futryn/security';
+import {FutrynError, type ModelPort} from '@cosmew/contracts';
+import {Conversation} from '@cosmew/core';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
+import {Redactor, redactModel} from '@cosmew/security';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -69,7 +69,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.close();
   const db = openPrivateDatabase(dir);
   cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(8);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(10);
   expect(
     (db.query('PRAGMA table_info(messages)').all() as {name: string}[]).some(column => column.name === 'parts'),
   ).toBe(true); // v3 tool parts
@@ -107,7 +107,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   }
   const future = directory();
   const invalid = new Database(join(future, 'provider-auth.sqlite'));
-  invalid.exec('PRAGMA user_version=9');
+  invalid.exec('PRAGMA user_version=11');
   invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });

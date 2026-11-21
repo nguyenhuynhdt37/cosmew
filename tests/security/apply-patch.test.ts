@@ -12,9 +12,9 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
-import {SessionGrants} from '@futryn/security';
+import {ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
+import {SessionGrants} from '@cosmew/security';
 import {parsePatch, updateFile} from '../../packages/tools/src/patch/parser';
 const cleanup: (() => void)[] = [];
 afterEach(() => {

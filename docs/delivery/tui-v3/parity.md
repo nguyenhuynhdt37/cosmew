@@ -1,8 +1,12 @@
 # TUI v3 Pha 2 — parity và bằng chứng
 
-2026-11-18. Pha 3 xong: Ink là TUI duy nhất (không còn `FUTRYN_TUI`, renderer cũ đã xoá). PASS bên dưới là hành vi có
+Giao diện hiện tại theo [TUI v4 — kết quả pha A–E](../tui-v4/claude-code-parity.md#kết-quả-pha-ae)
+và ADR 0065: inline, không alternate screen. Bảng dưới giữ lịch sử bằng chứng hành vi v3;
+nhãn, glyph, bố cục và golden đã chuyển sang v4.
+
+2026-11-18. Pha 3 xong: Ink là TUI duy nhất (không còn `COSMEW_TUI`, renderer cũ đã xoá). PASS bên dưới là hành vi có
 test tự động, không phải nghiệm thu live provider hay mọi terminal/OS.
-Provider giả chỉ chứng minh wire/lifecycle của Futryn; không chứng minh ChatGPT,
+Provider giả chỉ chứng minh wire/lifecycle của Cosmew; không chứng minh ChatGPT,
 DeepSeek, shell sandbox hay keyring live. Không tuyên bố Product MVP complete.
 
 Paths viết tắt: `ink/` = `apps/tui/src/ink/`; PTY =
@@ -37,6 +41,8 @@ Mỗi dòng tương ứng một mục phân cách bằng dấu `;` ở bảng pa
 
 **22 PASS / 1 PARTIAL / 0 MISSING** (23 dòng gồm 3 dòng bổ sung ở Pha 3). PASS nghĩa là có test tự động, không phải nghiệm thu live provider/OS/nhiều terminal.
 
+Fullscreen (ADR 0064, 2026-11-19) bổ sung sau bảng này, không đổi các dòng PASS lịch sử: khung tương tác chiếm đúng số hàng, composer nằm dưới, dialog không chồng full transcript. Bằng chứng là `apps/tui/src/ink/testing/fullscreen.test.tsx` và PTY `tests/end-to-end/tui-ink-pty.test.ts` (alternate screen vào rồi thoát). Một PTY macOS; Linux/Windows Needs verification.
+
 ## Golden và các mục bàn giao
 
 Golden Ink riêng: `ink/testing/golden-ink/integrated-{80,36}.txt`, test
@@ -50,7 +56,7 @@ README bốn feature trỏ về contract nội bộ 0.2 và tài liệu này.
 
 ## Pha 3 (đã làm 2026-11-18)
 
-Ink là mặc định và duy nhất; đã xoá `apps/tui/src/{app.tsx,features/,render/,ui/,core/,input/terminal-keys.ts}`, cờ `FUTRYN_TUI`, `tests/performance/tui-*` (và script `bench:tui*`), `tests/end-to-end/tui-v2-pty.test.ts` (thay bởi `tui-ink-pty.test.ts`), golden cũ `tests/contracts/__golden__`. Giữ lại và dùng bởi Ink: `src/theme/` (theme engine, presets, compat, wallpaper), `src/input/text.ts`, `src/clipboard.ts`, `src/types.ts`.
+Ink là mặc định và duy nhất; đã xoá `apps/tui/src/{app.tsx,features/,render/,ui/,core/,input/terminal-keys.ts}`, cờ `COSMEW_TUI`, `tests/performance/tui-*` (và script `bench:tui*`), `tests/end-to-end/tui-v2-pty.test.ts` (thay bởi `tui-ink-pty.test.ts`), golden cũ `tests/contracts/__golden__`. Giữ lại và dùng bởi Ink: `src/theme/` (theme engine, presets, compat, wallpaper), `src/input/text.ts`, `src/clipboard.ts`, `src/types.ts`.
 
 ### Test cũ → Ink
 

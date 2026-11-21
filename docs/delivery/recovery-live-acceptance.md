@@ -1,6 +1,6 @@
 # Recovery live-provider/TUI acceptance — 2026-11-16
 
-Baseline Futryn dev babdd502230166a4420803e24481ac6e003d24fc. Real configured xAI API account, model grok-4.7, native `hannes` execution backend; actual Futryn TUI launched through Bun.Terminal PTY in a disposable project. No Codex/foreign loop or mocked transport. Credentials remained in the OS vault and were not copied into fixtures/logs. Scratch prompts contained no production data.
+Baseline Cosmew dev babdd502230166a4420803e24481ac6e003d24fc. Real configured xAI API account, model grok-4.7, native `hannes` execution backend; actual Cosmew TUI launched through Bun.Terminal PTY in a disposable project. No Codex/foreign loop or mocked transport. Credentials remained in the OS vault and were not copied into fixtures/logs. Scratch prompts contained no production data.
 
 Sequence: folder consent → real startup generation → request a standalone helo.html sales page, reading brief.md first → observe durable successful read → Ctrl+C before creation → exit/restart TUI → fresh folder consent → /resume picker selects the original session → “tiếp” → current fs.write prompt approved once through the real UI → apply_patch result → read tool → final model continuation. Session ea01eaf7-e57e-4e65-90be-4f5bf04e31df, first state cancelled, final state completed. Final HTML: 2946 bytes, SHA256 `097f3cdfa1aea82522aaa9236cf264658d4f1ae9e071253b3121544c4c93b140`; doctype/opening and closing HTML plus CTA checked independently. Actual read after the confirmed write was present in the durable journal.
 

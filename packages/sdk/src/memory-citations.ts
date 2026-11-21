@@ -1,4 +1,4 @@
-import {memoryNameSchema} from '@futryn/contracts';
+import {memoryNameSchema} from '@cosmew/contracts';
 
 const OPEN = '<oai-mem-citation>',
   CLOSE = '</oai-mem-citation>';

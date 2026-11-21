@@ -1,10 +1,10 @@
 /** @jsxImportSource react */
 import {useEffect, useRef, useState} from 'react';
-import {providerSchema, modelIdSchema, type Provider, type ProviderAuthChallenge} from '@futryn/contracts';
+import {providerSchema, modelIdSchema, type Provider, type ProviderAuthChallenge} from '@cosmew/contracts';
 import {useFutrynClient, useTextInput} from '../../hooks';
 import {useOverlay} from '../../core';
 import {TextLine} from '../../ui';
-import {Dialog, PickerDialog, TextEntry, useDialogRefresh, useDialogTask, usePicker, type DialogProps} from '../picker';
+import {Dialog, PickerDialog, TextEntry, useDialogRefresh, useDialogTask, type DialogProps} from '../picker';
 import {ModelsDialog} from '../models';
 import {connectionChoices, describeProviderError, ENV_NAME, PROVIDER_ID, parseHeaderDraft} from './logic';
 import {createInitialConnectProviderState, type ConnectProviderState, type ConnectStep} from './types';
@@ -16,17 +16,6 @@ export interface ConnectDialogProps extends DialogProps {
   initialQuery?: string;
   onChanged?: () => void;
   isStreaming?: boolean;
-}
-export function useConnect() {
-  const client = useFutrynClient();
-  useDialogRefresh();
-  const router = usePicker();
-  return {
-    ...router,
-    accounts: client.listAccounts(),
-    integrations: client.listIntegrations(),
-    openConnect: (props: ConnectDialogProps = {}) => router.open('connect', <ConnectDialog {...props} />),
-  };
 }
 export function ConnectDialog({
   initialStep = 'provider',

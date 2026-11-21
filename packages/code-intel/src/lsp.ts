@@ -1,9 +1,9 @@
 import {pathToFileURL} from 'node:url';
 import {dirname, extname} from 'node:path';
 import {watch, type FSWatcher} from 'node:fs';
-import {ignoredDirectory} from '@futryn/workspace';
-import {FutrynError, type ServiceProcess} from '@futryn/contracts';
-import type {ResolvedPath, WorkspaceRoot} from '@futryn/workspace';
+import {ignoredDirectory} from '@cosmew/workspace';
+import {FutrynError, type ServiceProcess} from '@cosmew/contracts';
+import type {ResolvedPath, WorkspaceRoot} from '@cosmew/workspace';
 import {LspClient, type LspDiagnostic} from './client';
 import {SERVERS, projectRoot, specFor, type ServerSpec} from './servers';
 

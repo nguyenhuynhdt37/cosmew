@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, rmSync, realpathSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
-import {SkillCatalog, parseSkillDocument, renderSkillCatalog, skillInvocations, WorkspaceRoot} from '@futryn/workspace';
-import {ToolDispatcher, type ToolAuditRecord} from '@futryn/tools';
-import {SessionGrants} from '@futryn/security';
+import {SkillCatalog, parseSkillDocument, renderSkillCatalog, skillInvocations, WorkspaceRoot} from '@cosmew/workspace';
+import {ToolDispatcher, type ToolAuditRecord} from '@cosmew/tools';
+import {SessionGrants} from '@cosmew/security';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -78,6 +78,15 @@ test('project precedence, nearest repo scopes, compatibility roots, duplicates a
   expect(report.skills.find(s => s.name === 'demo')?.path).toContain('/sub/.claude/');
   expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(2);
   expect(report.skills.find(s => s.name === 'skill-creator')?.source).toBe('system');
+});
+
+test('canonical Cosmew skill roots take precedence over legacy project roots', () => {
+  const f = fixture();
+  f.put(f.project, '.futryn/skills/demo/SKILL.md', document('demo', '', 'legacy'));
+  f.put(f.project, '.cosmew/skills/demo/SKILL.md', document('demo', '', 'cosmew'));
+  const report = f.catalog().report();
+  expect(report.skills.find(s => s.name === 'demo')?.shortPath).toBe('.cosmew/skills/demo/SKILL.md');
+  expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(1);
 });
 
 test('catalog budget shortens descriptions before dropping entries, hides disabled skills', () => {

@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test';
-import {LspClient} from '@futryn/code-intel';
-import type {ServiceProcess} from '@futryn/contracts';
+import {LspClient} from '@cosmew/code-intel';
+import type {ServiceProcess} from '@cosmew/contracts';
 
 type Rpc = {
   id?: number;

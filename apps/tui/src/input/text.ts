@@ -1,6 +1,5 @@
 /** UTF-16 offsets for JS strings, with edits and terminal columns at grapheme boundaries. */
 const segmenter = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
-export const iterateGraphemes = (text: string) => segmenter.segment(text);
 export const graphemes = (text: string) => [...segmenter.segment(text)];
 export const textWidth = (text: string): number => Bun.stringWidth(text);
 
@@ -20,22 +19,26 @@ export function nextGrapheme(text: string, cursor: number): number {
   return text.length;
 }
 
-export function verticalCursor(text: string, cursor: number, direction: -1 | 1): number | null {
-  const start = cursor === 0 ? 0 : text.lastIndexOf('\n', cursor - 1) + 1;
-  const endAt = text.indexOf('\n', cursor);
-  const end = endAt < 0 ? text.length : endAt;
-  if ((direction < 0 && start === 0) || (direction > 0 && end === text.length)) return null;
-  const targetStart = direction < 0 ? (start <= 1 ? 0 : text.lastIndexOf('\n', start - 2) + 1) : end + 1;
-  const targetEnd = direction < 0 ? start - 1 : text.indexOf('\n', targetStart);
-  const line = text.slice(targetStart, targetEnd < 0 ? text.length : targetEnd);
-  const column = textWidth(text.slice(start, cursor));
-  let width = 0;
-  let offset = 0;
-  for (const {segment} of segmenter.segment(line)) {
-    const next = textWidth(segment);
-    if (width + next > column) break;
-    width += next;
-    offset += segment.length;
+/** Wrap whole words in terminal cells; only an over-wide single word splits at graphemes. */
+export function wrapWords(text: string, width: number): string[] {
+  const room = Math.max(1, width);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.trim().split(/\s+/).filter(Boolean)) {
+    if (line && textWidth(`${line} ${word}`) <= room) {
+      line += ` ${word}`;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = '';
+    for (const {segment} of graphemes(word)) {
+      if (line && textWidth(line + segment) > room) {
+        lines.push(line);
+        line = '';
+      }
+      line += segment;
+    }
   }
-  return targetStart + offset;
+  if (line || !lines.length) lines.push(line);
+  return lines;
 }

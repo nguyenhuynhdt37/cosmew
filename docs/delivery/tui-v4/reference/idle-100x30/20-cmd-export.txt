@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+01|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System prompt: 3.1k tokens (0.3%)
+02|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ System tools: 13.6k tokens (1%)
+03|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ MCP tools: 669 tokens (0.1%)
+04|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ MCP server instructions: 1.7k tokens (0.2%)
+05|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Custom agents: 4.7k tokens (0.5%)
+06|                                               ⛁ Skills: 9.9k tokens (1%)
+07|                                               ⛁ Messages: 2.1k tokens (0.2%)
+08|                                               ⛶ Free space: 931.3k tokens (93%)
+09|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+10|
+11|     Auto-compact window:  1m tokens
+12|
+13|     MCP tools · /mcp (loaded on-demand)
+14|     └ 155 tools · 669 tokens
+15|
+16|     Custom agents · .claude/agents/
+17|     └ 23 agents · 4.7k tokens
+18|
+19|     Skills · /skills
+20|     └ 220 skills · 9.9k tokens
+21|
+22|     /context all to expand
+23|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+24|  Export conversation
+25|
+26|  ❯ Copy to clipboard  Copy the conversation to your system clipboard
+27|    Save to file       Save the conversation to a file in the current directory
+28|
+29|  ↑/↓ to navigate · Enter to select · Esc to cancel

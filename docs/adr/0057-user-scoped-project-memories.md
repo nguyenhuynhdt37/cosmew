@@ -144,3 +144,7 @@ project deny thắng như các edits khác; `untrusted` hỏi, Auto/on-request/n
 trừ project ask/deny. Không cache approval mutation trong dispatcher để bỏ qua policy mới.
 Đây là quyết định user kiểu Claude Code, không mở quyền shell/LSP vào state.
 Regression tests bao phủ Read Only, plan/analysisOnly, untrusted, Auto và project deny.
+
+## Update (ADR 0061)
+
+The permission model changed to Claude Code's: memory write/delete is refused in `plan` mode (and in Plan/Review agent mode and read-only subagents), is an `edit` otherwise (`default` asks, `acceptEdits`/`bypassPermissions` write) and project deny rules (`Tool(memory)`) still win. The Read Only/Auto/untrusted wording above is historical.

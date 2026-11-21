@@ -1,5 +1,5 @@
 import type {Database} from 'bun:sqlite';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 /** One audit line from the tool dispatcher. Targets are workspace-relative; no file contents. */
 export interface ToolAuditEntry {

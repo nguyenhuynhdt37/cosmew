@@ -4,7 +4,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
-import type {ProjectContextOptions} from '@futryn/contracts';
+import type {ProjectContextOptions} from '@cosmew/contracts';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
@@ -130,6 +130,7 @@ test('project text cannot authorize a tool to read outside the workspace', async
           'glob',
           'grep',
           'memory',
+          'tool_output',
           'exec_command',
           'apply_patch',
           'edit',
@@ -192,13 +193,13 @@ test.skipIf(process.platform === 'win32')(
       expect(fn()).toBe(true);
     };
     try {
-      await wait(() => output.includes('Trust this folder?'));
+      await wait(() => output.includes('Accessing workspace:'));
       await Bun.sleep(200);
       terminal.write('\x1b[A');
       await Bun.sleep(80);
       terminal.write('\r');
       await Bun.sleep(300);
-      await wait(() => output.includes('Ask anything'));
+      await wait(() => output.includes('manual mode on'));
       terminal.write('Explain this project architecture');
       await Bun.sleep(80);
       terminal.write('\r');
@@ -217,12 +218,20 @@ test.skipIf(process.platform === 'win32')(
           r.body?.messages?.some((m: any) => m.content === 'Explain the updated architecture'),
         ),
       );
+      // The request arriving at the fixture server can precede the completed answer frame.
+      // Wait for the turn to settle before exercising the Ctrl-C double-press flow.
+      await wait(() => output.split('Hello fixture').length >= 3);
       const updated = c.server.requests
         .filter(r => r.body?.messages?.some((m: any) => m.content === 'Explain the updated architecture'))
         .at(-1)!.body;
       expect(contextual(updated)).toHaveLength(1);
       expect(JSON.stringify(updated)).toContain('TASK01_PTY_V2');
       expect(JSON.stringify(updated)).not.toContain('TASK01_PTY_V1');
+      // Give Ink one render turn after the second response before sending the exit chord.
+      await Bun.sleep(250);
+      terminal.write('\x03');
+      await wait(() => output.includes('Press Ctrl-C again to exit'));
+      expect(child.exitCode).toBeNull();
       terminal.write('\x03');
       expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
     } finally {

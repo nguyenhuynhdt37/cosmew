@@ -1,9 +1,9 @@
 import {readdirSync} from 'node:fs';
 import {basename, dirname, extname, join} from 'node:path';
 import {z} from 'zod';
-import type {Attachment} from '@futryn/contracts';
+import type {Attachment} from '@cosmew/contracts';
 import {readDecision, type ToolDispatcherOptions} from '../context';
-import {WorkspaceDenied, looksBinary, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
+import {WorkspaceDenied, looksBinary, type ResolvedPath, type WorkspaceRoot} from '@cosmew/workspace';
 import {LIMITS, clipBytes} from '../limits';
 import {
   MAX_ATTACHMENT_BYTES,
@@ -33,7 +33,11 @@ export const readDescriptor = {
   inputSchema: {
     type: 'object',
     properties: {
-      path: {type: 'string', description: 'File or directory path relative to the workspace root.'},
+      path: {
+        type: 'string',
+        description:
+          'File or directory path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+      },
       offset: {
         type: 'integer',
         description: 'First line or entry to return (1-based). A negative value returns the last N lines.',
@@ -134,7 +138,7 @@ function pageLines(text: string, input: z.infer<typeof readInput>): {ok: true; c
 
 /**
  * Directory listing (OpenCode `read` list page): directories first, then files, each sorted; `/`
- * marks directories. Entries policy denies (`.git`, Futryn state) or symlinks pointing there or
+ * marks directories. Entries policy denies (`.git`, Cosmew state) or symlinks pointing there or
  * outside the workspace are omitted.
  */
 function listDirectory(
@@ -155,7 +159,7 @@ function listDirectory(
       let targetAbsolute = join(file.absolute, entry.name);
       if (entry.isSymbolicLink()) {
         try {
-          const resolved = workspace.resolve(relative);
+          const resolved = workspace.resolve(relative, file.root === workspace.root ? [] : [file.root]);
           directory = resolved.kind === 'directory';
           targetRelative = resolved.relative;
           targetAbsolute = resolved.absolute;
@@ -208,7 +212,7 @@ function editDistance(a: string, b: string): number {
  * One readable path the model probably meant (OpenCode `read` did-you-mean): the same name in
  * another case or extension, a small typo, or an absolute path written from the wrong root whose
  * tail exists in the workspace. Only a path whose read policy is plain allow is suggested, so a
- * suggestion never names Git internals, Futryn state or a secret file.
+ * suggestion never names Git internals, Cosmew state or a secret file.
  */
 export function suggestReadPath(
   workspace: WorkspaceRoot,

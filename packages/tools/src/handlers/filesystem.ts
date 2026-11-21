@@ -1,5 +1,6 @@
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
-import {WorkspaceDenied} from '@futryn/workspace';
+import {resolveWorkspacePath} from '../working-roots';
+import {WorkspaceDenied} from '@cosmew/workspace';
 import {readDescriptor, readInput, suggestReadPath} from '../builtin/read';
 import {globDescriptor, globInput, grepDescriptor, grepInput} from '../builtin/search';
 import {FileSystemRuntime} from '../runtimes/filesystem';
@@ -20,7 +21,7 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
         if (!parsed.success) return invalid('read');
         let file;
         try {
-          file = options.workspace.resolve(parsed.data.path);
+          file = resolveWorkspacePath(options, parsed.data.path);
         } catch (error) {
           // Did-you-mean (ADR 0041): one readable workspace path, checked against the read policy.
           if (
@@ -81,7 +82,7 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
       prepare(args) {
         const parsed = globInput.safeParse(args);
         if (!parsed.success) return invalid('glob');
-        const file = options.workspace.resolve(parsed.data.path ?? '.');
+        const file = resolveWorkspacePath(options, parsed.data.path ?? '.');
         if (file.kind !== 'directory')
           return {
             status: 'error',
@@ -111,7 +112,7 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
       prepare(args) {
         const parsed = grepInput.safeParse(args);
         if (!parsed.success) return invalid('grep');
-        const file = options.workspace.resolve(parsed.data.path ?? '.');
+        const file = resolveWorkspacePath(options, parsed.data.path ?? '.');
         // A single file is searchable like ripgrep/Claude Code; its content read is still authorized per file.
         if (file.kind !== 'directory' && file.kind !== 'file')
           return {

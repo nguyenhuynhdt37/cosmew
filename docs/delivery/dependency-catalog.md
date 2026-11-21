@@ -126,6 +126,8 @@ No npm/native helper installed. Selected existing Bun 1.4.4 `bun:ffi` (Bun MIT, 
 
 ## Execution container candidate — 2026-11-16
 
+Removed 2026-11-18 ([ADR 0062](../adr/0062-remove-docker-command-backend.md)). The image below is no longer a runtime dependency. The rest of this section is the historical record.
+
 The execution milestone authorizes evaluation of the official `oven/bun:1.4.4` Linux image (Bun MIT; Debian base packages retain their respective licenses). Provenance: https://bun.com/guides/ecosystem/docker and https://hub.docker.com/r/oven/bun. The same Bun version is already pinned in this repository. Runtime code must pin the resolved sha256 digest, not a mutable tag; no command may pull images. Host setup may pull this version for acceptance. No npm dependency is added. Docker Engine is an external trusted host capability; require local Linux containers, default seccomp, private namespaces, no network/capability escalation and no daemon socket in the command. macOS native Seatbelt and unverified hosts remain closed. Supply-chain/kernel/daemon trust is a limitation; passing fixture tests alone is not approval to enable the backend. Final digest/host acceptance is recorded in ADR0032.
 
 Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d`, linux/arm64, Debian 13, Bun 1.4.4. Docker Engine 29.8.2 on OrbStack Linux 7.2.12/cgroup2/seccomp, Darwin 24.6.0 arm64 host. A transient registry 502 was retried once during authorized setup; the runtime never pulls. Existing cached Piston/Redis images were inspected during research but are not runtime dependencies or permitted execution images. No npm dependency/license change.
@@ -133,10 +135,10 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
 ### Optional git-enabled command image (ADR 0034, evaluated 2026-11-16)
 
 - **Name/version:** Debian `git` `1:2.47.3-0+deb13u1` (trixie main; package SHA256 `8c6b1e96b226211260d7814472215a8a1ed38ee37400c421d454391c1807cb5a`, depends on perl, libcurl3t64-gnutls, libexpat1, libpcre2-8-0, zlib1g, liberror-perl, git-man), installed on top of the pinned `oven/bun@sha256:1d22548f…548f1d` base.
-- **License:** git GPL-2.0-only; dependencies under their Debian licenses. Used only as an executable inside the sandbox image; nothing is linked into Futryn.
+- **License:** git GPL-2.0-only; dependencies under their Debian licenses. Used only as an executable inside the sandbox image; nothing is linked into Cosmew.
 - **Provenance:** deb.debian.org via the base image's apt sources (snapshot `20261020T213255Z`), verified by apt's Debian archive signatures at build time.
-- **Build:** explicit host setup only: `bun scripts/build-exec-image.ts` (needs network). Tag `futryn-exec:git-<recipe hash prefix>`; the runtime never builds or pulls.
-- **Runtime verification:** accepted only when its layer chain equals the pinned base chain plus exactly one layer and the label `futryn.exec.recipe` equals the recipe hash; the container is then created from the image **ID**, not the tag. Otherwise the base image (no git) is used and `git` is not advertised.
+- **Build:** explicit host setup only: `bun scripts/build-exec-image.ts` (needs network). Tag `cosmew-exec:git-<recipe hash prefix>`; the runtime never builds or pulls.
+- **Runtime verification:** accepted only when its layer chain equals the pinned base chain plus exactly one layer and the label `cosmew.exec.recipe` equals the recipe hash; the container is then created from the image **ID**, not the tag. Otherwise the base image (no git) is used and `git` is not advertised.
 - **Bun/OS compatibility:** built and tested linux/arm64 on Docker Engine 29.8.2 (OrbStack, Darwin 24.6.0 arm64). amd64 and standalone Linux hosts: Needs verification.
 - **Threat surface:** git can read `.git` (mounted read-only) including `.git/config`; it cannot write it. Network stays off unless a command's network escalation is approved. No npm dependency or lockfile change.
 
@@ -155,7 +157,7 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
 
 - **Name/version:** `web-tree-sitter` **0.27.1** (published 2026-10-08; 0.27.2 of 2026-11-07 was under two weeks old and is not used), `tree-sitter-bash` **0.25.1** (published 2025), both pinned exactly in `packages/tools/package.json`.
 - **License:** MIT (both). **Provenance:** npm; sources https://github.com/tree-sitter/tree-sitter (lib/binding_web) and https://github.com/tree-sitter/tree-sitter-bash. Integrity: `web-tree-sitter` `sha512-qtx0VyUyNRHtL3ze7+v0hCKB/sLcAmY7ZAVp/ZK/bCj0yED8ptvNrr7Vd7DwDyKDWN9baqcUx4uaD2r2ql+6IA==`, `tree-sitter-bash` `sha512-7hMytuYIMoXOq24yRulgIxthE9YmggZIOHCyPTTuJcu6EU54tYD+4G39cUb28kxC6jMf/AbPfWGLQtgPTdh3xw==`.
-- **Dependencies / install scripts:** `web-tree-sitter` none. `tree-sitter-bash` depends on `node-addon-api` 8.9.2 (MIT) and `node-gyp-build` 4.8.4 (MIT) for its optional native binding and declares an install script; Futryn installs with `--ignore-scripts`, never builds or loads the native binding, and uses only the prebuilt `tree-sitter-bash.wasm` shipped in the package. The optional peer `tree-sitter` (native) is not installed.
+- **Dependencies / install scripts:** `web-tree-sitter` none. `tree-sitter-bash` depends on `node-addon-api` 8.9.2 (MIT) and `node-gyp-build` 4.8.4 (MIT) for its optional native binding and declares an install script; Cosmew installs with `--ignore-scripts`, never builds or loads the native binding, and uses only the prebuilt `tree-sitter-bash.wasm` shipped in the package. The optional peer `tree-sitter` (native) is not installed.
 - **Bun/OS compatibility:** WASM, loaded with `Parser.init()` + `Language.load()`; verified under Bun 1.4.4 on Darwin arm64 (parser load ≈ 25 ms once per process). Linux/Windows: Needs verification (pure WASM, no native code).
 - **Threat surface:** parses command text the model proposed; no I/O beyond reading the two WASM files from this package's `node_modules`. A load failure makes every command "unverified" (asks), never "safe".
 - **Purpose:** split compound shell commands and find dangerous sub-commands, as Codex does with tree-sitter-bash.
@@ -170,7 +172,7 @@ Resolved and tested 2026-11-16: `oven/bun@sha256:1d22548f177f4ff38e0c15baa3c2c46
   https://github.com/mixmark-io/turndown,
   https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/turndown.
 - **Install:** `bun install --ignore-scripts`; no dependency lifecycle code is run.
-  SDK server/auth dependencies are installed as upstream declares them but Futryn
+  SDK server/auth dependencies are installed as upstream declares them but Cosmew
   imports only client/Streamable HTTP entrypoints. No stdio/OAuth or sampling/root
   services are exposed. Transitive packages retain their own licenses in installed
   manifests; the lock records their identities, not a new authorization to execute.
@@ -202,12 +204,12 @@ frozen reinstall both use `--ignore-scripts`. No additional direct dependencies.
 Ink's string-width/wrap-ansi handle Unicode cell measurement/wrapping internally;
 React reconciler and Yoga WASM are upstream renderer dependencies (not workspace
 executables). cli-highlight includes highlight.js and its own CLI dependencies;
-Futryn calls only its in-process highlight API, never invokes the CLI or loads
+Cosmew calls only its in-process highlight API, never invokes the CLI or loads
 workspace themes. Transitives retain their own manifest licenses.
 
 Threat surface: untrusted Markdown/code/diff text is parsed in-process. Terminal
 control sequences are removed before rendering, code/Markdown/diff are bounded,
-links remain visible text and HTML is not executed. Color uses existing Futryn
+links remain visible text and HTML is not executed. Color uses existing Cosmew
 semantic tokens and is disabled for no-color capability. Ink owns raw input and
 terminal repaint while mounted; it never receives tool/security authority.
 Bun 1.4.4 on Darwin arm64 verified by real renderer fixtures and non-TTY child

@@ -8,7 +8,7 @@
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {parseArgs} from 'node:util';
-import {CONTRACT_VERSION, type PermissionPromptRequest, type PlanState, type UserAnswers} from '@futryn/contracts';
+import {CONTRACT_VERSION, type PermissionPromptRequest, type PlanState, type UserAnswers} from '@cosmew/contracts';
 import {defaultStateDirectory} from '../../apps/cli/src/bootstrap/paths';
 import {startup, type Application} from '../../apps/cli/src/bootstrap/startup';
 import {collectTurnEvidence, type TurnEvidence} from './evidence';
@@ -131,7 +131,6 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
         model: s.selection?.modelId ?? null,
         executionBackend: s.executionBackend,
         permissionMode: s.permissionMode,
-        approvalPolicy: s.approvalPolicy,
         sandbox: s.terminalRuntime,
         workspaceReadStatus: s.workspaceReadStatus,
         tools: client.availableTools(),

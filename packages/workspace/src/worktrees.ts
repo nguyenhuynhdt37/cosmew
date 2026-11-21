@@ -2,7 +2,7 @@ import {existsSync, lstatSync, mkdirSync, realpathSync, rmSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import {dirname, join, resolve} from 'node:path';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 /**
  * Isolated Git worktrees for subagents (`isolation: "worktree"`, Wave 2 S5c). Every Git invocation runs with
@@ -59,7 +59,7 @@ export interface WorktreeFinish {
 export interface GitWorktreesOptions {
   workspaceRoot: string;
   /**
-   * Parent of the per-repository worktree directories. The host passes a directory under Futryn's per-user
+   * Parent of the per-repository worktree directories. The host passes a directory under Cosmew's per-user
    * state (`~/.futryn-worktrees`, a sibling of the state directory because policy denies the state directory to children); the fallback is a per-user directory in the OS temp directory, never a
    * shared fixed path. Every component created or used must be a real directory owned by the current user
    * with mode 0700 (symlinks and other owners are refused).

@@ -9,22 +9,10 @@ import {
   useDialogSize,
   useDialogRefresh,
   useDialogTask,
-  usePicker,
   type DialogProps,
 } from '../picker';
 import {transcriptLines, typeRow, childRow} from './logic';
 export {transcriptLines, typeRow, childRow, formatDuration, tokenTotal} from './logic';
-export function useAgents() {
-  const client = useFutrynClient();
-  useDialogRefresh();
-  const router = usePicker();
-  return {
-    ...router,
-    types: client.agentTypes(),
-    children: client.subagents(),
-    openAgents: (props: DialogProps = {}) => router.open('agents', <AgentsDialog {...props} />),
-  };
-}
 export function AgentsDialog(props: DialogProps) {
   const client = useFutrynClient();
   const {refresh} = useDialogRefresh();

@@ -1,10 +1,10 @@
 import {fileURLToPath} from 'node:url';
-import {isAbsolute, relative} from 'node:path';
 import {z} from 'zod';
-import {FutrynError, type ToolDescriptor} from '@futryn/contracts';
-import {lspFailureMessage, offsetAt, toCodePointColumn, toUtf16Character, type LspManager} from '@futryn/code-intel';
-import {WorkspaceDenied, type ResolvedPath} from '@futryn/workspace';
-import {readDecision, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {FutrynError, type ToolDescriptor} from '@cosmew/contracts';
+import {lspFailureMessage, offsetAt, toCodePointColumn, toUtf16Character, type LspManager} from '@cosmew/code-intel';
+import {locateWriteTarget, WorkspaceDenied, type ResolvedPath} from '@cosmew/workspace';
+import {readDecision, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {resolveWorkspacePath} from '../working-roots';
 import {PatchError} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {PreparedTool, ToolHandler} from './types';
@@ -14,7 +14,7 @@ import type {PreparedTool, ToolHandler} from './types';
  * `tool/lsp.ts` (read 2026-11-17); `lsp_rename` turns the server's WorkspaceEdit into one patch
  * plan that goes through the normal write approval. Positions are 1-based lines and 1-based
  * code-point columns. Locations are filtered by the read policy: code is quoted only for files the
- * read policy allows; other workspace files show path and line; Git and Futryn state are omitted;
+ * read policy allows; other workspace files show path and line; Git and Cosmew state are omitted;
  * files outside the workspace show their path and line only.
  */
 export const LSP_OPERATIONS = [
@@ -47,7 +47,11 @@ export const lspDescriptor: ToolDescriptor = {
     type: 'object',
     properties: {
       operation: {type: 'string', enum: [...LSP_OPERATIONS]},
-      path: {type: 'string', description: 'File path relative to the workspace root.'},
+      path: {
+        type: 'string',
+        description:
+          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+      },
       line: {type: 'integer', minimum: 1, description: '1-based line.'},
       character: {type: 'integer', minimum: 1, description: '1-based column (characters, as in read output).'},
       query: {type: 'string', description: 'Symbol name for workspaceSymbol.'},
@@ -108,14 +112,13 @@ function locationLine(
   } catch {
     return null;
   }
-  const rel = relative(options.workspace.root, absolute);
-  const inside = rel && !rel.startsWith('..') && !isAbsolute(rel);
   const line = range.start.line + 1;
-  if (!inside) return `${absolute}:${line}${label ? `  ${label}` : ''} (outside the workspace)`;
   let file: ResolvedPath;
   try {
-    file = options.workspace.resolve(rel.split('\\').join('/'));
-  } catch {
+    file = resolveWorkspacePath(options, absolute);
+  } catch (error) {
+    if (error instanceof WorkspaceDenied && error.reason === 'outside-workspace')
+      return `${absolute}:${line}${label ? `  ${label}` : ''} (outside the workspace)`;
     return null;
   }
   const decision = readDecision(options, file.relative, file.absolute);
@@ -227,7 +230,7 @@ export function lspHandler(options: ToolDispatcherOptions): ToolHandler {
         return refuse('INVALID_INPUT', `${input.operation} needs line and character (1-based).`);
       if (input.operation === 'workspaceSymbol' && !input.query)
         return refuse('INVALID_INPUT', 'workspaceSymbol needs a query.');
-      const file = options.workspace.resolve(input.path);
+      const file = resolveWorkspacePath(options, input.path);
       if (file.kind !== 'file') return refuse('INVALID_INPUT', `${file.relative} is not a file.`);
       const status = lsp().status(file);
       if (!status.ok) return refuse('LSP_UNAVAILABLE', status.message);
@@ -400,7 +403,7 @@ function workspaceEdits(
       if ('kind' in change)
         return {
           code: 'UNSUPPORTED',
-          message: 'The rename would create, move or delete files; Futryn only applies text edits.',
+          message: 'The rename would create, move or delete files; Cosmew only applies text edits.',
         };
       const checked = z
         .object({
@@ -469,7 +472,7 @@ export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
       const parsed = renameInput.safeParse(args);
       if (!parsed.success) return refuse('INVALID_INPUT', 'Expected {path, line, character, newName}.');
       const input = parsed.data;
-      const file = options.workspace.resolve(input.path);
+      const file = resolveWorkspacePath(options, input.path);
       if (file.kind !== 'file') return refuse('INVALID_INPUT', `${file.relative} is not a file.`);
       const status = options.codeIntel!.status(file);
       if (!status.ok) return refuse('LSP_UNAVAILABLE', status.message);
@@ -510,14 +513,22 @@ export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
             } catch {
               return refuse('INVALID_PATCH', 'The language server returned an invalid file URI.');
             }
-            const rel = relative(options.workspace.root, absolute);
-            if (!rel || rel.startsWith('..') || isAbsolute(rel))
-              return {
-                status: 'denied',
-                code: 'DENIED',
-                content: 'The rename would change files outside the workspace. Nothing was changed.',
-              };
-            const path = rel.split('\\').join('/');
+            let target;
+            try {
+              target = locateWriteTarget(options.workspace, absolute, sandboxConfig(options).additionalDirectories);
+            } catch (error) {
+              if (error instanceof WorkspaceDenied)
+                return {
+                  status: 'denied',
+                  code: 'DENIED',
+                  content:
+                    error.reason === 'outside-workspace'
+                      ? 'The rename would change files outside the workspace. Nothing was changed.'
+                      : 'The rename touches protected files. Nothing was changed.',
+                };
+              throw error;
+            }
+            const path = target.key;
             byPath.set(path, [...(byPath.get(path) ?? []), ...list]);
           }
           try {

@@ -1,5 +1,5 @@
-import {emptySettings, FutrynError} from '@futryn/contracts';
-import {FutrynClient, type FutrynBackendPorts} from '@futryn/sdk';
+import {emptySettings, FutrynError} from '@cosmew/contracts';
+import {FutrynClient, type FutrynBackendPorts} from '@cosmew/sdk';
 /** Real SDK over hermetic ports. Unsupported operations throw; no provider/OS compatibility claims. */
 export function createClientFixture(overrides: Partial<FutrynBackendPorts> = {}) {
   const state = emptySettings();

@@ -59,18 +59,18 @@ Mỗi lỗi do S0 tìm ra được sửa **trước** S1 (mỗi lỗi một phi�
 
 ### S0 — UAT thật Next.js
 
-**Mục tiêu**: chứng minh agent Futryn làm trọn một project thật bằng model có tool. Không viết tính năng.
+**Mục tiêu**: chứng minh agent Cosmew làm trọn một project thật bằng model có tool. Không viết tính năng.
 
 Prompt:
 
 ```
 Bước S0 (wave-2/plan.md). Không sửa code sản phẩm.
 1. bun run hannes account list — chọn tài khoản có backend `hannes` (xai API key hoặc chatgpt-api). Không có thì dừng, báo user.
-2. Tạo thư mục trống /Users/huynh/codes/hannes/uat-futryn/run-<yyyymmdd-hhmm>/ (không đụng file sẵn có trong uat-futryn/).
+2. Tạo thư mục trống /Users/huynh/codes/hannes/uat-cosmew/run-<yyyymmdd-hhmm>/ (không đụng file sẵn có trong uat-cosmew/).
 3. Chạy: bun scripts/uat/agent-run.ts --workspace <thư mục đó> --prompts <file 5 lượt Next.js> --report <thư mục>/report.json --approve all --turn-timeout-ms 900000
    (file prompt: copy nội dung 5 lượt ở docs/delivery/wave-2/uat-nextjs-prompts.txt; cần mạng cho npm/create-next-app.)
 4. Đọc report.json: mỗi lượt — số tool call, tool lỗi, quyền hỏi, kết quả build/test/curl thật.
-5. Ghi docs/delivery/wave-2/uat-nextjs.md: bảng lượt, lỗi Futryn tìm được (tool sai, quyền vô lý, treo, sai trạng thái), mỗi lỗi kèm bằng chứng (đoạn report đã redact). Commit chỉ file docs.
+5. Ghi docs/delivery/wave-2/uat-nextjs.md: bảng lượt, lỗi Cosmew tìm được (tool sai, quyền vô lý, treo, sai trạng thái), mỗi lỗi kèm bằng chứng (đoạn report đã redact). Commit chỉ file docs.
 ```
 
 Xong khi: có `uat-nextjs.md` với danh sách lỗi (có thể rỗng) và kết luận dùng được/không.
@@ -100,24 +100,26 @@ Theo W11. Bổ sung: đọc skill ở thư mục user đi qua reader có kiểm 
 
 ### S4 — W10 Memories
 
-Theo W10. Bổ sung: `/memory` trong TUI; `hannes exec` vẫn nạp `MEMORY.md`; tắt bằng `FUTRYN_MEMORY=0`.
+Theo W10. Bổ sung: `/memory` trong TUI; `hannes exec` vẫn nạp `MEMORY.md`; tắt bằng `COSMEW_MEMORY=0`.
 
 **Trạng thái (2026-11-18): S4 đã triển khai** — [ADR 0057](../../adr/0057-user-scoped-project-memories.md), contract 1.30. Memories kiểu Claude Code ở cấp user, Markdown/index private, dispatcher `memory`, context dữ liệu không tin cậy, `/memory` Modal, SDK list/read/delete, headless và env/config disable. Fixture verified; không claim live provider/OS opener/Seatbelt. S5 phải bỏ memory context của subagent. Citations gọn, usage_count/last_usage, ranking khi overflow và stale hint 30 ngày đã triển khai; trích xuất nền/tổng hợp còn hoãn chi tiết trong deferred.md. Không commit/push.
 
 ### S5 — W9 Subagent
 
-**Trạng thái (2026-11-18): S5a đã triển khai** — [ADR 0058](../../adr/0058-synchronous-subagents.md), contract 1.32: tool `agent` chế độ chờ, `explore/worker/general/plan`, song song 6 / độ sâu 1, quyền thu hẹp, journal + recovery, sự kiện + TUI + `exec --json`. **S5b đã triển khai** (contract 1.33): `background: true` + thông báo `<subagent>` bền cho cha, `agent_message/agent_wait/agent_close` (port Codex send_input/wait/close_agent), agent tuỳ chỉnh `.futryn|.claude|.agents/agents/*.md` + `~/.futryn|~/.claude/agents`, `/agents`, SDK `agentTypes()/stopSubagent()`; xem phần S5b của ADR 0058. **S5c đã triển khai** (contract 1.34): `isolation: "worktree"`, model/effort theo con + `[agents.<type>]`, ngân sách `max_child_*`, `fyn exec` chờ con nền, sửa lỗi bảo mật cap của cha áp cho con (`AGENT_BUDGET_EXHAUSTED`) và F12 (lệnh không sandbox dùng môi trường thật); **S5 hoàn tất**. Còn hoãn: agent role TOML kiểu Codex, mailbox giữa các con, remote/cloud agents, agent teams (deferred.md). Fixture verified, không claim live provider. Không commit/push.
+**Trạng thái (2026-11-18): S5a đã triển khai** — [ADR 0058](../../adr/0058-synchronous-subagents.md), contract 1.32: tool `agent` chế độ chờ, `explore/worker/general/plan`, song song 6 / độ sâu 1, quyền thu hẹp, journal + recovery, sự kiện + TUI + `exec --json`. **S5b đã triển khai** (contract 1.33): `background: true` + thông báo `<subagent>` bền cho cha, `agent_message/agent_wait/agent_close` (port Codex send_input/wait/close_agent), agent tuỳ chỉnh `.cosmew|.claude|.agents/agents/*.md` + `~/.cosmew|~/.claude/agents`, `/agents`, SDK `agentTypes()/stopSubagent()`; xem phần S5b của ADR 0058. **S5c đã triển khai** (contract 1.34): `isolation: "worktree"`, model/effort theo con + `[agents.<type>]`, ngân sách `max_child_*`, `fyn exec` chờ con nền, sửa lỗi bảo mật cap của cha áp cho con (`AGENT_BUDGET_EXHAUSTED`) và F12 (lệnh không sandbox dùng môi trường thật); **S5 hoàn tất**. Còn hoãn: agent role TOML kiểu Codex, mailbox giữa các con, remote/cloud agents, agent teams (deferred.md). Fixture verified, không claim live provider. Không commit/push.
 
-Theo W9. Bổ sung: sự kiện `subagent.started/finished` (contract); subagent kế thừa approval policy nhưng **không** kế thừa grant phiên của cha trừ grant đọc; `explore` dùng model rẻ hơn nếu cấu hình `[agents.explore] model=...` trong `~/.futryn/config.toml`.
+Theo W9. Bổ sung: sự kiện `subagent.started/finished` (contract); subagent kế thừa approval policy nhưng **không** kế thừa grant phiên của cha trừ grant đọc; `explore` dùng model rẻ hơn nếu cấu hình `[agents.explore] model=...` trong `~/.cosmew/config.toml`.
 
 ### S6 — W12 MCP đầy đủ + tự cài
 
 Theo W12; chia **hai phiên**: S6a (stdio transport, cấu hình, duyệt theo annotation, `/mcp`, `tool_search`, `mcp_resource`) và S6b (OAuth cho HTTP, `mcp_search` + `mcp_install` qua MCP Registry). Lấp `packages/mcp/src/transports/{stdio,http}.ts`; chuyển adapter `web_search` sang transport chung.
 
+**Trạng thái (2026-11-20): S6a một phần** — [ADR 0068](../../adr/0068-user-mcp-connect.md), không tăng contract. Nối stdio và HTTP từ `mcp.json` cấp người dùng (`fyn mcp`, `/mcp`, gọi tool qua ToolDispatcher). Chưa có: S6b, cấu hình project, annotation auto|prompt|writes, `tool_search`, `mcp_resource`, OAuth. `web_search` giữ adapter HTTP riêng.
+
 ### S7 — Hooks + slash command tuỳ chỉnh
 
 **Lấy**: Claude Code hooks (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`; JSON stdin, exit 2 = chặn), custom commands dạng Markdown (`.claude/commands/*.md`, `$ARGUMENTS`); Codex `notify` / hooks và OpenCode plugin hooks — Needs verification ở revision ghim.
-**Phạm vi**: hooks chỉ khai báo ở `~/.futryn/config.toml` (cấp user, không từ workspace — tránh repo tự chạy lệnh); chạy trong sandbox như `exec_command`, timeout 60 s, output bounded + redact; hook chỉ có thể **siết** quyền (deny/ask), không nới. Slash command tuỳ chỉnh từ `.futryn/commands/*.md` (project) và `~/.futryn/commands/` (user): chỉ là template prompt, không chạy lệnh.
+**Phạm vi**: hooks chỉ khai báo ở `~/.cosmew/config.toml` (cấp user, không từ workspace — tránh repo tự chạy lệnh); chạy trong sandbox như `exec_command`, timeout 60 s, output bounded + redact; hook chỉ có thể **siết** quyền (deny/ask), không nới. Slash command tuỳ chỉnh từ `.cosmew/commands/*.md` (project) và `~/.cosmew/commands/` (user): chỉ là template prompt, không chạy lệnh.
 **Test**: hook chặn tool, hook timeout, hook không thể allow cái bị deny, command template với `$ARGUMENTS`, command project không ghi đè command built-in.
 
 ### S8 — W13 CodeMode

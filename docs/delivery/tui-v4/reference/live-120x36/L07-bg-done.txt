@@ -1,0 +1,36 @@
+00|      2 +                                                         │                                                   ✕
+01|      3  A cursor blinks against the black,                       │2 files changed +1 -1              source: Current ▾
+02|      4  a heartbeat on an empty line;                            │
+03|      5  it never hurries, never asks,                            │a.txt                                          +1 -1
+04|                                                                  │poem.txt
+05|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it  │
+06|  the title "Exit Zero", which comes from its last line.          │────────────────────────────────────────────────────
+07|                                                                  │a.txt                                        [ ask ]
+08|  The poem has 15 four-line stanzas. They cover the blinking      │────────────────────────────────────────────────────
+09|  cursor, pipes, standard in, out and error, man pages, command   │ 1 -hello
+10|  history, Ctrl-C and Ctrl-D, and tmux panes. The title and a     │ 1 +HELLO
+11|  blank line sit above the poem, so the file is 62 lines long.    │ 2  world
+12|                                                                  │
+13|✻ Baked for 29s · done 11:05 PM                                   │────────────────────────────────────────────────────
+14|                                                                  │poem.txt (untracked)
+15|❯ Run sleep 40 as a background shell command (run_in_background)  │────────────────────────────────────────────────────
+16|  and then just reply 'started'.                                  │New file not yet staged.
+17|                                                                  │Run `git add :/poem.txt` to see line counts.
+18|  Ran 1 shell command                                             │
+19|                                                                  │
+20|⏺ started                                                         │
+21|                                                                  │
+22|✻ Cogitated for 5s · done 11:05 PM                                │
+23|                                                                  │
+24|⏺ Background command "Sleep for 40 seconds" completed (exit code  │
+25|  0)                                                              │
+26|                                                                  │
+27|⏺ sleep 40 finished successfully (exit code 0).                   │
+28|                                                                  │
+29|✻ Sautéed for 3s · done 11:06 PM                                  │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · ← 1 agent

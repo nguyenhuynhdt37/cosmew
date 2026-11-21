@@ -1,5 +1,4 @@
-import {APPROVAL_POLICY_FOR_MODE, type AppearanceConfig} from '@futryn/contracts';
-import {KEYMAP} from '../../hooks';
+import {PERMISSION_MODE_LABELS, type AppearanceConfig} from '@cosmew/contracts';
 
 export interface SettingRow {
   label: string;
@@ -28,8 +27,6 @@ export function settingsRows(appearance: AppearanceConfig, effectiveMode: 'dark'
     {label: 'Sidebar Panel', value: appearance.sidebar ? 'VISIBLE' : 'COLLAPSED'},
   ];
 }
-
-export const SETTINGS_ROW_COUNT = 13;
 
 export const clampStep = (value: number, step: number, min: number, max: number, digits = 2): number =>
   Math.max(min, Math.min(max, Number((value + step).toFixed(digits))));
@@ -66,7 +63,7 @@ export interface ConfigurationRow extends SettingRow {
 
 /** Effective values and actions derive from the SDK, not a second configuration store. */
 export function configurationRows(
-  client: import('@futryn/sdk').FutrynClient,
+  client: import('@cosmew/sdk').FutrynClient,
   section: SettingsSection,
   appearance: AppearanceConfig,
   effectiveMode: 'dark' | 'light',
@@ -108,8 +105,13 @@ export function configurationRows(
       {label: 'Language', value: 'English interface', disabled: 'Interface language selection is not implemented.'},
       {
         label: 'Terminal shortcuts',
-        value: KEYMAP.map(key => `${key.keys}: ${key.label}`).join(' · '),
-        source: 'KEYMAP',
+        value: 'Defaults plus ~/.cosmew/keybindings.json (run /keybindings to edit)',
+        source: 'keymap',
+      },
+      {
+        label: 'Editor mode',
+        value: 'Not implemented',
+        disabled: 'Not implemented: vim editing mode is not available; the prompt uses the default (emacs-style) keys.',
       },
     ];
   if (section === 'Models & Providers')
@@ -186,8 +188,8 @@ export function configurationRows(
         action: 'status',
       },
       {
-        label: 'Approval policy',
-        value: `${client.permissionPreset()} · ${client.sandboxMode()} sandbox · ${client.permissionMode()} (${APPROVAL_POLICY_FOR_MODE[client.permissionMode()]})`,
+        label: 'Permission mode',
+        value: `${PERMISSION_MODE_LABELS[client.permissionMode()]} · sandbox ${client.status().sandbox.enabled ? 'on' : 'off'}`,
         action: 'permissions',
         source: 'session only',
       },
@@ -231,4 +233,122 @@ export function configurationRows(
       action: 'context',
     },
   ];
+}
+
+export const SETTINGS_TABS = ['Status', 'Config', 'Usage', 'Stats'] as const;
+export type SettingsTab = (typeof SETTINGS_TABS)[number];
+
+type Fields = readonly (readonly [string, string])[];
+const NOT_REPORTED = 'Not reported';
+
+/** Empty user config is "None", never a fake connected row. */
+function mcpServersField(client: import('@cosmew/sdk').FutrynClient): string {
+  const report = client.mcpStatus();
+  if (report.servers.length === 0) return 'None · /mcp';
+  const connected = report.servers.filter(server => server.state === 'connected').length;
+  return `${connected} connected · /mcp`;
+}
+
+/** Render the settings sources the SDK actually loaded, rather than a fixed parity placeholder. */
+function settingsSourcesField(client: import('@cosmew/sdk').FutrynClient): {sources: string; diagnostics: string[]} {
+  try {
+    const snapshot = client.permissionSettings();
+    const labels = snapshot.files
+      .filter(file => file.exists)
+      .map(file =>
+        file.scope === 'user'
+          ? 'User settings'
+          : file.scope === 'project'
+            ? 'Shared project settings'
+            : 'Project local settings',
+      );
+    return {
+      sources: labels.length ? [...new Set(labels)].join(', ') : 'Defaults',
+      diagnostics: snapshot.diagnostics.slice(0, 3),
+    };
+  } catch {
+    // Embedded/test clients may not expose file-backed permission settings.
+    return {sources: 'Defaults', diagnostics: []};
+  }
+}
+
+/** `Status` tab: connection and session facts straight from the SDK (no request is sent). */
+export function statusFields(client: import('@cosmew/sdk').FutrynClient): Fields {
+  const status = client.status();
+  const settings = settingsSourcesField(client);
+  return [
+    ['Workspace', status.workspace],
+    ['Session ID', status.activeSessionId ?? 'Not started'],
+    ['', ''],
+    ['Provider', status.activeProvider?.name ?? 'Not connected'],
+    ['Account', status.activeAccount?.alias ?? 'Not connected'],
+    [
+      'Login method',
+      status.activeProvider?.auth === 'oauth' ? 'oauth' : (status.activeAccount?.credential.kind ?? 'None'),
+    ],
+    ['', ''],
+    ['Model', status.selection?.modelId ?? 'Not selected'],
+    [
+      'Permissions',
+      `${PERMISSION_MODE_LABELS[status.permissionMode]} · sandbox ${status.sandbox.enabled ? 'on' : 'OFF'} · ${status.pendingPermissions} pending`,
+    ],
+    ['Backend', status.executionBackend?.label ?? 'No model selected'],
+    ['MCP servers', mcpServersField(client)],
+    ['Setting sources', settings.sources],
+    ...(settings.diagnostics.length ? [['Settings diagnostics', settings.diagnostics.join(' · ')] as const] : []),
+  ];
+}
+
+/** `Stats` tab: session totals the SDK actually measured. */
+export function statsFields(client: import('@cosmew/sdk').FutrynClient): Fields {
+  const usage = client.usage();
+  let diff: ReturnType<typeof client.getWorkspaceDiff> | null = null;
+  try {
+    // A backend without Git reports UNSUPPORTED; the panel must still render.
+    diff = client.toolsEnabled() ? client.getWorkspaceDiff() : null;
+  } catch {
+    diff = null;
+  }
+  const n = (value: number | null | undefined) => (value == null ? '—' : value.toLocaleString('en-US'));
+  const last = usage.last?.usage;
+  return [
+    ['Session', ''],
+    ['Estimated cost', usage.costUSD == null ? NOT_REPORTED : `$${usage.costUSD.toFixed(4)}`],
+    ['Total duration (API)', NOT_REPORTED],
+    ['Total duration (wall)', NOT_REPORTED],
+    [
+      'Total code changes',
+      diff?.state === 'ready'
+        ? `${diff.totalAdditions} lines added, ${diff.totalDeletions} lines removed`
+        : NOT_REPORTED,
+    ],
+    [
+      'Usage',
+      `${n(usage.inputTokens)} input, ${n(usage.outputTokens)} output, ${n(last?.cacheReadTokens)} cache read, ${n(last?.cacheWriteTokens)} cache write (last turn)`,
+    ],
+  ];
+}
+
+export interface UsageMeter {
+  label: string;
+  percent: number | null;
+  text: string;
+  reset?: string;
+}
+/** Provider-reported limits as bars; empty when no account reported one. */
+export function usageMeters(client: import('@cosmew/sdk').FutrynClient): UsageMeter[] {
+  return client.limits().flatMap(account =>
+    account.items
+      .filter(item => item.unit !== 'USD')
+      .map(item => ({
+        label: item.label,
+        percent: item.unlimited ? null : (item.usedPercent ?? null),
+        text: item.unlimited
+          ? 'unlimited'
+          : item.usedPercent == null
+            ? 'usage unknown'
+            : `${Math.round(item.usedPercent)}% used`,
+        reset: item.resetAt ? `Resets ${item.resetAt}` : undefined,
+      })),
+  );
 }

@@ -1,9 +1,21 @@
 import {turnBudgetSchema} from './telemetry';
-import {permissionRuleSetSchema} from './permissions';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.35' as const;
+export const CONTRACT_VERSION = '1.40' as const;
+
+/**
+ * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
+ * exist (`Network(...)`, `Unsandboxed(...)`), so the stored shape stays lenient; the settings
+ * migration (ADR 0061) converts them into the local settings file and removes the entry.
+ */
+const legacyRuleList = z.array(z.string().max(520)).max(200);
+const legacyPermissionRuleSetSchema = z.strictObject({
+  allow: legacyRuleList,
+  ask: legacyRuleList,
+  deny: legacyRuleList,
+});
+
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/);
 export const themeIdSchema = z.string().regex(/^[a-z][a-z0-9-]{1,40}$/);
 export const hexColorSchema = z
@@ -19,6 +31,39 @@ export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini'
 export const envNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/);
 /** HTTP header name (RFC 9110 token); credentials never travel in static headers (ADR 0046). */
 export const headerNameSchema = z.string().regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$/);
+/** User-only reasoning declarations; absence means unknown. Contract 1.40, ADR 0078. */
+export const reasoningEffortsSchema = z
+  .array(
+    z
+      .string()
+      .min(1)
+      .max(40)
+      .regex(/^[^\s\x00-\x1f\x7f]+$/)
+      .refine(value => value !== 'default'),
+  )
+  .min(1)
+  .max(20)
+  .refine(values => new Set(values).size === values.length);
+const reasoningDeclarationSchema = z
+  .strictObject({
+    supported: z.boolean().optional(),
+    efforts: reasoningEffortsSchema.optional(),
+  })
+  .refine(value => value.supported !== false || value.efforts === undefined, {
+    message: 'unsupported reasoning cannot declare efforts',
+  });
+export const providerReasoningSchema = z
+  .strictObject({
+    supported: z.boolean().optional(),
+    efforts: reasoningEffortsSchema.optional(),
+    models: z
+      .record(modelIdSchema, reasoningDeclarationSchema)
+      .refine(models => Object.keys(models).length <= 500)
+      .optional(),
+  })
+  .refine(value => value.supported !== false || value.efforts === undefined, {
+    message: 'unsupported reasoning cannot declare efforts',
+  });
 export const providerSchema = z.strictObject({
   id: idSchema,
   name: z
@@ -38,7 +83,7 @@ export const providerSchema = z.strictObject({
   streamIdleTimeoutMs: z.number().int().min(100).max(3_600_000).optional(),
   streamUsage: z.boolean().optional(),
   family: idSchema.optional(),
-  /** Declared in the user-level host config (~/.futryn/config.toml), the source of truth for it. Contract 1.20. */
+  /** Declared in the user-level host config (~/.cosmew/config.toml; legacy roots remain readable), the source of truth for it. Contract 1.20. */
   source: z.literal('config').optional(),
   /** Environment variable that conventionally holds the API key (Codex `env_key`). */
   envKey: envNameSchema.optional(),
@@ -73,6 +118,7 @@ export const providerSchema = z.strictObject({
   requestEncoding: z.literal('zstd').optional(),
   /** Send the assistant's earlier reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
   replayReasoning: z.boolean().optional(),
+  reasoning: providerReasoningSchema.optional(),
 });
 export type Provider = z.infer<typeof providerSchema>;
 
@@ -142,6 +188,8 @@ export const modelSchema = z.strictObject({
   id: modelIdSchema,
   name: z.string().min(1).max(300),
   capabilities: capabilitiesSchema,
+  /** Advisory models.dev evidence used only for listing, never capability claims (ADR 0078, contract 1.40). */
+  codingEvidence: z.strictObject({text: capability, tools: capability}).optional(),
   reasoningEfforts: z.array(z.string().min(1).max(40)).max(20).optional(),
   defaultReasoningEffort: z.string().max(40).optional(),
   contextLimit: z.number().int().positive().nullable(),
@@ -154,11 +202,24 @@ export const modelSchema = z.strictObject({
     })
     .nullable(),
   source: z.enum(['provider', 'manual']),
+  /** Manual model provenance; omitted on legacy cache entries for backwards compatibility. */
+  manualOrigin: z.enum(['user', 'provider-config']).optional(),
   fetchedAt: z.string().datetime(),
   metadataSource: z.string().max(2048).nullable(),
   metadataFetchedAt: z.string().datetime().nullable(),
 });
 export type ModelInfo = z.infer<typeof modelSchema>;
+/** Metadata-only coding suitability; unknown, manual and current selections remain available. */
+export function isCodingModel(model: ModelInfo, selectedModelId?: string): boolean {
+  return (
+    model.source === 'manual' ||
+    model.id === selectedModelId ||
+    (model.capabilities.text !== 'unsupported' &&
+      model.capabilities.tools !== 'unsupported' &&
+      model.codingEvidence?.text !== 'unsupported' &&
+      model.codingEvidence?.tools !== 'unsupported')
+  );
+}
 export const selectionSchema = z.strictObject({accountId: z.string().uuid(), modelId: modelIdSchema});
 export type Selection = z.infer<typeof selectionSchema>;
 export const toolCallSchema = z.strictObject({id: z.string().min(1).max(200), name: idSchema, input: z.unknown()});
@@ -177,12 +238,14 @@ export const messageSchema = z
     toolName: idSchema.optional(),
     /** Assistant messages with tool calls: the model's reasoning, sent back only to providers that require it (ADR 0048). */
     reasoning: z.string().optional(),
-    /** Tool messages only: media the tool returned (ADR 0041). Never persisted in the message row. */
+    /** User or tool media (ADRs 0041/0072). User image bytes are ephemeral; never journaled. */
     attachments: z.array(attachmentSchema).max(8).optional(),
   })
   .superRefine((m, ctx) => {
     const issue = (message: string) => ctx.addIssue({code: 'custom', message});
-    if (m.attachments && m.role !== 'tool') issue('only tool messages carry attachments');
+    if (m.attachments && m.role === 'assistant') issue('only user or tool messages carry attachments');
+    if (m.role === 'user' && m.attachments?.some(a => a.mime === 'application/pdf'))
+      issue('user attachments must be images');
     if (m.reasoning !== undefined && m.role !== 'assistant') issue('only assistant messages carry reasoning');
     if (m.role === 'tool') {
       if (!m.toolCallId || !m.toolName || m.toolCalls) issue('tool message needs toolCallId and toolName only');
@@ -260,8 +323,9 @@ export type ModelEvent =
   /** Older history was replaced by a handoff summary (or, as a fallback, an excerpt checkpoint). ADR 0054. */
   | ({type: 'context.compacted'} & ContextCompaction)
   /** Subagent lifecycle and progress events (Wave 2 S5). */
-  | import('./subagents').SubagentEvent;
-/** A provider API adapter: Futryn sends the request and reads the response; it owns the loop and tools. */
+  | import('./subagents').SubagentEvent
+  | import('./hooks').HookRanEvent;
+/** A provider API adapter: Cosmew sends the request and reads the response; it owns the loop and tools. */
 export interface ModelPort {
   stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent>;
   generate(
@@ -474,7 +538,14 @@ export const settingsSchema = z
     appearance: appearanceSchema.optional(),
     projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
     /** Project permission rules by workspace path (ADR 0028); optional, so older files still load. */
-    projectPermissionRules: z.record(z.string(), permissionRuleSetSchema).optional(),
+    projectPermissionRules: z.record(z.string(), legacyPermissionRuleSetSchema).optional(),
+    /**
+     * Content hashes of repository settings files the user approved (ADR 0061), by absolute path. A
+     * changed file hashes differently and is untrusted again.
+     */
+    trustedProjectSettings: z.record(z.string(), z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(50)).optional(),
+    /** Canonical workspaces explicitly trusted for interactive folder access (Claude-style persistent consent). */
+    trustedWorkspaces: z.array(z.string().min(1).max(4096)).max(1000).optional(),
   })
   .superRefine((settings, ctx) => {
     const unique = (values: string[]) => new Set(values).size === values.length;
@@ -483,7 +554,7 @@ export const settingsSchema = z
       !unique(settings.providers.map(p => p.id)) ||
       !unique(settings.accounts.map(a => a.id)) ||
       !unique(settings.accounts.map(a => a.alias)) ||
-      !unique(settings.catalogs.map(c => c.accountId))
+      !unique(settings.catalogs.map(c => `${c.accountId}\u0000${c.providerFingerprint}`))
     )
       ctx.addIssue({code: 'custom', message: 'Duplicate identity'});
     const keys = settings.accounts.flatMap(a => (a.credential.kind === 'keyring' ? [a.credential.key] : []));
@@ -516,7 +587,7 @@ export interface SettingsStore {
 }
 
 /**
- * Who runs the coding agent (ADR 0029, 0049). Futryn always owns the loop and every project tool;
+ * Who runs the coding agent (ADR 0029, 0049). Cosmew always owns the loop and every project tool;
  * a provider only answers API requests. `chat-only`: no folder consent, so no project tools.
  */
 export type ExecutionBackendKind = 'hannes' | 'chat-only';
@@ -528,11 +599,11 @@ export interface ExecutionBackend {
 }
 export function executionBackendFor(options: {toolsEnabled: boolean}): ExecutionBackend {
   return options.toolsEnabled
-    ? {kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes', label: 'Futryn agent · Futryn tools'}
+    ? {kind: 'hannes', loopOwner: 'hannes', toolOwner: 'hannes', label: 'Cosmew agent · Cosmew tools'}
     : {
         kind: 'chat-only',
         loopOwner: 'hannes',
         toolOwner: 'none',
-        label: 'Futryn agent · tools off (no folder consent)',
+        label: 'Cosmew agent · tools off (no folder consent)',
       };
 }

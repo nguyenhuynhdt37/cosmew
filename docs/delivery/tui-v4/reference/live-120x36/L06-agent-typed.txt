@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|⏺ Write(poem.txt)                                                 │2 files changed +1 -1              source: Current ▾
+02|  ⎿  Wrote 60 lines to poem.txt                                   │
+03|       1 A cursor blinks against the black,                       │a.txt                                          +1 -1
+04|       2 a heartbeat on an empty line;                            │poem.txt
+05|       3 it never hurries, never asks,                            │
+06|       4 it only waits for your design.                           │────────────────────────────────────────────────────
+07|       5 The prompt is small, a dollar sign,                      │a.txt                                        [ ask ]
+08|       6 a humble gate, a narrow door,                            │────────────────────────────────────────────────────
+09|       7 yet through it pour the oldest spells                    │ 1 -hello
+10|       8 that ran on glass and tape before.                       │ 1 +HELLO
+11|       9 I type a word, the shell replies,                        │ 2  world
+12|      10 a pipe connects one thought to two,                      │
+13|     … +50 lines                                                  │────────────────────────────────────────────────────
+14|                                                                  │poem.txt (untracked)
+15|❯ also give it a title                                            │────────────────────────────────────────────────────
+16|                                                                  │New file not yet staged.
+17|⏺ Update(poem.txt)                                                │Run `git add :/poem.txt` to see line counts.
+18|                                                                  │
+19|──────────────────────────────────────────────────────────────────│
+20| Edit file                                                        │
+21| poem.txt                                                         │
+22|╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+23| 1 +Exit Zero                                                     │
+24| 2 +                                                              │
+25| 3  A cursor blinks against the black,                            │
+26| 4  a heartbeat on an empty line;                                 │
+27| 5  it never hurries, never asks,                                 │
+28|╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+29| Do you want to make this edit to poem.txt?                       │
+30| ❯ 1. Yes                                                         │
+31|   2. Yes, and switch to accept edits (auto-approve file edits    │
+32|      and common file commands) for this session (shift+tab)      │
+33|   3. No                                                          │
+34|                                                                  │
+35| Esc to cancel · Tab to amend                                     │

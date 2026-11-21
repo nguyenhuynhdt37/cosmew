@@ -2,8 +2,11 @@ import {
   FutrynError,
   messageSchema,
   type CompactionOutcome,
+  type RetractQueuedOptions,
+  type QueuedInputEntry,
   type ConversationStore,
   type Message,
+  type Attachment,
   type ModelEvent,
   type ModelPort,
   type ProjectContextPort,
@@ -11,7 +14,7 @@ import {
   type SteerOutcome,
   type ToolPort,
   type Usage,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {normalizeHistory} from '../context/builder';
 import {compactConversation} from './compact';
 import {TurnRun} from './turn';
@@ -61,7 +64,35 @@ export class Conversation {
 
   /** Accepted instructions that no turn processed yet; the next `send` delivers them first. */
   queuedInput(): readonly {steerId: string; content: string}[] {
-    return this.state.pendingInput.map(p => ({steerId: p.steerId, content: p.message.content}));
+    return [...this.state.pendingInput, ...(this.active?.pending ?? [])].map(p => ({
+      steerId: p.steerId,
+      content: p.message.content,
+    }));
+  }
+
+  /** Synchronous claim/retract boundary: no await between durable removal and runtime removal. */
+  retractQueuedInput(): string {
+    return this.retractQueuedEntries()
+      .map(p => p.content)
+      .join('\n');
+  }
+  retractQueuedEntries(options: RetractQueuedOptions & {claimedIds?: readonly string[]} = {}): QueuedInputEntry[] {
+    if (!this.store.retractQueuedInput) throw new FutrynError('UNSUPPORTED');
+    const items = this.store.retractQueuedInput(this.id, this.queuedInput(), options);
+    const removed = new Set(items.map(p => p.steerId));
+    this.state.pendingInput = this.state.pendingInput.filter(p => !removed.has(p.steerId));
+    if (this.active) {
+      const kept = this.active.pending.filter(p => !removed.has(p.steerId));
+      this.active.pending.splice(0, this.active.pending.length, ...kept);
+    }
+    return items.map(p => ({id: p.steerId, type: p.content.startsWith('!') ? 'shell' : 'text', content: p.content}));
+  }
+
+  queueSteeringForNextTurn(): void {
+    if (!this.store.moveQueuedInputToInbox) throw new FutrynError('UNSUPPORTED');
+    this.store.moveQueuedInputToInbox(this.id, this.queuedInput());
+    this.state.pendingInput = [];
+    this.active?.pending.splice(0);
   }
 
   /** Identity of the turn that currently accepts steering, if any. */
@@ -122,11 +153,12 @@ export class Conversation {
     maxEstimatedCostUSD?: number,
     reasoningEffort?: string,
     queuedInputId?: string,
+    attachments?: Attachment[],
   ): AsyncIterable<ModelEvent> {
     if (this.running) throw new FutrynError('POLICY');
     let user: Message;
     try {
-      user = messageSchema.parse({role: 'user', content});
+      user = messageSchema.parse({role: 'user', content, ...(attachments?.length ? {attachments} : {})});
     } catch {
       throw new FutrynError('INVALID_INPUT');
     }

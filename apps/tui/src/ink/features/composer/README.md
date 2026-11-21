@@ -40,8 +40,8 @@ thay SDK, dispatch/policy, composition root, keymap, dependency hay renderer cũ
   skills SDK; `@` dùng public file-list API; `$` chỉ dùng catalog skills.
 - `History({query, match?, width?})`, `useHistory`, `recordHistory`,
   `searchHistory` export từ `history/index.tsx`.
-- `Paste({id, content, width?})`, `usePasteState` và range helpers export từ
-  `paste/index.tsx`. Paste >=5 dòng hoặc >=1000 ký tự thu thành marker, vẫn gửi
+- `Paste({id, content, width?})` và range helpers (`createPasteState`, `insertPaste`,
+  `replaceRange`, `expandPastes`) export từ `paste/index.tsx`. Paste >=5 dòng hoặc >=1000 ký tự thu thành marker, vẫn gửi
   đủ nội dung đã lọc terminal controls. Marker do user tự gõ luôn giữ literal.
   Phím di chuyển/xoá coi mỗi paste thu gọn là một đơn vị, không thể gửi mảnh marker.
 
@@ -103,3 +103,107 @@ Evidence từng luồng và giới hạn tại
 [parity](../../../../../../docs/delivery/tui-v3/parity.md),
 `ink/testing/integration.test.tsx`, `tests/end-to-end/tui-ink-pty.test.ts` và
 `tests/contracts/sdk-memory-write.test.ts`. Default/golden legacy không đổi.
+
+## TUI v4 phase C (2026-11-19)
+
+Rows 5–10: full-width shared `Rule`s, `❯`, rotating Cosmew examples, pink
+shell prompt/rules and memory prompt/rules. Prefixes remain in the underlying
+draft for dispatch; caret/selection offsets account for the display prefix.
+Advertised SDK effort renders above the top rule on the right; Shift+↑/↓ calls
+`setReasoningEffort`, retaining SDK rejection while a turn is running.
+Autocomplete uses the shared Pointer, a fixed name column (40 cells at 100
+columns, reduced at narrow widths), two cell-aware description lines with `…`,
+five visible choices, and existing Tab/Enter acceptance semantics.
+The old hint rows are gone. Composer owns one footer (mode, temporary message,
+current measured context warning, or three-column shortcuts); `StatusLine` is a
+compatibility no-op. Context/cost remain available through report dialogs.
+`?` on empty input opens shortcuts; input closes it without inserting/submitting.
+The panel omits unavailable host actions and model effort when unadvertised.
+
+Row 20: Ctrl+_ restores bounded draft snapshots including paste metadata;
+Ctrl+S stashes/restores one exact draft and refuses overwriting an existing stash.
+Double Esc clears the draft; single Esc first closes search/menu or interrupts
+owned shell work. Busy generation still returns false to the host for cancellation.
+Empty double Esc explicitly reports unavailable SDK rewind. `confirmExit()`
+returns false with `Press Ctrl-C again to exit`, then true for a second call within
+1.5 seconds. Temporary confirmation messages do not publish persistent notices.
+Opt+P routes `/model` without clearing the draft; `onToggleTasks` enables Ctrl+T.
+G3 integration: the shell passes `onEditor` (Ctrl+G: draft written to a private
+temp file, `$VISUAL`/`$EDITOR` run through Ink's `suspendTerminal`, result read
+back), `onSuspend` (Ctrl+Z: SIGTSTP inside `suspendTerminal`), `onRewind` (Esc Esc
+and `/rewind`) and `onSendQueuedNow` (Ctrl+X Ctrl+S aborts the turn, then sends
+the queue). Ctrl+V reports `Not implemented` (no SDK image attachment; `clipboard.ts`
+only writes text), so image paste is not listed in the `?`/`/help` tables, which
+share `HELP_SHORTCUT_COLUMNS` (`../help/logic.ts`). `backgroundShells` is not wired:
+the SDK exposes no background-shell source.
+
+Phase E host integration completed:
+
+- Ready Ctrl+C calls `confirmExit()` before `gate.exit()`; startup cancellation
+  stays immediate and shutdown still drains owned tasks.
+- Ctrl+S stashes/restores the draft; Ctrl+T calls `usePlan().toggleTodos` through
+  `onToggleTasks`. Session/theme dialogs remain explicit slash commands.
+- Esc/Shift+Tab/Ctrl+O dismiss shortcuts before interrupting, cycling modes or
+  toggling the detailed transcript (G3: Ctrl+O no longer opens the history panel). Other global shortcuts also dismiss the panel.
+- Host `inputWidth` is `width - 3`. The inert StatusLine render/import is removed;
+  `useStatusLine` still supplies welcome status.
+- Host tests verify these bindings and live task ordering; native synthetic PTY
+  verifies consent, permission, toggling, resize and two-press exit inline.
+
+Tests use real Ink and public SDK on hermetic ports. They prove formatting,
+measurement gating, draft preservation, keyboard dispatch and denial/cancellation
+invariants, not native clipboard/editor/suspend or live provider compatibility.
+Phase E reviewed and recorded the composed 80/36-column golden frames.
+
+Phase E fix round: host-rendered successful shell results no longer publish a
+second success notice/footer. Mode/messages/shortcuts use the two-cell inset;
+autocomplete descriptions wrap at word boundaries.
+
+## TUI v4 phase G3 (ô nhập, footer, menu, Ctrl+R)
+
+Đặc tả: `docs/delivery/tui-v4/spec.md` mục 2 và các khung `reference/idle-100x30/01..09`, `live-120x36/L05-queued`.
+
+- Footer (`features/status`): `⏸ manual mode on` (mặc định), `⏵⏵ accept edits on (shift+tab to cycle)`, `⏸ plan mode on (...)`,
+  bypass giữ màu lỗi riêng; hậu tố ` · esc to interrupt`, ` · ← N agent(s)` (từ `client.subagents()`), ` · N shell(s)`
+  (tuỳ chọn `backgroundShells`, SDK chưa có danh sách shell nền). `!` đổi footer thành `! for shell mode`. `?` thay footer bằng bảng 3 cột
+  24/35/còn lại (đúng 02-shortcuts); `#` giữ dispatch memory nhưng dùng prompt `❯` thường.
+- Khe phải phía trên rule: `ctrl+y to paste deleted text` (sau Ctrl+C / Esc Esc xoá chữ; Ctrl+Y dán lại), `ctrl+g to edit in <editor>` khi
+  nhiều dòng, còn lại `◐ <effort> · /effort` (ẩn nếu model không có effort).
+- Tin xếp hàng (`QueuedMessages`): `❯ text` nền user + `  ⎿  Queued · ctrl+x ctrl+s to send now`; placeholder
+  `Press up to edit queued messages`. Up không rút tin lại được vì SDK chưa có API retract: báo `Not implemented`.
+- Menu `/`, `$`, `@`: ngân sách 5 hàng, cột tên 42 ô tính từ pointer, mô tả tối đa 2 dòng + `…`, hàng chọn màu `selected`,
+  còn lại `dim`; file là `+ path` dưới cột pointer.
+- Ctrl+R: panel `Search prompts · everywhere` (`History`), lọc khi gõ, ↑/↓ chọn, Enter dùng, Esc huỷ, Ctrl+S scope = `Not implemented`
+  (lịch sử không có mốc thời gian nên không có cột thời gian). Nháp chỉ đổi khi Enter.
+- Callback host: `onRewind` (Esc Esc khi rỗng), `onEditor`/`onSuspend`/`onPasteImage` (Ctrl+G/Z/V), `onSendQueuedNow`
+  (Ctrl+X Ctrl+S), `backgroundShells`; thiếu bridge thì in `Not implemented: ...`, không gửi gì.
+- Ctrl+C: có chữ thì xoá (không lên đạn thoát); rỗng thì `Press Ctrl-C again to exit`, lần hai thoát.
+
+## P2 SDK integration (2026-11-20)
+
+Queue rows now read `client.queuedInput()` directly: entries disappear once claimed by
+runtime, without a second local steering cache. Up on the first visual row calls the
+atomic `retractQueuedInput()` and prepends returned text to the current expanded draft;
+claimed entries and denied retractions never insert stale display text. Send-now calls
+the host only after the draft was accepted; host uses `sendQueuedNow()` and owns inbox
+delivery.
+
+`onReadClipboardImage` supplies explicit clipboard bytes/path to SDK `attachImage`;
+legacy `onPasteImage` remains a void bridge for existing hosts. `readMacClipboardImage`
+in `clipboard.ts` reads PNG via fixed `/usr/bin/osascript`, with timeout and bounded
+output (20 MiB decoded); it does not read prompt paths or write temp files. SDK validates
+image contents and permissions. Chips show metadata only; Left at the beginning of the
+input selects chips, Left/Right move, Delete/Backspace remove, Esc returns to text.
+Image-only chat submits an empty string to the host; the host must allow this when
+`imageAttachments()` is nonempty. Busy turns, shell/slash/memory submissions and
+incomplete clipboard preparation preserve the draft. Clipboard results cannot cross a
+session/account/model change. Native clipboard execution remains Needs verification;
+hermetic tests cover SDK flow and races, not OS compatibility.
+
+Ctrl+B calls `backgroundCurrentTask()` (or optional `onBackgroundTask`). Shell counts
+come from session-scoped `backgroundTasks()`, updates subscribe to task events. Footer
+navigation includes shells and agents; x calls SDK stop, and `onOpenBackgroundTasks`
+opens `BackgroundTasksDialog`. The panel shows task state glyphs, Enter opens output
+tail directly, Esc returns to the list, and x stops the selected running task. The host
+continues to own turn/notification delivery and shutdown; this feature creates no loop.
+The keymap-generated help restores Ctrl+V and Ctrl+B rows.

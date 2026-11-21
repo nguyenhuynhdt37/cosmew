@@ -1,4 +1,4 @@
-import {SecureVault} from '@futryn/security';
+import {SecureVault} from '@cosmew/security';
 
 // Opt-in OS backend probe. Uses only a new Futryn-owned entry and always deletes it.
 if (process.env.HANNES_VERIFY_KEYRING !== '1') {

@@ -1,4 +1,4 @@
-import type {Usage} from '@futryn/contracts';
+import type {Usage} from '@cosmew/contracts';
 
 /** One limit shown to the user. Percent-based (subscription plans) or amount-based (API credit). */
 export interface LimitItem {
@@ -16,7 +16,7 @@ export interface LimitItem {
  * Limits for one connected account.
  *  - live:        fetched from the provider's API just now
  *  - last-turn:   the plan snapshot the subscription runtime reported with its latest reply
- *  - unavailable: this provider exposes no balance or quota API to Futryn
+ *  - unavailable: this provider exposes no balance or quota API to Cosmew
  */
 export interface AccountLimits {
   accountId: string;
@@ -38,7 +38,7 @@ export interface AccountLimits {
  * such API, so the UI can say so at once instead of showing a pending check.
  */
 export type FetchAccountLimits = (
-  account: import('@futryn/contracts').Account,
+  account: import('@cosmew/contracts').Account,
   signal?: AbortSignal,
 ) => Promise<{items: LimitItem[]; note?: string}> | null;
 

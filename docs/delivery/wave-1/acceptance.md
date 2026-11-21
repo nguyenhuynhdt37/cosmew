@@ -4,7 +4,7 @@ Kế hoạch: [plan.md](plan.md). Mỗi workstream ghi lệnh đã chạy, exit 
 
 ## W0 — Baseline (2026-11-17, HEAD `30f2d8a`)
 
-Bun 1.4.4, macOS (Darwin 24.6.0), `FUTRYN_COMMAND_BACKEND=none` qua `tests/preload.ts`.
+Bun 1.4.4, macOS (Darwin 24.6.0), `COSMEW_COMMAND_BACKEND=none` qua `tests/preload.ts`.
 
 | Lệnh | Exit | Pass | Skip | Fail |
 |---|---:|---:|---:|---:|
@@ -100,7 +100,7 @@ write receipt/transcript, còn W5 chỉ là search adapter cố định. W8–W1
 | `bun test tests/end-to-end/web-search.test.ts` sau retry fix | exit 0, 8 pass, 33 expects | Local MCP/REST transport fixture; không live provider |
 | `bun test tests/security/web-fetch.test.ts` | exit 0, 7 pass, 53 expects | Chính sách/DNS/redirect + actual local HTTP sockets; không live Internet TLS |
 | Parent targeted RPC/LSP/redaction/question/read-policy/transcript group | exit 0, 62 pass / 1 skip / 0 fail | Regression/security & local protocol/UI integration |
-| `FUTRYN_TEST_REAL_LSP=1 bun test tests/end-to-end/lsp.test.ts -t 'real installed TypeScript LSP'` | exit 0, 1 pass, 6 expects, ~4.3 s | TypeScript 7 thật; native Seatbelt, definition + actual rename receipt/file change |
+| `COSMEW_TEST_REAL_LSP=1 bun test tests/end-to-end/lsp.test.ts -t 'real installed TypeScript LSP'` | exit 0, 1 pass, 6 expects, ~4.3 s | TypeScript 7 thật; native Seatbelt, definition + actual rename receipt/file change |
 | Native helper natural-exit descendants | RED → GREEN | Same-PGID descendants được kill trước leader PID release; setsid vẫn unconfirmed |
 | Native helper TERM-ignoring descendant | exit 0 | Kill request không để lại child cố tình bỏ qua TERM trong fixture cùng PGID |
 | `bun run typecheck`, `bun run lint` sau sửa import/unused/format | exit 0 | Static typing, unused checks, format và diff whitespace |

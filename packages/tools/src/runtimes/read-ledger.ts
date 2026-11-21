@@ -1,4 +1,4 @@
-import {contentHash} from '@futryn/workspace';
+import {contentHash} from '@cosmew/workspace';
 
 /**
  * Which file versions the model has actually seen (ADR 0038). `edit` and `write` may change an

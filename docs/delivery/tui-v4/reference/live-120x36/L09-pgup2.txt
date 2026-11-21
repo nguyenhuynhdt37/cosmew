@@ -1,0 +1,36 @@
+00|❯ Use TodoWrite to create 3 todos (alpha, beta, gamma) and compl… │                                                   ✕
+01|  I could run the same alpha → beta → gamma sequence another way, │2 files changed +1 -1              source: Current ▾
+02|  for example by updating a checklist file after each step. If    │
+03|  you'd like that, tell me which way to use.                      │a.txt                                          +1 -1
+04|                                                                  │poem.txt
+05|✻ Cooked for 3s · done 11:02 PM                                   │
+06|                                                                  │────────────────────────────────────────────────────
+07|❯ Write a 60-line poem about terminals to poem.txt.               │a.txt                                        [ ask ]
+08|                                                                  │────────────────────────────────────────────────────
+09|⏺ Write(poem.txt)                                                 │ 1 -hello
+10|  ⎿  Wrote 60 lines to poem.txt                                   │ 1 +HELLO
+11|       1 A cursor blinks against the black,                       │ 2  world
+12|       2 a heartbeat on an empty line;                            │
+13|       3 it never hurries, never asks,                            │────────────────────────────────────────────────────
+14|       4 it only waits for your design.                           │poem.txt (untracked)
+15|       5 The prompt is small, a dollar sign,                      │────────────────────────────────────────────────────
+16|       6 a humble gate, a narrow door,                            │New file not yet staged.
+17|       7 yet through it pour the oldest spells                    │Run `git add :/poem.txt` to see line counts.
+18|       8 that ran on glass and tape before.                       │
+19|       9 I type a word, the shell replies,                        │
+20|      10 a pipe connects one thought to two,                      │
+21|     … +50 lines                                                  │
+22|                                                                  │
+23|❯ also give it a title                                            │
+24|                                                                  │
+25|⏺ Update(poem.txt)                                                │
+26|  ⎿  Added 2 lines                                                │
+27|      1 +Exit Zero                                                │
+28|      2 +                                                         │
+29|      3  A cursor Jump to bottom · fn+↓ to scroll                 │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · ← 1 agent

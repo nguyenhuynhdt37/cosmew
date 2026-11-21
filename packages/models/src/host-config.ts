@@ -2,24 +2,21 @@ import {
   BUILTIN_SUBAGENT_TYPES,
   DEFAULT_AGENT_MAX_DEPTH,
   DEFAULT_AGENT_MAX_THREADS,
-  approvalPolicySchema,
-  sandboxModeSchema,
   envNameSchema,
   headerNameSchema,
   idSchema,
   modelIdSchema,
   protocolSchema,
   providerSchema,
-  type ApprovalPolicy,
+  providerReasoningSchema,
   type HostAgentRoleConfig,
   type HostAgentsConfig,
   type Provider,
-  type SandboxModeSetting,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 /**
  * Host provider configuration (ADR 0046): `[model_providers.<id>]` tables of the user-level
- * `~/.futryn/config.toml`, using Codex field names. This module is pure: it validates already parsed
+ * `~/.cosmew/config.toml` (legacy roots remain readable), using Codex field names. This module is pure: it validates already parsed
  * TOML and renders TOML text. Reading the file, running the token command and every network call
  * belong to the composition root and the transport.
  */
@@ -45,7 +42,7 @@ export interface HostConfig {
   diagnostics: HostConfigDiagnostic[];
 }
 
-/** Codex fields that exist but Futryn refuses or does not implement, with the reason shown to the user. */
+/** Codex fields that exist but Cosmew refuses or does not implement, with the reason shown to the user. */
 const REFUSED_FIELDS: Record<string, string> = {
   experimental_bearer_token:
     'plaintext tokens are never stored in config files; use env_key, the keyring or an auth command',
@@ -77,12 +74,13 @@ const ALLOWED_FIELDS = new Set([
   'catalog',
   'requires_auth',
   'replay_reasoning',
+  'reasoning',
   'auth',
 ]);
 const ALLOWED_AUTH_FIELDS = new Set(['command', 'args', 'timeout_ms', 'refresh_interval_ms']);
 const CATALOGS = ['openai', 'anthropic', 'gemini', 'ollama', 'manual'] as const;
 
-/** Codex DEFAULT_PROVIDER_AUTH_TIMEOUT_MS / refresh interval. Futryn caps the timeout at one minute. */
+/** Codex DEFAULT_PROVIDER_AUTH_TIMEOUT_MS / refresh interval. Cosmew caps the timeout at one minute. */
 const AUTH_TIMEOUT_MS = 5_000;
 const AUTH_TIMEOUT_MAX_MS = 60_000;
 const AUTH_REFRESH_MS = 300_000;
@@ -169,6 +167,11 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     if (REFUSED_FIELDS[key]) fail(`${key}: ${REFUSED_FIELDS[key]}`);
     if (!ALLOWED_FIELDS.has(key)) fail(`${key} is not a supported field`);
   }
+  const reasoning = raw.reasoning === undefined ? undefined : providerReasoningSchema.safeParse(raw.reasoning);
+  if (reasoning && !reasoning.success)
+    fail(
+      'reasoning must use known keys, a boolean supported, and 1–20 unique effort strings (1–40 characters; default is reserved)',
+    );
   const baseURL = validateBaseURL(raw.base_url);
   const protocol = protocolSchema.safeParse(raw.wire_api ?? 'chat');
   if (!protocol.success) return fail('wire_api must be chat, responses, anthropic or gemini');
@@ -262,6 +265,7 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     ...(modelCatalogURL ? {modelCatalogURL} : {}),
     ...(models?.length ? {models} : {}),
     ...(raw.replay_reasoning === true ? {replayReasoning: true} : {}),
+    ...(reasoning?.success ? {reasoning: reasoning.data} : {}),
     // Streams are chatty; a chat gateway reports usage only when asked.
     ...(protocol.data === 'chat' ? {streamUsage: true} : {}),
   });
@@ -294,50 +298,26 @@ export function loadHostConfig(parsed: unknown, reserved: ReadonlySet<string> = 
 }
 
 /**
- * Permission defaults of the user-level config (ADR 0055), with Codex field names: top-level
- * `sandbox_mode` and `approval_policy`, and `[sandbox_workspace_write] network_access`. Pure: the
- * composition root reads the file, applies the environment and the CLI flags on top, and never
- * reads this from a workspace. An invalid value fails closed (stricter) and is reported.
+ * Permissions moved to Claude Code style settings files (ADR 0061): `~/.cosmew/settings.json` and the
+ * project's `.cosmew/settings.json` / `settings.local.json` (legacy roots remain readable). The Codex keys of ADR 0053/0055 are no
+ * longer read; finding one in `config.toml` is reported so nobody believes it still applies.
  */
 export interface HostPermissionConfig {
-  sandboxMode?: SandboxModeSetting;
-  approvalPolicy?: ApprovalPolicy;
-  networkAccess?: boolean;
   diagnostics: HostConfigDiagnostic[];
 }
+
+const REMOVED_PERMISSION_KEYS: Record<string, string> = {
+  sandbox_mode: 'use sandbox.enabled in settings.json',
+  approval_policy: 'use permissions.defaultMode in settings.json',
+  sandbox_workspace_write: 'use sandbox.network.allowedDomains in settings.json',
+};
 
 export function loadHostPermissions(parsed: unknown): HostPermissionConfig {
   const result: HostPermissionConfig = {diagnostics: []};
   if (!isRecord(parsed)) return result;
-  if (parsed.sandbox_mode !== undefined) {
-    const mode = sandboxModeSchema.safeParse(parsed.sandbox_mode);
-    if (mode.success) result.sandboxMode = mode.data;
-    else {
-      result.sandboxMode = 'read-only';
-      result.diagnostics.push({
-        message: 'sandbox_mode must be read-only, workspace-write or danger-full-access; using read-only',
-      });
-    }
-  }
-  if (parsed.approval_policy !== undefined) {
-    const policy = approvalPolicySchema.safeParse(parsed.approval_policy);
-    if (policy.success) result.approvalPolicy = policy.data;
-    else {
-      result.approvalPolicy = 'untrusted';
-      result.diagnostics.push({message: 'approval_policy must be untrusted, on-request or never; using untrusted'});
-    }
-  }
-  const workspaceWrite = parsed.sandbox_workspace_write;
-  if (workspaceWrite !== undefined) {
-    if (!isRecord(workspaceWrite)) result.diagnostics.push({message: 'sandbox_workspace_write must be a table'});
-    else if (workspaceWrite.network_access !== undefined) {
-      if (typeof workspaceWrite.network_access === 'boolean') result.networkAccess = workspaceWrite.network_access;
-      else
-        result.diagnostics.push({
-          message: 'sandbox_workspace_write.network_access must be true or false; network stays off',
-        });
-    }
-  }
+  for (const [key, replacement] of Object.entries(REMOVED_PERMISSION_KEYS))
+    if (parsed[key] !== undefined)
+      result.diagnostics.push({message: `${key} is no longer supported and is ignored (ADR 0061): ${replacement}`});
   return result;
 }
 
@@ -373,7 +353,7 @@ const VALID_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'hi
 const VALID_ROLE_NAMES = new Set<string>([...BUILTIN_SUBAGENT_TYPES, 'explorer', 'default']);
 
 /**
- * Subagent configuration in `~/.futryn/config.toml` (`[agents]` and `[agents.<role>]`, Wave 2 S5).
+ * Subagent configuration in `~/.cosmew/config.toml` (`[agents]` and `[agents.<role>]`, Wave 2 S5).
  * Pure parser: invalid values emit diagnostics and fall back to Codex defaults (`max_threads = 6`, `max_depth = 1`).
  */
 export function loadHostAgents(parsed: unknown): HostAgentsLoadedConfig {
@@ -549,6 +529,16 @@ export function renderProviderToml(entry: HostProviderEntry): string {
   table('query_params', provider.queryParams);
   table('http_headers', provider.httpHeaders);
   table('env_http_headers', provider.envHttpHeaders);
+  const declaration = (name: string, value: {supported?: boolean; efforts?: string[]}) => {
+    lines.push('', `[${head}.${name}]`);
+    if (value.supported !== undefined) lines.push(`supported = ${value.supported}`);
+    if (value.efforts) lines.push(`efforts = [${value.efforts.map(tomlString).join(', ')}]`);
+  };
+  if (provider.reasoning) {
+    declaration('reasoning', provider.reasoning);
+    for (const [id, value] of Object.entries(provider.reasoning.models ?? {}))
+      declaration(`reasoning.models.${tomlKey(id)}`, value);
+  }
   if (command) {
     lines.push('', `[${head}.auth]`, `command = ${tomlString(command.command)}`);
     if (command.args.length) lines.push(`args = [${command.args.map(tomlString).join(', ')}]`);

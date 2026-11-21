@@ -10,7 +10,7 @@ import {
   type ToolResult,
   type TurnBudget,
   type TurnStopReason,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import type {ProgressQueue} from './progress-queue';
 import {ExecutionGate} from './tool-runtime';
 
@@ -138,7 +138,7 @@ export class TurnTools {
       result = toolResultSchema.parse(output);
       if (result.callId !== call.id || result.name !== call.name) throw new FutrynError('PROTOCOL');
     } catch (error) {
-      // Codex answers an aborted call "aborted by user after Xs". Futryn cannot prove that an
+      // Codex answers an aborted call "aborted by user after Xs". Cosmew cannot prove that an
       // interrupted call had no effect, so the outcome stays explicitly unknown.
       const seconds = Math.max(0.1, (Date.now() - started) / 1000).toFixed(1);
       const unknown = this.errorResult(

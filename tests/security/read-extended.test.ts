@@ -13,9 +13,9 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher, type ApprovalRequest} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher, type ApprovalRequest} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {toModelMessages} from '../../packages/models/src/adapter';
 
 /** ADR 0041: read of directories, tails, media, notebooks and did-you-mean, under the read policy. */

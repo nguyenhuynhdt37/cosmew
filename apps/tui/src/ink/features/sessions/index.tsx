@@ -2,26 +2,21 @@
 import {useState} from 'react';
 import {useFutrynClient, useTextInput} from '../../hooks';
 import {useOverlay} from '../../core';
-import {TextLine} from '../../ui';
-import {PickerDialog, useDialogRefresh, useDialogTask, usePicker, type DialogProps} from '../picker';
+import {Text} from 'ink';
+import {useTheme} from '../../theme';
+import {ListPicker, Panel, TextLine, useUiTheme} from '../../ui';
+import {PickerDialog, useDialogRefresh, useDialogSize, useDialogTask, type DialogProps} from '../picker';
 export interface SessionsDialogProps extends DialogProps {
   onChanged?: () => void;
-}
-export function useSessions() {
-  const client = useFutrynClient();
-  useDialogRefresh();
-  const router = usePicker();
-  return {
-    ...router,
-    sessions: client.listSessions(),
-    openSessions: (props: SessionsDialogProps = {}) => router.open('sessions', <SessionsDialog {...props} />),
-  };
 }
 export function SessionsDialog({onChanged, ...props}: SessionsDialogProps) {
   const client = useFutrynClient();
   const router = useOverlay();
   const {refresh} = useDialogRefresh();
   const task = useDialogTask();
+  const size = useDialogSize(props);
+  const {color} = useTheme();
+  const ui = useUiTheme();
   const [selected, setSelected] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const done = () => {
@@ -88,20 +83,28 @@ export function SessionsDialog({onChanged, ...props}: SessionsDialogProps) {
         <TextLine>{target.preview}</TextLine>
       </PickerDialog>
     );
+  const project = client.status().workspace.split('/').filter(Boolean).at(-1) ?? 'project';
   return (
-    <PickerDialog
-      title="Sessions / Resume"
-      {...props}
-      message={task.message}
-      items={sessions.map(s => ({
-        id: s.id,
-        label: `${s.id === client.status().activeSessionId ? '● ' : ''}${s.title || s.id}`,
-        description: `${s.selection.modelId} · ${s.preview}`,
-        keywords: s.id,
-      }))}
-      onSelect={item => setSelected(item.id)}
-    >
-      <TextLine>Ctrl+N new session · select to resume or delete</TextLine>
-    </PickerDialog>
+    <Panel width={size.width}>
+      <Text bold color={ui.color('rule')}>
+        Resume session
+      </Text>
+      <ListPicker
+        items={sessions.map(s => ({
+          id: s.id,
+          label: s.title || s.id,
+          current: s.id === client.status().activeSessionId,
+          description: `${s.selection.modelId} · ${s.preview}`,
+          keywords: s.id,
+        }))}
+        heading={project}
+        showSearch
+        empty="No sessions in this project yet"
+        visibleRows={size.visibleRows}
+        hint="Ctrl+N to start a new session · ↑/↓ to navigate · Enter to resume · Esc to close"
+        onSelect={item => setSelected(item.id)}
+      />
+      {task.message ? <TextLine color={color('warning')}>{task.message}</TextLine> : null}
+    </Panel>
   );
 }

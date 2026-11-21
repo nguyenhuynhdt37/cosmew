@@ -2,10 +2,10 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher} from '@cosmew/tools';
 import {openInk, type InkSession} from '../../apps/tui/src/ink/testing/ink-session';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -108,10 +108,11 @@ test('answers with a single choice, a multiple choice and free text reach the mo
   const frame = c.tui!.computeFrameSnapshot().plainText;
   expect(frame).toContain('Which database should the service use?');
   expect(frame).toContain('Postgres (Recommended)');
-  expect(frame).toContain('Nhập câu trả lời tự do');
-  // Submitting with the second question unanswered jumps there and asks for an answer.
+  expect(frame).toContain('Type something.');
+  // A single choice advances to the next question; submitting with it unanswered jumps back and asks for an answer.
   await c.tui!.handleKey('Enter'); // Postgres
-  await rows(c.tui!, 3, 'Enter'); // Submit all answers
+  await c.tui!.handleKey('ArrowRight'); // Submit tab: review
+  await c.tui!.handleKey('Enter'); // Submit answers
   expect(c.client.listPendingQuestions()).toHaveLength(1);
   expect(c.tui!.computeFrameSnapshot().plainText).toContain('Answer every question');
   // Multiple: toggle both options, then add free text via the free-text row.
@@ -120,14 +121,15 @@ test('answers with a single choice, a multiple choice and free text reach the mo
   await rows(c.tui!, 1, 'Enter'); // free-text row
   await c.tui!.type('lint');
   await c.tui!.handleKey('Enter');
-  await rows(c.tui!, 3, 'Enter'); // Submit all answers (the list remounts at its first row)
+  await rows(c.tui!, 1, 'Enter'); // Next: the review tab
+  await c.tui!.handleKey('Enter'); // Submit answers
   await c.tui!.idle();
   const text = c.tui!.getTranscript().at(-1)!.content;
   expect(text).toContain('GOT {"answers":');
   const answers = JSON.parse(text.slice(4)).answers;
   expect(answers).toEqual({db: {answers: ['Postgres (Recommended)']}, checks: {answers: ['Unit', 'E2E', 'lint']}});
   expect(c.tui!.frame()).not.toContain('Answer every question');
-  expect(c.tui!.computeFrameSnapshot().plainText).toContain('⏺ request_user_input');
+  expect(c.tui!.computeFrameSnapshot().plainText).toContain('Which checks should run? → Unit, E2E, lint');
 });
 
 test('Esc dismisses: the model is told and continues; nothing is granted', async () => {
@@ -196,10 +198,10 @@ test('an answered question is history: a restarted session never asks it again',
   const first = await open(d, askThenEcho);
   await first.tui!.submitPrompt('Set up');
   await waitForQuestion(first);
-  await rows(first.tui!, 1, 'Enter'); // SQLite
-  await first.tui!.handleKey('ArrowRight');
+  await rows(first.tui!, 1, 'Enter'); // SQLite, advances to the next question
   await first.tui!.handleKey('Enter'); // Unit
-  await rows(first.tui!, 3, 'Enter'); // Submit all answers
+  await first.tui!.handleKey('ArrowRight'); // Submit tab
+  await first.tui!.handleKey('Enter'); // Submit answers
   await first.tui!.idle();
   const id = first.client.activeSession()!.id;
   await first.close();
@@ -291,7 +293,7 @@ test('a new deny invalidates a pending command approval before an old dialog can
   const c = await open(dirs(), () => ({text: 'ready'}));
   const waiting = c.client.requestPermission({
     capability: 'process.execute',
-    kind: 'execute',
+    kind: 'command',
     target: 'echo blocked',
     ruleTarget: 'echo blocked',
     action: 'Run fixture command',

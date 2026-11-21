@@ -1,13 +1,14 @@
-import type {CommandClassification} from '@futryn/security';
+import type {CommandClassification} from '@cosmew/security';
 import type {
   CommandRuntime,
   CommandOutputChunk,
   CommandSandbox,
   ToolDescriptor,
   PermissionDecision,
+  OutputArchiveSource,
   SubagentEvent,
-} from '@futryn/contracts';
-import type {ResolvedPath} from '@futryn/workspace';
+} from '@cosmew/contracts';
+import type {ResolvedPath} from '@cosmew/workspace';
 import type {PatchPlan, ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ToolOutput} from '../context';
 
@@ -24,18 +25,19 @@ export type PreparedTool = {
   | {kind: 'read'; file: ResolvedPath; revalidate?: () => ResolvedPath; readDecision?: PermissionDecision}
   /** Agent session state (plan): no workspace effect, no approval; audited (ADR 0042). */
   | {kind: 'state'}
+  | {kind: 'output'; source: OutputArchiveSource; valid(): boolean}
   /** Durable memory mutation; authorized as an edit, never as a workspace path. */
   | {kind: 'state-write'; target: string}
   /** A question to the user: no workspace effect; the answer is text (ADR 0042). */
   | {kind: 'question'}
   /** Subagent delegation (Wave 2 S5a): child tools enforce the same dispatcher/policy invariants. */
   | {kind: 'agent'; target: string; agentType: string}
+  /** A user-configured MCP tool. The target is `mcp__server__tool`. */
+  | {kind: 'mcp'; target: string}
   | {kind: 'web-search'; target: string}
   | {kind: 'web-fetch'; url: string; authorize?: (url: string, signal?: AbortSignal) => Promise<boolean>}
   /** Resolved asynchronously before policy (LSP rename asks the server first, ADR 0043). */
   | {kind: 'deferred'; file: ResolvedPath; resolve(signal?: AbortSignal): Promise<PreparedTool | ToolOutput>}
-  /** `request_permissions` (ADR 0040): a grant for later calls, never an action by itself. */
-  | {kind: 'permissions'; network: boolean; writable: string[]; justification?: string}
   | {kind: 'search'; file: ResolvedPath; reason: 'listing' | 'search-skips-secrets'}
   | {
       kind: 'command';
@@ -51,6 +53,10 @@ export type PreparedTool = {
       /** Effective sandbox of a launch; stdin carries its session's launch sandbox instead. */
       sandbox?: CommandSandbox;
       justification?: string;
+      /** `dangerouslyDisableSandbox` while the sandbox is enabled (ADR 0061). */
+      escalation?: boolean;
+      /** Set by the orchestrator: the command matched `sandbox.excludedCommands` and runs unsandboxed. */
+      excluded?: boolean;
       stdin?: {chars: string; interrupt: boolean; tty: boolean; launch: CommandSandbox};
       /** Text the grant scope binds instead of `command` (stdin: the session, not the input). */
       grantCommand?: string;

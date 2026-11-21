@@ -1,14 +1,20 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
 import {cleanup, render} from 'ink-testing-library';
-import {FutrynError, type ModelEvent} from '@futryn/contracts';
-import {SLASH_COMMANDS} from '@futryn/sdk';
+import {FutrynError, type ModelEvent} from '@cosmew/contracts';
+import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {InkApp} from '../app';
+import {openInk} from './ink-session';
 import {dialogFixture, selection, account} from '../features/picker/test-fixture';
 import {routeCommand, type CommandHost} from '../features/commands';
 import {ListPicker} from '../ui';
 import {renderInk, settle} from './index';
 afterEach(cleanup);
+/** Consent plus the real account check take a few frames; wait for the ready composer before typing. */
+const untilReady = async (view: {lastFrame(): string | undefined}) => {
+  for (let wait = 0; wait < 100 && !view.lastFrame()?.includes('manual mode on'); wait++) await settle();
+  await settle(); // input handlers register one commit after the frame
+};
 const key = async (view: {stdin: {write(s: string): void}}, text: string) => {
   view.stdin.write(text);
   await settle();
@@ -77,17 +83,24 @@ test('host gates initial command, streams tool and session approval, history foc
   await key(view, '\r');
   await settle();
   expect(f.prompts).toEqual(['hello']);
-  expect(view.lastFrame()).toContain('2 Cả phiên');
+  expect(view.lastFrame()).toContain('2. Yes, and');
   await key(view, '2');
   await settle();
   expect(view.lastFrame()).toContain('Integrated answer');
+  // Ctrl+O toggles the detailed transcript: every tool call is listed and the composer gives way to its footer.
   await key(view, '\x0f');
-  expect(view.lastFrame()).toContain('Transcript history');
-  await key(view, '\x0f');
+  expect(view.lastFrame()).toContain('Showing detailed transcript');
+  expect(view.lastFrame()).toContain('⏺ Read(file)');
   expect(view.lastFrame()).toContain('Read session');
-  await key(view, '\x1b');
+  expect(view.lastFrame()).toMatch(/\d+:\d\d [AP]M sample-model/);
+  await key(view, '\x0f');
+  expect(view.lastFrame()).not.toContain('Showing detailed transcript');
+  expect(view.lastFrame()).toContain('Integrated answer');
   await key(view, '/clear');
   await key(view, '\r');
+  // The fullscreen transcript is cleared with /clear; the SDK starts a fresh session.
+  expect(view.lastFrame()).toContain('Started a fresh conversation.');
+  expect(f.client.activeSession()).toBeNull();
   expect(view.lastFrame()).not.toContain('Integrated answer');
   await shutdown();
   view.unmount();
@@ -126,7 +139,7 @@ test('controlled picker tracks highlight and fixed decision numbering', async ()
     />,
   );
   await settle();
-  expect(view.lastFrame()).toContain('› Beta');
+  expect(view.lastFrame()).toContain('❯ Beta');
   expect(view.lastFrame()).not.toContain('2.');
   expect(highlights).toEqual(['b']);
 });
@@ -154,6 +167,25 @@ test('every SDK slash has an explicit implemented route or Not implemented diagn
       def.command,
     ).toBe(false);
   }
+});
+
+test('/config applies Claude-style multiple key=value arguments', async () => {
+  const f = fixture();
+  const notices: string[] = [];
+  await routeCommand(
+    {
+      client: f.client,
+      busy: () => false,
+      open: () => {},
+      notice: text => notices.push(text),
+      reset: () => {},
+      submit: () => true,
+      exit: () => {},
+    },
+    '/config mode=dark syntaxHighlighting=false sidebar=true',
+  );
+  expect(f.client.getAppearance()).toMatchObject({mode: 'dark', syntaxHighlighting: false, sidebar: true});
+  expect(notices).toEqual(['Updated mode.', 'Updated syntaxHighlighting.', 'Updated sidebar.']);
 });
 
 test('host routes quick memory to public API and shell output/escape to transcript and shutdown', async () => {
@@ -192,6 +224,7 @@ test('host routes quick memory to public API and shell output/escape to transcri
   await key(view, '!echo shell');
   await key(view, '\r');
   expect(view.lastFrame()).toContain('SHELL_STREAM_MARKER');
+  expect(view.lastFrame()).toContain('Bash(echo shell)');
   await key(view, '\x1b');
   expect(signal?.aborted).toBe(true);
   expect(view.lastFrame()).toContain('Shell cancelled');
@@ -214,10 +247,10 @@ test('permission denial reason reaches SDK steering and permission cleanup does 
   await settle();
   await key(view, 'read it');
   await key(view, '\r');
-  expect(view.lastFrame()).toContain('4 Không');
+  expect(view.lastFrame()).toContain('Esc to cancel · Tab to amend');
   // The dialog opens asynchronously; allow Ink to attach its passive input subscriptions.
   await Bun.sleep(200);
-  await key(view, '4');
+  await key(view, '\t');
   await key(view, 'Use another file');
   await key(view, '\r');
   await settle();
@@ -261,7 +294,7 @@ test('picker remembers selection across overlay mounts and themes preview on hig
   await key(view, '\x1b[B');
   await key(view, '\r');
   await key(view, 'p');
-  expect(view.lastFrame()).toContain('› 2. Beta');
+  expect(view.lastFrame()).toMatch(/❯ +Beta/);
   await key(view, '\x1b');
   await key(view, 't');
   await key(view, '\x1b[B');
@@ -363,7 +396,251 @@ test('startup sign-in connects then chooses model before verification unlocks ch
   await key(view, '\r');
   await Bun.sleep(100);
   expect(f.checks()).toBe(2);
-  expect(view.lastFrame()).toContain('Ask anything');
+  expect(view.lastFrame()).toContain('manual mode on');
   view.unmount();
   expect(f.client.toolsEnabled()).toBe(false);
+});
+
+test('host orders one spinner then live todos, toggles without mutation, and guards global shortcuts', async () => {
+  const plan = {
+    updatedAt: '2026-11-19T00:00:00Z',
+    items: [{step: 'LIVE_TODO', status: 'in_progress' as const}],
+  };
+  let finish = () => {};
+  const wait = new Promise<void>(resolve => {
+    finish = resolve;
+  });
+  const f = dialogFixture({
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+    startSession: () => ({id: 'session-1', selection, messages: []}),
+    getPlan: () => plan,
+    async *sendTurn() {
+      yield {type: 'textDelta', text: 'Working'};
+      await wait;
+      yield {type: 'textDelta', text: ' done'};
+    },
+  });
+  const view = render(<InkApp client={f.client} width={90} />);
+  try {
+    await settle();
+    await key(view, '\x1b[A');
+    await key(view, '\r');
+    await untilReady(view);
+    await key(view, '?');
+    expect(view.lastFrame()).toContain('ctrl+t to toggle tasks');
+    await key(view, '\x1b[Z');
+    expect(f.client.permissionMode()).toBe('default');
+    expect(view.lastFrame()).not.toContain('ctrl+t to toggle tasks');
+    await key(view, '?');
+    await key(view, '\x0f');
+    expect(view.lastFrame()).not.toContain('Transcript history');
+    await key(view, 'inspect');
+    await key(view, '\r');
+    const frame = view.lastFrame()!;
+    // One spinner line, then the live todos, then the prompt; `esc to interrupt` lives in the footer below it.
+    const spinner = /^[·✢✳✶✻✽] \S+…/m;
+    expect(frame.match(new RegExp(spinner.source, 'gm'))).toHaveLength(1);
+    expect(frame.search(spinner)).toBeLessThan(frame.indexOf('LIVE_TODO'));
+    expect(frame.split('esc to interrupt')).toHaveLength(2);
+    expect(frame.indexOf('LIVE_TODO')).toBeLessThan(frame.lastIndexOf('❯'));
+    expect(frame.lastIndexOf('❯')).toBeLessThan(frame.indexOf('esc to interrupt'));
+    await key(view, '\x14');
+    expect(view.lastFrame()).not.toContain('LIVE_TODO');
+    expect(view.lastFrame()).not.toContain('Theme');
+    expect(f.client.plan()).toEqual(plan);
+    await key(view, '\x14');
+    expect(view.lastFrame()).toContain('LIVE_TODO');
+    await key(view, '\x0f');
+    await key(view, '\x14');
+    await key(view, '\x1b');
+    expect(view.lastFrame()).toContain('LIVE_TODO');
+    finish();
+    await settle();
+    expect(view.lastFrame()).not.toContain('LIVE_TODO');
+    expect(f.client.plan()).toEqual(plan);
+  } finally {
+    finish();
+    view.unmount();
+  }
+});
+
+test('ready Ctrl+C confirms before shutdown and Ctrl+S stashes the draft without opening sessions', async () => {
+  const f = dialogFixture({validateAccount: async () => ({models: 1, validation: 'fixture'})});
+  const view = render(<InkApp client={f.client} width={90} />);
+  await settle();
+  await key(view, '\x1b[A');
+  await key(view, '\r');
+  await untilReady(view);
+  await key(view, 'preserved draft');
+  await key(view, '\x13');
+  expect(view.lastFrame()).not.toContain('Sessions');
+  await key(view, '\x13');
+  expect(view.lastFrame()).toContain('preserved draft');
+  // First Ctrl+C clears the text (Ctrl+Y brings it back) and does not arm the exit.
+  await key(view, '\x03');
+  expect(view.lastFrame()).toContain('ctrl+y to paste deleted text');
+  expect(view.lastFrame()).not.toContain('preserved draft');
+  expect(f.client.toolsEnabled()).toBe(true);
+  // On an empty prompt the next press asks for confirmation, the one after exits.
+  await key(view, '\x03');
+  expect(view.lastFrame()).toContain('Press Ctrl-C again to exit');
+  expect(f.client.toolsEnabled()).toBe(true);
+  await key(view, '\x03');
+  expect(f.client.toolsEnabled()).toBe(false);
+  view.unmount();
+});
+
+test('startup helper accepts a pending settings-trust dialog without granting it or waiting for the composer', async () => {
+  const f = dialogFixture({
+    startSession: () => ({id: 'trust-session', selection, messages: []}),
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+  });
+  const request = f.client.enqueuePermissionRequest({
+    capability: 'settings.trust',
+    action: 'Trust repository project settings',
+    target: '.futryn/settings.json',
+    reason: 'allow rule: Bash(npm test:*)',
+    decisions: ['session', 'always'],
+  });
+  const tui = await openInk(f.client);
+  try {
+    await tui.nextPermission();
+    expect(f.client.userInputReady()).toBe(true);
+    expect(f.client.listPendingPermissions().map(p => p.approvalId)).toEqual([request.approvalId]);
+    expect(tui.frame()).toContain('Trust settings');
+    expect(tui.frame()).toContain('2. Yes, always trust this content (by hash)');
+    expect(tui.frame()).not.toContain('Type to filter');
+    await tui.press('\x1b');
+    expect(f.client.listPendingPermissions()).toEqual([]);
+    expect(f.client.listPermissions()[0]?.status).toBe('denied');
+    expect(f.client.listToolGrants()).toEqual([]);
+  } finally {
+    await tui.close();
+  }
+});
+
+test('launch bypass mode retains the new footer and resolves an ask without opening a prompt', async () => {
+  const f = dialogFixture({
+    permissionMode: 'bypassPermissions',
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+  });
+  const view = render(<InkApp client={f.client} width={90} />);
+  try {
+    await settle();
+    await key(view, '\x1b[A');
+    await key(view, '\r');
+    expect(f.client.permissionMode()).toBe('bypassPermissions');
+    expect(view.lastFrame()).toContain('  ⏵⏵ bypass permissions on (shift+tab to cycle)');
+    expect(
+      await f.client.requestPermission({
+        capability: 'fs.read',
+        action: 'read .env',
+        target: '.env',
+        reason: 'secret',
+        decisions: ['once', 'session'],
+      }),
+    ).toBe('once');
+    expect(f.client.listPendingPermissions()).toEqual([]);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('a question and a picker keep the live transcript visible and restore the draft', async () => {
+  let client: ReturnType<typeof dialogFixture>['client'];
+  const f = dialogFixture({
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+    startSession: () => ({id: 'question-session', selection, messages: []}),
+    async *sendTurn() {
+      yield {type: 'textDelta', text: 'LIVE_BEFORE_QUESTION'};
+      await client.askUser([
+        {
+          id: 'choice',
+          header: 'Direction',
+          question: 'Which direction?',
+          options: [{label: 'Continue', description: 'Keep going'}],
+        },
+      ]);
+      yield {type: 'textDelta', text: ' FINISHED_AFTER_QUESTION'};
+    },
+  });
+  client = f.client;
+  const tui = await openInk(client);
+  try {
+    await tui.submitPrompt('question please');
+    await tui.waitFor('☐ Direction');
+    expect(tui.frame()).toContain('LIVE_BEFORE_QUESTION');
+    expect(tui.frame().indexOf('LIVE_BEFORE_QUESTION')).toBeLessThan(tui.frame().indexOf('☐ Direction'));
+    expect(tui.frame()).not.toContain('manual mode on');
+    expect(tui.frame()).not.toContain('esc to interrupt');
+    await tui.press('\x1b');
+    await tui.idle();
+    await tui.type('DRAFT_SURVIVES_PICKER');
+    await tui.press('\x1bp');
+    await tui.waitFor('Model / Reasoning effort'); // Alt+P opens the model picker and keeps the draft
+    expect(tui.frame()).toContain('LIVE_BEFORE_QUESTION');
+    expect(tui.frame()).not.toContain('DRAFT_SURVIVES_PICKER');
+    await tui.press('\x1b');
+    await tui.waitFor('manual mode on');
+    expect(tui.frame()).toContain('DRAFT_SURVIVES_PICKER');
+  } finally {
+    await tui.close();
+  }
+});
+
+test('slash commands leave their result under ❯ /cmd; Esc on a panel prints a cancellation; Esc Esc and /rewind open Rewind', async () => {
+  const f = dialogFixture({validateAccount: async () => ({models: 1, validation: 'fixture'})});
+  const view = render(<InkApp client={f.client} width={90} />);
+  try {
+    await settle();
+    await key(view, '\x1b[A');
+    await key(view, '\r');
+    await untilReady(view);
+    await key(view, '/help');
+    await key(view, '\r');
+    await settle();
+    expect(view.lastFrame()).toContain('Custom commands');
+    await key(view, '\x1b');
+    // The result line sits directly under the command, with no blank row between them.
+    expect(view.lastFrame()).toMatch(/❯ \/help\n  ⎿\s+Closed help/);
+    await key(view, '/cost');
+    await key(view, '\r');
+    await settle();
+    expect(view.lastFrame()).toContain('Estimated cost');
+    await key(view, '\x1b');
+    await key(view, '/rewind');
+    await key(view, '\r');
+    await settle();
+    expect(view.lastFrame()).toContain('Restore the code and/or conversation');
+    await key(view, '\x1b');
+    expect(view.lastFrame()).toMatch(/❯ \/rewind\n  ⎿\s+Rewind cancelled/);
+    // Esc Esc on an empty prompt is the same panel.
+    await key(view, '\x1b');
+    await Bun.sleep(30);
+    await key(view, '\x1b');
+    await settle();
+    expect(view.lastFrame()).toContain('Restore the code and/or conversation');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('Ctrl+O shows the detailed transcript footer and Esc leaves it; the composer keeps its draft', async () => {
+  const f = dialogFixture({validateAccount: async () => ({models: 1, validation: 'fixture'})});
+  const view = render(<InkApp client={f.client} width={90} />);
+  try {
+    await settle();
+    await key(view, '\x1b[A');
+    await key(view, '\r');
+    await untilReady(view);
+    await key(view, 'keep this');
+    await key(view, '\x0f');
+    expect(view.lastFrame()).toContain('Showing detailed transcript');
+    expect(view.lastFrame()).toContain('verbose');
+    await key(view, '\x1b');
+    expect(view.lastFrame()).not.toContain('Showing detailed transcript');
+    expect(view.lastFrame()).toContain('keep this');
+  } finally {
+    view.unmount();
+  }
 });

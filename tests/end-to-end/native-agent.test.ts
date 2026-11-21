@@ -3,7 +3,7 @@ import {test, expect, afterEach} from 'bun:test';
 import {mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {NativeCommandRuntime} from '@futryn/tools';
+import {NativeCommandRuntime} from '@cosmew/tools';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
@@ -124,7 +124,8 @@ nativeTest(
     const results = events.filter(e => e.type === 'toolResult').map(e => e.result);
     expect(results.map(r => r.exitCode)).toEqual([0, 1, 0, 0]);
     expect(results[1].content).toContain('fail');
-    expect(approvals).toBe(4);
+    // Commands inside the sandbox need no prompt (autoAllowBashIfSandboxed, ADR 0061).
+    expect(approvals).toBe(0);
     expect(
       events
         .filter(e => e.type === 'textDelta')
@@ -136,7 +137,8 @@ nativeTest(
     const stored = c.app.conversations.recover(c.client.activeSession()!.id);
     expect(stored.turns.at(-1)!.state).toBe('completed');
     expect(stored.messages.filter(m => m.toolName === 'exec_command')).toHaveLength(4);
-    const tui = await openInk(c.client, {width: 100});
+    // /diff opens the side panel only from 110 columns (spec section 8); below that it prints a resize hint.
+    const tui = await openInk(c.client, {width: 120});
     try {
       const report = await c.client.refreshWorkspaceDiff();
       expect(

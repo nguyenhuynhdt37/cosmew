@@ -1,0 +1,36 @@
+00|
+01|✻ Sautéed for 3s · done 11:06 PM
+02|
+03|❯ /diff
+04|  ⎿  Diff panel hidden
+05|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+06|  Rewind
+07|
+08|  Restore the code and/or conversation to the point before…
+09|
+10|    Run the shell command `ls -la` and tell me how many entries it lists.
+11|    No code changes
+12|
+13|    In a.txt replace the word hello with HELLO.
+14|    a.txt +1 -1
+15|
+16|    Use the AskUserQuestion tool to ask me which color I prefer, red or blue, then reply with my choice.
+17|    No code changes
+18|
+19|    Use TodoWrite to create 3 todos (alpha, beta, gamma) and complete them one at a time, updating TodoWrite afte…
+20|    No code changes
+21|
+22|    Write a 60-line poem about terminals to poem.txt.
+23|    poem.txt +62
+24|
+25|    also give it a title
+26|    ⚠ No code restore
+27|
+28|    Run `sleep 40` as a background shell command (run_in_background) and then just reply 'started'.
+29|    No code changes
+30|
+31|  ❯ (current)
+32|
+33|
+34|
+35|  Enter to continue · Esc to cancel

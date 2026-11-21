@@ -1,4 +1,4 @@
-import {FutrynError, credentialRefSchema, type CredentialRef, type CredentialVault} from '@futryn/contracts';
+import {FutrynError, credentialRefSchema, type CredentialRef, type CredentialVault} from '@cosmew/contracts';
 
 export class Redactor {
   private readonly secrets = new Set<string>();
@@ -92,9 +92,9 @@ export function terminalText(value: string): string {
 
 /** Redact normalized model text before it reaches durable transcripts or UI sinks. */
 export function redactModel(
-  model: import('@futryn/contracts').ModelPort,
+  model: import('@cosmew/contracts').ModelPort,
   redactor: Redactor,
-): import('@futryn/contracts').ModelPort {
+): import('@cosmew/contracts').ModelPort {
   return {
     async *stream(request, signal) {
       const filter = redactor.stream();

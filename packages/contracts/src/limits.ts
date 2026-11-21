@@ -1,6 +1,6 @@
 /**
  * Model-stream defaults ported from Codex (openai/codex `75fc67e8`, `model-provider-info/src/lib.rs`,
- * `codex-client/src/retry.rs`, `async-utils/src/backoff.rs`; ADR 0036). Like Codex, Futryn puts no
+ * `codex-client/src/retry.rs`, `async-utils/src/backoff.rs`; ADR 0036). Like Codex, Cosmew puts no
  * byte ceiling on a response, its text or its tool-call arguments, and sends no output-token cap
  * unless the user asks for one (Anthropic, whose API requires `max_tokens`, gets the model's limit).
  */

@@ -2,10 +2,10 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync, readFileSync, readdirSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import type {CommandRuntime, CommandOutcome} from '@futryn/contracts';
+import type {CommandRuntime, CommandOutcome} from '@cosmew/contracts';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {messagesToTranscript, toolState} from '../../apps/tui/src/ink/features/transcript/logic';
-import {SeatbeltRuntime} from '@futryn/tools';
+import {SeatbeltRuntime} from '@cosmew/tools';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -20,6 +20,10 @@ async function make(enabled = true, real = false) {
     () => rmSync(ws, {recursive: true, force: true}),
   );
   writeFileSync(join(ws, 'source.ts'), 'export const marker = 1;\n');
+  // These tests pin the approval dialog for commands, so sandboxed commands must still ask (ADR 0061).
+  writeFileSync(join(dir, 'settings.json'), JSON.stringify({sandbox: {autoAllowBashIfSandboxed: false}}), {
+    mode: 0o600,
+  });
   let runs = 0,
     factories = 0,
     shutdowns = 0;
@@ -117,7 +121,7 @@ test('direct API fixture: exact approval, command pairing, sanitized output and 
   expect(answer.toolResults?.[0]).toMatchObject({name: 'exec_command', status: 'ok', exitCode: 0});
   expect(answer.toolResults?.[0]?.callId).toBe(answer.toolCalls?.[0]?.id);
   expect(answer.toolResults?.[0]?.content).not.toContain('\x1b');
-  expect(c.tui.computeFrameSnapshot().plainText).toContain('⏺ exec_command(rg -n marker source.ts)');
+  expect(c.tui.computeFrameSnapshot().plainText).toContain('Searched for 1 pattern');
   const id = c.client.activeSession()!.id;
   const saved = c.app.conversations.get(id)!;
   expect(saved.messages.find(m => m.role === 'tool')?.content).toStartWith('Exit code: 0\nWall time:');
@@ -256,8 +260,10 @@ test('!command shell mode uses the same dispatcher approval and sandbox; denial 
   await c.tui.press('\r'); // the denied draft stays editable: send it again
   await pending(c);
   await c.tui.handleKey('1');
-  await c.tui.waitFor('Shell ok.');
+  await c.tui.waitFor('source.ts:1:marker');
   expect(c.runs()).toBe(1);
-  expect(c.tui.frame()).toContain('exit 0');
+  expect(c.tui.frame()).toContain('⏺ Bash(rg -n marker source.ts)');
+  expect(c.tui.frame()).toContain('source.ts:1:marker');
+  expect(c.tui.getTranscript().at(-1)?.toolResults?.[0]?.exitCode).toBe(0);
   expect(c.server.requests.length).toBe(before);
 });

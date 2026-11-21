@@ -1,0 +1,36 @@
+00|  33 The history climbs with every key,                           │                                                   ✕
+01|  34 an up-arrow into the past,                                   │1 file changed +1 -1               source: Current ▾
+02|  35 the commands I ran at 3 a.m.                                 │
+03|  36 preserved in amber, holding fast.                            │a.txt                                          +1 -1
+04|  37 Control-C, the gentle knife,                                 │
+05|  38 cuts loose the process gone astray;                          │────────────────────────────────────────────────────
+06|  39 Control-D, the quiet end,                                    │a.txt                                        [ ask ]
+07|  40 the way a session slips away.                                │────────────────────────────────────────────────────
+08|  41 In tmux panes the windows split                              │ 1 -hello
+09|  42 like rooms within a single house;                            │ 1 +HELLO
+10|  43 a log tails slowly on the left,                              │ 2  world
+11|  44 the right side waits without a mouse.                        │
+12|  45 Some fear the bare and silent screen,                        │
+13|  46 no buttons there, no friendly guide,                         │
+14|  47 but those who stay will come to see                          │
+15|  48 how much the plain text holds inside.                        │
+16|  49 For every tool that's ever made                              │
+17|  50 began as text and patient will,                              │
+18|  51 a line of code, a careful test,                              │
+19|  52 a script that runs while all is still.                       │
+20|  53 So here's to every blinking box,                             │
+21|  54 to every shell and every tty,                                │
+22|  55 to all the keystrokes, one by one,                           │
+23|  56 that taught a machine to answer me.                          │
+24|  57 And when the night is growing late                           │
+25|  58 and all the builds have passed or failed,                    │
+26|  59 I close the window, soft and slow:                           │
+27|  60 exit zero. All is well.                                      │
+28|╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+29| Do you want to create poem.txt?                                  │
+30| ❯ 1. Yes                                                         │
+31|   2. Yes, and switch to accept edits (auto-approve file edits    │
+32|      and common file commands) for this session (shift+tab)      │
+33|   3. No                                                          │
+34| ↑ 36 more lines                                                  │
+35| Esc to cancel · Tab to amend                                     │

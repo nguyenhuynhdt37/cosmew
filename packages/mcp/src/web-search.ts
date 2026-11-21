@@ -1,4 +1,4 @@
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 import {McpClient, MCP_TIMEOUT_MS, MAX_MCP_RESPONSE_BYTES, MAX_MCP_OUTPUT_BYTES, clip} from './client';
 
 export type SearchProvider = 'exa' | 'tavily' | 'firecrawl' | 'parallel';
@@ -36,6 +36,19 @@ export interface WebSearchOptions {
 
 /** Fixed public search endpoints only. Credentials are held in memory and never appear in targets. */
 export class WebSearchClient {
+  private lastStatus: 'connected' | 'failed' | 'disabled' = 'disabled';
+  status(): {name: string; status: 'connected' | 'failed' | 'disabled'; toolCount: number; source: string}[] {
+    return this.mcp
+      ? [
+          {
+            name: `web-search:${this.provider}`,
+            status: this.lastStatus,
+            toolCount: this.lastStatus === 'connected' ? 1 : 0,
+            source: 'built-in HTTP search adapter',
+          },
+        ]
+      : [];
+  }
   readonly provider: SearchProvider;
   readonly endpoint: string;
   private readonly mcp?: McpClient;
@@ -44,7 +57,7 @@ export class WebSearchClient {
     this.endpoint = searchEndpoint(this.provider);
     if (this.provider !== 'tavily') {
       const url = new URL(this.endpoint);
-      const headers: Record<string, string> = {'User-Agent': 'futryn/0.1.0'};
+      const headers: Record<string, string> = {'User-Agent': 'cosmew/0.1.0'};
       if (this.provider === 'exa' && options.keys.EXA_API_KEY)
         url.searchParams.set('exaApiKey', options.keys.EXA_API_KEY);
       if (this.provider === 'firecrawl' && options.keys.FIRECRAWL_API_KEY)
@@ -89,6 +102,7 @@ export class WebSearchClient {
               ? parseResults(record(answer.structuredContent).results, 'excerpts')
               : parseResults(record(record(parseJson(answer.text)).data).web, 'description');
       }
+      this.lastStatus = 'connected';
       const safe = results.filter(result => publicResultUrl(result.url)).slice(0, numResults);
       const body = safe
         .map(
@@ -104,6 +118,7 @@ export class WebSearchClient {
       );
     } catch (error) {
       if (error instanceof FutrynError && ['CANCELLED', 'TIMEOUT', 'INVALID_INPUT'].includes(error.code)) throw error;
+      this.lastStatus = 'failed';
       // No automatic provider fallback: that would disclose the query to an unselected service.
       throw new FutrynError('TRANSPORT');
     }

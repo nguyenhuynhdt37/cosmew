@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {HostAgentsConfig, ModelInfo, SubagentParentLimits, SubagentWorktreePort} from '@futryn/contracts';
+import type {HostAgentsConfig, ModelInfo, SubagentParentLimits, SubagentWorktreePort} from '@cosmew/contracts';
 import {
   SubagentManager,
   inheritChildLimits,
@@ -10,9 +10,9 @@ import {
   NO_RESERVATION,
   normalizeAgentsConfig,
   type ChildRunContext,
-} from '@futryn/agents';
-import {loadHostAgents} from '@futryn/models';
-import {SqliteConversations, openPrivateDatabase} from '@futryn/persistence';
+} from '@cosmew/agents';
+import {loadHostAgents} from '@cosmew/models';
+import {SqliteConversations, openPrivateDatabase} from '@cosmew/persistence';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {

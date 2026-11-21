@@ -12,6 +12,9 @@ adapter, and results are bounded/redacted source data, never host instructions.
 Only application-defined public provider endpoints are used; repository configuration
 cannot supply transport code or arbitrary endpoints in this slice. Stdio servers,
 OAuth, installation, general MCP tools/resources and server management remain W12.
+[ADR 0068](0068-user-mcp-connect.md) (2026-11-20) connects user-level stdio and HTTP
+servers from `mcp.json` without moving `web_search` off this adapter. OAuth, project
+config, resources and install stay out.
 
 The SDK initializes once per endpoint and sends `tools/call`, with a 30 second
 request/initialization deadline, cancellation, 256 KiB maximum HTTP response and

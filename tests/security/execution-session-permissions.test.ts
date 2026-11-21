@@ -2,10 +2,11 @@ import {test, expect, afterEach} from 'bun:test';
 import {mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {ToolDispatcher, platformCommandRuntime} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
-import {Redactor, SessionGrants} from '@futryn/security';
-import type {CommandRuntime, CommandOutcome} from '@futryn/contracts';
+import {ToolDispatcher, platformCommandRuntime} from '@cosmew/tools';
+import {sandboxConfig} from '../sandbox-config';
+import {WorkspaceRoot} from '@cosmew/workspace';
+import {Redactor, SessionGrants} from '@cosmew/security';
+import type {CommandRuntime, CommandOutcome} from '@cosmew/contracts';
 const cleanup: string[] = [];
 afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, {recursive: true, force: true});
@@ -88,7 +89,7 @@ test('stdin under a drifted sandbox requires a distinct current scope, and expir
     workspace: new WorkspaceRoot(root),
     grants: new SessionGrants(),
     commands: runtime,
-    sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
+    sandbox: () => sandboxConfig(),
     redact: s => s,
     approve: async request => {
       scopes.push(request.scopeKey!);
@@ -145,8 +146,8 @@ test('streaming output is control-stripped and a secret split across chunks neve
   expect(result.content).not.toContain(secret);
   expect(streamed.join('')).not.toContain('\x1b');
 });
-test('unsupported Windows never falls back to an unrestricted container or shell', () => {
-  const runtime = platformCommandRuntime({workspaceRoot: fixture(), platform: 'win32', container: true});
+test('unsupported Windows never falls back to an unrestricted shell', () => {
+  const runtime = platformCommandRuntime({workspaceRoot: fixture(), platform: 'win32'});
   expect(runtime.availability().ok).toBe(false);
 });
 
@@ -173,7 +174,7 @@ test('stdin review: polls and interrupts never prompt; input always asks; a sess
     workspace: new WorkspaceRoot(root),
     grants: new SessionGrants(),
     commands: runtime,
-    sandbox: () => ({mode, escalation: 'on-request'}),
+    sandbox: () => sandboxConfig({readOnly: mode === 'read-only'}),
     redact: s => s,
     approve: async () => {
       prompts++;

@@ -2,8 +2,8 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
-import {providerSchema, type CommandRuntime, type CommandSandbox, type ModelEvent} from '@futryn/contracts';
-import {FileMemories} from '@futryn/persistence';
+import {providerSchema, type CommandRuntime, type CommandSandbox, type ModelEvent} from '@cosmew/contracts';
+import {FileMemories} from '@cosmew/persistence';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -186,7 +186,7 @@ async function setup(options: SetupOptions) {
   }) as typeof globalThis.fetch;
 
   const app = startup(state, {
-    permissions: {sandbox: 'workspace-write', approval: 'on-request'},
+    permissions: {mode: 'acceptEdits'},
     vault: memoryVault(),
     fetch,
     skillsHome: home,
@@ -256,13 +256,13 @@ test('explore subagent is read-only (exec_command runs in read-only sandbox, wri
         };
       }
       if (view.results.length === 2) {
-        // Also verify explore cannot request_escalated on exec_command.
+        // Also verify explore cannot dangerouslyDisableSandbox on exec_command.
         return {
           calls: [
             {
               id: 'e-escalate',
               name: 'exec_command',
-              input: {cmd: 'whoami', sandbox_permissions: 'require_escalated', justification: 'try escape'},
+              input: {cmd: 'whoami', dangerouslyDisableSandbox: true, justification: 'try escape'},
             },
           ],
         };
@@ -795,7 +795,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
 
   // TUI collapsed view shows `⏺ Agent(check entrypoint)` and `[explore] Done · 1 tool · ... tokens`.
   const collapsedFrame = tui.computeFrameSnapshot().plainText;
-  expect(collapsedFrame).toContain('⏺ agent(check entrypoint) · ok');
+  expect(collapsedFrame).toContain('⏺ Task(check entrypoint)');
   expect(collapsedFrame).toContain('explore: check entrypoint · completed');
 
   // Pressing Ctrl+O expands the subagent transcript to show child tool steps and summary.
@@ -816,10 +816,10 @@ test('subagent events emit in order (started -> progress -> finished), render in
   cleanup.push(() => resumedTui.shutdown());
   await resumedTui.handleKey('Ctrl+O');
   const resumedFrame = resumedTui.computeFrameSnapshot().plainText;
-  expect(resumedFrame).toContain('agent(check entrypoint)');
+  expect(resumedFrame).toContain('Task(check entrypoint)');
   expect(resumedFrame).toContain('read src/index.ts [ok]');
 
-  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.35.
+  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.38.
   const lines: string[] = [];
   const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
     lines.push(String(chunk));
@@ -830,7 +830,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
       await runExec(h.app, {
         prompt: 'Inspect entrypoint headless',
         workspace: h.project,
-        approval: 'never',
+        permissions: {mode: 'acceptEdits'},
         json: true,
       }),
     ).toBe(0);
@@ -846,7 +846,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.35')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.40')).toBe(true);
 });
 
 test('S5c: isolation worktree edits stay out of the main checkout; unchanged worktrees vanish; non-git is refused', async () => {
@@ -993,7 +993,12 @@ test('S5c: fyn exec waits for a background child and gives its result to the par
   });
   try {
     expect(
-      await runExec(h.app, {prompt: 'run it in the background', workspace: h.project, approval: 'never', json: false}),
+      await runExec(h.app, {
+        prompt: 'run it in the background',
+        workspace: h.project,
+        permissions: {mode: 'acceptEdits'},
+        json: false,
+      }),
     ).toBe(0);
   } finally {
     stdoutSpy.mockRestore();

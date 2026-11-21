@@ -67,8 +67,8 @@ test('model reads, edits and writes through the agent loop; each write shows its
   expect(readFileSync(join(c.root, 'docs/notes.md'), 'utf8')).toBe('# Notes\n');
   const frame = c.tui.frames();
   expect(frame).toContain('DONE edit,write');
-  expect(frame).toContain('edit(app.ts) · ok');
-  expect(frame).toContain('write(docs/notes.md) · ok');
+  expect(frame).toContain('Update(app.ts)');
+  expect(frame).toContain('Write(docs/notes.md)');
 });
 
 test('an edit without a prior read is refused before any approval prompt', async () => {

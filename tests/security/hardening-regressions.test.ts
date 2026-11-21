@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {APPROVAL_KIND_FOR_REASON} from '@futryn/security';
+import {APPROVAL_KIND_FOR_REASON} from '@cosmew/security';
 import {toolPermissionRequest} from '../../apps/cli/src/bootstrap/approvals';
 import {fitUtf8Prefix} from '../../apps/cli/src/bootstrap/utf8';
 

@@ -17,7 +17,7 @@ import {
   FutrynError,
   type HostAgentsConfig,
   type Provider,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {
   appendProvider,
   loadHostAgents,
@@ -28,12 +28,12 @@ import {
   type HostConfigDiagnostic,
   type HostProviderEntry,
   type TokenCommand,
-} from '@futryn/models';
+} from '@cosmew/models';
 
 /**
  * The user-level host config (ADR 0046): `<state directory>/config.toml`. It is read from the state
  * directory only. A workspace never contributes providers, so a cloned repository cannot point
- * prompts at its own host or make Futryn run its commands.
+ * prompts at its own host or make Cosmew run its commands.
  */
 const MAX_BYTES = 256 * 1024;
 

@@ -1,4 +1,4 @@
-import {FutrynError, type CompactionOutcome} from '@futryn/contracts';
+import {FutrynError, type CompactionOutcome} from '@cosmew/contracts';
 import {estimateContextTokens, normalizeHistory} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
 import {

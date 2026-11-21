@@ -6,7 +6,7 @@ import {
   agentToolInputSchema,
   agentWaitInputSchema,
   type SubagentToolOutcome,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import type {ToolDispatcherOptions} from '../context';
 import type {ToolHandler} from './types';
 

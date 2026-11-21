@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|❯ Use the AskUserQuestion tool to ask me which color I prefer,    │1 file changed +1 -1               source: Current ▾
+02|  red or blue, then reply with my choice.                         │
+03|                                                                  │a.txt                                          +1 -1
+04|⏺ Answered Claude's questions:                                    │
+05|  ⎿  · Which color do you prefer, red or blue? → Red              │────────────────────────────────────────────────────
+06|                                                                  │a.txt                                        [ ask ]
+07|⏺ You chose red.                                                  │────────────────────────────────────────────────────
+08|                                                                  │ 1 -hello
+09|✻ Brewed for 4s · done 11:02 PM                                   │ 1 +HELLO
+10|                                                                  │ 2  world
+11|❯ Use TodoWrite to create 3 todos (alpha, beta, gamma) and        │
+12|  complete them one at a time, updating TodoWrite after each; use │
+13|  no other tools.                                                 │
+14|                                                                  │
+15|⏺ I can't do this: there's no TodoWrite tool in this session. It  │
+16|  isn't among my available tools or the extra tools that can be   │
+17|  loaded on demand. You asked me to use no other tools, so I      │
+18|  haven't substituted anything.                                   │
+19|                                                                  │
+20|  I could run the same alpha → beta → gamma sequence another way, │
+21|  for example by updating a checklist file after each step. If    │
+22|  you'd like that, tell me which way to use.                      │
+23|                                                                  │
+24|✻ Cooked for 3s · done 11:02 PM                                   │
+25|                                                                  │
+26|❯ Write a 60-line poem about terminals to poem.txt.               │
+27|                                                                  │
+28|✻ Forging… (4s · ↓ 97 tokens · thinking with medium effort)       │
+29|  ⎿  Tip: Use /color and /rename to tell your sessions apart      │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

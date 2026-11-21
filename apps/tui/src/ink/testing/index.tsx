@@ -2,7 +2,7 @@
 import type {ReactElement} from 'react';
 import {render} from 'ink-testing-library';
 import {ThemeEngine} from '../../theme/theme';
-import {FutrynClientProvider} from '../hooks';
+import {FutrynClientProvider, KeymapProvider} from '../hooks';
 import {ThemeProvider} from '../theme';
 import {OverlayProvider} from '../core/overlay';
 import {createClientFixture, type ClientFixture} from './client-fixture';
@@ -14,7 +14,9 @@ export function renderInk(tree: ReactElement, options: {fixture?: ClientFixture;
   const wrap = (element: ReactElement) => (
     <FutrynClientProvider client={fixture.client}>
       <ThemeProvider engine={engine}>
-        <OverlayProvider>{element}</OverlayProvider>
+        <KeymapProvider>
+          <OverlayProvider>{element}</OverlayProvider>
+        </KeymapProvider>
       </ThemeProvider>
     </FutrynClientProvider>
   );

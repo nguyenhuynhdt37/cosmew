@@ -1,12 +1,12 @@
 import {z} from 'zod';
-import {MAX_COMMAND_CHARS} from '@futryn/security';
+import {MAX_COMMAND_CHARS} from '@cosmew/security';
 import {plainTerminalText} from './output';
-import type {CommandOutcome} from '@futryn/contracts';
+import type {CommandOutcome} from '@cosmew/contracts';
 
 /**
  * Bounds for one exec_command call. Yield bounds and the 10 000-token default are Codex's
- * (`unified_exec/mod.rs`, pinned 75fc67e8). `timeout_ms` is Futryn's hard lease: Codex keeps
- * terminals until exit or eviction, Futryn's PID1 deadline bounds an orphan after an owner crash.
+ * (`unified_exec/mod.rs`, pinned 75fc67e8). `timeout_ms` is Cosmew's hard lease: Codex keeps
+ * terminals until exit or eviction, Cosmew's PID1 deadline bounds an orphan after an owner crash.
  * Output tokens are approximated as 4 bytes each.
  */
 export const EXEC_LIMITS = {
@@ -48,15 +48,8 @@ export const execInput = z.strictObject({
   yield_time_ms: z.number().int().min(0).max(300_000).optional(),
   max_output_tokens: z.number().int().min(EXEC_LIMITS.minOutputTokens).max(EXEC_LIMITS.maxOutputTokens).optional(),
   timeout_ms: z.number().int().min(EXEC_LIMITS.minTimeoutMs).max(EXEC_LIMITS.maxTimeoutMs).optional(),
-  sandbox_permissions: z.enum(['use_default', 'with_additional_permissions', 'require_escalated']).optional(),
-  additional_permissions: z
-    .strictObject({
-      network: z.strictObject({enabled: z.boolean()}).optional(),
-      file_system: z.unknown().optional(),
-    })
-    .optional(),
+  dangerouslyDisableSandbox: z.boolean().optional(),
   justification: z.string().min(1).max(500).optional(),
-  prefix_rule: z.array(z.string().max(200)).max(32).optional(),
 });
 export type ExecInput = z.infer<typeof execInput>;
 export const shellOf = (value: string | undefined) => (value === undefined ? ('bash' as const) : SHELLS[value]);
@@ -64,7 +57,7 @@ export const shellOf = (value: string | undefined) => (value === undefined ? ('b
 export const execDescriptor = {
   name: 'exec_command',
   description:
-    'Runs a command in the Futryn sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: in workspace-write mode file changes are real and visible to other tools and git; .git is readable but never writable, Futryn state is hidden, and files outside the project are not visible. Only localhost can be reached; external network is off unless you set sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification (the user approves it). If a command legitimately needs more than the sandbox gives, set sandbox_permissions "require_escalated" with a justification: the user is asked and, if approved, that one command runs WITHOUT the sandbox. Use it only after a sandboxed attempt failed because of the sandbox. The session approval policy decides prompts: by default (on-request) commands run in the sandbox without asking, while dangerous commands (e.g. forced rm), network access and escalation ask the user; under never they are refused.',
+    'Runs a command in the Cosmew sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: file changes there (and in any additional directories the user configured) are real and visible to other tools and git. Writes anywhere else are blocked; .git is readable but never writable; reads work everywhere except credential locations (~/.ssh, ~/.aws, keychains, browser profiles, Cosmew state) and secret files. There is no direct network: HTTP(S) goes through a local proxy (HTTP_PROXY/HTTPS_PROXY are set) that only reaches domains the user allowed, asks the user about a new domain, and always reaches localhost. If a command legitimately cannot work inside the sandbox, retry it with dangerouslyDisableSandbox true and a justification: the user is asked first and, if approved, that one command runs WITHOUT the sandbox. Use it only after a sandboxed attempt failed because of the sandbox, never to bypass a denied domain or path. The permission mode decides prompts: sandboxed commands normally run without asking unless a rule says ask or deny.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -92,28 +85,14 @@ export const execDescriptor = {
         maximum: EXEC_LIMITS.maxTimeoutMs,
         description: `Hard lease for the command and its session (default ${EXEC_LIMITS.defaultLeaseMs} ms). The whole process tree is terminated at this deadline.`,
       },
-      sandbox_permissions: {
-        type: 'string',
-        enum: ['use_default', 'with_additional_permissions', 'require_escalated'],
+      dangerouslyDisableSandbox: {
+        type: 'boolean',
         description:
-          'Per-command sandbox override. Defaults to use_default. with_additional_permissions (with additional_permissions and a justification) adds network. require_escalated (with a justification) asks the user to run this one command without the sandbox.',
-      },
-      additional_permissions: {
-        type: 'object',
-        properties: {
-          network: {
-            type: 'object',
-            properties: {enabled: {type: 'boolean'}},
-            required: ['enabled'],
-            additionalProperties: false,
-          },
-        },
-        additionalProperties: false,
-        description: 'Additional sandboxed access for this command; only network is supported.',
+          'Run this one command WITHOUT the sandbox. Always asks the user (and is refused when settings disallow unsandboxed commands). Requires a justification.',
       },
       justification: {
         type: 'string',
-        description: 'User-facing reason for additional permissions or escalation; omit otherwise.',
+        description: 'User-facing reason for dangerouslyDisableSandbox; omit otherwise.',
       },
     },
     required: ['cmd'],
@@ -151,8 +130,8 @@ export function formatOutcome(
     ...(outcome.sandboxDenied
       ? [
           canEscalate
-            ? 'The sandbox likely denied this operation (protected path, read-only mode, or no network). Nothing was retried. If it needs network, retry with sandbox_permissions "with_additional_permissions", additional_permissions {"network":{"enabled":true}} and a justification. If it needs access the sandbox never gives, you may retry the same command with sandbox_permissions "require_escalated" and a justification: the user is asked first and, if approved, it runs once WITHOUT the sandbox. Do not repeat it unchanged.'
-            : 'The sandbox likely denied this operation (protected path, read-only mode, or no network). Nothing was retried; do not repeat it unchanged.',
+            ? 'The sandbox likely denied this operation (a path outside the working directory, a protected or credential path, or a network domain the user has not allowed). Nothing was retried. If it needs access the sandbox never gives, you may retry the same command with dangerouslyDisableSandbox true and a justification: the user is asked first and, if approved, it runs once WITHOUT the sandbox. Do not repeat it unchanged.'
+            : 'The sandbox likely denied this operation (a path outside the working directory, a protected or credential path, or a network domain). Nothing was retried; do not repeat it unchanged.',
         ]
       : []),
     `Wall time: ${(outcome.durationMs / 1000).toFixed(2)} s`,

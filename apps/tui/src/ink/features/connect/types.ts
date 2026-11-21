@@ -1,4 +1,4 @@
-import type {AuthMethod, Provider, ProviderAuthChallenge} from '@futryn/contracts';
+import type {AuthMethod, Provider, ProviderAuthChallenge} from '@cosmew/contracts';
 
 export type ConnectStep =
   | 'provider'

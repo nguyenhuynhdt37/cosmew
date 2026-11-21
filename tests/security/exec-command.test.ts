@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {type CommandRuntime, type CommandOutcome} from '@futryn/contracts';
-import {SessionGrants, evaluateExec} from '@futryn/security';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {type CommandRuntime, type CommandOutcome} from '@cosmew/contracts';
+import {SessionGrants, evaluateExec} from '@cosmew/security';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {
   ToolDispatcher,
   SeatbeltRuntime,
@@ -12,7 +12,7 @@ import {
   HeadTailBuffer,
   plainTerminalText,
   commandGrantTarget,
-} from '@futryn/tools';
+} from '@cosmew/tools';
 import {runProcess} from '../../packages/tools/src/exec/process';
 import {waitFor} from '../process-fixtures/observe';
 const cleanup: (() => void)[] = [];
@@ -123,6 +123,7 @@ test('strict arguments and canonical cwd policy reject unsupported modes and wor
     {cmd: 'x', additional_permissions: {network: {enabled: true}}},
     {cmd: 'x', sandbox_permissions: 'with_additional_permissions', additional_permissions: {network: {enabled: true}}},
     {cmd: 'x', prefix_rule: ['git']},
+    {cmd: 'x', dangerouslyDisableSandbox: 'yes'},
     {cmd: 'x', shell: '/bin/zsh'},
     {cmd: 'x', session_id: 'fake'},
     {cmd: 'x', timeout_ms: 1},

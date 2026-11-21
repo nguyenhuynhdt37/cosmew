@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|                                                                  │1 file changed +1 -1               source: Current ▾
+02|❯ In a.txt replace the word hello with HELLO.                     │
+03|                                                                  │a.txt                                          +1 -1
+04|  Read 1 file                                                     │
+05|                                                                  │────────────────────────────────────────────────────
+06|⏺ Update(a.txt)                                                   │a.txt                                        [ ask ]
+07|  ⎿  Added 1 line, removed 1 line                                 │────────────────────────────────────────────────────
+08|      1 -hello                                                    │ 1 -hello
+09|      1 +HELLO                                                    │ 1 +HELLO
+10|      2  world                                                    │ 2  world
+11|                                                                  │
+12|⏺ I changed hello to HELLO in a.txt. It was the only "hello" in   │
+13|  the file, so the file now reads:                                │
+14|                                                                  │
+15|  HELLO                                                           │
+16|  world                                                           │
+17|                                                                  │
+18|✻ Crunched for 8s · done 11:02 PM                                 │
+19|                                                                  │
+20|❯ Use the AskUserQuestion tool to ask me which color I prefer,    │
+21|  red or blue, then reply with my choice.                         │
+22|                                                                  │
+23|⏺ Answered Claude's questions:                                    │
+24|  ⎿  · Which color do you prefer, red or blue? → Red              │
+25|                                                                  │
+26|⏺ You chose red.                                                  │
+27|                                                                  │
+28|✻ Brewed for 4s · done 11:02 PM                                   │
+29|                                                                  │
+30|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+31|❯ Use TodoWrite to create 3 todos (alpha, beta, gamma) and complete them one at a time, updating TodoWrite after each;
+32|  use no other tools.
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on

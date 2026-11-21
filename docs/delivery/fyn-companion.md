@@ -1,4 +1,4 @@
-# Fyn — FUTRYN terminal companion
+# Fyn — COSMEW terminal companion
 
 Implemented within the user-authorized TUI1 slice on 2026-11-14. Fyn is an original ember fox with large ears and a chevron tail. UI presentation only: no new domain contracts, dependencies, persisted settings, or package edges.
 
@@ -29,7 +29,7 @@ The existing differential framebuffer handles color degradation and output. The 
 
 ## References and evidence
 
-Reference inspection date: 2026-11-14. Local `/Users/huynh/.local/bin/hydefetch` calls `pokemon-colorscripts -r` followed by Fastfetch. The installed `/Users/huynh/.local/opt/pokemon-colorscripts/pokemon-colorscripts.py` prints stored ANSI files; neither inspected code path contains an animation loop. Exact installed upstream revision: **Needs verification**, because no Git metadata was present. The reference informed block-sprite readability; Pokémon assets were not copied. Existing pinned TUI references remain in [TUI1 research](futryn-tui-upstream-research.md).
+Reference inspection date: 2026-11-14. Local `/Users/huynh/.local/bin/hydefetch` calls `pokemon-colorscripts -r` followed by Fastfetch. The installed `/Users/huynh/.local/opt/pokemon-colorscripts/pokemon-colorscripts.py` prints stored ANSI files; neither inspected code path contains an animation loop. Exact installed upstream revision: **Needs verification**, because no Git metadata was present. The reference informed block-sprite readability; Pokémon assets were not copied. Existing pinned TUI references remain in [TUI1 research](cosmew-tui-upstream-research.md).
 
 Validation:
 

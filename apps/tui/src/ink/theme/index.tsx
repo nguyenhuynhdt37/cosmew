@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import {createContext, useContext, useLayoutEffect, useReducer, type ReactNode} from 'react';
-import type {ThemeTokenKey} from '@futryn/contracts';
+import type {ThemeTokenKey} from '@cosmew/contracts';
 import {ThemeEngine} from '../../theme/theme';
 
 function readTheme(engine: ThemeEngine) {

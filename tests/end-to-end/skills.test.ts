@@ -2,7 +2,7 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerSchema} from '@futryn/contracts';
+import {providerSchema} from '@cosmew/contracts';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -178,7 +178,9 @@ test('headless fyn exec resolves a dollar mention through the same dispatcher', 
     return true;
   });
   try {
-    expect(await runExec(h.app, {prompt: 'use $s3-demo', workspace: h.root, approval: 'never', json: true})).toBe(0);
+    expect(
+      await runExec(h.app, {prompt: 'use $s3-demo', workspace: h.root, permissions: {mode: 'acceptEdits'}, json: true}),
+    ).toBe(0);
   } finally {
     stdout.mockRestore();
   }
@@ -189,7 +191,7 @@ test('headless fyn exec resolves a dollar mention through the same dispatcher', 
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.35'});
+  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.40'});
 });
 
 test('default state and user skills coexist through production discovery and dispatcher', async () => {

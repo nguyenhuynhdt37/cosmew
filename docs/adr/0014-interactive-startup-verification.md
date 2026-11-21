@@ -1,5 +1,7 @@
 # ADR 0014: Interactive folder consent and account verification
 
+> Consent persistence is amended by [ADR 0075](0075-persistent-workspace-consent-and-claude-keybindings.md): the first approval is persisted per canonical workspace in user settings. The account/model verification described below still runs on every launch.
+
 Accepted 2026-11-15 at the user's request. Applies to interactive FUTRYN TUI startup. PA1/TUI1/SUB1 scope, tool permission engine, and provider authentication boundaries remain unchanged; no new dependency or storage schema.
 
 Before interactive chat or a requested initial slash command, show the current workspace and require an explicit session-only Allow selection; Exit is selected by default. File reference and diff views may read that folder after consent. This UI consent does not grant write/shell/tool permissions or replace the security permission engine. Denial/Escape/Ctrl+C exits without a provider request. Consent is not persisted. Non-TTY single-frame display remains noninteractive and exits without running chat.

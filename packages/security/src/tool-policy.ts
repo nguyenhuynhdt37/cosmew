@@ -1,4 +1,4 @@
-import {SANDBOX_MODE_RANK, type PermissionDecision} from '@futryn/contracts';
+import {SANDBOX_MODE_RANK, type PermissionDecision} from '@cosmew/contracts';
 
 /**
  * Built-in read policy for TOOLS1 (ADR 0017). Evaluation order is deny → ask → allow: the first
@@ -27,6 +27,47 @@ export const SECRET_FILE_RULES: readonly {match: 'exact' | 'prefix' | 'suffix'; 
 /** Templates that are meant to be shared. */
 export const SECRET_FILE_EXCEPTIONS: readonly string[] = ['.env.example', '.env.sample', '.env.template'];
 
+/**
+ * Directories under the user's home that commands can never read or write (ADR 0061): credentials,
+ * key material, keychains, browser profiles and the state of other agents. Reads everywhere else
+ * are allowed; this is the default sensitive list, `Read(...)` deny rules add to it.
+ */
+export const SENSITIVE_HOME_PATHS: readonly string[] = [
+  '.ssh',
+  '.aws',
+  '.gnupg',
+  '.azure',
+  '.kube',
+  '.config/gcloud',
+  '.config/gh',
+  '.config/op',
+  '.docker/config.json',
+  '.git-credentials',
+  '.codex',
+  '.claude',
+  '.cosmew',
+  '.futryn',
+  '.hannes',
+  'Library/Keychains',
+  'Library/Cookies',
+  'Library/Safari',
+  'Library/Mail',
+  'Library/Messages',
+  'Library/Application Support/Google/Chrome',
+  'Library/Application Support/Chromium',
+  'Library/Application Support/Microsoft Edge',
+  'Library/Application Support/BraveSoftware',
+  'Library/Application Support/Arc',
+  'Library/Application Support/Vivaldi',
+  'Library/Application Support/Firefox',
+  'Library/Application Support/com.apple.sharedfilelist',
+  '.mozilla',
+  '.config/google-chrome',
+  '.config/chromium',
+  '.config/BraveSoftware',
+  '.local/share/keyrings',
+];
+
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const SECRET_NAMES = SECRET_FILE_RULES.map(
   rule =>
@@ -42,7 +83,7 @@ const SECRET_NAMES = SECRET_FILE_RULES.map(
 const SECRET_EXCEPTIONS = SECRET_FILE_EXCEPTIONS.map(name => new RegExp(`^${escape(name)}$`, 'i'));
 
 export interface ReadPolicyContext {
-  /** Absolute path of Futryn's own state directory (credentials metadata, sessions). */
+  /** Absolute path of Cosmew's own state directory (credentials metadata, sessions). */
   stateDirectory?: string;
 }
 
@@ -76,7 +117,13 @@ export function evaluateRead(
  * canonical target; nothing is persisted, and a revoke takes effect on the next check.
  */
 export class SessionGrants {
+  /** Process-local authority identity; persisted handles cannot resurrect grants after restart. */
+  readonly scopeId = crypto.randomUUID();
   private readonly grants = new Set<string>();
+  private revocationGeneration = 0;
+  get generation(): number {
+    return this.revocationGeneration;
+  }
   private readonly children = new Set<SessionGrants>();
 
   private key(capability: string, target: string): string {
@@ -92,6 +139,7 @@ export class SessionGrants {
   }
 
   revoke(capability: string, target: string): void {
+    this.revocationGeneration++;
     this.grants.delete(this.key(capability, target));
     for (const child of this.children) child.revoke(capability, target);
   }
@@ -104,6 +152,7 @@ export class SessionGrants {
   }
 
   clear(): void {
+    this.revocationGeneration++;
     this.grants.clear();
     for (const child of this.children) child.clear();
   }
@@ -136,9 +185,17 @@ export class ChildSessionGrants extends SessionGrants {
 export const MAX_COMMAND_CHARS = 1024;
 
 /**
- * Policy for one sandboxed command (ADR 0022). There is no allow branch: a command either is
- * denied or needs an explicit user decision bound to the command, the canonical working directory
- * and the sandbox policy. File-read grants never authorize execution.
+ * Policy for one command (ADR 0022, 0061). A command is never allowed here: the decision names
+ * what kind of command it is, and `FutrynClient.requestPermission` applies rules and the
+ * permission mode to that kind (a sandboxed command with `autoAllowBashIfSandboxed` is allowed by
+ * default/acceptEdits; anything else asks). The reason selects the kind through
+ * `APPROVAL_KIND_FOR_REASON`.
+ * - `sandboxed-command`: runs in the OS sandbox and auto-allow is on;
+ * - `process-execute`: runs in the sandbox but auto-allow is off;
+ * - `unsandboxed-session`: the sandbox is disabled in settings;
+ * - `excluded-command`: matches `sandbox.excludedCommands`, runs outside the sandbox;
+ * - `unsandboxed-escalation`: `dangerouslyDisableSandbox`, one command outside the sandbox;
+ * - `unsandboxed-forbidden` (deny): the same request while `allowUnsandboxedCommands` is false.
  */
 export function evaluateExec(
   command: string,
@@ -150,69 +207,42 @@ export function evaluateExec(
     return {effect: 'deny', reason: 'invalid-command'};
   const location = evaluateRead(workdirRelative === '.' ? '.' : workdirRelative + '/', workdirAbsolute, context);
   if (location.effect === 'deny') return location;
-  const sandbox = context.sandbox;
-  // ADR 0055 (Codex `danger-full-access`, `FileSystemSandboxKind::Unrestricted`): the session itself
-  // runs without a sandbox, so a command in it is ordinary, not an escalation, and network needs no
-  // approval. The approval policy still judges the command (dangerous list, untrusted).
-  const fullAccess = sandbox?.mode === 'danger-full-access' && context.configuredMode === 'danger-full-access';
-  // Codex `SandboxPermissions::RequireEscalated` (ADR 0053): running without the sandbox is always
-  // a decision for the user (`untrusted`/`on-request`) and refused under `never`. No allow rule,
-  // session grant or granted network permission can stand in for it.
-  if (sandbox?.unsandboxed && !fullAccess) {
-    if (context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
+  if (context.escalation) {
+    if (context.unsandboxedAllowed === false) return {effect: 'deny', reason: 'unsandboxed-forbidden'};
     return {effect: 'ask', reason: 'unsandboxed-escalation'};
   }
-  if (sandbox && !fullAccess) {
-    // A request may not loosen the configured mode (Codex: per-command overrides go through
-    // additional permissions, and `never` forbids every escalation).
-    if (context.configuredMode && SANDBOX_MODE_RANK[sandbox.mode] > SANDBOX_MODE_RANK[context.configuredMode])
-      return {effect: 'deny', reason: 'sandbox-mode'};
-    // `[sandbox_workspace_write] network_access` (ADR 0055): the user already allowed the network.
-    if (sandbox.network && !context.networkConfigured) {
-      if (context.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
-      if (!context.networkGranted) return {effect: 'ask', reason: 'network-escalation'};
-    }
-  }
-  // ADR 0053 (Codex exec_policy.rs `render_decision_for_unmatched_command`): the session's approval
-  // policy answers these asks. Only commands on the dangerous list stay forbidden under `never`;
-  // a command the parser cannot verify still runs inside the sandbox under `on-request`/`never`
-  // and asks under `untrusted`, because the sandbox, not the parse, is the boundary.
-  const classification = context.classification ?? {dangerous: null, parserUnavailable: true};
-  if (classification.parserUnavailable) return {effect: 'ask', reason: 'shell-parser-unavailable'};
-  if (classification.dangerous === 'other') return {effect: 'ask', reason: 'unverified-command'};
-  if (classification.dangerous) return {effect: 'ask', reason: 'dangerous-command'};
-  return {effect: 'ask', reason: 'process-execute'};
+  if (context.sandbox?.unsandboxed)
+    return {effect: 'ask', reason: context.excluded ? 'excluded-command' : 'unsandboxed-session'};
+  return {effect: 'ask', reason: context.autoAllow === false ? 'process-execute' : 'sandboxed-command'};
 }
 
-export type SandboxEscalation = 'on-request' | 'never';
 export interface ExecSandbox {
   mode: 'read-only' | 'workspace-write' | 'danger-full-access';
-  network: boolean;
-  /** The one-off approved escalation to no sandbox (ADR 0053). */
+  /** The command runs outside the OS sandbox (sandbox disabled, excluded command or approved escape). */
   unsandboxed?: boolean;
 }
 export interface ExecPolicyContext extends ReadPolicyContext {
   /** Effective sandbox requested for this command. */
   sandbox?: ExecSandbox;
-  /** Mode configured for the session; requests cannot exceed it. */
-  configuredMode?: ExecSandbox['mode'];
-  escalation?: SandboxEscalation;
-  /** Codex-style classification (ADR 0040); an unparsed command is judged by the approval policy, not refused. */
+  /** The model asked for `dangerouslyDisableSandbox` while the sandbox is enabled. */
+  escalation?: boolean;
+  /** `sandbox.allowUnsandboxedCommands` is not false. */
+  unsandboxedAllowed?: boolean;
+  /** `sandbox.autoAllowBashIfSandboxed`; default true. */
+  autoAllow?: boolean;
+  /** The command matched `sandbox.excludedCommands` (it runs outside the sandbox). */
+  excluded?: boolean;
+  /** Codex-style classification (ADR 0040), used for display and rule segments. */
   classification?: {dangerous: string | null; parserUnavailable?: boolean};
-  /** The user granted network for this turn or session through `request_permissions`. */
-  networkGranted?: boolean;
-  /** The user's config gives sandboxed commands network (`network_access`, `FUTRYN_SANDBOX_NETWORK`). */
-  networkConfigured?: boolean;
 }
 
 /**
- * Terminal input review, ported from Codex `unified_exec/stdin_approval.rs` (pinned 75fc67e8).
- * Input never widens a session's authority: the process keeps its launch sandbox. Polls and an
- * interrupt are transport, not new commands. Non-empty input is an `stdin` approval kind: it runs
- * under `on-request`/`never` (the session is sandboxed) and asks under `untrusted` (ADR 0053).
- * Drift is named in the reason; a session that can no longer satisfy a stricter current policy
- * is refused ("start a new terminal"), because approval cannot retrofit restrictions onto a
- * running process.
+ * Terminal input review (ADR 0034, 0061). Input never widens a session's authority: the process
+ * keeps its launch sandbox. Polls and an interrupt are transport, not new commands. Non-empty
+ * input is a `stdin-sandboxed` request when the terminal runs in the OS sandbox (like a sandboxed
+ * command) and `stdin-unsandboxed` otherwise. A session that can no longer satisfy a stricter
+ * current policy is refused ("start a new terminal"), because approval cannot retrofit
+ * restrictions onto a running process.
  */
 export function evaluateStdin(input: {
   chars: string;
@@ -220,44 +250,28 @@ export function evaluateStdin(input: {
   tty: boolean;
   launch: ExecSandbox;
   current: ExecSandbox;
-  escalation?: SandboxEscalation;
-  /** Sandboxed commands get network by configuration, so a launch with network is not an escalation. */
-  networkConfigured?: boolean;
-  /** Network remains granted for this turn or session via `request_permissions`. */
-  networkGranted?: boolean;
+  /** `sandbox.autoAllowBashIfSandboxed`; off makes input to a sandboxed terminal ask like any command. */
+  autoAllow?: boolean;
 }): PermissionDecision {
   if (input.chars.includes('\u0000')) return {effect: 'deny', reason: 'invalid-input'};
   if (!input.chars && !input.interrupt) return {effect: 'allow', reason: 'stdin-poll'};
   if (input.interrupt || (!input.tty && input.chars === '\u0003')) return {effect: 'allow', reason: 'stdin-interrupt'};
-  // `current` is the configured session sandbox; a terminal cannot be tightened after launch.
   if (SANDBOX_MODE_RANK[input.launch.mode] > SANDBOX_MODE_RANK[input.current.mode])
     return {effect: 'deny', reason: 'stdin-policy-tightened'};
-  // A Full Access terminal (ADR 0055) holds nothing beyond what its session mode already is.
-  if (
-    input.launch.network &&
-    input.launch.mode !== 'danger-full-access' &&
-    !input.networkConfigured &&
-    !input.networkGranted
-  ) {
-    if (input.escalation === 'never') return {effect: 'deny', reason: 'escalation-forbidden'};
-    return {effect: 'ask', reason: 'stdin-retained-escalation'};
-  }
-  if (input.launch.mode !== input.current.mode) return {effect: 'ask', reason: 'stdin-policy-drift'};
-  // The session keeps its launch sandbox, so what typed input does stays inside it. The approval
-  // policy decides: `untrusted` asks, `on-request`/`never` let it through (decideApproval).
-  return {effect: 'ask', reason: 'stdin-input-approval-required'};
+  if (input.launch.unsandboxed) return {effect: 'ask', reason: 'stdin-unsandboxed'};
+  return {effect: 'ask', reason: input.autoAllow === false ? 'stdin-process' : 'stdin-sandboxed'};
 }
 
 export interface WritePolicyContext extends ReadPolicyContext {
   /**
-   * The path lies in a writable root of the session sandbox (workspace-write, or a path granted by
-   * `request_permissions`). Codex `assess_patch_safety`: writes there are approved by `on-request`;
-   * elsewhere they are an escalation. Defaults to true (workspace-write).
+   * The path lies in a writable root (the working directory or `additionalDirectories`). Writes
+   * there follow the permission mode; the read-only analysis profile of a subagent has none.
+   * Defaults to true.
    */
   writable?: boolean;
 }
 
-/** Patch writes cannot modify credentials, Git internals or Futryn durable state. */
+/** Patch writes cannot modify credentials, Git internals or Cosmew durable state. */
 export function evaluateWrite(
   relativePath: string,
   absolutePath: string,
@@ -269,7 +283,15 @@ export function evaluateWrite(
     relativePath
       .toLowerCase()
       .split('/')
-      .some(p => p === '.hannes' || p === '.futryn' || p.startsWith('.hannes-patch-') || p.startsWith('.futryn-patch-'))
+      .some(
+        p =>
+          p === '.hannes' ||
+          p === '.futryn' ||
+          p === '.cosmew' ||
+          p.startsWith('.hannes-patch-') ||
+          p.startsWith('.futryn-patch-') ||
+          p.startsWith('.cosmew-patch-'),
+      )
   )
     return {effect: 'deny', reason: 'protected-path'};
   if (context.writable === false) return {effect: 'ask', reason: 'outside-writable-roots'};

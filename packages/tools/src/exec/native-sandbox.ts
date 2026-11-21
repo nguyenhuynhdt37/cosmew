@@ -1,4 +1,4 @@
-import type {CommandSandbox} from '@futryn/contracts';
+import type {CommandSandbox} from '@cosmew/contracts';
 
 /** An OS sandbox that can wrap one shell command (ADR 0035). */
 export interface NativeSandbox {

@@ -12,9 +12,11 @@ import {
 } from 'node:fs';
 import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {homedir, tmpdir} from 'node:os';
-import {delimiter, dirname, isAbsolute, join, relative, resolve} from 'node:path';
+import {delimiter, dirname, isAbsolute, join, resolve} from 'node:path';
 import {
   FutrynError,
+  type BackgroundTask,
+  type BackgroundTaskEvent,
   type CommandOutcome,
   type CommandOutputChunk,
   type CommandRequest,
@@ -24,11 +26,12 @@ import {
   type CommandSessionInfo,
   type RuntimeAvailability,
   type ServiceProcess,
-} from '@futryn/contracts';
-import {WorkspaceRoot} from '@futryn/workspace';
+} from '@cosmew/contracts';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {BubblewrapSandbox} from './bubblewrap';
 import type {NativeSandbox} from './native-sandbox';
 import {HeadTailBuffer} from './output';
+import {proxyEnvironment} from './proxy';
 import {likelySandboxDenied} from './sandbox-denial';
 import {SeatbeltSandbox, secretPatterns} from './seatbelt-profile';
 
@@ -52,7 +55,7 @@ const READ_ONLY: CommandSandbox = {mode: 'read-only', network: false};
 
 /**
  * Codex `UNIFIED_EXEC_ENV` (unified_exec/process_manager.rs, pinned 75fc67e8). Apart from PATH,
- * nothing is inherited from Futryn's own environment, so credentials in it never reach commands.
+ * nothing is inherited from Cosmew's own environment, so credentials in it never reach commands.
  */
 const EXEC_ENV = {
   NO_COLOR: '1',
@@ -83,7 +86,7 @@ export interface NativeRuntimeOptions {
   hostPath?: string;
   home?: string;
   /**
-   * Hide secret-named project files from commands (FUTRYN_SANDBOX_HIDE_SECRETS=1). Off by default
+   * Hide secret-named project files from commands (COSMEW_SANDBOX_HIDE_SECRETS=1). Off by default
    * like Codex: bun, node and vite read `.env` themselves and fail with EPERM when it is denied.
    */
   hideSecrets?: boolean;
@@ -118,6 +121,10 @@ interface NativeSession {
   stop?: 'cancelled' | 'timeout' | 'signalled';
   lease?: ReturnType<typeof setTimeout>;
   releaseAbort?: () => void;
+  background?: boolean;
+  yieldForeground?: () => void;
+  taskTail: string;
+  taskChanged?: () => void;
   pid?: number;
   pipeChild?: ChildProcess;
   ptyChild?: ReturnType<typeof Bun.spawn>;
@@ -126,7 +133,7 @@ interface NativeSession {
 /**
  * Native unified-exec runtime (ADR 0035), the Codex model: each command runs on the host inside
  * the OS sandbox (macOS Seatbelt, Linux bubblewrap). Readable: the system, PATH toolchains and the
- * workspace — never other user files or Futryn state. Writable in workspace-write: the workspace
+ * workspace — never other user files or Cosmew state. Writable in workspace-write: the workspace
  * except `.git`, plus a private temp directory. No network unless approved for the command.
  */
 export class NativeCommandRuntime implements CommandRuntime {
@@ -136,6 +143,78 @@ export class NativeCommandRuntime implements CommandRuntime {
   private readonly sandbox: NativeSandbox | undefined;
   private readonly unavailableReason: string | undefined;
   private readonly sessions = new Map<string, NativeSession>();
+  private readonly taskSnapshots = new Map<string, BackgroundTask>();
+  private readonly taskListeners = new Set<(event: BackgroundTaskEvent) => void>();
+
+  backgroundTasks(): BackgroundTask[] {
+    return [...this.taskSnapshots.values()].map(task => ({...task}));
+  }
+
+  observeBackgroundTasks(listener: (event: BackgroundTaskEvent) => void): () => void {
+    this.taskListeners.add(listener);
+    return () => this.taskListeners.delete(listener);
+  }
+
+  private publishTask(session: NativeSession): void {
+    if (!session.background) return;
+    const previous = this.taskSnapshots.get(session.id);
+    const task: BackgroundTask = {
+      id: session.id,
+      kind: 'shell',
+      description: session.request.command,
+      status: !session.ended
+        ? 'running'
+        : session.stop === 'cancelled' || session.stop === 'signalled'
+          ? 'stopped'
+          : session.exitCode === 0 && !session.stop && !session.spawnFailed
+            ? 'done'
+            : 'failed',
+      startedAt: new Date(session.start).toISOString(),
+      ...(session.ended && session.exitCode !== null ? {exitCode: session.exitCode} : {}),
+      outputTail: session.taskTail,
+    };
+    this.taskSnapshots.set(task.id, task);
+    // Keep live executions and a bounded recent completion history.
+    for (const [id, value] of this.taskSnapshots) {
+      if (this.taskSnapshots.size <= 200) break;
+      if (value.status !== 'running') this.taskSnapshots.delete(id);
+    }
+    const type = !previous ? 'task.started' : task.status !== 'running' ? 'task.finished' : 'task.updated';
+    if (previous && previous.status !== 'running') return;
+    for (const listener of [...this.taskListeners]) {
+      try {
+        listener({type, task: {...task}, parentSessionId: session.request.taskSessionId});
+      } catch {
+        /* observers never affect execution */
+      }
+    }
+  }
+
+  private moveToBackground(session: NativeSession): void {
+    if (session.background || session.ended) return;
+    session.background = true;
+    session.releaseAbort?.();
+    session.yieldForeground?.();
+    this.publishTask(session);
+  }
+
+  backgroundCurrentTask(sessionId?: string): BackgroundTask | undefined {
+    const session = [...this.sessions.values()].find(
+      value =>
+        value.busy && !value.ended && !value.background && (!sessionId || value.request.taskSessionId === sessionId),
+    );
+    if (!session) return undefined;
+    this.moveToBackground(session);
+    return {...this.taskSnapshots.get(session.id)!};
+  }
+
+  async stopBackgroundTask(id: string): Promise<boolean> {
+    const session = this.sessions.get(id);
+    if (!session?.background || session.ended || session.stop) return false;
+    await this.stop(session, 'signalled');
+    return true;
+  }
+
   /** Private directory with the command's HOME and TMPDIR; removed on shutdown. */
   private readonly scratch: string;
   private readonly path: string;
@@ -188,23 +267,19 @@ export class NativeCommandRuntime implements CommandRuntime {
         state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
-        toolchains,
         skillDirectories: options.skillDirectories,
         readOnlySkillDirectories: options.readOnlySkillDirectories,
         secrets: options.hideSecrets ? secretPatterns() : undefined,
         denied: this.deniedFiles,
-        metadataOnly: this.rustupHome ? [this.rustupHome] : [],
       });
       this.serviceSandbox = new SeatbeltSandbox({
         workspace: this.canonicalWorkspaceRoot,
         state: this.canonicalStateDirectory,
         scratch: this.scratch,
         home,
-        toolchains,
         secrets: secretPatterns(),
         denied: this.deniedFiles,
         loopback: false,
-        metadataOnly: this.rustupHome ? [this.rustupHome] : [],
       });
     } else if (os === 'linux' && findExecutable('bwrap', this.path)) {
       this.sandbox = new BubblewrapSandbox({
@@ -241,7 +316,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       toolchains,
       this.deniedFiles,
       options.hideSecrets === true,
-      'v3',
+      'v4',
     ];
     this.id =
       `native-${this.sandbox?.name ?? 'none'}:` +
@@ -300,46 +375,60 @@ export class NativeCommandRuntime implements CommandRuntime {
     writeFileSync(join(probe, '.env'), 'PROBE_SECRET');
     mkdirSync(join(probe, '.git'));
     const outside = join(dirname(probe), 'fyn-probe-outside-' + randomUUID());
-    const home = this.options.home ?? homedir();
+    // A throwaway "home": its credential directory must be unreadable while the rest of it, like
+    // the rest of the system, stays readable (ADR 0061).
+    const probeHome = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-probe-home-')));
+    mkdirSync(join(probeHome, '.ssh'));
+    writeFileSync(join(probeHome, '.ssh', 'id_probe'), 'PROBE_KEY');
+    writeFileSync(join(probeHome, 'visible.txt'), 'VISIBLE');
 
-    // The probe always enables the secret rule so a hide-secrets configuration is proven as well.
-    const sandbox =
-      this.sandbox!.name === 'macos-seatbelt'
-        ? new SeatbeltSandbox({
-            workspace: probe,
-            scratch: this.scratch,
-            home: realPath(home),
-            toolchains: [],
-            secrets: secretPatterns(),
-          })
-        : this.sandbox!;
-    const script = [
-      'echo ok > made',
-      '! cat .env 2>/dev/null | grep -q PROBE',
-      '! touch .git/x 2>/dev/null',
-      `! touch ${JSON.stringify(outside)} 2>/dev/null`,
-      `! ls ${JSON.stringify(home)} >/dev/null 2>&1`,
-      `! kill -0 ${process.pid} 2>/dev/null`,
-      '! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null',
-    ].join(' && ');
-    const argv = sandbox.wrap(
-      ['/bin/bash', '--noprofile', '--norc', '-c', script],
-      {mode: 'workspace-write', network: false},
-      probe,
-    );
-    const result = spawnSync(argv[0]!, argv.slice(1), {
-      cwd: probe,
-      env: this.env(false),
-      timeout: 10_000,
-      encoding: 'utf8',
-    });
+    try {
+      // The probe always enables the secret rule so a hide-secrets configuration is proven as well.
+      const sandbox =
+        this.sandbox!.name === 'macos-seatbelt'
+          ? new SeatbeltSandbox({
+              workspace: probe,
+              scratch: this.scratch,
+              home: probeHome,
+              secrets: secretPatterns(),
+            })
+          : this.sandbox!;
+      const script = [
+        'echo ok > made',
+        '! cat .env 2>/dev/null | grep -q PROBE',
+        '! touch .git/x 2>/dev/null',
+        `! touch ${JSON.stringify(outside)} 2>/dev/null`,
+        ...(this.sandbox!.name === 'macos-seatbelt'
+          ? [
+              `! cat ${JSON.stringify(join(probeHome, '.ssh', 'id_probe'))} >/dev/null 2>&1`,
+              `grep -q VISIBLE ${JSON.stringify(join(probeHome, 'visible.txt'))}`,
+              `! touch ${JSON.stringify(join(probeHome, 'planted'))} 2>/dev/null`,
+            ]
+          : []),
+        `! kill -0 ${process.pid} 2>/dev/null`,
+        '! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null',
+      ].join(' && ');
+      const argv = sandbox.wrap(
+        ['/bin/bash', '--noprofile', '--norc', '-c', script],
+        {mode: 'workspace-write', network: false},
+        probe,
+      );
+      const result = spawnSync(argv[0]!, argv.slice(1), {
+        cwd: probe,
+        env: this.env(false),
+        timeout: 10_000,
+        encoding: 'utf8',
+      });
 
-    return (
-      result.status === 0 &&
-      readFileSync(join(probe, 'made'), 'utf8') === 'ok\n' &&
-      !existsSync(outside) &&
-      !existsSync(join(probe, '.git', 'x'))
-    );
+      return (
+        result.status === 0 &&
+        readFileSync(join(probe, 'made'), 'utf8') === 'ok\n' &&
+        !existsSync(outside) &&
+        !existsSync(join(probe, '.git', 'x'))
+      );
+    } finally {
+      rmSync(probeHome, {recursive: true, force: true});
+    }
   }
 
   /**
@@ -365,9 +454,10 @@ export class NativeCommandRuntime implements CommandRuntime {
     };
   }
 
-  private env(tty: boolean, unsandboxed = false): Record<string, string> {
+  private env(tty: boolean, unsandboxed = false, proxyUrl?: string): Record<string, string> {
     if (unsandboxed) return this.hostEnv(tty);
     return {
+      ...(proxyUrl ? {...proxyEnvironment(proxyUrl), NODE_USE_ENV_PROXY: '1'} : {}),
       ...EXEC_ENV,
       ...(tty ? {TERM: 'xterm-256color', NO_COLOR: ''} : {}),
       PATH: this.path,
@@ -383,13 +473,13 @@ export class NativeCommandRuntime implements CommandRuntime {
    * Environment of a command the user approved to run WITHOUT the sandbox (an escalation or Full
    * Access, F12): the user's real environment and HOME, as Codex's `shell_environment_policy`
    * (inherit all, default excludes `*KEY*`, `*SECRET*`, `*TOKEN*`) followed by Codex's unified-exec
-   * overlay. Futryn's own state and configuration variables never pass, and neither does the
+   * overlay. Cosmew's own state and configuration variables never pass, and neither does the
    * sandbox scratch directory (no scratch HOME, XDG_* or cache redirects).
    */
   private hostEnv(tty: boolean): Record<string, string> {
     const inherited: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (value === undefined || HOST_ENV_EXCLUDED.test(key) || /^(FUTRYN|HANNES)_/i.test(key)) continue;
+      if (value === undefined || HOST_ENV_EXCLUDED.test(key) || /^(COSMEW|FUTRYN|HANNES)_/i.test(key)) continue;
       inherited[key] = value;
     }
     const {FUTRYN_SANDBOX: _marker, ...overlay} = EXEC_ENV;
@@ -405,14 +495,22 @@ export class NativeCommandRuntime implements CommandRuntime {
   async run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome> {
     if (!this.availability().ok) throw new FutrynError('UNSUPPORTED');
     signal?.throwIfAborted();
+    // Completed background tasks already have bounded snapshots; reclaim their terminal slots
+    // when admission needs one, without consuming any live session's pending output.
+    if (this.sessions.size >= NATIVE_LIMITS.maxSessions) {
+      for (const [id, session] of this.sessions) {
+        if (this.sessions.size < NATIVE_LIMITS.maxSessions) break;
+        if (session.background && session.ended && !session.busy) this.sessions.delete(id);
+      }
+    }
     if (this.sessions.size >= NATIVE_LIMITS.maxSessions) throw new FutrynError('BUDGET');
     validateRequest(request);
 
     const workspace = new WorkspaceRoot(this.canonicalWorkspaceRoot);
-    const cwd = workspace.resolve(request.cwd);
+    // writableRoots is the seatbelt write list and is omitted when the command is unsandboxed,
+    // read-only, or excluded. cwdRoots keeps the trusted additional directories for the cwd.
+    const cwd = workspace.resolve(request.cwd, request.cwdRoots ?? request.sandbox?.writableRoots ?? []);
     if (cwd.kind !== 'directory') throw new FutrynError('POLICY');
-    const relativeCwd = relative(workspace.root, cwd.absolute);
-    if (relativeCwd.startsWith('..') || isAbsolute(relativeCwd)) throw new FutrynError('POLICY');
     if (this.workspaceRetargeted()) throw new FutrynError('POLICY');
 
     const sandbox = request.sandbox ?? READ_ONLY;
@@ -434,9 +532,14 @@ export class NativeCommandRuntime implements CommandRuntime {
       void this.stop(session, 'timeout');
     }, request.timeoutMs);
     this.sessions.set(session.id, session);
+    session.taskChanged = () => this.publishTask(session);
+    void session.done.then(() => {
+      session.releaseAbort?.();
+      this.publishTask(session);
+    });
 
     const abort = () => {
-      void this.stop(session, 'cancelled');
+      if (!session.background) void this.stop(session, 'cancelled');
     };
     signal?.addEventListener('abort', abort, {once: true});
     session.releaseAbort = () => signal?.removeEventListener('abort', abort);
@@ -452,7 +555,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private startPty(session: NativeSession, argv: string[], cwd: string): void {
     const child = Bun.spawn(argv, {
       cwd,
-      env: this.env(true, session.sandbox.unsandboxed === true),
+      env: this.env(true, session.sandbox.unsandboxed === true, session.sandbox.proxyUrl),
       terminal: {cols: 120, rows: 40, data: (_terminal, data) => recordOutput(session, 'stdout', Buffer.from(data))},
     });
     session.ptyChild = child;
@@ -470,7 +573,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private startPipes(session: NativeSession, argv: string[], cwd: string): void {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd,
-      env: this.env(false, session.sandbox.unsandboxed === true),
+      env: this.env(false, session.sandbox.unsandboxed === true, session.sandbox.proxyUrl),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     });
@@ -513,9 +616,9 @@ export class NativeCommandRuntime implements CommandRuntime {
   /** Wait up to `yieldMs`, then report the session's state and the output since the previous call. */
   private async collect(session: NativeSession, yieldMs: number, signal?: AbortSignal): Promise<CommandOutcome> {
     const abort = () => {
-      void this.stop(session, 'cancelled');
+      if (!session.background) void this.stop(session, 'cancelled');
     };
-    if (signal?.aborted) await this.stop(session, 'cancelled');
+    if (signal?.aborted && !session.background) await this.stop(session, 'cancelled');
     else signal?.addEventListener('abort', abort, {once: true});
 
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -524,11 +627,15 @@ export class NativeCommandRuntime implements CommandRuntime {
         await Promise.race([
           session.done,
           new Promise<void>(resolve => {
+            session.yieldForeground = resolve;
+          }),
+          new Promise<void>(resolve => {
             timer = setTimeout(resolve, yieldMs);
           }),
         ]);
-      if (signal?.aborted) await this.stop(session, 'cancelled');
+      if (signal?.aborted && !session.background) await this.stop(session, 'cancelled');
 
+      if (!session.ended) this.moveToBackground(session);
       const result = this.outcome(session);
       resetOutputWindow(session);
       if (session.ended) {
@@ -540,6 +647,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       session.observer = undefined;
+      session.yieldForeground = undefined;
     }
   }
 
@@ -721,6 +829,7 @@ function createSession(request: CommandRequest, sandbox: CommandSandbox): Native
     exitCode: null,
     signal: null,
     busy: true,
+    taskTail: '',
     observer: request.onOutput,
     budgets: {stdout: stdoutBudget, stderr: stderrBudget},
     buffers: {stdout: new HeadTailBuffer(stdoutBudget), stderr: new HeadTailBuffer(stderrBudget)},
@@ -732,6 +841,10 @@ function createSession(request: CommandRequest, sandbox: CommandSandbox): Native
 /** Keep bounded output for the result and stream a bounded prefix live to the observer. */
 function recordOutput(session: NativeSession, stream: Stream, bytes: Buffer): void {
   session.buffers[stream].push(bytes);
+  session.taskTail = (
+    session.taskTail + new TextDecoder().decode(bytes.subarray(Math.max(0, bytes.length - 8192)))
+  ).slice(-8192);
+  session.taskChanged?.();
   const limit = session.tty ? session.request.maxOutputBytes : session.budgets.stderr;
   if (session.streamed[stream] >= limit) return;
 

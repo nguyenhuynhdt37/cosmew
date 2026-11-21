@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|❯ /help
+06|  ⎿  Closed help
+07|
+08|❯ /config
+09|  ⎿  Closed config
+10|
+11|❯ /status
+12|  ⎿  Closed status
+13|
+14|
+15|
+16|
+17|
+18|
+19|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+20|  Settings  Status   Config   Usage   Stats
+21|
+22|  Session:
+23|  Estimated cost:         Not reported
+24|  Total duration (API):   Not reported
+25|  Total duration (wall):  Not reported
+26|  Total code changes:     Not reported
+27|  Usage:                  — input, — output, — cache read, — cache write (last turn)
+28|
+29|  ←/→ to switch · Esc to close

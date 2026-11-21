@@ -8,7 +8,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {GENERATION_LIMITS} from '@futryn/contracts';
+import {GENERATION_LIMITS} from '@cosmew/contracts';
 import {messagesToTranscript} from '../../apps/tui/src/ink/features/transcript/logic';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';

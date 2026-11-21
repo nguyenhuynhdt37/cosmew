@@ -6,20 +6,24 @@ The continued Claude task implements W0–W7 from the approved
 [approval ADR 0040](adr/0040-codex-approval-policy.md), [extended read ADR 0041](adr/0041-full-read.md),
 [plan/questions ADR 0042](adr/0042-plan-and-questions.md),
 [LSP ADR 0043](adr/0043-sandboxed-code-intelligence.md), [MCP/web ADR 0044](adr/0044-mcp-and-web-tools.md). Login rework: [ADR 0045](adr/0045-remove-delegated-and-chat-only-runtimes.md), [0046](adr/0046-host-provider-config.md), [0047](adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), [0048](adr/0048-deepseek-reasoning-replay.md).
-Public contract is 1.35 (memories: [ADR 0057](adr/0057-user-scoped-project-memories.md); skills: [ADR 0056](adr/0056-skills-discovery-and-mediated-invocation.md)); SQLite schema 8. ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
-UAT diagnostics, usage and execution evidence: [ADR 0051](adr/0051-uat-diagnostics-usage-and-execution-evidence.md). Wave 2 S1 headless exec: [ADR 0052](adr/0052-headless-exec-and-sdk-interactions.md). Codex sandbox/approval alignment, model compaction, and presets/Full Access: [ADR 0053](adr/0053-codex-sandbox-and-approval-alignment.md), [0054](adr/0054-model-compaction.md), [0055](adr/0055-codex-approval-decisions-network-and-full-access.md). Other wave 2/3 steps remain future work.
+Public contract is 1.40 (Cosmew rename and reasoning declarations: [ADR 0078](adr/0078-user-declared-reasoning-efforts.md)); previous contract is 1.39 (P3: [ADR 0074](adr/0074-p3-review-and-session-controls.md); P1 SDK: [delivery](delivery/tui-v4/p1-backend.md), [ADRs 0069–0073](adr/0069-p1-queued-input-and-status.md); permissions: [ADR 0061](adr/0061-claude-code-permissions-and-sandbox.md); working directories: [ADR 0067](adr/0067-working-directories.md); user MCP connect: [ADR 0068](adr/0068-user-mcp-connect.md), no contract bump; memories: [ADR 0057](adr/0057-user-scoped-project-memories.md); skills: [ADR 0056](adr/0056-skills-discovery-and-mediated-invocation.md)); SQLite schema 10. Context/evidence continuation: [ADR 0063](adr/0063-retrievable-tool-evidence-and-context-continuation.md). ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
+UAT diagnostics, usage and execution evidence: [ADR 0051](adr/0051-uat-diagnostics-usage-and-execution-evidence.md). Wave 2 S1 headless exec: [ADR 0052](adr/0052-headless-exec-and-sdk-interactions.md). Codex sandbox/approval alignment (superseded by [ADR 0061](adr/0061-claude-code-permissions-and-sandbox.md): Claude Code permission modes, settings files and sandbox), model compaction, and presets/Full Access: [ADR 0053](adr/0053-codex-sandbox-and-approval-alignment.md), [0054](adr/0054-model-compaction.md), [0055](adr/0055-codex-approval-decisions-network-and-full-access.md). Other wave 2/3 steps remain future work.
 This is not authenticated-generation or Product MVP completion evidence.
 
-TUI v3 Ink opt-in: [parity Pha 2](delivery/tui-v3/parity.md), [ADR 0060](adr/0060-ink-tui-integration-and-memory-write.md). Legacy vẫn mặc định.
+TUI: Ink là UI terminal duy nhất ([ADR 0059](adr/0059-ink-tui-foundation.md), [ADR 0060](adr/0060-ink-tui-integration-and-memory-write.md), fullscreen [ADR 0064](adr/0064-fullscreen-ink-tui.md), [parity Pha 2](delivery/tui-v3/parity.md)).
 
-# Điều hướng đặc tả Futryn
+Interactive workspace trust and Claude-compatible user keybindings: [ADR 0075](adr/0075-persistent-workspace-consent-and-claude-keybindings.md).
+
+Fullscreen wheel/trackpad navigation and terminal input lifecycle: [ADR 0079](adr/0079-terminal-mouse-wheel.md).
+
+# Điều hướng đặc tả Cosmew
 
 TUI V2: [architecture decision](adr/0039-tui-v2-virtualized-transcript.md),
 [usage](delivery/tui-v2/usage.md), [benchmarks and acceptance](delivery/tui-v2/report.md).
 
-Latest execution milestone: [ADR 0035](adr/0035-native-sandbox-default.md) — native Seatbelt/bubblewrap by default, Docker optional. Before that: [ADR 0034](adr/0034-unified-exec-terminal-parity.md) ([acceptance](delivery/unified-exec-acceptance.md)): the verified Docker backend is auto-selected when a local engine passes its self-tests and supports workspace-write, PTY sessions and approved network escalation. Earlier: [ADR 0032](adr/0032-contained-command-sessions.md), [acceptance](delivery/execution-runtime-acceptance.md). Native host execution remains closed. Historical gate descriptions below do not enable other backends.
+Latest execution milestone: [ADR 0062](adr/0062-remove-docker-command-backend.md) — commands use the OS sandbox only. The Docker backend of [ADR 0032](adr/0032-contained-command-sessions.md), [ADR 0034](adr/0034-unified-exec-terminal-parity.md) and [ADR 0035](adr/0035-native-sandbox-default.md) is gone. Historical gate descriptions below do not enable it.
 
-Project/repository rename: [ADR 0031](adr/0031-futryn-project-rename.md). Futryn is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.
+Project/repository rename: [ADR 0031](adr/0031-cosmew-project-rename.md). Cosmew is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.
 
 Current conversation recovery: [ADR 0030](adr/0030-durable-conversation-recovery.md), [acceptance matrix](delivery/conversation-recovery.md). Contract 1.12 / SQLite 4 preserve interrupted evidence without replaying tools.
 
@@ -32,14 +36,15 @@ Task 03A exec_command foundation: [ADR 0022](adr/0022-sandboxed-exec-command-fou
 Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-verification.md). TUI feature modules and shared UI kit: [ADR 0015](adr/0015-tui-feature-modules.md). Provider limits in /usage: [ADR 0016](adr/0016-usage-provider-limits.md). Proposed next slice, read-only tools and permission engine: [ADR 0017](adr/0017-read-only-tools-and-permission-engine.md) ([upstream comparison](delivery/tools-permissions-research.md)).
 
 Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
+Claude Code command-name and autocomplete parity: [ADR 0077](adr/0077-claude-slash-command-parity.md).
 
-Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/futryn-tui-acceptance.md).
+Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/cosmew-tui-acceptance.md).
 
 Current provider-connect rebuild: [usage, command audit and acceptance](delivery/provider-connect-acceptance.md), [ADR 0007 and contract 1.1 migration](adr/0007-provider-connect-and-commands.md). These updates supersede older blanket OAuth/TUI/command limitations only for their stated scope.
 
 Fyn companion: [usage, lifecycle and verification](delivery/fyn-companion.md).
 
-> PA1 & TUI1 implementations are authorized: [PA1 plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md), [ADR 0006 (FUTRYN TUI & Theme Engine)](adr/0006-futryn-tui-and-theme-engine.md), [TUI1 Research](delivery/futryn-tui-upstream-research.md), [TUI1 Acceptance](delivery/futryn-tui-acceptance.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
+> PA1 & TUI1 implementations are authorized: [PA1 plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md), [ADR 0006 (COSMEW TUI & Theme Engine)](adr/0006-cosmew-tui-and-theme-engine.md), [TUI1 Research](delivery/cosmew-tui-upstream-research.md), [TUI1 Acceptance](delivery/cosmew-tui-acceptance.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
 
 **Historical Phase 0 baseline follows.** The PA1 implementation and evidence are linked below; unrelated subsystems remain Not implemented. Đọc [quy tắc agents](../AGENTS.md) trước khi thay đổi repository. Nghiên cứu thực hiện 2026-11-13; tổng hợp/quality gate 2026-11-14. Không install/build/lint/test/start application trong Phase 0.
 

@@ -1,7 +1,7 @@
-# FUTRYN TUI & Theme Engine — Upstream Research, Keyboard Mapping & Library Evaluation
+# COSMEW TUI & Theme Engine — Upstream Research, Keyboard Mapping & Library Evaluation
 
 **Access date:** 2026-11-14
-**Scope:** Authorized Stage A–F implementation slice (**TUI1: FUTRYN Terminal UI, Advanced Theme Engine & Live ASCII Wallpapers**) building upon **PA1 (Provider & Authentication)**.
+**Scope:** Authorized Stage A–F implementation slice (**TUI1: COSMEW Terminal UI, Advanced Theme Engine & Live ASCII Wallpapers**) building upon **PA1 (Provider & Authentication)**.
 
 ---
 
@@ -81,7 +81,7 @@
 
 ### 2.1 Slash Commands Parity
 
-| Command | Aliases / Arguments | Behavior in FUTRYN TUI |
+| Command | Aliases / Arguments | Behavior in COSMEW TUI |
 |---|---|---|
 | `/help` | `/?` | Open keyboard & command reference overlay |
 | `/connect` | `/login [account]` | Open guided Provider & Account connection wizard overlay |
@@ -123,11 +123,11 @@
 
 ## 3. Theme Compatibility & Conversion Analysis
 
-| Source Format | Supported Fields | Conversion to FUTRYN Tokens | Unsupported / Refused Features |
+| Source Format | Supported Fields | Conversion to COSMEW Tokens | Unsupported / Refused Features |
 |---|---|---|---|
-| **FUTRYN Native JSON (`schemaVersion: 1`)** | Full 30 semantic tokens (`dark` & `light` variants), metadata, optional `wallpaper` preset & animation defaults | Direct 1:1 validated mapping via `themeManifestSchema` | Unknown schema versions (> 1) or unknown keys rejected |
-| **OpenCode Theme JSON** (`defs` + `theme`) | `defs` palette dictionary, `theme.*` (`primary`, `secondary`, `accent`, `error`, `warning`, `success`, `info`, `text`, `textMuted`, `background`, `backgroundPanel`, `backgroundElement`, `border`, `borderActive`, `borderSubtle`, `diff*`, `markdown*`, `syntax*`) | Resolves `defs` references for both `dark` and `light` modes and maps all 30 FUTRYN semantic tokens | None — 100% color & syntax fidelity preserved |
-| **Claude Desktop Themes JSON** (`id`, `name`, `tagline`, `bg`, `text`, `accent`, `vars`, `font`, `deco`, `wallpaper`, `css`) | `id`, `name`, `tagline`, `bg`, `text`, `accent`, `wallpaper` (if matching one of the 12 built-in safe scenes; `clawd` mapped to `futryn-spark`), `vars['wall-halo']`, `vars['wall-rim']`, `vars['cds-radius']` (mapped to border style: `0px` $\rightarrow$ sharp/square, $>0$ $\rightarrow$ rounded) | Algorithmic derivation of all 30 semantic tokens from `[bg, text, accent]` matching `extension/src/core.js` ramps and contrast rules | **Explicitly reported in `CompatibilityReport` and ignored/refused:** CSS font families (`font`), CSS box-shadows (`cds-shadow-*`), raw SVG `deco`, DOM CSS rules (`css`), and arbitrary `.js` scene code execution |
+| **COSMEW Native JSON (`schemaVersion: 1`)** | Full 30 semantic tokens (`dark` & `light` variants), metadata, optional `wallpaper` preset & animation defaults | Direct 1:1 validated mapping via `themeManifestSchema` | Unknown schema versions (> 1) or unknown keys rejected |
+| **OpenCode Theme JSON** (`defs` + `theme`) | `defs` palette dictionary, `theme.*` (`primary`, `secondary`, `accent`, `error`, `warning`, `success`, `info`, `text`, `textMuted`, `background`, `backgroundPanel`, `backgroundElement`, `border`, `borderActive`, `borderSubtle`, `diff*`, `markdown*`, `syntax*`) | Resolves `defs` references for both `dark` and `light` modes and maps all 30 COSMEW semantic tokens | None — 100% color & syntax fidelity preserved |
+| **Claude Desktop Themes JSON** (`id`, `name`, `tagline`, `bg`, `text`, `accent`, `vars`, `font`, `deco`, `wallpaper`, `css`) | `id`, `name`, `tagline`, `bg`, `text`, `accent`, `wallpaper` (if matching one of the 12 built-in safe scenes; `clawd` mapped to `cosmew-spark`), `vars['wall-halo']`, `vars['wall-rim']`, `vars['cds-radius']` (mapped to border style: `0px` $\rightarrow$ sharp/square, $>0$ $\rightarrow$ rounded) | Algorithmic derivation of all 30 semantic tokens from `[bg, text, accent]` matching `extension/src/core.js` ramps and contrast rules | **Explicitly reported in `CompatibilityReport` and ignored/refused:** CSS font families (`font`), CSS box-shadows (`cds-shadow-*`), raw SVG `deco`, DOM CSS rules (`css`), and arbitrary `.js` scene code execution |
 
 ---
 
@@ -144,13 +144,13 @@
 
 ## Default visual language (2026-11-15)
 
-The default theme `futryn-default` is monochrome and follows the terminal appearance. Dark terminals get black surfaces and white ink. Light terminals get white surfaces and black ink. Components still read `ThemeTokens` only. Before the first message, the original Fyn art is shown small and centered above a narrow composer card. A live thread uses the full terminal with the same inset on every side, and that same small Fyn sits on the composer. No web CSS, font, or script is loaded.
+The default theme `cosmew-default` is monochrome and follows the terminal appearance. Dark terminals get black surfaces and white ink. Light terminals get white surfaces and black ink. Components still read `ThemeTokens` only. Before the first message, the original Fyn art is shown small and centered above a narrow composer card. A live thread uses the full terminal with the same inset on every side, and that same small Fyn sits on the composer. No web CSS, font, or script is loaded.
 
 The older OpenCode-oriented slash/keyboard table above is historical. [Current Claude command audit, upstream revisions/doc hashes and explicit keyboard deviations](provider-connect-acceptance.md) are canonical for the Provider Connect rebuild. `/login`, `/model`, `/theme`, `/config`, `/resume` are primary; prior spellings remain aliases. Ctrl+M was replaced by Ctrl+L because ordinary terminals encode Ctrl+M as Enter. The native cell renderer remains in use; no exact OpenTUI compatibility claim is added.
 
 ## Codex chat presentation and miniature Fyn follow-up (2026-11-15)
 
-Reference: [Codex TUI styles](https://github.com/openai/codex/blob/65a5410f72dac1f4b40862c34ef0a8b71b12834a/codex-rs/tui/styles.md), `tui/src/streaming/render.rs`, `tui/src/bottom_pane/` and `config/src/types.rs`. Accessed 2026-11-15 through Context7's `/openai/codex` current source index; repository HEAD observed as `65a5410f72dac1f4b40862c34ef0a8b71b12834a`. The dynamic documentation index is not guaranteed to match every line of that HEAD. Adopted presentation conventions: left-aligned prompt marker, readable Markdown, quiet metadata, bottom composer and secondary keyboard/status text. FUTRYN keeps its canonical commands, theme tokens and original renderer; this is a visual adaptation, not a claim of full Codex feature parity.
+Reference: [Codex TUI styles](https://github.com/openai/codex/blob/65a5410f72dac1f4b40862c34ef0a8b71b12834a/codex-rs/tui/styles.md), `tui/src/streaming/render.rs`, `tui/src/bottom_pane/` and `config/src/types.rs`. Accessed 2026-11-15 through Context7's `/openai/codex` current source index; repository HEAD observed as `65a5410f72dac1f4b40862c34ef0a8b71b12834a`. The dynamic documentation index is not guaranteed to match every line of that HEAD. Adopted presentation conventions: left-aligned prompt marker, readable Markdown, quiet metadata, bottom composer and secondary keyboard/status text. COSMEW keeps its canonical commands, theme tokens and original renderer; this is a visual adaptation, not a claim of full Codex feature parity.
 
 The miniature companion now has a dedicated 14×10 logical-pixel pose instead of averaging the original 28×24 image into an unreadable thumbnail. Its ears, eyes, feet and tail remain inside a fixed canvas across states. Tail/tapping/blink/status animation respects the existing reduced-motion and focus controls. Layout reserves the entire six-row art/label block, falls back to a compact status header when space is limited, and omits the pet when the terminal cannot fit it. Busy feedback uses real processing/replying state and an Esc hint; no invented tool progress or reasoning trace is shown.
 

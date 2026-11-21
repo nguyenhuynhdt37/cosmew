@@ -1,8 +1,8 @@
-import {lstatSync} from 'node:fs';
-import {join} from 'node:path';
+import {lstatSync, readdirSync} from 'node:fs';
+import {isAbsolute, join, relative, sep} from 'node:path';
 import {z} from 'zod';
 import {readDecision, type ToolDispatcherOptions} from '../context';
-import {listWorkspaceFiles, type ResolvedPath, type WorkspaceRoot} from '@futryn/workspace';
+import {listWorkspaceFiles, type ResolvedPath, type WorkspaceRoot} from '@cosmew/workspace';
 import {LIMITS, clipBytes} from '../limits';
 import type {FileHits, GrepQuery} from './ripgrep';
 
@@ -19,7 +19,11 @@ export const globDescriptor = {
     type: 'object',
     properties: {
       pattern: {type: 'string', description: 'Glob pattern relative to path, e.g. "src/**/*.ts".'},
-      path: {type: 'string', description: 'Directory to search in, relative to the workspace root (default ".").'},
+      path: {
+        type: 'string',
+        description:
+          'Directory to search, relative to the workspace or an absolute path inside permissions.additionalDirectories (default ".").',
+      },
     },
     additionalProperties: false,
   },
@@ -53,7 +57,11 @@ export const grepDescriptor = {
     type: 'object',
     properties: {
       pattern: {type: 'string', description: 'Regular expression to search for.'},
-      path: {type: 'string', description: 'Directory to search in, relative to the workspace root (default ".").'},
+      path: {
+        type: 'string',
+        description:
+          'Directory to search, relative to the workspace or an absolute path inside permissions.additionalDirectories (default ".").',
+      },
       glob: {type: 'string', description: 'Only search files matching this glob, e.g. "**/*.ts" or "*.{ts,tsx}".'},
       type: {type: 'string', description: 'ripgrep file type, e.g. "ts", "js", "py", "rust", "go".'},
       ignoreCase: {type: 'boolean', description: 'Case-insensitive match.'},
@@ -152,24 +160,57 @@ export function formatGrep(
   };
 }
 
-/** Files under `base` (a resolved directory) that match `pattern`, as workspace-relative paths. */
+/** Files under a granted directory. Skips `.git` and does not follow symlinks. Paths are absolute. */
+function listGrantedFiles(root: string, deadline: number): {files: string[]; incomplete: boolean} {
+  const files: string[] = [];
+  let incomplete = false;
+  const walk = (dir: string) => {
+    if (Date.now() > deadline || files.length >= 50000) {
+      incomplete = true;
+      return;
+    }
+    let entries;
+    try {
+      entries = readdirSync(dir, {withFileTypes: true});
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.isSymbolicLink()) continue;
+      const absolute = join(dir, entry.name);
+      if (entry.isDirectory()) walk(absolute);
+      else if (entry.isFile()) files.push(absolute.split(sep).join('/'));
+      if (incomplete) return;
+    }
+  };
+  walk(root);
+  return {files, incomplete};
+}
+
+/** Files under `base` (a resolved directory or file) that match `pattern`. Project paths stay relative; granted paths are absolute. */
 export function candidateFiles(
   workspace: WorkspaceRoot,
   base: ResolvedPath,
   pattern: string | undefined,
   deadline: number,
 ): {files: string[]; incomplete: boolean} {
+  const gitInternal = (path: string) => path === '.git' || path.startsWith('.git/') || path.split('/').includes('.git');
   // A single file is its own candidate list (the glob is relative to a directory and does not apply).
-  if (base.kind === 'file')
-    return {
-      files: base.relative === '.git' || base.relative.startsWith('.git/') ? [] : [base.relative],
-      incomplete: false,
-    };
+  if (base.kind === 'file') return {files: gitInternal(base.relative) ? [] : [base.relative], incomplete: false};
+  if (base.root !== workspace.root) {
+    const listing = listGrantedFiles(base.absolute, deadline);
+    const glob = pattern ? new Bun.Glob(pattern) : null;
+    const files = listing.files.filter(absolute => {
+      const rel = relative(base.absolute, absolute).split(sep).join('/');
+      return !gitInternal(rel) && (!glob || glob.match(rel));
+    });
+    return {files, incomplete: listing.incomplete};
+  }
   const listing = listWorkspaceFiles(workspace, {deadline});
   const prefix = base.relative === '.' ? '' : base.relative + '/';
   const glob = pattern ? new Bun.Glob(pattern) : null;
   const files = listing.files.filter(
-    path => path.startsWith(prefix) && (!glob || glob.match(path.slice(prefix.length))),
+    path => path.startsWith(prefix) && !gitInternal(path) && (!glob || glob.match(path.slice(prefix.length))),
   );
   return {files, incomplete: listing.incomplete};
 }
@@ -184,9 +225,10 @@ export function runGlob(
   const {files, incomplete} = candidateFiles(workspace, base, input.pattern ?? '**/*', Date.now() + LIMITS.deadlineMs);
   const visible = newestFirst(
     workspace.root,
-    files.filter(
-      path => readDecision({stateDirectory, readPolicy}, path, `${workspace.root}/${path}`).effect !== 'deny',
-    ),
+    files.filter(path => {
+      const absolute = isAbsolute(path) ? path : join(workspace.root, path);
+      return readDecision({stateDirectory, readPolicy}, path, absolute).effect !== 'deny';
+    }),
   );
   const shown = visible.slice(0, LIMITS.results);
   const truncated = visible.length > shown.length || incomplete;

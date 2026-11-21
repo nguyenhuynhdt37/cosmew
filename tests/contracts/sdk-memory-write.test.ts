@@ -14,7 +14,6 @@ test('SDK writeMemory uses mediated memory: consent, schema, plan, read-only, de
   const app = startup(join(home, '.futryn'), {
     vault: memoryVault(),
     memoriesHome: home,
-    permissions: {sandbox: 'workspace-write', approval: 'on-request'},
   });
   const client = app.createFutrynClient(project);
   const entry = {
@@ -30,10 +29,10 @@ test('SDK writeMemory uses mediated memory: consent, schema, plan, read-only, de
     client.setMode('plan');
     await expect(client.writeMemory(entry)).rejects.toMatchObject({code: 'POLICY'});
     client.setMode('chat');
-    client.setPermissionPreset('read-only');
+    client.setPermissionMode('plan');
     expect((await client.writeMemory(entry)).status).toBe('denied');
     expect(client.memories()).toEqual([]);
-    client.setPermissionPreset('auto');
+    client.setPermissionMode('acceptEdits');
     expect((await client.writeMemory(entry)).status).toBe('ok');
     expect((await client.readMemory(entry.name)).content).toContain(entry.content);
     client.addPermissionRule('deny', 'Tool(memory)');

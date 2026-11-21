@@ -17,10 +17,11 @@ import {
 import {spawn, spawnSync} from 'node:child_process';
 import {join} from 'node:path';
 import {homedir, tmpdir} from 'node:os';
-import {NativeCommandRuntime, ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
-import {SessionGrants} from '@futryn/security';
-import type {ToolResult} from '@futryn/contracts';
+import {NativeCommandRuntime, ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
+import {sandboxConfig} from '../sandbox-config';
+import {SessionGrants} from '@cosmew/security';
+import type {ToolResult} from '@cosmew/contracts';
 import {observe, current, waitFor, dispose} from '../process-fixtures/observe';
 
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
@@ -36,7 +37,12 @@ const git = (root: string, ...args: string[]) =>
   );
 
 function harness(
-  options: {answer?: ApprovalDecision; escalation?: 'on-request' | 'never'; hideSecrets?: boolean} = {},
+  options: {
+    answer?: ApprovalDecision;
+    escalation?: 'on-request' | 'never';
+    hideSecrets?: boolean;
+    proxy?: {ensure(): Promise<string>};
+  } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-native-')));
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-native-outside-')));
@@ -57,10 +63,7 @@ function harness(
   );
   const grants = new SessionGrants();
   const prompts: ApprovalRequest[] = [];
-  const config = {
-    mode: 'workspace-write' as 'read-only' | 'workspace-write',
-    escalation: options.escalation ?? ('on-request' as 'on-request' | 'never'),
-  };
+  const config = sandboxConfig({allowUnsandboxed: options.escalation !== 'never'});
   let answer: ApprovalDecision | (() => ApprovalDecision) = options.answer ?? 'once';
   const dispatcher = new ToolDispatcher({
     workspace: new WorkspaceRoot(root),
@@ -68,6 +71,7 @@ function harness(
     commands: runtime,
     stateDirectory: state,
     sandbox: () => ({...config}),
+    ...(options.proxy ? {proxy: options.proxy} : {}),
     redact: s => s,
     approve: async r => {
       prompts.push(r);
@@ -144,7 +148,7 @@ nativeTest(
 );
 
 nativeTest(
-  'B 7-12: outside writes, symlinks, the home directory, Futryn state, hidden secrets and the network are enforced by Seatbelt',
+  'B 7-12: outside writes, symlinks, home writes, Futryn state, hidden secrets and the network are enforced by Seatbelt',
   async () => {
     const h = harness({hideSecrets: true});
     expect(h.runtime.availability().ok).toBe(true);
@@ -158,7 +162,7 @@ nativeTest(
       cmd: String.raw`set +e
   echo x > ../escape-$$.txt 2>/dev/null && echo OUTSIDE_WRITE
   echo x > to-outside/pwned 2>/dev/null && echo SYMLINK_WRITE
-  ls to-home/ >/dev/null 2>&1 && echo HOME_LISTED; cat to-home/.zshrc 2>/dev/null | head -c 1 | grep -q . && echo HOME_LISTED
+  ls to-home/ >/dev/null 2>&1 && echo HOME_READABLE
   echo x > "$(cd to-home && pwd -P 2>/dev/null)/fyn-native-escape" 2>/dev/null && echo HOME_WRITE
   cat .env 2>/dev/null; cat .env.example; rm .env 2>/dev/null && echo SECRET_REMOVED
   cat .fyn-state/credentials.json 2>/dev/null; cat .futryn/session 2>/dev/null; touch .fyn-state/x 2>/dev/null && echo STATE_WRITE
@@ -169,7 +173,6 @@ nativeTest(
     for (const leak of [
       'OUTSIDE_WRITE',
       'SYMLINK_WRITE',
-      'HOME_LISTED',
       'HOME_WRITE',
       'TOPSECRET',
       'SECRET_REMOVED',
@@ -180,6 +183,8 @@ nativeTest(
     ])
       expect(r.content).not.toContain(leak);
     expect(r.content).toContain('TEMPLATE=1');
+    // Reads are open (ADR 0061): only credential directories and secrets are hidden; writes are not.
+    expect(r.content).toContain('HOME_READABLE');
     expect(r.content).toContain('NETWORK_DENIED');
     expect(existsSync(join(h.outside, 'pwned'))).toBe(false);
     expect(existsSync(join(homedir(), 'fyn-native-escape'))).toBe(false);
@@ -190,45 +195,41 @@ nativeTest(
 );
 
 nativeTest(
-  'B 12-15 / E 32-35: network is a separate approval; refusal and never run nothing; approvals bind the sandbox mode',
+  'B 12-15 / E 32-35: dangerouslyDisableSandbox is a user decision (and refusable); approvals bind the sandbox mode',
   async () => {
     const h = harness({answer: 'deny'});
     expect(h.runtime.availability().ok).toBe(true);
-    const network = {
-      sandbox_permissions: 'with_additional_permissions',
-      additional_permissions: {network: {enabled: true}},
-      justification: 'Install dependencies',
-    };
-    expect((await h.exec({cmd: 'touch RAN', ...network})).status).toBe('denied');
-    expect(existsSync(join(h.root, 'RAN'))).toBe(false);
-    expect(h.prompts.at(-1)!.network).toBe(true);
-    // Escalation to no sandbox (ADR 0053) is a user decision: denied means nothing runs.
-    const refused = await h.exec({cmd: 'touch RAN', sandbox_permissions: 'require_escalated', justification: 'x'});
+    // The escape hatch always asks; denied means nothing runs.
+    const refused = await h.exec({cmd: 'touch RAN', dangerouslyDisableSandbox: true, justification: 'x'});
     expect(refused.status).toBe('denied');
     expect(h.prompts.at(-1)!.unsandboxed).toBe(true);
     expect(existsSync(join(h.root, 'RAN'))).toBe(false);
+    // Approved once: that one command runs with no sandbox (a file outside the workspace can be written).
     h.setAnswer('once');
-    const allowed = await h.exec({
-      cmd: 'bun -e \'const r=await fetch("https://example.com");console.log("STATUS",r.status)\'',
-      ...network,
-    });
-    expect(allowed.content).toContain('STATUS 200');
+    const target = join(h.outside, 'escaped');
+    const allowed = await h.exec({cmd: `touch ${target}`, dangerouslyDisableSandbox: true, justification: 'x'});
+    expect(allowed.status).toBe('ok');
+    expect(existsSync(target)).toBe(true);
+    // allowUnsandboxedCommands false: refused without asking and nothing runs.
     const never = harness({escalation: 'never'});
-    expect((await never.exec({cmd: 'touch RAN', ...network})).status).toBe('denied');
-    expect(never.prompts).toHaveLength(0);
+    const before = never.prompts.length;
+    expect((await never.exec({cmd: 'touch RAN', dangerouslyDisableSandbox: true, justification: 'x'})).status).toBe(
+      'denied',
+    );
+    expect(never.prompts).toHaveLength(before);
     h.setAnswer('session');
     await h.exec({cmd: 'touch b'});
-    const before = h.prompts.length;
+    const asked = h.prompts.length;
     await h.exec({cmd: 'touch b'});
-    expect(h.prompts.length).toBe(before);
-    h.config.mode = 'read-only';
+    expect(h.prompts.length).toBe(asked);
+    h.config.readOnly = true;
     const ro = await h.exec({cmd: 'touch c'});
-    expect(h.prompts.length).toBe(before + 1);
+    expect(h.prompts.length).toBe(asked + 1);
     expect(ro.code).toBe('SANDBOX_DENIED');
     expect(existsSync(join(h.root, 'c'))).toBe(false);
-    h.config.mode = 'workspace-write';
+    h.config.readOnly = false;
     h.setAnswer(() => {
-      h.config.mode = 'read-only';
+      h.config.readOnly = true;
       return 'once';
     });
     const raced = await h.exec({cmd: 'touch d'});
@@ -437,12 +438,7 @@ nativeTest(
       join(h.root, 'server.ts'),
       'const s=Bun.serve({port:0,hostname:"127.0.0.1",fetch:()=>new Response("SERVED")});console.log("LISTENING",s.port);process.on("SIGINT",()=>{console.log("SHUTDOWN");process.exit(0);});',
     );
-    const network = {
-      sandbox_permissions: 'with_additional_permissions',
-      additional_permissions: {network: {enabled: true}},
-      justification: 'Run the dev server',
-    };
-    const started = await h.exec({cmd: 'bun server.ts', yield_time_ms: 2000, ...network});
+    const started = await h.exec({cmd: 'bun server.ts', yield_time_ms: 2000});
     const sid = sessionOf(started)!;
     expect(started.content).toContain('LISTENING');
     const port = Number(/LISTENING (\d+)/.exec(started.content)![1]);

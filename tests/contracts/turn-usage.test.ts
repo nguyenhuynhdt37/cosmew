@@ -2,12 +2,12 @@ import {expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {ModelPort, Usage} from '@futryn/contracts';
-import {Conversation} from '@futryn/core';
-import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import type {ModelPort, Usage} from '@cosmew/contracts';
+import {Conversation} from '@cosmew/core';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 
 async function roundTrip(usages: Usage[]) {
   const root = mkdtempSync(join(tmpdir(), 'futryn-turn-usage-'));

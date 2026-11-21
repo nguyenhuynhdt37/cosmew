@@ -2,7 +2,7 @@ import {existsSync, readFileSync, statSync} from 'node:fs';
 import {dirname, extname, isAbsolute, join, relative} from 'node:path';
 
 /**
- * Language servers Futryn can use (ADR 0043): four languages, one table row each, after OpenCode
+ * Language servers Cosmew can use (ADR 0043): four languages, one table row each, after OpenCode
  * v1.19.5 `packages/opencode/src/lsp/server.ts` (read 2026-11-17). Nothing is downloaded or
  * installed: a server is the project's own `node_modules/.bin` entry or an absolute program on
  * PATH outside the workspace, and it always runs inside the command sandbox (read-only, no network).

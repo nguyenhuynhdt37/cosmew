@@ -10,7 +10,7 @@ Task 03A foundation ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md
 
 > Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.
 
-**Not implemented.** Mỗi đường dẫn dưới đây là placeholder source 0 byte; mô tả là trách nhiệm dự kiến. `index.ts` là public entry tương lai; mọi file khác private trừ ADR công bố subpath. TUI app.tsx là UI entry, không API dùng cho core. Import allowlist chính xác nằm tại [dependency rules](dependency-rules.md); owner trong bảng không cho phép package khác deep-import.
+**Not implemented.** 2026-11-18: các file nguồn 0 byte đã xoá khỏi đĩa (kể cả `packages/extensions`, `compat-*`, `testkit`, `apps/server`, `apps/web`, `apps/desktop` và stub không được import trong package thật). Bảng dưới là trách nhiệm dự kiến, không còn file tương ứng. `index.ts` là public entry tương lai; mọi file khác private trừ ADR công bố subpath. TUI app.tsx là UI entry, không API dùng cho core. Import allowlist chính xác nằm tại [dependency rules](dependency-rules.md); owner trong bảng không cho phép package khác deep-import.
 
 ## Public/private và thay đổi cần ADR
 
@@ -306,7 +306,7 @@ The Phase 0 file table above is retained as the original roadmap. Actual nonempt
 | apps/cli | index/input/auth-wizard/bootstrap/startup: command parsing, shared chat/wizard input, hidden secret input, guided login/logout and root wiring |
 | tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
 
-New package-internal files are private; all cross-package imports use `@futryn/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
+New package-internal files are private; all cross-package imports use `@cosmew/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
 
 
 ## PA1/TUI1 Provider Connect rebuild (ADR 0007)
@@ -348,6 +348,6 @@ SUB1 files: `apps/cli/src/subscriptions/{host,rpc,login}.ts` own composition-sid
 
 Activated files: contracts/recovery.ts defines durable events/checkpoints; core/context/builder.ts normalizes model history and estimates/truncates context; core/context/compaction.ts implements extractive snapshots; core/agent/progress.ts tracks evidence and auxiliary continuity; persistence/event-store.ts owns ordered journal writes and legacy reconstruction. Paths are under packages/*/src. Core uses only contracts/ports; CLI composes model metadata/redaction/mode; SDK refreshes canonical history after all outcomes. No new package or dependency was added.
 
-## Contained execution ownership (ADR0032)
+## Command execution ownership (ADR 0035, 0062)
 
-Tools exec/container.ts owns local Docker lifecycle and opaque sessions; exec/container-supervisor.ts is trusted PID1 code; handlers/stdin.ts uses the existing orchestrator; runtimes/process.ts shares final result projection. Workspace execution-snapshot.ts uses descriptor-relative secure-files binary/directory reads. Core pumps domain progress and owns cancellation; CLI selects backend/forwards callbacks; TUI displays transient output. No provider SDK or foreign agent runtime owns native execution.
+The Docker runtime and `execution-snapshot.ts` were removed. `packages/tools/src/exec/native.ts` owns Seatbelt and bubblewrap launches; `handlers/command.ts` and the orchestrator own approval. Core pumps progress and owns cancellation; the CLI selects the runtime. No provider SDK owns execution.

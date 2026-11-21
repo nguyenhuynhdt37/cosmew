@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {appendProvider, loadHostConfig, removeProvider, renderProviderToml} from '@futryn/models';
+import {appendProvider, loadHostConfig, removeProvider, renderProviderToml} from '@cosmew/models';
 
 const load = (toml: string, reserved: string[] = ['chatgpt']) =>
   loadHostConfig(Bun.TOML.parse(toml), new Set(reserved));
@@ -151,4 +151,38 @@ test('render, append and remove keep the rest of the user file and round-trip th
   expect(removed).not.toContain('router9');
   expect(load(removed).providers.map(p => p.provider.id)).toEqual(['gw']);
   expect(removeProvider(removed, 'router9')).toBe(removed);
+});
+
+test('reasoning declarations parse and round-trip with strict nested validation', () => {
+  const head = '[model_providers.x]\nbase_url = "https://h.example/v1"\n';
+  const good = load(
+    head +
+      '[model_providers.x.reasoning]\nefforts = ["low", "high"]\n[model_providers.x.reasoning.models."grok-4.7"]\nsupported = true\nefforts = ["high"]\n[model_providers.x.reasoning.models.disabled]\nsupported = false\n',
+  );
+  expect(good.diagnostics).toEqual([]);
+  expect(good.providers[0]!.provider.reasoning).toEqual({
+    efforts: ['low', 'high'],
+    models: {'grok-4.7': {supported: true, efforts: ['high']}, disabled: {supported: false}},
+  });
+  expect(load(renderProviderToml(good.providers[0]!)).providers[0]!.provider).toEqual(good.providers[0]!.provider);
+  for (const bad of [
+    {efforts: []},
+    {efforts: ['low', 'low']},
+    {efforts: ['']},
+    {efforts: ['a'.repeat(41)]},
+    {efforts: Array.from({length: 21}, (_, i) => `level${i}`)},
+    {efforts: ['low high']},
+    {efforts: [1]},
+    {efforts: ['default']},
+    {supported: 'yes'},
+    {unknown: true},
+    {supported: false, efforts: ['high']},
+    {models: {'bad model id': {supported: true}}},
+    {models: {valid: {effort: ['low']}}},
+    {models: {valid: {supported: false, efforts: ['low']}}},
+  ]) {
+    const result = loadHostConfig({model_providers: {x: {base_url: 'https://h.example/v1', reasoning: bad}}});
+    expect({bad, count: result.providers.length}).toEqual({bad, count: 0});
+    expect(result.diagnostics[0]?.message).toContain('reasoning');
+  }
 });

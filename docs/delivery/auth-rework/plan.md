@@ -4,11 +4,11 @@ Ngày lập: 2026-11-17. Trạng thái: **đã duyệt 2026-11-17** — user đ�
 
 ## 0. Mục tiêu
 
-Mọi model Futryn dùng đều chạy **agent loop của Futryn** (backend `hannes`: tool, sandbox, quyền, LSP của Futryn). Không còn chế độ chat-only vô dụng hay `delegated`. Người dùng nối được **provider bất kỳ** bằng cấu hình host (URL, giao thức, header, khoá), như `model_providers` của Codex.
+Mọi model Cosmew dùng đều chạy **agent loop của Cosmew** (backend `hannes`: tool, sandbox, quyền, LSP của Cosmew). Không còn chế độ chat-only vô dụng hay `delegated`. Người dùng nối được **provider bất kỳ** bằng cấu hình host (URL, giao thức, header, khoá), như `model_providers` của Codex.
 
 ## 1. Hiện trạng và bằng chứng
 
-- 5 runtime subscription (`packages/contracts/src/models.ts:18`, `executionBackendFor` dòng 500): chỉ `codex` có tool Futryn (`codex-bridge`); `copilot`, `gemini-cli`, `qwen-code`, `grok-build` là `chat-only` trừ khi `/backend delegated` (tool riêng của runtime, ngoài sandbox Futryn).
+- 5 runtime subscription (`packages/contracts/src/models.ts:18`, `executionBackendFor` dòng 500): chỉ `codex` có tool Cosmew (`codex-bridge`); `copilot`, `gemini-cli`, `qwen-code`, `grok-build` là `chat-only` trừ khi `/backend delegated` (tool riêng của runtime, ngoài sandbox Cosmew).
 - UAT 2026-11-17 với `grok-subscription`: 5 lượt, 0 tool call; status báo `toolsEnabled: true` + 15 tool trong khi backend `chat-only` (lỗi hiển thị).
 - Provider tuỳ chỉnh hiện có: `providerSchema` = `{protocol: chat|responses|anthropic|gemini, baseURL, auth: api-key|none, catalog, timeoutMs, streamIdleTimeoutMs, streamUsage}`; thêm bằng `fyn providers add`. Không có header, query param, env header, retry riêng, lệnh lấy token, file cấu hình.
 - Codex `model-provider-info/src/lib.rs` (pin `090be4d`): `name, base_url, env_key, env_key_instructions, wire_api, query_params, http_headers, env_http_headers, request_max_retries, stream_max_retries, stream_idle_timeout_ms, auth (lệnh lấy token), model_catalog_url, requires_openai_auth`.
@@ -24,8 +24,8 @@ Mọi model Futryn dùng đều chạy **agent loop của Futryn** (backend `han
 |---|---|---|
 | Q1 | Gỡ runtime Gemini CLI, Qwen Code, Copilot CLI, Grok Build? Tài khoản đang có thì sao? | Gỡ. Lần khởi động sau: thông báo, đăng xuất và xoá credentials/profile của các tài khoản đó; tài khoản mặc định chuyển sang tài khoản còn dùng được |
 | Q2 | ChatGPT: thay `codex-bridge` bằng API thuần hay giữ cả hai? | Thêm API thuần làm mặc định; giữ `codex-bridge` như lựa chọn dự phòng tới khi API thuần được thử thật, rồi gỡ |
-| Q3 | Định dạng cấu hình host | `~/.futryn/config.toml`, bảng `[model_providers.<id>]` dùng đúng tên trường Codex (Bun đọc TOML sẵn, không thêm dependency) |
-| Q4 | Copilot, SuperGrok | Làm bước xác minh trước (A5); chỉ code khi có client ID hợp lệ của Futryn hoặc người dùng tự cung cấp client ID của họ |
+| Q3 | Định dạng cấu hình host | `~/.cosmew/config.toml`, bảng `[model_providers.<id>]` dùng đúng tên trường Codex (Bun đọc TOML sẵn, không thêm dependency) |
+| Q4 | Copilot, SuperGrok | Làm bước xác minh trước (A5); chỉ code khi có client ID hợp lệ của Cosmew hoặc người dùng tự cung cấp client ID của họ |
 
 ## 3. Workstreams
 
@@ -36,7 +36,7 @@ Gỡ backend `delegated`, `/backend delegated`, `setDelegatedAgent`, ADR 0027 pe
 Gỡ provider `github-copilot` (runtime CLI), `google-subscription`, `qwen-subscription`, `grok-subscription` và code runtime tương ứng (`apps/cli/src/subscriptions/*` phần ACP/Copilot, `packages/models/src/subscription.ts`, `packages/security/src/subscription-policy.ts` phần liên quan). Migration persistence: tài khoản có `providerId` bị gỡ → xoá credential vault + profile runtime, xoá account, ghi thông báo một lần; nếu là tài khoản active → chọn tài khoản hợp lệ khác hoặc mở `/login`. Test: migration trên DB có các tài khoản đó; credentials thật sự bị xoá; tài khoản khác không đổi.
 
 ### A3 — Cấu hình host cho provider bất kỳ (M–L)
-- File `~/.futryn/config.toml` (theo `FUTRYN_HOME`), **chỉ cấp người dùng**; config trong repo không được khai báo provider (tránh repo lạ chuyển prompt tới host của kẻ tấn công hoặc chạy lệnh lấy token).
+- File `~/.cosmew/config.toml` (theo `COSMEW_HOME`), **chỉ cấp người dùng**; config trong repo không được khai báo provider (tránh repo lạ chuyển prompt tới host của kẻ tấn công hoặc chạy lệnh lấy token).
 - `[model_providers.<id>]`: `name`, `base_url` (https; http chỉ cho loopback), `wire_api` = `chat|responses|anthropic|gemini`, `env_key`, `env_key_instructions`, `query_params`, `http_headers` (không chứa secret — từ chối giá trị trông như token), `env_http_headers`, `request_max_retries`, `stream_max_retries`, `stream_idle_timeout_ms`, `models` (danh sách tay) hoặc `model_catalog_url`, `[model_providers.<id>.auth] command/args/timeout_ms` (lệnh lấy bearer token, chạy trực tiếp không qua shell, ngoài sandbox vì là cấu hình của chính người dùng; output không log; cache theo thời hạn).
 - Không cho token dạng chữ trong file (luật "không plaintext credential"); khoá API dùng `env_key` hoặc keyring (`fyn auth login --provider <id>`).
 - Nạp lúc khởi động vào registry với nguồn `config`; lỗi cấu hình hiện trong `/doctor` và `fyn providers list`, không chặn khởi động; giới hạn retry/timeout theo Codex.
@@ -46,7 +46,7 @@ Gỡ provider `github-copilot` (runtime CLI), `google-subscription`, `qwen-subsc
 - Test: parse/validate (field lạ, URL http không loopback, header có token), merge với preset, header/query đến đúng request (fixture server), một gateway giả kiểu 9Router (path prefix + header + `/models` + tên model `vendor/model`) chạy được một lượt agent có tool, lệnh token chạy không qua shell và timeout, config trong repo bị bỏ qua, `/doctor` báo lỗi.
 
 ### A4 — ChatGPT API thuần (M)
-- Đăng nhập "Sign in with ChatGPT": OAuth `auth.openai.com` + PKCE, đăng ký client động của Futryn (không dùng client của OpenCode/Codex), scope `chatgpt.tokens.use.direct`, refresh token trong keyring; gọi `https://api.openai.com/v1` (Responses) như API key → backend `hannes`.
+- Đăng nhập "Sign in with ChatGPT": OAuth `auth.openai.com` + PKCE, đăng ký client động của Cosmew (không dùng client của OpenCode/Codex), scope `chatgpt.tokens.use.direct`, refresh token trong keyring; gọi `https://api.openai.com/v1` (Responses) như API key → backend `hannes`.
 - Chi tiết endpoint đăng ký/token lấy từ `chatgpt.ts` của OpenCode → **Needs verification** bằng một lần đăng nhập thật; nếu đăng ký động không chấp nhận client mới → dừng, báo user.
 - Giữ `codex-bridge` theo Q2.
 - Test: luồng OAuth với server giả (PKCE, callback, hủy giữa chừng xoá credential), refresh, 401 → yêu cầu đăng nhập lại.
@@ -59,10 +59,10 @@ Gỡ provider `github-copilot` (runtime CLI), `google-subscription`, `qwen-subsc
 - Preset `deepseek`: `https://api.deepseek.com`, giao thức `chat`, API key, `stream_idle_timeout_ms = 900000`.
 - Contract: lưu phần suy nghĩ của assistant theo tin nhắn (`reasoning` tuỳ chọn, redact, không hiển thị lại) để adapter gửi lại `reasoning_content` cho provider yêu cầu (DeepSeek; cờ `replayReasoning` theo provider/preset hoặc `config.toml`).
 - Usage: đọc `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`.
-- Test: fixture server kiểm tra `reasoning_content` có trong request lượt sau khi có tool call; usage cache; timeout. Live (nếu user có key) sau `FUTRYN_LIVE_DEEPSEEK=1`.
+- Test: fixture server kiểm tra `reasoning_content` có trong request lượt sau khi có tool call; usage cache; timeout. Live (nếu user có key) sau `COSMEW_LIVE_DEEPSEEK=1`.
 
 ### A7 — Status/UX và dọn dẹp (S)
-- Sửa lỗi UAT: status chỉ liệt kê tool khi backend thật sự dùng tool Futryn; `toolsEnabled` phản ánh backend.
+- Sửa lỗi UAT: status chỉ liệt kê tool khi backend thật sự dùng tool Cosmew; `toolsEnabled` phản ánh backend.
 - `/login` sắp xếp: API key (OpenAI, Anthropic, Gemini, OpenRouter, xAI, DeepSeek, Ollama), subscription (ChatGPT; Copilot/SuperGrok nếu A5 đạt), Provider tuỳ chỉnh.
 - Docs: `CLAUDE.md`, `AGENTS.md`, `docs/delivery/subscription-auth.md`, ADR mới (0045: gỡ delegated + runtime chat-only; 0046: cấu hình host; 0047: ChatGPT/Copilot/SuperGrok API thuần; 0048: DeepSeek reasoning replay).
 

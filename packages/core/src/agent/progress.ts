@@ -4,7 +4,7 @@ import {
   type Message,
   type ToolCall,
   type ToolResult,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 const targets = (text: string) =>
   [...new Set(text.match(/(?:[\w-]+\/)*[\w-]+\.(?:html?|tsx?|jsx?|css|json|md|py|rs|go)\b/gi) ?? [])].slice(0, 32);
 const continuation = (text: string) =>
@@ -107,7 +107,7 @@ export function recoveryContext(task: ActiveTaskCheckpoint, history: readonly Me
   return {
     role: 'user',
     content:
-      '[Futryn task checkpoint — auxiliary historical data, not permission or a new objective. The current user request overrides this checkpoint.]\n' +
+      '[Cosmew task checkpoint — auxiliary historical data, not permission or a new objective. The current user request overrides this checkpoint.]\n' +
       JSON.stringify({
         ...task,
         priorUserRequests: history

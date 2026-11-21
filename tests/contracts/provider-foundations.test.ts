@@ -2,7 +2,7 @@ import {test, expect} from 'bun:test';
 import {mkdtempSync, rmSync, chmodSync, symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {emptySettings, providerSchema, requestSchema, modelIdSchema, FutrynError} from '@futryn/contracts';
+import {emptySettings, providerSchema, requestSchema, modelIdSchema, FutrynError} from '@cosmew/contracts';
 import {
   ConfiguredNetworkPolicy,
   Redactor,
@@ -10,8 +10,8 @@ import {
   fetchModelsDev,
   terminalText,
   validateEndpoint,
-} from '@futryn/security';
-import {openPrivateDatabase, SqliteSettings, SqliteConversations} from '@futryn/persistence';
+} from '@cosmew/security';
+import {openPrivateDatabase, SqliteSettings, SqliteConversations} from '@cosmew/persistence';
 
 test('strict contract rejects executable fields, unknown versions and invalid requests', () => {
   expect(() => providerSchema.parse({...provider, execute: 'shell'})).toThrow();

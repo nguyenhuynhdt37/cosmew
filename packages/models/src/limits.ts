@@ -1,4 +1,4 @@
-import {FutrynError, type Usage} from '@futryn/contracts';
+import {FutrynError, type Usage} from '@cosmew/contracts';
 
 /** One spending or quota limit as reported by a provider API (never estimated locally). */
 export interface ProviderLimitItem {

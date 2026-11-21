@@ -15,5 +15,3 @@ export interface QuestionDialogState {
   answers: QuestionAnswerState[];
   error?: string;
 }
-
-export const createQuestionDialogState = (): QuestionDialogState => ({questionId: null, tab: 0, answers: []});

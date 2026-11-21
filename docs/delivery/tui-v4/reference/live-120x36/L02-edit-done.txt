@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|⏺ ls -la lists 5 entries:                                         │1 file changed +1 -1               source: Current ▾
+02|                                                                  │
+03|  1. . (the current directory)                                    │a.txt                                          +1 -1
+04|  2. .. (the parent directory)                                    │
+05|  3. .git                                                         │────────────────────────────────────────────────────
+06|  4. a.txt                                                        │a.txt                                        [ ask ]
+07|  5. index.ts                                                     │────────────────────────────────────────────────────
+08|                                                                  │ 1 -hello
+09|  Leaving out . and .., the directory holds 3 items: .git, a.txt  │ 1 +HELLO
+10|  and index.ts.                                                   │ 2  world
+11|                                                                  │
+12|  The output also had no total line and used a different format   │
+13|  from standard ls. Your ls is probably aliased to another tool,  │
+14|  such as eza. That doesn't change the count.                     │
+15|                                                                  │
+16|✻ Crunched for 8s · done 11:00 PM                                 │
+17|                                                                  │
+18|❯ In a.txt replace the word hello with HELLO.                     │
+19|                                                                  │
+20|  Read 1 file                                                     │
+21|                                                                  │
+22|⏺ Update(a.txt)                                                   │
+23|  ⎿  Added 1 line, removed 1 line                                 │
+24|      1 -hello                                                    │
+25|      1 +HELLO                                                    │
+26|      2  world                                                    │
+27|                                                                  │
+28|· Simmering… (7s · ↓ 279 tokens)                                  │
+29|  ⎿  Tip: Send a message mid-task to steer Claude                 │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

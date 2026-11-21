@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|❯ /help
+06|  ⎿  Closed help
+07|
+08|❯ /config
+09|  ⎿  Closed config
+10|
+11|
+12|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+13|  Settings  Status   Config   Usage   Stats
+14|
+15|  Workspace:         /private/tmp/claude-502/-Users-huynh-codes-hannes/4898d007-8a7c-4c60-85cb-422
+16|  ec87295f6/scratchpad/demo-g3b
+17|  Session ID:        Not started
+18|
+19|  Provider:          xAI Grok
+20|  Account:           xai
+21|  Login method:      keyring
+22|
+23|  Model:             grok-4.7
+24|  Permissions:       accept edits · sandbox on · 0 pending
+25|  Backend:           Cosmew agent · Cosmew tools
+26|  MCP servers:       Not implemented · /mcp
+27|  Setting sources:   User settings, project settings
+28|
+29|  ←/→ to switch · Esc to close

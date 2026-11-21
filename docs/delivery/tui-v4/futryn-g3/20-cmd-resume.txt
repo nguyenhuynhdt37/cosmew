@@ -1,0 +1,25 @@
+00|❯ /help
+01|  ⎿  Closed help
+02|
+03|❯ /config
+04|  ⎿  Closed config
+05|
+06|❯ /status
+07|  ⎿  Closed status
+08|
+09|❯ /cost
+10|  ⎿  Closed cost
+11|
+12|❯ /permissions
+13|  ⎿  Closed permissions
+14|
+15|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+16|  Resume session
+17|  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+18|  │ ⌕ Search…                                                                                    │
+19|  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+20|    demo-g3b
+28|
+29|  Ctrl+N to start a new session · ↑/↓ to navigate · Enter to resume · Esc to close
+
+(session rows redacted: they listed the real user history)

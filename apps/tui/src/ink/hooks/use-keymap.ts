@@ -1,44 +1,37 @@
-import {useInput, type Key} from 'ink';
-import {useInputEnabled} from './input-scope';
+import {useKeybindings, type ContextHandlers} from './keymap';
+import type {Keystroke} from './keymap';
 
-/** Shared source for dispatch and help; feature inputs must disable themselves behind overlays. */
-export const KEYMAP = [
-  {action: 'close', keys: 'Esc', label: 'Close overlay / interrupt'},
-  {action: 'submit', keys: 'Enter', label: 'Submit / select'},
-  {action: 'newline', keys: 'Shift+Enter', label: 'New line'},
-  {action: 'previous', keys: '↑', label: 'Previous item'},
-  {action: 'next', keys: '↓', label: 'Next item'},
-  {action: 'expand', keys: 'Ctrl+O', label: 'Expand / collapse output'},
-  {action: 'history', keys: 'Ctrl+R', label: 'Search history'},
-  {action: 'permissions', keys: 'Shift+Tab', label: 'Cycle permission preset'},
-  {action: 'exit', keys: 'Ctrl+C', label: 'Exit'},
-] as const;
-export type KeyAction = (typeof KEYMAP)[number]['action'];
+/**
+ * Legacy vocabulary of simple dialogs (navigate, choose, close), mapped onto the central keymap: a handler runs for the
+ * keys the Select/Chat/Global contexts bind to the matching action, including user remaps. Letter keys (j/k) are not
+ * routed here because many of these dialogs share the screen with a text field; `ListPicker` opts in explicitly.
+ */
+export type KeyAction =
+  'close' | 'submit' | 'newline' | 'previous' | 'next' | 'expand' | 'history' | 'permissions' | 'exit';
 export type KeyHandlers = Partial<Record<KeyAction, () => void>>;
-export function keyAction(input: string, key: Key): KeyAction | undefined {
-  if (key.eventType === 'release') return;
-  if (key.ctrl && !key.meta && !key.shift) {
-    if (input === 'c') return 'exit';
-    if (input === 'o') return 'expand';
-    if (input === 'r') return 'history';
-    return;
-  }
-  if (key.ctrl || key.meta || key.super || key.hyper) return;
-  if (key.escape) return 'close';
-  if (key.return) return key.shift ? 'newline' : 'submit';
-  if (key.upArrow) return 'previous';
-  if (key.downArrow) return 'next';
-  if (key.tab && key.shift) return 'permissions';
-  return;
-}
+const arrowsOnly = (fn: () => void) => (stroke: Keystroke) => {
+  if (stroke.key === 'j' || stroke.key === 'k') return false;
+  fn();
+};
+const plain = (fn: () => void) => () => {
+  fn();
+};
 export function useKeymap(handlers: KeyHandlers, options: {isActive?: boolean} = {}): void {
-  const isActive = useInputEnabled(options.isActive);
-  useInput(
-    (input, key) => {
-      if (!isActive) return;
-      const action = keyAction(input, key);
-      if (action) handlers[action]?.();
-    },
-    {isActive: isActive},
-  );
+  const map: ContextHandlers = {};
+  const select: Record<string, (stroke: Keystroke) => boolean | void> = {};
+  if (handlers.previous) select['select:previous'] = arrowsOnly(handlers.previous);
+  if (handlers.next) select['select:next'] = arrowsOnly(handlers.next);
+  if (handlers.submit) select['select:accept'] = plain(handlers.submit);
+  if (handlers.close) select['select:cancel'] = plain(handlers.close);
+  if (Object.keys(select).length) map.Select = select;
+  const global: Record<string, (stroke: Keystroke) => boolean | void> = {};
+  if (handlers.expand) global['app:toggleTranscript'] = plain(handlers.expand);
+  if (handlers.history) global['history:search'] = plain(handlers.history);
+  if (handlers.exit) global['app:interrupt'] = plain(handlers.exit);
+  if (Object.keys(global).length) map.Global = global;
+  const chat: Record<string, (stroke: Keystroke) => boolean | void> = {};
+  if (handlers.permissions) chat['chat:cycleMode'] = plain(handlers.permissions);
+  if (handlers.newline) chat['chat:newline'] = plain(handlers.newline);
+  if (Object.keys(chat).length) map.Chat = chat;
+  useKeybindings(map, {isActive: options.isActive});
 }

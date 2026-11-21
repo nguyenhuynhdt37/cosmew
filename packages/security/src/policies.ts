@@ -1,4 +1,4 @@
-import {FutrynError, providerSchema, type Account, type NetworkPolicy, type Provider} from '@futryn/contracts';
+import {FutrynError, providerSchema, type Account, type NetworkPolicy, type Provider} from '@cosmew/contracts';
 
 export function validateEndpoint(input: string): string {
   let url: URL;

@@ -14,8 +14,8 @@ import {
 import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {NativeCommandRuntime} from '@futryn/tools';
-import {GitWorktrees, WorktreeError} from '@futryn/workspace';
+import {NativeCommandRuntime} from '@cosmew/tools';
+import {GitWorktrees, WorktreeError} from '@cosmew/workspace';
 
 const clean: (() => void | Promise<void>)[] = [];
 afterEach(async () => {

@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|  HELLO                                                           │1 file changed +1 -1               source: Current ▾
+02|  world                                                           │
+03|                                                                  │a.txt                                          +1 -1
+04|✻ Crunched for 8s · done 11:02 PM                                 │
+05|                                                                  │────────────────────────────────────────────────────
+06|❯ Use the AskUserQuestion tool to ask me which color I prefer,    │a.txt                                        [ ask ]
+07|  red or blue, then reply with my choice.                         │────────────────────────────────────────────────────
+08|                                                                  │ 1 -hello
+09|⏺ Answered Claude's questions:                                    │ 1 +HELLO
+10|  ⎿  · Which color do you prefer, red or blue? → Red              │ 2  world
+11|                                                                  │
+12|⏺ You chose red.                                                  │
+13|                                                                  │
+14|✻ Brewed for 4s · done 11:02 PM                                   │
+15|                                                                  │
+16|❯ Use TodoWrite to create 3 todos (alpha, beta, gamma) and        │
+17|  complete them one at a time, updating TodoWrite after each; use │
+18|  no other tools.                                                 │
+19|                                                                  │
+20|⏺ I can't do this: there's no TodoWrite tool in this session. It  │
+21|  isn't among my available tools or the extra tools that can be   │
+22|  loaded on demand. You asked me to use no other tools, so I      │
+23|  haven't substituted anything.                                   │
+24|                                                                  │
+25|  I could run the same alpha → beta → gamma sequence another way, │
+26|  for example by updating a checklist file after each step. If    │
+27|  you'd like that, tell me which way to use.                      │
+28|                                                                  │
+29|✻ Cooked for 3s · done 11:02 PM                                   │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯ Write a 60-line poem about terminals to poem.txt.
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on

@@ -1,7 +1,7 @@
 import {existsSync, lstatSync, readdirSync, realpathSync} from 'node:fs';
 import {dirname, join, relative, resolve} from 'node:path';
 import {homedir} from 'node:os';
-import type {SkillDiagnostic, SkillMetadata, SkillsReport} from '@futryn/contracts';
+import type {SkillDiagnostic, SkillMetadata, SkillsReport} from '@cosmew/contracts';
 import {WorkspaceDenied, WorkspaceRoot, type ResolvedPath} from './paths';
 import {ignoredDirectory, VENDORED_DIRECTORIES} from './files';
 import {parseSkillDocument, SKILL_FILE_BYTES, SKILL_NAME} from './skill-parser';
@@ -43,11 +43,12 @@ export class SkillCatalog {
     const roots: {path: string; source: SkillMetadata['source']}[] = [];
     for (let scope = options.workspace.root; ; scope = dirname(scope)) {
       if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
-        for (const dir of ['.futryn', '.agents', '.claude'])
+        for (const dir of ['.cosmew', '.futryn', '.hannes', '.agents', '.claude'])
           roots.push({path: join(scope, dir, 'skills'), source: 'project'});
       if (scope === repo) break;
     }
-    for (const dir of ['.futryn', '.agents', '.claude']) roots.push({path: join(home, dir, 'skills'), source: 'user'});
+    for (const dir of ['.cosmew', '.futryn', '.hannes', '.agents', '.claude'])
+      roots.push({path: join(home, dir, 'skills'), source: 'user'});
     roots.push({path: systemRoot, source: 'system'});
     let visited = 0;
     for (const scan of roots) {
@@ -146,7 +147,9 @@ export class SkillCatalog {
         e =>
           e.file.absolute === absolute &&
           e.metadata.source === 'user' &&
-          e.metadata.shortPath.startsWith('~/.futryn/skills/'),
+          (e.metadata.shortPath.startsWith('~/.cosmew/skills/') ||
+            e.metadata.shortPath.startsWith('~/.futryn/skills/') ||
+            e.metadata.shortPath.startsWith('~/.hannes/skills/')),
       )
     );
   }

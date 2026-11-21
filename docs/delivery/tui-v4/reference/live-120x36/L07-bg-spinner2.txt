@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|                                                                  │2 files changed +1 -1              source: Current ▾
+02|❯ also give it a title                                            │
+03|                                                                  │a.txt                                          +1 -1
+04|⏺ Update(poem.txt)                                                │poem.txt
+05|  ⎿  Added 2 lines                                                │
+06|      1 +Exit Zero                                                │────────────────────────────────────────────────────
+07|      2 +                                                         │a.txt                                        [ ask ]
+08|      3  A cursor blinks against the black,                       │────────────────────────────────────────────────────
+09|      4  a heartbeat on an empty line;                            │ 1 -hello
+10|      5  it never hurries, never asks,                            │ 1 +HELLO
+11|                                                                  │ 2  world
+12|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it  │
+13|  the title "Exit Zero", which comes from its last line.          │────────────────────────────────────────────────────
+14|                                                                  │poem.txt (untracked)
+15|  The poem has 15 four-line stanzas. They cover the blinking      │────────────────────────────────────────────────────
+16|  cursor, pipes, standard in, out and error, man pages, command   │New file not yet staged.
+17|  history, Ctrl-C and Ctrl-D, and tmux panes. The title and a     │Run `git add :/poem.txt` to see line counts.
+18|  blank line sit above the poem, so the file is 62 lines long.    │
+19|                                                                  │
+20|✻ Baked for 29s · done 11:05 PM                                   │
+21|                                                                  │
+22|❯ Run sleep 40 as a background shell command (run_in_background)  │
+23|  and then just reply 'started'.                                  │
+24|                                                                  │
+25|  Ran 1 shell command                                             │
+26|                                                                  │
+27|⏺ started                                                         │
+28|                                                                  │
+29|· Concocting… (running Stop hooks… 2/6 · 4s · ↓ 110 tokens)       │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · 1 shell · esc to interrupt · ← 1 agent · ↓ to manage

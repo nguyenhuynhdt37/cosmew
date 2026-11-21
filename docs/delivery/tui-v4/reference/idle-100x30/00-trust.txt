@@ -1,0 +1,30 @@
+00|
+01|────────────────────────────────────────────────────────────────────────────────────────────────────
+02| Accessing workspace:
+03|
+04| /tmp/<scratch>/
+05| demo2
+06|
+07| Quick safety check: Is this a project you created or one you trust? (Like your own code, a
+08| well-known open source project, or work from your team). If not, take a moment to review what's in
+09| this folder first.
+10|
+11| Claude Code'll be able to read, edit, and execute files here.
+12|
+13| Security guide
+14|
+15| ❯ No, exit
+16|   Yes, I trust this folder
+17|
+18| Enter to confirm · Esc to cancel
+19|
+20|
+21|
+22|
+23|
+24|
+25|
+26|
+27|
+28|
+29|

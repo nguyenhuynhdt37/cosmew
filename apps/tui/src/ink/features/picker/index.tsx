@@ -1,11 +1,11 @@
 /** @jsxImportSource react */
 import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
-import {useStdout} from 'ink';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 import {useOverlay} from '../../core';
 import {useClientEvents, useKeymap, useTextInput} from '../../hooks';
+import {useTerminalSize} from '../../hooks/use-terminal-size';
 import {useTheme} from '../../theme';
-import {Panel, ListPicker, TextLine, KeyHint, safeText, type PickerItem} from '../../ui';
+import {Panel, PanelTabs, ListPicker, TextLine, KeyHint, safeText, type PickerItem} from '../../ui';
 export type DialogProps = {width?: number; visibleRows?: number};
 export function usePicker() {
   const {open, close} = useOverlay();
@@ -25,33 +25,34 @@ export function useDialogRefresh() {
   return {revision, refresh: update};
 }
 export function useDialogSize({width, visibleRows}: DialogProps) {
-  const {stdout} = useStdout();
-  const [, resize] = useState(0);
-  useEffect(() => {
-    const update = () => resize(n => n + 1);
-    stdout.on('resize', update);
-    return () => {
-      stdout.off('resize', update);
-    };
-  }, [stdout]);
+  const {columns, rows: reportedRows} = useTerminalSize();
+  const rows = reportedRows || 24;
+  // Tall terminals keep a half-height list. Short ones must shrink or the choices render past the frame.
+  const fitted =
+    rows >= 24 ? Math.max(6, Math.min(16, Math.floor((rows - 8) / 2))) : Math.max(1, Math.min(8, rows - 6));
   return {
-    width: Math.max(4, Math.min(width ?? 84, (stdout as typeof stdout & {columns?: number}).columns || 88)),
-    visibleRows: Math.max(
-      1,
-      visibleRows ?? Math.min(8, Math.floor((((stdout as typeof stdout & {rows?: number}).rows || 24) - 10) / 2)),
-    ),
+    width: Math.max(4, Math.min(width ?? (columns || 88), columns || width || 88)),
+    visibleRows: Math.max(1, visibleRows ?? fitted),
   };
 }
 export function Dialog({
   title,
   children,
   message,
+  tone,
+  ruleStyle,
   ...props
-}: DialogProps & {title: string; children: ReactNode; message?: string}) {
+}: DialogProps & {
+  title: string;
+  children: ReactNode;
+  message?: string;
+  tone?: 'info' | 'accent';
+  ruleStyle?: 'panel' | 'dialog';
+}) {
   const size = useDialogSize(props);
   const {color} = useTheme();
   return (
-    <Panel title={title} width={size.width} focused>
+    <Panel title={title} width={size.width} focused tone={tone} ruleStyle={ruleStyle}>
       {children}
       {message ? <TextLine color={color('warning')}>{message}</TextLine> : null}
     </Panel>
@@ -64,9 +65,24 @@ export function PickerDialog<T extends PickerItem>({
   message,
   children,
   onHighlight,
+  hint,
+  filterable,
+  onTextKey,
+  placeholder,
+  numbered,
+  cursor,
+  onCursorChange,
   ...props
 }: DialogProps & {
   title: string;
+  hint?: string | false;
+  filterable?: boolean;
+  onTextKey?: (input: string) => boolean;
+  placeholder?: string;
+  numbered?: boolean;
+  /** Controlled highlight (the effort slider moves it with ←/→). */
+  cursor?: number;
+  onCursorChange?: (index: number) => void;
   onHighlight?: (item: T) => void;
   items: readonly T[];
   onSelect(item: T): void;
@@ -82,6 +98,13 @@ export function PickerDialog<T extends PickerItem>({
         key={title}
         items={items}
         onSelect={onSelect}
+        hint={hint}
+        filterable={filterable}
+        onTextKey={onTextKey}
+        placeholder={placeholder}
+        numbered={numbered}
+        cursor={cursor}
+        onCursorChange={onCursorChange}
         initialCursor={Math.max(
           0,
           items.findIndex(item => item.id === selections.get(title)),
@@ -164,7 +187,9 @@ export function Detail({text, visibleRows = 10, onBack}: {text: string; visibleR
 }
 export function describeDialogError(error: unknown): string {
   return error instanceof FutrynError
-    ? `${error.code}: Action failed; review current state and retry.`
+    ? error.code === 'UNSUPPORTED'
+      ? `${error.code}: ${error.message}`
+      : `${error.code}: Action failed; review current state and retry.`
     : 'Action failed; review current state and retry.';
 }
 /** One task per dialog; close aborts work and late completions cannot mutate UI. */
@@ -204,4 +229,9 @@ export function useDialogTask() {
     }
   };
   return {run, busy, message, setMessage};
+}
+
+/** Input stays with the feature so tabs cannot steal text-entry or approval keys. */
+export function DialogTabs({tabs, selected, title}: {tabs: readonly string[]; selected: string; title?: string}) {
+  return <PanelTabs title={title} tabs={tabs} selected={selected} />;
 }

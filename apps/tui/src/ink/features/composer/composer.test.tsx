@@ -1,6 +1,7 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
 import {cleanup} from 'ink-testing-library';
+import {dialogFixture, selection} from '../picker/test-fixture';
 import {InputScope} from '../../hooks';
 import {createClientFixture, renderInk, settle} from '../../testing';
 import {Composer, ComposerView, useComposer, type ComposerController, type ComposerOptions} from './index';
@@ -17,7 +18,7 @@ async function key(view: ReturnType<typeof renderInk>, input: string) {
   await settle();
 }
 
-test('Composer renders rounded frame, placeholder, hints and edits a Unicode draft in place', async () => {
+test('Composer renders full-width rules, placeholder, mode footer and edits a Unicode draft in place', async () => {
   const sent: string[] = [];
   const view = renderInk(
     <Composer
@@ -29,9 +30,9 @@ test('Composer renders rounded frame, placeholder, hints and edits a Unicode dra
     />,
   );
   await settle();
-  expect(view.lastFrame()).toContain('╭');
+  expect(view.lastFrame()).toContain('─'.repeat(48));
   expect(view.lastFrame()).toContain('Describe a change');
-  expect(view.lastFrame()).toContain('Ctrl+R');
+  expect(view.lastFrame()).toContain('⏸ manual mode on');
   await key(view, 'hello');
   await key(view, '\u001b[D');
   await key(view, 'X');
@@ -81,7 +82,7 @@ test('Ctrl+A/E/K/U/W and Shift selection keep edits inside the draft', async () 
   await key(view, '\u0015');
   expect(controller.content).toBe('');
 });
-test('history restores unsent draft, reverse search cycles and cancels without sending', async () => {
+test('history restores unsent draft; Ctrl+R opens a filter panel that only changes the draft on Enter', async () => {
   const sent: string[] = [];
   const view = renderInk(
     <Harness
@@ -98,18 +99,45 @@ test('history restores unsent draft, reverse search cycles and cancels without s
   await key(view, '\u001b[B');
   expect(controller.content).toBe('draft');
   await key(view, '\u0012');
+  expect(view.lastFrame()).toContain('Search prompts · session');
+  // The search starts from the typed text (reference behaviour); clear it to see every prompt.
+  expect(view.lastFrame()).toContain('⌕ draft');
+  await key(view, '\x7f\x7f\x7f\x7f\x7f');
+  expect(view.lastFrame()).toContain('Filter history…');
   await key(view, 'alpha');
-  expect(controller.content).toBe('alpha two');
+  expect(controller.content).toBe('draft');
+  expect(view.lastFrame()).toContain('❯ alpha two');
+  await key(view, '\u001b[A');
+  expect(view.lastFrame()).toContain('❯ alpha one');
+  await key(view, '\u001b[B');
+  expect(view.lastFrame()).toContain('❯ alpha two');
   await key(view, '\u0012');
-  expect(controller.content).toBe('alpha one');
-  await key(view, '\u0007');
+  expect(view.lastFrame()).toContain('❯ alpha one');
+  controller.interrupt();
+  await settle();
+  expect(controller.search).toBeNull();
   expect(controller.content).toBe('draft');
   await key(view, '\u0012');
+  await key(view, '\x7f\x7f\x7f\x7f\x7f');
   await key(view, 'beta');
   await key(view, '\r');
   expect(sent).toEqual([]);
+  expect(controller.search).toBeNull();
+  expect(controller.content).toBe('beta');
   await key(view, '\r');
   expect(sent).toEqual(['beta']);
+});
+test('history panel cycles scope and Ctrl+C closes it keeping the draft', async () => {
+  const view = renderInk(<Harness initialValue="mine" initialHistory={['one']} onSubmit={() => {}} />);
+  await settle();
+  await key(view, '\u0012');
+  await key(view, '\u0013');
+  expect(view.lastFrame()).toContain('Search prompts · project');
+  expect(controller.content).toBe('mine');
+  expect(controller.confirmExit()).toBe(false);
+  await settle();
+  expect(controller.search).toBeNull();
+  expect(controller.content).toBe('mine');
 });
 test('restored SDK session user messages seed composer history', async () => {
   const fixture = createClientFixture({
@@ -146,7 +174,7 @@ test('bracketed paste never executes embedded shell, commands or control shortcu
   await key(view, '\r');
   expect(sent).toEqual([content]);
 });
-test('slash aliases dispatch canonical command; arguments and explicit unknown commands are retained', async () => {
+test('a complete alias is dispatched as typed (the host maps /cost to its Stats tab); arguments and explicit unknown commands are retained', async () => {
   const commands: string[] = [];
   const view = renderInk(
     <Harness
@@ -161,10 +189,10 @@ test('slash aliases dispatch canonical command; arguments and explicit unknown c
   await settle();
   await key(view, '/cost');
   await key(view, '\r');
-  expect(commands).toEqual(['/usage']);
+  expect(commands).toEqual(['/cost']);
   await key(view, '/compact keep API');
   await key(view, '\r');
-  expect(commands).toEqual(['/usage', '/compact keep API']);
+  expect(commands).toEqual(['/cost', '/compact keep API']);
   await key(view, '/does-not-exist args');
   await key(view, '\r');
   expect(commands.at(-1)).toBe('/does-not-exist args');
@@ -270,12 +298,15 @@ test('resize wraps wide text into bounded input rows while keeping the caret vis
   await settle();
   view.rerender(<Harness width={20} onSubmit={() => {}} />);
   await settle();
-  expect(view.lastFrame()).toContain('╭');
+  expect(view.lastFrame()).toContain('─'.repeat(20));
   expect(controller.content).toBe('你好世界'.repeat(20));
-  const panelLines = view
-    .lastFrame()!
-    .split('\n')
-    .filter(line => /^[╭│╰]/.test(line));
+  const lines = view.lastFrame()!.split('\n');
+  const top = lines.indexOf('─'.repeat(20));
+  const bottom = lines.indexOf('─'.repeat(20), top + 1);
+  expect(top).toBeGreaterThanOrEqual(0);
+  expect(bottom).toBeGreaterThan(top);
+  const panelLines = lines.slice(top, bottom + 1);
+  expect(lines.every(line => Bun.stringWidth(line) <= 20)).toBe(true);
   expect(panelLines.every(line => Bun.stringWidth(line) <= 20)).toBe(true);
   expect(panelLines.length).toBeLessThanOrEqual(8);
 });
@@ -431,6 +462,10 @@ test('Shell owns Esc and calls composer interrupt before cancelling host generat
   expect(controller.content).toBe('draft');
   expect(controller.interrupt()).toBe(true);
   await settle();
+  expect(controller.content).toBe('draft');
+  expect(controller.notice).toBe('Esc again to clear');
+  expect(controller.interrupt()).toBe(true);
+  await settle();
   expect(controller.content).toBe('');
   view.rerender(<Harness busy onSubmit={() => {}} />);
   await settle();
@@ -443,7 +478,7 @@ test('failed history search restores draft instead of selecting the previous unr
   await settle();
   await key(view, '\u0012');
   await key(view, 'missing');
-  expect(controller.search?.index).toBe(-1);
+  expect(view.lastFrame()).toContain('No match');
   await key(view, '\r');
   expect(controller.content).toBe('original draft');
 });
@@ -493,4 +528,220 @@ test('skill completion preserves the full pasted argument beyond the cursor', as
   await settle();
   await key(view, '\r');
   expect(sent).toEqual(['/deployer  a\nb\nc\nd\ne']);
+});
+
+test('a host-rendered shell success has no duplicate footer or persistent status notice', async () => {
+  const notices: string[] = [];
+  const results: unknown[] = [];
+  const fixture = createClientFixture({
+    startSession: () => ({id: 's', selection: {accountId: 'a', modelId: 'm'}, messages: []}),
+    runShellCommand: async () => ({name: 'exec_command', callId: 'sh', status: 'ok', content: 'marker', exitCode: 0}),
+  });
+  fixture.client.setToolsEnabled(true);
+  const view = renderInk(
+    <Harness
+      initialValue="!echo marker"
+      workspaceAccess
+      onSubmit={() => {
+        throw Error('shell is not a model prompt');
+      }}
+      onShellResult={result => results.push(result)}
+      onNotice={text => notices.push(text)}
+    />,
+    {fixture},
+  );
+  await settle();
+  await key(view, '\r');
+  expect(results).toHaveLength(1);
+  expect(controller.content).toBe('');
+  expect(controller.notice).toBe('');
+  expect(notices).toEqual([]);
+  expect(view.lastFrame()).not.toContain('Shell ok.');
+});
+
+test('shell and memory presentation preserve dispatch prefixes and use full-width rules', async () => {
+  for (const [draft, displayed] of [
+    ['!echo hello', '! echo hello'],
+    ['#remember this', '❯ #remember this'],
+  ] as const) {
+    const view = renderInk(<Harness initialValue={draft} width={60} onSubmit={() => {}} />);
+    await settle();
+    expect(controller.content).toBe(draft);
+    expect(view.lastFrame()).toContain(displayed);
+    expect(view.lastFrame()!.split('─'.repeat(60))).toHaveLength(3);
+    view.unmount();
+  }
+});
+
+test('empty question mark opens shortcuts and consumes the closing key without submitting', async () => {
+  const sent: string[] = [];
+  const view = renderInk(
+    <Harness
+      width={100}
+      onSubmit={text => {
+        sent.push(text);
+      }}
+    />,
+  );
+  await settle();
+  await key(view, '?');
+  expect(controller.shortcuts).toBe(true);
+  expect(controller.content).toBe('');
+  expect(view.lastFrame()).toContain('! for shell mode');
+  expect(view.lastFrame()).toContain('ctrl+t to toggle tasks');
+  expect(view.lastFrame()).not.toContain('shift+↑/↓ to change effort');
+  await key(view, 'x');
+  expect(controller.shortcuts).toBe(false);
+  expect(controller.content).toBe('');
+  expect(sent).toEqual([]);
+  await key(view, 'literal?');
+  expect(controller.content).toBe('literal?');
+});
+
+test('undo restores exact collapsed paste metadata and Ctrl+S stashes and restores it', async () => {
+  const view = renderInk(<Harness onSubmit={() => {}} />);
+  await settle();
+  controller.paste('one\ntwo\nthree\nfour\nfive');
+  await settle();
+  const pasted = structuredClone(controller.draft);
+  await key(view, 'x');
+  await key(view, '\x1f');
+  expect(controller.draft).toEqual(pasted);
+  expect(controller.content).toBe('one\ntwo\nthree\nfour\nfive');
+  await key(view, '\x13');
+  expect(controller.content).toBe('');
+  await key(view, '\x13');
+  expect(controller.draft).toEqual(pasted);
+  expect(controller.content).toBe('one\ntwo\nthree\nfour\nfive');
+});
+
+test('an occupied stash rejects replacement and retains the original full draft', async () => {
+  const view = renderInk(<Harness initialValue="original" onSubmit={() => {}} />);
+  await settle();
+  await key(view, '\x13');
+  await key(view, 'competing');
+  await key(view, '\x13');
+  expect(controller.content).toBe('competing');
+  expect(controller.notice).toContain('already stashed');
+  controller.interrupt();
+  controller.interrupt();
+  await settle();
+  expect(controller.content).toBe('');
+  await key(view, '\x13');
+  expect(controller.content).toBe('original');
+});
+
+test('double Esc and exit confirmation remain local and empty rewind reports unavailable', async () => {
+  const notices: string[] = [];
+  const view = renderInk(<Harness initialValue="draft" onSubmit={() => {}} onNotice={text => notices.push(text)} />);
+  await settle();
+  expect(controller.interrupt()).toBe(true);
+  await settle();
+  expect(controller.content).toBe('draft');
+  expect(controller.notice).toBe('Esc again to clear');
+  expect(controller.interrupt()).toBe(true);
+  await settle();
+  expect(controller.content).toBe('');
+  expect(controller.confirmExit()).toBe(false);
+  await settle();
+  expect(controller.notice).toBe('Press Ctrl-C again to exit');
+  expect(view.lastFrame()).toContain('  Press Ctrl-C again to exit');
+  expect(controller.confirmExit()).toBe(true);
+  expect(notices).toEqual([]);
+  controller.interrupt();
+  controller.interrupt();
+  await settle();
+  expect(controller.notice).toContain('Not implemented: conversation rewind');
+});
+
+test('task/model shortcuts preserve the draft and unsupported native bridges never send input', async () => {
+  let toggles = 0;
+  const commands: string[] = [];
+  const sent: string[] = [];
+  const view = renderInk(
+    <Harness
+      initialValue="keep me"
+      onSubmit={text => {
+        sent.push(text);
+      }}
+      onCommand={text => {
+        commands.push(text);
+      }}
+      onToggleTasks={() => toggles++}
+    />,
+  );
+  await settle();
+  await key(view, '\x14');
+  await key(view, '\x1bp');
+  expect(toggles).toBe(1);
+  expect(commands).toEqual(['/model']);
+  for (const keyCode of ['\x07', '\x16', '\x1a']) {
+    await key(view, keyCode);
+    expect(controller.notice).toContain('Not implemented:');
+    expect(controller.content).toBe('keep me');
+  }
+  expect(sent).toEqual([]);
+});
+
+test('advertised effort shortcuts update SDK preferences and reject during a live turn', async () => {
+  let finish = () => {};
+  const held = new Promise<void>(resolve => {
+    finish = resolve;
+  });
+  const fixture = dialogFixture({
+    startSession: () => ({id: 'effort', selection, messages: []}),
+    async *sendTurn() {
+      await held;
+      yield {type: 'textDelta', text: 'done'};
+    },
+  });
+  const view = renderInk(<Harness initialValue="draft" onSubmit={() => {}} />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('◐ default · /effort');
+  await key(view, '\x1b[1;2A');
+  expect(fixture.client.status().reasoningEffort).toBe('low');
+  await key(view, '\x1b[1;2A');
+  expect(fixture.client.status().reasoningEffort).toBe('high');
+  const stream = fixture.client.sendMessage('hold')[Symbol.asyncIterator]();
+  const next = stream.next();
+  await settle();
+  await key(view, '\x1b[1;2B');
+  expect(fixture.client.status().reasoningEffort).toBe('high');
+  expect(controller.notice).toContain('Effort change rejected');
+  expect(controller.content).toBe('draft');
+  finish();
+  await next;
+  await stream.return?.();
+});
+
+test('Ctrl+R shows stored timestamps and Ctrl+S cycles session project everywhere without changing the draft', async () => {
+  const scopes: string[] = [];
+  const fixture = dialogFixture({
+    promptHistory: ({scope}) => {
+      scopes.push(scope);
+      return [
+        {
+          id: scope,
+          sessionId: 'stored',
+          content: `${scope} request`,
+          timestamp: new Date(Date.now() - 11 * 60 * 60 * 1000).toISOString(),
+        },
+      ];
+    },
+  });
+  const view = renderInk(<Harness initialValue="" width={100} onSubmit={() => {}} />, {fixture});
+  await settle();
+  await key(view, '\x12');
+  expect(view.lastFrame()).toContain('Search prompts · everywhere');
+  expect(view.lastFrame()).toContain('11h ago');
+  expect(view.lastFrame()).toContain('everywhere request');
+  await key(view, '\x13');
+  expect(view.lastFrame()).toContain('Search prompts · session');
+  expect(view.lastFrame()).toContain('session request');
+  expect(view.lastFrame()).not.toContain('everywhere request');
+  await key(view, '\x13');
+  expect(view.lastFrame()).toContain('Search prompts · project');
+  await key(view, '\r');
+  expect(controller.content).toBe('project request');
+  expect(scopes).toContain('project');
 });

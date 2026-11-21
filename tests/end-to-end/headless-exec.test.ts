@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fixtureServer} from '../fixtures';
@@ -85,13 +85,14 @@ test('exec validates arguments (64), stdin and missing tool account (2) without 
   };
   for (const args of [
     [],
-    ['hi', '--approval', 'yes'],
-    ['hi', '--sandbox', 'oops'],
-    ['hi', '--approval', 'never', '--ask-for-approval', 'on-request'],
-    ['hi', '--dangerously-bypass-approvals-and-sandbox', '--sandbox', 'read-only'],
-    ['hi', '--yolo', '--sandbox', 'read-only'],
-    ['hi', '--yolo', '--full-auto'],
-    ['hi', '--full-auto', '--approval', 'never'],
+    ['hi', '--permission-mode', 'auto'],
+    ['hi', '--permission-mode', 'default', '--dangerously-skip-permissions'],
+    ['hi', '--allowedTools', 'Bogus(x)'],
+    ['hi', '--approval', 'never'],
+    ['hi', '--sandbox', 'read-only'],
+    ['hi', '--yolo'],
+    ['hi', '--full-auto'],
+    ['hi', '--dangerously-bypass-approvals-and-sandbox'],
     ['hi', '--unknown'],
     ['a', 'b'],
     ['-C'],
@@ -123,7 +124,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.35', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.40', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');
@@ -199,83 +200,108 @@ test('exec reports provider turn failure as exit 1 and a terminal JSONL failure'
   });
 });
 
+/** One headless run against a scripted model that makes the given tool calls, once each. */
+async function scripted(
+  x: ReturnType<typeof context>,
+  calls: {name: string; input: Record<string, unknown>}[],
+  flags: string[],
+  files: Record<string, unknown> = {},
+) {
+  for (const [path, value] of Object.entries(files)) {
+    mkdirSync(join(x.root, path, '..'), {recursive: true});
+    writeFileSync(join(x.root, path), typeof value === 'string' ? value : JSON.stringify(value));
+  }
+  x.server.set({script: view => (view.results.length ? {text: 'DONE'} : {calls})});
+  const result = await x.cli(
+    ['exec', 'work', '--cd', x.root, '--json', '--account', 'exec-test', '--model', 'fixture-model', ...flags],
+    '',
+    {FUTRYN_COMMAND_BACKEND: 'native'},
+  );
+  const events = result.stdout
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  return {...result, events, results: events.filter(e => e.type === 'toolResult').map(e => e.result)};
+}
+
 test.skipIf(process.platform !== 'darwin')(
-  'exec --sandbox danger-full-access and --dangerously-bypass-approvals-and-sandbox run unsandboxed with stderr warning',
+  'exec permission flags: without a TTY whatever would ask is denied, flags select the mode, the sandbox always applies',
   async () => {
     const x = context();
     await x.configure();
-    const outside = join(tmpdir(), `fyn-exec-dfa-${crypto.randomUUID()}`);
+    const outside = join(tmpdir(), `fyn-exec-outside-${crypto.randomUUID()}`);
     cleanup.push(() => rmSync(outside, {force: true}));
-    x.server.set({
-      script: view =>
-        view.results.length ? {text: 'DONE'} : {calls: [{name: 'exec_command', input: {cmd: `touch ${outside}`}}]},
-    });
-    const result = await x.cli(
-      [
-        'exec',
-        'write marker',
-        '--cd',
-        x.root,
-        '--sandbox',
-        'danger-full-access',
-        '--json',
-        '--account',
-        'exec-test',
-        '--model',
-        'fixture-model',
-      ],
-      '',
-      {FUTRYN_COMMAND_BACKEND: 'native'},
-    );
-    expect(result.code).toBe(0);
-    expect(result.stderr).toContain('WARNING: Full Access');
-    expect(existsSync(outside)).toBe(true);
-    const events = result.stdout
-      .trim()
-      .split('\n')
-      .map(line => JSON.parse(line));
-    expect(events.some(e => e.type === 'permission.requested')).toBe(false);
-    expect(events.at(-1)).toMatchObject({contractVersion: '1.35', type: 'turn.completed'});
+    const edit = {name: 'write', input: {path: 'notes.md', content: 'ok\n'}};
+    const escape = {name: 'exec_command', input: {cmd: `touch ${outside}`}};
+    const notes = () => existsSync(join(x.root, 'notes.md'));
 
-    rmSync(outside, {force: true});
-    const yolo = await x.cli(
-      [
-        'exec',
-        'write marker again',
-        '-C',
-        x.root,
-        '--dangerously-bypass-approvals-and-sandbox',
-        '--account',
-        'exec-test',
-        '--model',
-        'fixture-model',
-      ],
-      '',
-      {FUTRYN_COMMAND_BACKEND: 'native'},
-    );
-    expect(yolo.code).toBe(0);
-    expect(yolo.stderr).toContain('WARNING: Full Access');
-    expect(existsSync(outside)).toBe(true);
+    // default: a sandboxed command runs without asking, the edit would ask and is denied (no TTY, no event).
+    const plain = await scripted(x, [edit, escape], []);
+    expect(plain.code).toBe(0);
+    expect(plain.results.map(r => r.status)).toEqual(['denied', 'error']);
+    expect(plain.results[1].code).toBe('SANDBOX_DENIED');
+    expect(plain.events.some(e => e.type === 'permission.requested')).toBe(false);
+    expect(notes()).toBe(false);
+    expect(existsSync(outside)).toBe(false);
+    expect(plain.stderr).not.toContain('WARNING');
 
-    rmSync(outside, {force: true});
-    const yoloAlias = await x.cli(
-      [
-        'exec',
-        'write marker with --yolo',
-        '-C',
-        x.root,
-        '--yolo',
-        '--account',
-        'exec-test',
-        '--model',
-        'fixture-model',
-      ],
-      '',
-      {FUTRYN_COMMAND_BACKEND: 'native'},
-    );
-    expect(yoloAlias.code).toBe(0);
-    expect(yoloAlias.stderr).toContain('WARNING: Full Access');
-    expect(existsSync(outside)).toBe(true);
+    // acceptEdits approves the edit.
+    expect((await scripted(x, [edit], ['--permission-mode', 'acceptEdits'])).results[0].status).toBe('ok');
+    expect(notes()).toBe(true);
+    rmSync(join(x.root, 'notes.md'));
+
+    // plan refuses edits and commands.
+    const plan = await scripted(x, [edit, {name: 'exec_command', input: {cmd: 'ls'}}], ['--permission-mode', 'plan']);
+    expect(plan.results.map(r => r.status)).toEqual(['denied', 'denied']);
+    expect(notes()).toBe(false);
+
+    // --allowedTools / --disallowedTools behave like `claude -p`.
+    expect((await scripted(x, [edit], ['--allowedTools', 'Edit'])).results[0].status).toBe('ok');
+    rmSync(join(x.root, 'notes.md'));
+    const disallowed = await scripted(x, [edit], ['--permission-mode', 'acceptEdits', '--disallowedTools', 'Edit']);
+    expect(disallowed.results[0].status).toBe('denied');
+    expect(notes()).toBe(false);
+
+    // --dangerously-skip-permissions: warning, no prompts, edit approved - but the OS sandbox still applies.
+    const bypass = await scripted(x, [edit, escape], ['--dangerously-skip-permissions']);
+    expect(bypass.code).toBe(0);
+    expect(bypass.stderr).toContain('WARNING: bypassPermissions');
+    expect(bypass.results[0].status).toBe('ok');
+    expect(bypass.results[1].code).toBe('SANDBOX_DENIED');
+    expect(existsSync(outside)).toBe(false);
+    expect(bypass.events.some(e => e.type === 'permission.requested')).toBe(false);
+    expect(bypass.events.at(-1)).toMatchObject({contractVersion: '1.40', type: 'turn.completed'});
   },
-  20_000,
+  60_000,
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'exec reads settings files: user settings apply, repository settings that loosen are ignored with a notice, deny rules always apply',
+  async () => {
+    const x = context();
+    await x.configure();
+    const edit = {name: 'write', input: {path: 'notes.md', content: 'ok\n'}};
+    // A repository file tries to allow edits, disable the sandbox and deny a path.
+    const repo = {
+      permissions: {allow: ['Edit'], deny: ['Edit(secret/**)']},
+      sandbox: {enabled: false},
+    };
+    const ignored = await scripted(x, [edit, {name: 'write', input: {path: 'secret/a.txt', content: 'x'}}], [], {
+      '.futryn/settings.json': repo,
+    });
+    expect(ignored.results.map(r => r.status)).toEqual(['denied', 'denied']);
+    expect(ignored.stderr).toContain('ignoring the loosening parts of');
+    expect(ignored.stderr).toContain('allow rule: Edit');
+    expect(existsSync(join(x.root, 'notes.md'))).toBe(false);
+    // The user's own settings.json is trusted: its allow rule applies, the repository deny rule still wins.
+    writeFileSync(join(x.home, 'settings.json'), JSON.stringify({permissions: {allow: ['Edit']}}), {mode: 0o600});
+    const trusted = await scripted(x, [edit, {name: 'write', input: {path: 'secret/a.txt', content: 'x'}}], []);
+    expect(trusted.results.map(r => r.status)).toEqual(['ok', 'denied']);
+    expect(readFileSync(join(x.root, 'notes.md'), 'utf8')).toBe('ok\n');
+    // permissions.defaultMode of the user settings is the starting mode.
+    rmSync(join(x.root, 'notes.md'));
+    writeFileSync(join(x.home, 'settings.json'), JSON.stringify({permissions: {defaultMode: 'plan'}}), {mode: 0o600});
+    expect((await scripted(x, [edit], [])).results[0].status).toBe('denied');
+  },
+  60_000,
 );

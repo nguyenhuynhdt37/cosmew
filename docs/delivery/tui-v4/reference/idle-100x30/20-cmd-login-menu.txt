@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝ ⛝   ⛁ Custom agents: 4.7k tokens (0.5%)
+01|                                               ⛁ Skills: 9.9k tokens (1%)
+02|                                               ⛁ Messages: 2.1k tokens (0.2%)
+03|                                               ⛶ Free space: 931.3k tokens (93%)
+04|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+05|
+06|     Auto-compact window:  1m tokens
+07|
+08|     MCP tools · /mcp (loaded on-demand)
+09|     └ 155 tools · 669 tokens
+10|
+11|     Custom agents · .claude/agents/
+12|     └ 23 agents · 4.7k tokens
+13|
+14|     Skills · /skills
+15|     └ 220 skills · 9.9k tokens
+16|
+17|     /context all to expand
+18|
+19|
+20|  ❯ /login                                  Sign in with your Anthropic account
+21|    /design-login                           Authorize design-system access for /design-sync with
+22|                                            your claude.ai account
+23|    /greptile:login                         (greptile) Sign the Greptile CLI in to your Greptile
+24|                                            account
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ /login
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on

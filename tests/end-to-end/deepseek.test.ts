@@ -2,7 +2,7 @@ import {afterEach, expect, setDefaultTimeout, test} from 'bun:test';
 import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerPresets} from '@futryn/models';
+import {providerPresets} from '@cosmew/models';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 

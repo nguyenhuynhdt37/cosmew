@@ -1,13 +1,12 @@
-import {DockerCommandRuntime} from './container';
 import {NativeCommandRuntime} from './native';
 import {createHash} from 'node:crypto';
 import {existsSync, realpathSync, statSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {homedir} from 'node:os';
 import {delimiter, dirname, join} from 'node:path';
-import {SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES} from '@futryn/security';
+import {SECRET_FILE_EXCEPTIONS, SECRET_FILE_RULES} from '@cosmew/security';
 import {ProcessSupervisor} from './process';
-import type {CommandRequest, CommandOutcome, CommandRuntime, RuntimeAvailability} from '@futryn/contracts';
+import type {CommandRequest, CommandOutcome, CommandRuntime, RuntimeAvailability} from '@cosmew/contracts';
 
 /** Used on platforms without a tested sandbox: the tool is never offered and nothing runs. */
 export class UnsupportedRuntime implements CommandRuntime {
@@ -51,21 +50,20 @@ export interface SeatbeltOptions {
   readOnlySkillDirectories?: readonly string[];
   /** Canonical workspace root; the only user tree the command may read. */
   workspaceRoot: string;
-  /** Futryn's state directory; always denied, even if it lies inside the workspace. */
+  /** Cosmew's state directory; always denied, even if it lies inside the workspace. */
   stateDirectory?: string;
   /** Extra programs (by name, looked up on the host PATH) the sandbox may execute, e.g. `rg`. */
   extraExecutables?: string[];
   /** Override for tests; production always uses the system binary, never PATH. */
   sandboxExec?: string;
   platform?: NodeJS.Platform;
-  container?: boolean;
   hostPath?: string;
 }
 
 /**
  * macOS Seatbelt runtime (ADR 0022), modelled on Codex's `sandbox-exec` launcher: deny by default,
  * read-only, no network, reads limited to system locations, the workspace and named executables;
- * Futryn state, `.git` internals and secret-looking files are denied. The shell is
+ * Cosmew state, `.git` internals and secret-looking files are denied. The shell is
  * `bash --noprofile --norc` with a fixed environment, so project files cannot inject startup code.
  */
 export class SeatbeltRuntime implements CommandRuntime {
@@ -214,19 +212,17 @@ export class SeatbeltRuntime implements CommandRuntime {
 }
 
 /**
- * The runtime for this host (ADR 0035, Codex model): the native OS sandbox by default (macOS
- * Seatbelt, Linux bubblewrap); Docker only when explicitly selected; Windows is not implemented.
+ * The runtime for this host (ADR 0035, 0062): the OS sandbox (macOS Seatbelt, Linux bubblewrap).
+ * Windows is not implemented. `backend: 'none'` disables commands.
  */
 export function platformCommandRuntime(
-  options: SeatbeltOptions & {backend?: 'native' | 'docker'; hideSecrets?: boolean},
+  options: SeatbeltOptions & {backend?: 'native' | 'none'; hideSecrets?: boolean},
 ): CommandRuntime {
-  const platform = options.platform ?? process.platform;
-  if ((options.backend === 'docker' || options.container) && ['darwin', 'linux'].includes(platform))
-    return new DockerCommandRuntime(options);
+  if (options.backend === 'none') return new UnsupportedRuntime('Commands are disabled (COSMEW_COMMAND_BACKEND).');
   return new NativeCommandRuntime({
     workspaceRoot: options.workspaceRoot,
     stateDirectory: options.stateDirectory,
-    platform,
+    platform: options.platform ?? process.platform,
     hostPath: options.hostPath,
     hideSecrets: options.hideSecrets,
     skillDirectories: options.skillDirectories,
@@ -234,8 +230,8 @@ export function platformCommandRuntime(
   });
 }
 
-/** FUTRYN_COMMAND_BACKEND: `native` (default, also `auto`), `docker`, or `none`. Unknown values disable commands. */
-export function commandBackendFromEnv(value: string | undefined): 'docker' | 'native' | 'none' {
+/** `COSMEW_COMMAND_BACKEND`: `native` (default, also `auto`) or `none`. Any other value, including removed `docker`, disables commands. */
+export function commandBackendFromEnv(value: string | undefined): 'native' | 'none' {
   if (value === undefined || value === '' || value === 'auto' || value === 'native') return 'native';
-  return value === 'docker' ? 'docker' : 'none';
+  return 'none';
 }

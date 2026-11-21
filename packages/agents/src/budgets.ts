@@ -9,7 +9,7 @@ import {
   type TurnBudget,
   type Selection,
   type Usage,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import type {AgentProfile} from './profiles';
 
 export function defaultAgentsConfig(): HostAgentsConfig {

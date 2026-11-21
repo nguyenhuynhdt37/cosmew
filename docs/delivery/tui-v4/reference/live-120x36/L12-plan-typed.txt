@@ -1,0 +1,36 @@
+00|      1 +Exit Zero
+01|      2 +
+02|      3  A cursor blinks against the black,
+03|      4  a heartbeat on an empty line;
+04|      5  it never hurries, never asks,
+05|
+06|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it the title "Exit Zero", which comes from its last line.
+07|
+08|  The poem has 15 four-line stanzas. They cover the blinking cursor, pipes, standard in, out and error, man pages,
+09|  command history, Ctrl-C and Ctrl-D, and tmux panes. The title and a blank line sit above the poem, so the file is 62
+10|  lines long.
+11|
+12|✻ Baked for 29s · done 11:05 PM
+13|
+14|❯ Run sleep 40 as a background shell command (run_in_background) and then just reply 'started'.
+15|
+16|  Ran 1 shell command
+17|
+18|⏺ started
+19|
+20|✻ Cogitated for 5s · done 11:05 PM
+21|
+22|⏺ Background command "Sleep for 40 seconds" completed (exit code 0)
+23|
+24|⏺ sleep 40 finished successfully (exit code 0).
+25|
+26|✻ Sautéed for 3s · done 11:06 PM
+27|
+28|❯ /diff
+29|  ⎿  Diff panel hidden
+30|
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯ Plan how to add a subtract function to index.ts. Do not edit yet.
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ plan mode on (shift+tab to cycle)

@@ -1,17 +1,13 @@
 History · 2 of 2 messages
-> Inspect the integration and preserve permission boundaries · Tiếng Việt 日本語
+❯ Inspect the integration and preserve permission boundaries · Tiếng Việt 日本語
 
 ⏺ Ready
 
-  • Checked tool policy
-  • Kept legacy default
+  - Checked tool policy
+  - Kept legacy default
 
-  ts
   const ready = true;
 
-› ⏺ read(note.txt) · ok · Ctrl+O
- ⎿ Safe fixture content
+  Read 1 file
 
-Plan · 0/1 completed
-Integration verification
-  ▸ Verify integrated UI
+  ⎿  ☐ Verify integrated UI

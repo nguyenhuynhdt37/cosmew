@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import {createContext, useContext, type ReactNode} from 'react';
-import type {FutrynClient} from '@futryn/sdk';
+import type {FutrynClient} from '@cosmew/sdk';
 
 const ClientContext = createContext<FutrynClient | null>(null);
 export function FutrynClientProvider({client, children}: {client: FutrynClient; children: ReactNode}) {

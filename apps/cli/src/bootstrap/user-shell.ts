@@ -1,6 +1,6 @@
-import {FutrynError} from '@futryn/contracts';
-import type {CommandOutputChunk, Message, Selection, ToolCall, ToolResult, TurnReceipt} from '@futryn/contracts';
-import type {SqliteConversations} from '@futryn/persistence';
+import {FutrynError} from '@cosmew/contracts';
+import type {CommandOutputChunk, Message, Selection, ToolCall, ToolResult, TurnReceipt} from '@cosmew/contracts';
+import type {SqliteConversations} from '@cosmew/persistence';
 
 /**
  * Persist a user shell invocation through the same execution journal as agent tools. The injected

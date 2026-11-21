@@ -1,4 +1,4 @@
-import {FutrynError, type Account, type ModelInfo, type Selection, type SettingsStore} from '@futryn/contracts';
+import {FutrynError, type Account, type ModelInfo, type Selection, type SettingsStore} from '@cosmew/contracts';
 export class ModelRouter {
   constructor(private readonly store: SettingsStore) {}
   select(account: Account, model: ModelInfo, project?: string): Selection {

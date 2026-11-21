@@ -1,0 +1,30 @@
+00|                                               ⛁ Skills: 9.9k tokens (1%)
+01|                                               ⛁ Messages: 2.1k tokens (0.2%)
+02|                                               ⛶ Free space: 931.3k tokens (93%)
+03|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+04|
+05|     Auto-compact window:  1m tokens
+06|
+07|     MCP tools · /mcp (loaded on-demand)
+08|     └ 155 tools · 669 tokens
+09|
+10|     Custom agents · .claude/agents/
+11|     └ 23 agents · 4.7k tokens
+12|
+13|     Skills · /skills
+14|     └ 220 skills · 9.9k tokens
+15|
+16|     /context all to expand
+17|
+18|❯ /doctor
+19|
+20|⏺ /status checks your setup if Claude can't be reached
+21|
+22|✽ Hatching… (3s · thinking with medium effort)
+23|  ⎿  Tip: Control this session from the Claude mobile app · run /remote-control
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on · esc to interrupt · ← 1 agent

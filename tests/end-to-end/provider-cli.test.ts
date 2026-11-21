@@ -470,7 +470,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
         notify();
       });
     try {
-      await waitFor('fyn> ');
+      await waitFor('cosmew> ');
       terminal.write('/login\r');
       await waitFor('Provider [');
       terminal.write('gateway\r');
@@ -481,18 +481,18 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
       await waitFor('Model [fixture-model]: ');
       terminal.write('\r');
       await waitFor('Đã đăng nhập gateway');
-      await waitFor('fyn> ');
+      await waitFor('cosmew> ');
       terminal.write('\x1b[AHello after hidden login\r');
       await waitFor('Hello fixture');
-      await waitFor('fyn> ');
+      await waitFor('cosmew> ');
       terminal.write('/logout\r');
       await waitFor('Sign out of gateway?');
       terminal.write('y\r');
       await waitFor('Đã đăng xuất gateway');
-      await waitFor('fyn> ');
+      await waitFor('cosmew> ');
       terminal.write('/status\r');
       await waitFor('"selection": null');
-      await waitFor('fyn> ');
+      await waitFor('cosmew> ');
       terminal.write('/exit\r');
       expect(await child.exited).toBe(0);
       expect(transcript).not.toContain('fixture-e2e-sensitive-value');
@@ -532,7 +532,7 @@ test.skipIf(process.platform === 'win32')(
       ).code,
     ).toBe(0);
     const steps = [
-      ['fyn> ', '/login\r'],
+      ['cosmew> ', '/login\r'],
       ['Provider [', 'gateway\r'],
       ['Cách đăng nhập [keyring]: ', '\r'],
       ['API key (hidden): ', '\x03'],

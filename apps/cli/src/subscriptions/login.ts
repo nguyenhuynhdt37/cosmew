@@ -1,4 +1,4 @@
-import {FutrynError, type Account, type Provider} from '@futryn/contracts';
+import {FutrynError, type Account, type Provider} from '@cosmew/contracts';
 import type {Application} from '../bootstrap/startup';
 
 /** Browser sign-in (ChatGPT OAuth + PKCE, ADR 0047) for the CLI. Prints public authorization

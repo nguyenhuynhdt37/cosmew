@@ -10,9 +10,9 @@ import {
   type Settings,
   type SettingsStore,
   type ThemeManifest,
-} from '@futryn/contracts';
-import {FileCustomThemeStore} from '@futryn/persistence';
-import {FutrynClient} from '@futryn/sdk';
+} from '@cosmew/contracts';
+import {FileCustomThemeStore} from '@cosmew/persistence';
+import {FutrynClient} from '@cosmew/sdk';
 import {
   ALL_BUILTIN_THEMES,
   BUILTIN_COLOR_THEMES,
@@ -23,7 +23,7 @@ import {
   detectTerminalColorCapability,
   fgHex,
   getThemeMiniSwatches,
-} from '@futryn/tui';
+} from '@cosmew/tui';
 
 class MemorySettingsStore implements SettingsStore {
   private state: Settings = emptySettings();
@@ -109,16 +109,19 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
         for (const key of THEME_TOKEN_KEYS) expect(tokens[key]).toMatch(/^#[0-9a-f]{6}$/);
         for (const key of [
           'foreground',
-          'accent',
           'error',
-          'warning',
           'success',
-          'info',
           'syntaxKeyword',
           'syntaxString',
           'syntaxFunction',
         ] as const)
           expect(contrastRatio(tokens.background, tokens[key])).toBeGreaterThan(4.5);
+        // `warning` and `info` (file paths) are kept as measured from the reference capture
+        // (light: #8e7700 = 4.39:1, #5769f7 = 4.40:1 on white; docs/delivery/tui-v4/spec.md section 9), so they get a slightly lower bar.
+        for (const key of ['warning', 'info'] as const)
+          expect(contrastRatio(tokens.background, tokens[key])).toBeGreaterThan(4.3);
+        expect(tokens.accent).toBe('#d77757');
+        expect(contrastRatio(tokens.background, tokens.accent)).toBeGreaterThan(3);
         expect(new Set([tokens.error, tokens.warning, tokens.success, tokens.info]).size).toBe(4);
         expect(tokens.background === '#000000' || tokens.background === '#ffffff').toBe(true);
       }
@@ -229,7 +232,7 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       expect(engine.listThemes('all').map(theme => theme.id)).toEqual(['auto', 'dark', 'light']);
       await expect(engine.setTheme('old-custom')).rejects.toThrow();
       await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
-      expect(engine.getActiveTokens().accent).toBe('#195dbc');
+      expect(engine.getActiveTokens().accent).toBe('#d77757');
     } finally {
       await rm(dir, {recursive: true, force: true});
     }

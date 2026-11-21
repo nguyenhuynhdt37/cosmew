@@ -1,8 +1,8 @@
 # Source-backed Chat/TUI and Config/Commands parity
 
-Inspected 2026-11-17. Upstream pin: [`090be4df0724cdef5758e6a0934ba557af8b6bbe`](https://github.com/openai/codex/tree/090be4df0724cdef5758e6a0934ba557af8b6bbe). Futryn starting HEAD `d56e11fabb82f638d6602a6628ee5323e064119b`, dev, with existing Agent Loop/provider/patch changes. Paths below are relative to upstream `codex-rs/tui/src/` or Futryn root. This is behavioral evidence, not a full Codex CLI parity claim.
+Inspected 2026-11-17. Upstream pin: [`090be4df0724cdef5758e6a0934ba557af8b6bbe`](https://github.com/openai/codex/tree/090be4df0724cdef5758e6a0934ba557af8b6bbe). Cosmew starting HEAD `d56e11fabb82f638d6602a6628ee5323e064119b`, dev, with existing Agent Loop/provider/patch changes. Paths below are relative to upstream `codex-rs/tui/src/` or Cosmew root. This is behavioral evidence, not a full Codex CLI parity claim.
 
-| Feature | Codex behavior/source | Initial Futryn classification | Fix / Futryn implementation | Acceptance / final scope |
+| Feature | Codex behavior/source | Initial Cosmew classification | Fix / Cosmew implementation | Acceptance / final scope |
 |---|---|---|---|---|
 | Streaming transcript | `chatwidget/streaming.rs:289,534`: completed-item reconciliation and item identity; history cells | Working for normal deltas; partial recovery | `features/chat/controller.ts`, transcript parts preserve provisional discard, call IDs, live output; UUID identities, retained event notices | transcript-activity, agent-loop-codex, composer-input; **PARTIAL**: no authoritative final-text field in normalized provider completion |
 | Parallel tool outcomes | `chatwidget/command_lifecycle.rs:370`, `tool_lifecycle.rs` pair by call ID | Working | Existing independent loop and per-call parts retained | agent-loop-codex, transcript-activity, native-agent; fixture verification |

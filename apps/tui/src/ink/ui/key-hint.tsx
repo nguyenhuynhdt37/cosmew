@@ -8,9 +8,5 @@ export interface KeyHintProps {
 }
 export function KeyHint({keys, label}: KeyHintProps) {
   const {color} = useTheme();
-  return (
-    <Text color={color('foregroundMuted')}>
-      <Text bold>{safeText(keys)}</Text> {safeText(label)}
-    </Text>
-  );
+  return <Text color={color('foregroundMuted')}>{`${safeText(keys)} ${safeText(label)}`}</Text>;
 }

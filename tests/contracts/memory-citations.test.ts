@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import * as sdk from '@futryn/sdk';
+import * as sdk from '@cosmew/sdk';
 
 const block =
   '<oai-mem-citation>\n<citation_entries>\npreference.md:1-3|note=[used preference]\nMEMORY.md:1-2|note=[index]\n../outside.md:1-2|note=[bad]\npreference.md:1-3|note=[duplicate]\n</citation_entries>\n</oai-mem-citation>';

@@ -1,9 +1,27 @@
+import {
+  constants,
+  closeSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import {dirname, join} from 'node:path';
 import type {Database} from 'bun:sqlite';
 import {
   FutrynError,
   attachmentSchema,
   combineUsage,
   planStateSchema,
+  planProposalSchema,
+  type PlanProposal,
+  type RetractQueuedOptions,
+  type PromptHistoryScope,
+  type PromptHistoryEntry,
   type Attachment,
   type PlanState,
   turnReceiptSchema,
@@ -19,7 +37,7 @@ import {
   type StoredMessage,
   type SubagentSessionRecord,
   type SubagentStatus,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 import {ExecutionJournal} from './event-store';
 
@@ -73,6 +91,7 @@ export class SqliteConversations implements ConversationStore {
   constructor(
     private readonly db: Database,
     private readonly redact: (value: string) => string = value => value,
+    private readonly historyWorkspace?: string,
   ) {
     this.journal = new ExecutionJournal(db, redact);
   }
@@ -107,6 +126,64 @@ export class SqliteConversations implements ConversationStore {
     } catch {
       throw new FutrynError('STORAGE');
     }
+  }
+  /** Atomic transfer for send-now: a crash sees either the old steering or its inbox replacement. */
+  moveQueuedInputToInbox(id: string, live: readonly {steerId: string; content: string}[]): void {
+    this.db
+      .transaction(() => {
+        const items = this.retractQueuedInput(id, live);
+        for (const item of items) this.enqueueNextTurn(id, item.content);
+      })
+      .immediate();
+  }
+
+  /** Linearizes with beginExecution; live ids are exclusively owned by Conversation. */
+  retractQueuedInput(
+    id: string,
+    live: readonly {steerId: string; content: string}[] = [],
+    options: RetractQueuedOptions & {claimedIds?: readonly string[]} = {},
+  ): {steerId: string; content: string}[] {
+    return this.db
+      .transaction(() => {
+        const recovered = this.recover(id);
+        const pending = (recovered.pendingInput ?? []).map(p => ({steerId: p.steerId, content: p.message.content}));
+        const eligible = new Set<string>();
+        for (const turn of recovered.turns) {
+          const waiting = new Set<string>();
+          let requests = 0;
+          for (const {data} of turn.events) {
+            if (data.type === 'user.steered') waiting.add(data.steerId);
+            if (data.type === 'model.requested' && requests++ > 0) waiting.clear();
+          }
+          if (turn.state === 'running' || turn.state === 'pending') for (const key of waiting) eligible.add(key);
+        }
+        const items = [
+          ...pending,
+          ...live.filter(p => eligible.has(p.steerId)),
+          ...this.listNextTurn(id).map(p => ({steerId: p.id, content: p.content})),
+        ];
+        const retracted = new Set(
+          (this.db.query('SELECT id FROM input_retractions WHERE conversation=?').all(id) as {id: string}[]).map(
+            p => p.id,
+          ),
+        );
+        const all = [...new Map(items.map(p => [p.steerId, p])).values()].filter(p => !retracted.has(p.steerId));
+        const claimed = new Set(options.claimedIds ?? []);
+        const unique = all.filter(
+          p =>
+            !claimed.has(p.steerId) &&
+            (!p.content.startsWith('!') ||
+              (options.includeShell !== false && (!options.shellOnlyWhenAlone || all.length === 1))),
+        );
+        for (const item of unique)
+          this.db
+            .query('INSERT OR IGNORE INTO input_retractions VALUES(?,?,?)')
+            .run(id, item.steerId, new Date().toISOString());
+        for (const item of unique)
+          this.db.query('DELETE FROM next_turn_input WHERE conversation=? AND id=?').run(id, item.steerId);
+        return unique.map(p => ({...p, content: this.redact(p.content)}));
+      })
+      .immediate();
   }
   beginExecution(
     id: string,
@@ -147,10 +224,16 @@ export class SqliteConversations implements ConversationStore {
       throw new FutrynError('STORAGE');
     }
   }
-  recordExecution(id: string, turnId: string, event: import('@futryn/contracts').ExecutionEventData): number {
-    return this.journal.record(id, turnId, event);
+  recordExecution(id: string, turnId: string, event: import('@cosmew/contracts').ExecutionEventData): number {
+    return this.db
+      .transaction(() => {
+        const seq = this.journal.record(id, turnId, event);
+        if (event.type === 'user.steered') this.recordPrompt(id, event.steerId, event.message.content);
+        return seq;
+      })
+      .immediate();
   }
-  recover(id: string): import('@futryn/contracts').RecoveredConversation {
+  recover(id: string): import('@cosmew/contracts').RecoveredConversation {
     const messages = (
       this.db
         .query('SELECT revision,role,content,state,parts FROM messages WHERE conversation=? ORDER BY revision')
@@ -183,6 +266,96 @@ export class SqliteConversations implements ConversationStore {
           }
         })
         .immediate();
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  savePlanProposal(id: string, proposal: PlanProposal): PlanProposal {
+    let createdPath: string | undefined;
+    try {
+      const parsed = planProposalSchema.parse(this.clean(proposal));
+      if (parsed.sessionId !== id) throw new FutrynError('STORAGE');
+      // The durable store chooses the path: callers can never target arbitrary files.
+      const database = this.db.query('PRAGMA database_list').get() as {file: string};
+      if (database.file) {
+        const directory = join(dirname(database.file), 'plans');
+        mkdirSync(directory, {recursive: true, mode: 0o700});
+        const stat = lstatSync(directory);
+        if (
+          stat.isSymbolicLink() ||
+          !stat.isDirectory() ||
+          stat.mode & 0o077 ||
+          (process.getuid && stat.uid !== process.getuid())
+        )
+          throw new FutrynError('STORAGE');
+        parsed.revision ??= 1;
+        const path = join(directory, `${parsed.id}-${parsed.revision}.md`);
+        let fd: number;
+        let created = false;
+        try {
+          fd = openSync(path, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+          created = true;
+          createdPath = path;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          // Open first, then inspect and read that same inode; never follow a swapped symlink.
+          fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        }
+        try {
+          if (created) {
+            writeFileSync(fd, parsed.plan);
+            fsyncSync(fd);
+          } else {
+            const existing = fstatSync(fd);
+            const expected = Buffer.from(parsed.plan, 'utf8');
+            if (
+              !existing.isFile() ||
+              existing.mode & 0o077 ||
+              (process.getuid && existing.uid !== process.getuid()) ||
+              existing.size !== expected.length
+            )
+              throw new FutrynError('STORAGE');
+            // One extra byte detects growth after fstat, without allocating from an untrusted file size.
+            const bytes = Buffer.alloc(expected.length + 1);
+            const count = readSync(fd, bytes, 0, bytes.length, 0);
+            if (count !== expected.length || !bytes.subarray(0, count).equals(expected))
+              throw new FutrynError('STORAGE');
+          }
+        } finally {
+          closeSync(fd);
+        }
+        // Make the newly created directory entry durable before SQLite publishes its path.
+        const directoryFd = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          fsyncSync(directoryFd);
+        } finally {
+          closeSync(directoryFd);
+        }
+        parsed.path = this.redact(path);
+      }
+      this.db
+        .query(
+          'INSERT INTO session_plan_approval(conversation,data) VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET data=excluded.data',
+        )
+        .run(id, JSON.stringify(parsed));
+      return parsed;
+    } catch {
+      if (createdPath) {
+        try {
+          unlinkSync(createdPath);
+        } catch {
+          /* no authority from an orphan */
+        }
+      }
+      throw new FutrynError('STORAGE');
+    }
+  }
+  loadPlanProposal(id: string): PlanProposal | null {
+    try {
+      const row = this.db.query('SELECT data FROM session_plan_approval WHERE conversation=?').get(id) as {
+        data: string;
+      } | null;
+      return row ? planProposalSchema.parse(JSON.parse(row.data)) : null;
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -379,10 +552,10 @@ export class SqliteConversations implements ConversationStore {
       m.role === 'tool' && m.toolCallId && byCall.has(m.toolCallId) ? {...m, attachments: byCall.get(m.toolCallId)} : m,
     );
   }
-  saveTask(id: string, task: import('@futryn/contracts').ActiveTaskCheckpoint): void {
+  saveTask(id: string, task: import('@cosmew/contracts').ActiveTaskCheckpoint): void {
     this.journal.task(id, task);
   }
-  saveContextSnapshot(id: string, snapshot: import('@futryn/contracts').ContextSnapshot): void {
+  saveContextSnapshot(id: string, snapshot: import('@cosmew/contracts').ContextSnapshot): void {
     this.journal.snapshot(id, snapshot);
   }
   create(selection: Selection): string {
@@ -391,6 +564,7 @@ export class SqliteConversations implements ConversationStore {
       this.db
         .query('INSERT INTO conversations(id,selection) VALUES(?,?)')
         .run(id, JSON.stringify(selectionSchema.parse(selection)));
+      if (this.historyWorkspace) this.bindWorkspace(id, this.historyWorkspace);
       return id;
     } catch {
       throw new FutrynError('STORAGE');
@@ -403,7 +577,7 @@ export class SqliteConversations implements ConversationStore {
         if (!source) throw new FutrynError('NOT_FOUND');
         const next = this.create(selection);
         for (const message of source.recovery?.messages ?? source.messages.map(toMessage)) {
-          this.append(next, message, 'committed');
+          this.appendContext(next, message);
           if (message.attachments?.length && message.toolCallId)
             this.saveAttachments(next, message.toolCallId, message.attachments);
         }
@@ -418,7 +592,24 @@ export class SqliteConversations implements ConversationStore {
       })
       .immediate();
   }
-  append(id: string, message: Message, state: 'pending' | 'committed', receipt?: TurnReceipt): number {
+  /** Copied/synthetic context is not a new prompt submission and must not enter prompt history. */
+  appendContext(id: string, message: Message): number {
+    return this.db
+      .transaction(() => {
+        const revision = this.append(id, message, 'committed', undefined, false);
+        this.db.query('UPDATE messages SET created_at=NULL WHERE conversation=? AND revision=?').run(id, revision);
+        this.db.query('DELETE FROM prompt_history WHERE conversation=? AND id=?').run(id, `message:${revision}`);
+        return revision;
+      })
+      .immediate();
+  }
+  append(
+    id: string,
+    message: Message,
+    state: 'pending' | 'committed',
+    receipt?: TurnReceipt,
+    includeHistory = true,
+  ): number {
     try {
       return this.db
         .transaction(() => {
@@ -428,8 +619,20 @@ export class SqliteConversations implements ConversationStore {
             .get(id) as {revision: number} | null;
           if (!row) throw new FutrynError('STORAGE');
           this.db
-            .query('INSERT INTO messages (conversation, revision, role, content, state, parts) VALUES(?,?,?,?,?,?)')
-            .run(id, row.revision, message.role, message.content, state, encodeParts(message));
+            .query(
+              'INSERT INTO messages (conversation, revision, role, content, state, parts, created_at) VALUES(?,?,?,?,?,?,?)',
+            )
+            .run(
+              id,
+              row.revision,
+              message.role,
+              message.content,
+              state,
+              encodeParts(message),
+              new Date().toISOString(),
+            );
+          if (includeHistory && message.role === 'user')
+            this.recordPrompt(id, `message:${row.revision}`, message.content);
           if (receipt)
             this.db
               .query('INSERT INTO turn_receipts VALUES(?,?,?)')
@@ -454,7 +657,7 @@ export class SqliteConversations implements ConversationStore {
             .run(id, revision);
           if (result.changes !== 1) throw new FutrynError('STORAGE');
           // Tool rounds of this turn are committed together with the final answer, never on their own.
-          for (const step of intermediate) this.append(id, messageSchema.parse(step), 'committed');
+          for (const step of intermediate) this.appendContext(id, messageSchema.parse(step));
           this.append(id, messageSchema.parse(message), 'committed');
           if (receipt) this.writeReceipt(id, revision, receipt);
           this.journal.finish(id, revision, 'completed');
@@ -471,7 +674,7 @@ export class SqliteConversations implements ConversationStore {
     if (result.changes !== 1) throw new FutrynError('STORAGE');
   }
   /** Fold a compaction call's usage into the latest agent turn so session usage counts it (ADR 0054). */
-  addUsage(id: string, usage: import('@futryn/contracts').Usage): void {
+  addUsage(id: string, usage: import('@cosmew/contracts').Usage): void {
     try {
       const rows = this.db
         .query('SELECT revision,data FROM turn_receipts WHERE conversation=? ORDER BY revision DESC')
@@ -504,7 +707,7 @@ export class SqliteConversations implements ConversationStore {
             .run(state, id, revision);
           if (appliedSteps.length && updated.changes !== 1) throw new FutrynError('STORAGE');
           // Mutating receipts survive interrupted continuations; they are evidence, never replay jobs.
-          for (const step of appliedSteps) this.append(id, messageSchema.parse(step), 'committed');
+          for (const step of appliedSteps) this.appendContext(id, messageSchema.parse(step));
           if (receipt) this.writeReceipt(id, revision, receipt);
           this.journal.finish(
             id,
@@ -520,6 +723,50 @@ export class SqliteConversations implements ConversationStore {
     } catch {
       throw new FutrynError('STORAGE');
     }
+  }
+  /** Immutable workspace identity; resuming elsewhere never relabels old prompts. */
+  bindWorkspace(id: string, workspace: string): void {
+    this.db.query('UPDATE conversations SET workspace=? WHERE id=? AND workspace IS NULL').run(workspace, id);
+  }
+  private recordPrompt(sessionId: string, id: string, content: string): void {
+    const owner = this.db.query('SELECT workspace FROM conversations WHERE id=?').get(sessionId) as {
+      workspace: string | null;
+    } | null;
+    this.db
+      .query('INSERT OR IGNORE INTO prompt_history(conversation,id,workspace,at,content) VALUES(?,?,?,?,?)')
+      .run(
+        sessionId,
+        id,
+        this.historyWorkspace ?? owner?.workspace ?? null,
+        new Date().toISOString(),
+        this.redact(content).slice(0, 16000),
+      );
+    this.db
+      .query(
+        'DELETE FROM prompt_history WHERE rowid IN (SELECT rowid FROM prompt_history ORDER BY at DESC,rowid DESC LIMIT -1 OFFSET 5000)',
+      )
+      .run();
+  }
+  promptHistory(input: {
+    scope: PromptHistoryScope;
+    sessionId?: string;
+    workspace: string;
+    limit?: number;
+  }): PromptHistoryEntry[] {
+    const limit = Math.max(1, Math.min(200, Math.floor(input.limit ?? 100)));
+    const predicate =
+      input.scope === 'session' ? 'h.conversation=?' : input.scope === 'project' ? 'h.workspace=?' : '1=1';
+    const args =
+      input.scope === 'session' ? [input.sessionId ?? ''] : input.scope === 'project' ? [input.workspace] : [];
+    const rows = this.db
+      .query(
+        `SELECT h.conversation AS sessionId,h.id,h.content,h.at AS timestamp
+      FROM prompt_history h WHERE h.conversation NOT IN (SELECT id FROM subagent_sessions)
+      AND NOT EXISTS (SELECT 1 FROM input_retractions r WHERE r.conversation=h.conversation AND r.id=h.id)
+      AND ${predicate} ORDER BY h.at DESC,h.rowid DESC LIMIT ?`,
+      )
+      .all(...args, limit) as PromptHistoryEntry[];
+    return rows.map(r => ({...r, id: `${r.sessionId}:${r.id}`, content: this.redact(r.content).slice(0, 16000)}));
   }
   list(): SessionSummary[] {
     try {
@@ -619,9 +866,13 @@ export class SqliteConversations implements ConversationStore {
             for (const child of children) removeConversation(child.id);
             this.db.query('DELETE FROM subagent_sessions WHERE id=? OR parent_conversation=?').run(targetId, targetId);
             this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM prompt_history WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM turn_checkpoints WHERE session_id=?').run(targetId);
+            this.db.query('DELETE FROM input_retractions WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM session_instructions WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM session_plan WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM session_plan_approval WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM conversation_events WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM execution_turns WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM conversation_checkpoints WHERE conversation=?').run(targetId);

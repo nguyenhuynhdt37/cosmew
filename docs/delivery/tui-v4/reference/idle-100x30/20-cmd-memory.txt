@@ -1,0 +1,30 @@
+00|       sonarqube-cli: ✗ not found — run /sonarqube:sonar-integrate
+01|       SonarQube hooks: ✗ no hooks installed — run /sonarqube:sonar-integrate
+02|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+03|     protected, files are scanned as they are written
+04|
+05|❯ /resume
+06|  ⎿  Resume cancelled
+07|
+08|❯ /agents
+09|  ⎿  The /agents wizard has been removed.
+10|
+11|     Ask Claude to create or update subagents for you (e.g. "create a code-reviewer subagent that
+12|     ..."),
+13|     or edit the files directly:
+14|       • .claude/agents/       (this project)
+15|       • ~/.claude/agents/     (all projects)
+16|
+17|     Docs: https://code.claude.com/docs/en/sub-agents
+18|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+19|  Memory
+20|
+21|  ❯ Auto-memory  on
+22|
+23|  ❯ User instructions      Saved in ~/.claude/CLAUDE.md
+24|    Project instructions   Checked in at ./CLAUDE.md
+25|    Open auto-memory folder
+26|
+27|  Learn more: https://code.claude.com/docs/en/memory
+28|
+29|  ↑/↓ to navigate · Enter to select · Esc to close

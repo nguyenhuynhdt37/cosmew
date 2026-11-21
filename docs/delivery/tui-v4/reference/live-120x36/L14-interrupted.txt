@@ -1,0 +1,36 @@
+00|  A pipe connects the standard output of one process to the standard input of another. You write it with the |
+01|  character. Pipes are central to the Unix philosophy: each program does one thing well, and you combine small tools to
+02|  solve bigger problems. They were added to Version 3 Unix in 1973, at Doug McIlroy's urging, and the idea has shaped
+03|  command-line work ever since.
+04|
+05|  How they work
+06|
+07|  When the shell sees cmd1 | cmd2, it calls pipe() to create a kernel buffer with a read end and a write end. It then
+08|  forks both processes and uses dup2() to connect each one to the right end of the buffer. Both programs run at the same
+09|  time. If the buffer fills up (often 64 KB on Linux), the writer waits until the reader catches up, and if the buffer
+10|  is empty, the reader waits for more data. This backpressure keeps memory use low, even across very large data streams.
+11|
+12|  Example
+13|
+14|  # Top 5 most common words in a file
+15|  cat poem.txt \
+16|    | tr -cs '[:alpha:]' '\n' \
+17|    | tr '[:upper:]' '[:lower:]' \
+18|    | sort \
+19|    | uniq -c \
+20|    | sort -rn \
+21|    | head -5
+22|
+23|  Each stage does one small transformation: split the text into words, lowercase them, sort them, count duplicates, rank
+24|  by count, then trim to the top five.
+25|
+26|  Related operators
+27|
+28|  | Operator | Name | Purpose |
+29|  ⎿  Interrupted · What should Claude do instead?
+30|
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ plan mode on (shift+tab to cycle) · ← 1 agent

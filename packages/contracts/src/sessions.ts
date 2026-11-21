@@ -43,7 +43,18 @@ export const workspaceDiffFileSchema = z.strictObject({
 });
 export type WorkspaceDiffFile = z.infer<typeof workspaceDiffFileSchema>;
 
+export type WorkspaceDiffBase = 'session' | 'uncommitted' | 'branch';
+export interface WorkspaceDiffOptions {
+  base?: WorkspaceDiffBase;
+}
+export interface WorkspaceDiffCapability {
+  available: boolean;
+  reason?: string;
+}
 export interface WorkspaceDiffReport {
+  /** Effective comparison; Current in the TUI means session. Older hosts may omit this. */
+  base?: WorkspaceDiffBase;
+  capabilities?: Record<WorkspaceDiffBase, WorkspaceDiffCapability>;
   workspace: string;
   gitAvailable: boolean;
   branch?: string;
@@ -75,6 +86,24 @@ export interface CompactionOutcome {
   reason?: string;
 }
 
+export type PromptHistoryScope = 'session' | 'project' | 'everywhere';
+export interface PromptHistoryEntry {
+  id: string;
+  sessionId: string;
+  content: string;
+  timestamp: string;
+}
+export interface RetractQueuedOptions {
+  includeShell?: boolean;
+  /** Shell is eligible only when it is the sole queued entry (checked atomically). */
+  shellOnlyWhenAlone?: boolean;
+}
+export interface QueuedInputEntry {
+  id: string;
+  type: 'text' | 'shell';
+  content: string;
+}
+
 export interface ConversationStore {
   create(selection: Selection): string;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
@@ -88,6 +117,12 @@ export interface ConversationStore {
   ): number;
   /** User input accepted after the active turn stopped accepting steering. Never grants execution authority. */
   enqueueNextTurn?(id: string, content: string): {id: string; content: string};
+  moveQueuedInputToInbox?(id: string, live: readonly {steerId: string; content: string}[]): void;
+  retractQueuedInput?(
+    id: string,
+    live?: readonly {steerId: string; content: string}[],
+    options?: RetractQueuedOptions & {claimedIds?: readonly string[]},
+  ): {steerId: string; content: string}[];
   listNextTurn?(id: string): readonly {id: string; content: string}[];
   recordExecution?(id: string, turnId: string, event: import('./recovery').ExecutionEventData): number;
   recover?(id: string): import('./recovery').RecoveredConversation;
@@ -100,6 +135,8 @@ export interface ConversationStore {
   listInstructionDirectories?(id: string): string[];
   /** The session's current plan (`update_plan`, ADR 0042); durable, replaced as a whole. */
   savePlan?(id: string, plan: import('./tools').PlanState): void;
+  savePlanProposal?(id: string, proposal: import('./tools').PlanProposal): import('./tools').PlanProposal | void;
+  loadPlanProposal?(id: string): import('./tools').PlanProposal | null;
   loadPlan?(id: string): import('./tools').PlanState | null;
   /** Durable subagent metadata linked to a parent conversation (Wave 2 S5). */
   saveSubagentSession?(record: import('./subagents').SubagentSessionRecord): void;

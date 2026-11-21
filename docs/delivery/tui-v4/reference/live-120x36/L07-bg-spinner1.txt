@@ -1,0 +1,36 @@
+00|       9 I type a word, the shell replies,                        │                                                   ✕
+01|      10 a pipe connects one thought to two,                      │2 files changed +1 -1              source: Current ▾
+02|     … +50 lines                                                  │
+03|                                                                  │a.txt                                          +1 -1
+04|❯ also give it a title                                            │poem.txt
+05|                                                                  │
+06|⏺ Update(poem.txt)                                                │────────────────────────────────────────────────────
+07|  ⎿  Added 2 lines                                                │a.txt                                        [ ask ]
+08|      1 +Exit Zero                                                │────────────────────────────────────────────────────
+09|      2 +                                                         │ 1 -hello
+10|      3  A cursor blinks against the black,                       │ 1 +HELLO
+11|      4  a heartbeat on an empty line;                            │ 2  world
+12|      5  it never hurries, never asks,                            │
+13|                                                                  │────────────────────────────────────────────────────
+14|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it  │poem.txt (untracked)
+15|  the title "Exit Zero", which comes from its last line.          │────────────────────────────────────────────────────
+16|                                                                  │New file not yet staged.
+17|  The poem has 15 four-line stanzas. They cover the blinking      │Run `git add :/poem.txt` to see line counts.
+18|  cursor, pipes, standard in, out and error, man pages, command   │
+19|  history, Ctrl-C and Ctrl-D, and tmux panes. The title and a     │
+20|  blank line sit above the poem, so the file is 62 lines long.    │
+21|                                                                  │
+22|✻ Baked for 29s · done 11:05 PM                                   │
+23|                                                                  │
+24|❯ Run sleep 40 as a background shell command (run_in_background)  │
+25|  and then just reply 'started'.                                  │
+26|                                                                  │
+27|✽ Concocting…                                                     │
+28|  ⎿  Tip: Run /install-github-app to tag @claude in your GitHub   │
+29|     issues and PRs                                               │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

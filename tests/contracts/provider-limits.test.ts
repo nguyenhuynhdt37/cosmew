@@ -2,8 +2,8 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {FutrynError} from '@futryn/contracts';
-import {parseOpenRouterKeyLimits} from '@futryn/models';
+import {FutrynError} from '@cosmew/contracts';
+import {parseOpenRouterKeyLimits} from '@cosmew/models';
 
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
@@ -31,7 +31,7 @@ test('malformed key responses are protocol errors, never zero balances', () => {
 });
 
 test('OpenAI and Anthropic rate-limit headers become quota entries; bad values are skipped', async () => {
-  const {parseRateLimitHeaders, parseDurationMs} = await import('@futryn/models');
+  const {parseRateLimitHeaders, parseDurationMs} = await import('@cosmew/models');
   expect(parseDurationMs('6m0s')).toBe(360000);
   expect(parseDurationMs('1h2m3.5s')).toBe(3723500);
   expect(parseDurationMs('20ms')).toBe(20);

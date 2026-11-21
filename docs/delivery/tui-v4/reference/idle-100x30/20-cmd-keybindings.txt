@@ -1,0 +1,30 @@
+00|     MCP tools · /mcp (loaded on-demand)
+01|     └ 155 tools · 669 tokens
+02|
+03|     Custom agents · .claude/agents/
+04|     └ 23 agents · 4.7k tokens
+05|
+06|     Skills · /skills
+07|     └ 220 skills · 9.9k tokens
+08|
+09|     /context all to expand
+10|
+11|❯ /export
+12|  ⎿  Export cancelled
+13|
+14|❯ /diff
+15|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+16|
+17|❯ /effort
+18|  ⎿  Cancelled
+19|
+20|❯ /keybindings
+21|
+22|✻ Imagining…
+23|  ⎿  Tip: Run /web-setup to use cloud sessions with the GitHub account gh is signed in to
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on · esc to interrupt · ← 1 agent

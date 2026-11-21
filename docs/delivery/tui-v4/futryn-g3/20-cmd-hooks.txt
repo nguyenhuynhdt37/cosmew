@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 0 tokens (0%)
+01|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛝ Autocompact buffer: 0 tokens (0%)
+02|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+03|
+04|     Auto-compact window:  Not reported
+05|
+06|     MCP tools · /mcp
+07|     └ Not implemented
+08|
+09|     Custom agents · .cosmew/agents/
+10|     └ 0 agents
+11|
+12|     Skills · /skills
+13|     └ 111 skills
+14|
+15|     System prompt and tool schemas are not measured.
+16|
+17|❯ /rewind
+18|  ⎿  Rewind cancelled
+19|
+20|❯ /mcp
+21|  ⎿  Closed mcp
+22|
+23|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+24|  Hooks
+25|
+26|  Not implemented
+27|  Cosmew does not run hooks, so there is nothing to list.
+28|
+29|  Esc to close

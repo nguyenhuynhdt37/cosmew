@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {FutrynError, type ToolDescriptor} from '@futryn/contracts';
+import {FutrynError, type ToolDescriptor} from '@cosmew/contracts';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import type {PreparedTool, ToolHandler} from './types';
 import {parseFetchUrl, WebFetchRuntime} from '../runtimes/web-fetch';

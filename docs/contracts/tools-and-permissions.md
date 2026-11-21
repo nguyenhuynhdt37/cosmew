@@ -79,3 +79,30 @@ ask-required content; automatic instructions do not prompt or create grants.
 Trusted ripgrep can scan before output filtering; the fallback worker also filters
 before reading. This distinction is an implementation limit, not proof of a
 per-file OS sandbox for arbitrary third-party language servers.
+
+## Claude Code permission model (contract 1.36)
+
+[ADR 0061](../adr/0061-claude-code-permissions-and-sandbox.md) replaces the Codex approval policy, presets and `request_permissions`.
+
+- `PermissionMode = default | acceptEdits | plan | bypassPermissions` (`auto` removed); `permissionModeDecision(mode, kind)` is the mode table over `PermissionKind = read | secret | edit | sandboxed-command | command | escalation | network | other`. Order: deny rule > `plan` refusal of edit/command/escalation/network > ask rule > allow rule > mode. `bypassPermissions` is launch-only (`--dangerously-skip-permissions`).
+- Rules: `Bash`, `Bash(prefix:*)`, `Read(path-glob)`, `Edit(path-glob)` (`Write` alias), `WebFetch(domain:host)`, `WebSearch`, `mcp__server[__tool|__*]`, `Tool(name)`; `Network(...)` and `Unsandboxed(...)` are gone.
+- Settings: `PermissionSettingsPort` / `PermissionSettingsSnapshot` (merged and trust-filtered rules, `defaultMode`, `additionalDirectories`, `sandbox.{enabled, autoAllowBashIfSandboxed, excludedCommands, allowUnsandboxedCommands, allowedDomains}`, per-file info, `pendingTrust`). Repository files loosen nothing until their content hash is approved (`capability: settings.trust`, decisions `session | always`).
+- `exec_command` input: `cmd, workdir, tty, shell, login, yield_time_ms, max_output_tokens, timeout_ms, dangerouslyDisableSandbox, justification` (strict; `sandbox_permissions`, `additional_permissions`, `prefix_rule` rejected). `CommandSandbox` adds `proxyUrl`, `writableRoots`, `denyRead`, `denyWrite`; `network: true` now only marks an unsandboxed command.
+- Network gate: `CosmewClient.authorizeNetwork(host, port)` decides each proxy connection (`network.connect` prompt with `alwaysRule: domain:<host>`); audit tool `sandbox_network`.
+- `status()`: `permissionMode`, `sandbox {enabled, autoAllowBashIfSandboxed, allowUnsandboxedCommands, allowedDomains, excludedCommands, additionalDirectories}`, `bypassAvailable`, `terminalRuntime {sandbox: enabled|disabled|unavailable, unsandboxedAllowed}`; `approvalPolicy`, `sandboxMode`, `permissionPreset`, `sandboxNetwork` removed.
+
+## Working directories (ADR 0067, no contract bump)
+
+Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither stays refused. `.git`, Cosmew/Hannes state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` still defaults to on. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
+
+## User MCP (ADR 0068, no contract bump)
+
+`fyn mcp` reads only the user file `<state>/mcp.json` (`mcpServers` stdio or HTTP). Project `.cosmew/mcp.json` and `.mcp.json` are not started. Each remote tool is `mcp__server__tool` and goes through ToolDispatcher (`mcp.call`): `default` and `acceptEdits` ask, `plan` and a read-only agent deny without a prompt, an exact tool name may be saved as Always. Results are untrusted, bounded and redacted. Stdio servers from that user file run unsandboxed. OAuth, project launch, `tool_search` and `mcp_resource` are not in this slice. See [ADR 0068](../adr/0068-user-mcp-connect.md).
+
+## Captured tool evidence (contract 1.37)
+
+[ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md). `ToolOutputArchive` is an injected persistence port; `OutputArchiveScope` binds the canonical workspace and conversation ID. `ArchivedToolOutput` contains a source descriptor, redacted capture, permission-context digest and truncation flag. The SQLite auxiliary cache does not change conversation schema version 8.
+
+When configured, `tool_output({output_id, offset?, limit?, query?})` pages or searches historical captured output. `query` is literal; offset counts Unicode code points in the currently redacted view; `limit` bounds page text in UTF-8 bytes (1–10000). The metadata reports coverage, `next_offset`, source truncation and search outcome. Too small a byte limit to fit the next code point returns `OUTPUT_PAGE_TOO_SMALL`. Missing/expired/evicted/cross-session handles return `OUTPUT_UNAVAILABLE`. Cache bounds: 1 MiB per artifact, 8 MiB per session, 1024 global entries and seven-day retention.
+
+Retrieval is a dispatcher operation with audit, explicit `Tool(tool_output)` policy and current source Read checks. Effective policy/session/workspace changes or grant revocation invalidate access. No source command or web request runs again. Handles do not restore grants after host restart; reread the source under current permissions when needed. Archive contents are untrusted evidence, never new instructions. Persistence stores redacted producer output before the generic result clip; it cannot recover bytes already omitted by a producer/process runtime. Optional cache write failure leaves the original result usable and reports archive unavailability rather than replaying the operation.

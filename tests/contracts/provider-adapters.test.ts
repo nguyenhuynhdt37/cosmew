@@ -1,8 +1,8 @@
 import {afterEach, test, expect} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {FutrynError, GENERATION_LIMITS, type Account, type ModelRequest} from '@futryn/contracts';
-import {ConfiguredNetworkPolicy} from '@futryn/security';
-import {SqliteSettings} from '@futryn/persistence';
+import {FutrynError, GENERATION_LIMITS, type Account, type ModelRequest} from '@cosmew/contracts';
+import {ConfiguredNetworkPolicy} from '@cosmew/security';
+import {SqliteSettings} from '@cosmew/persistence';
 import {
   AccountManager,
   ModelCatalog,
@@ -11,14 +11,21 @@ import {
   ProviderRegistry,
   ProviderTransport,
   normalizeModel,
+  normalizeError,
   retryAfter,
   retryDelay,
-} from '@futryn/models';
+} from '@cosmew/models';
 import {fixtureServer, memoryVault} from '../fixtures';
 
 const servers: ReturnType<typeof fixtureServer>[] = [];
 afterEach(() => {
   for (const f of servers.splice(0)) f.server.stop(true);
+});
+
+test('provider SDK errors with status or response.status preserve auth and HTTP codes', () => {
+  expect(normalizeError({status: 401}).code).toBe('AUTH');
+  expect(normalizeError({response: {status: 403}}).code).toBe('FORBIDDEN');
+  expect(normalizeError({statusCode: 404}).code).toBe('NOT_FOUND');
 });
 const setup = (protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat') => {
   const f = fixtureServer();
@@ -106,6 +113,23 @@ for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
     x.db.close();
   });
 }
+
+test('malformed provider tool identity fails before it can enter the core loop', async () => {
+  const x = setup('chat');
+  x.f.set({toolCall: {name: 'lookup with spaces', args: '{}'}});
+  const info = normalizeModel('fixture-model', 'fixture');
+  info.capabilities.tools = 'supported';
+  await expect(
+    Array.fromAsync(
+      new ProviderAdapter(x.transport, 'fixture-model', info).stream({
+        ...x.request,
+        tools: [{name: 'lookup', description: 'fixture', inputSchema: {type: 'object'}}],
+      }),
+    ),
+  ).rejects.toMatchObject({code: 'PROTOCOL'});
+  x.db.close();
+});
+
 test('missing keys do not invoke HTTP; a model known to reject tools fails before network', async () => {
   const x = setup();
   x.vault.values.clear();
@@ -185,20 +209,86 @@ test('catalog pagination, manual entries, unknown metadata and account-isolated 
   expect(otherCatalog.cached()).toEqual([]);
   x.f.set({status: 503});
   expect((await catalog.discover()).stale).toBe(true);
+  x.f.set({status: 429});
+  expect((await catalog.discover()).stale).toBe(true);
   x.f.set({status: 401});
   await expect(catalog.discover()).rejects.toMatchObject({code: 'AUTH'});
   x.db.close();
 });
+test('catalog normalizes compatible metadata and accepts ChatGPT entries without visibility', async () => {
+  const x = setup('chat');
+  const provider = {...x.provider, modelCatalogURL: x.provider.baseURL + '/catalog'};
+  const transport = new ProviderTransport(provider, x.account, x.vault, new ConfiguredNetworkPolicy(), (async () =>
+    Response.json({
+      data: [
+        {
+          id: 'vision-model',
+          name: 'Vision model',
+          input_modalities: ['text', 'image'],
+          supported_parameters: ['tools', 'reasoning'],
+          reasoning_efforts: ['low', 'high'],
+        },
+      ],
+    })) as unknown as typeof fetch);
+  const model = (await new ModelCatalog(x.store, transport).discover()).models[0]!;
+  expect(model.id).toBe('vision-model');
+  expect(model.capabilities).toMatchObject({
+    text: 'supported',
+    vision: 'supported',
+    tools: 'supported',
+    reasoning: 'supported',
+  });
+  expect(model.reasoningEfforts).toEqual(['low', 'high']);
+  x.db.close();
+});
+
+test('OpenAI-compatible chat sends an advertised reasoning effort through its native option', async () => {
+  const x = setup('chat');
+  try {
+    const info = normalizeModel('fixture-model', 'fixture');
+    info.reasoningEfforts = ['low', 'high'];
+    info.capabilities.reasoning = 'supported';
+    const adapter = new ProviderAdapter(x.transport, x.request.modelId, info);
+    await adapter.generate({...x.request, reasoningEffort: 'high'});
+    expect(x.f.requests.at(-1)?.body?.reasoning_effort).toBe('high');
+  } finally {
+    x.db.close();
+  }
+});
+
+test('non-Chat protocols reject advertised reasoning efforts until a wire mapping exists', async () => {
+  for (const protocol of ['anthropic', 'gemini'] as const) {
+    const x = setup(protocol);
+    try {
+      const info = normalizeModel('fixture-model', 'fixture');
+      info.reasoningEfforts = ['high'];
+      await expect(
+        new ProviderAdapter(x.transport, x.request.modelId, info).generate({...x.request, reasoningEffort: 'high'}),
+      ).rejects.toMatchObject({code: 'UNSUPPORTED'});
+      expect(x.f.requests).toHaveLength(0);
+    } finally {
+      x.db.close();
+    }
+  }
+});
+
 test('metadata provenance never upgrades capability claims', () => {
   const x = setup();
   const catalog = new ModelCatalog(x.store, x.transport);
   catalog.manual('fixture-model');
+  const before = catalog.cached()[0]!;
+  before.contextLimit = 1234;
+  before.pricing = {inputPerMillion: 1, outputPerMillion: 2, currency: 'USD'};
+  x.store.update(s => {
+    s.catalogs[0]!.models[0] = before;
+  });
   catalog.enrichModelsDev({
-    fixture: {models: {'fixture-model': {tool_call: true, limit: {context: 20000}, cost: {input: 1, output: 2}}}},
+    fixture: {models: {'fixture-model': {tool_call: true, cost: {input: 3}}}},
   });
   const model = catalog.cached()[0]!;
   expect(model.capabilities.tools).toBe('unknown');
-  expect(model.contextLimit).toBe(20000);
+  expect(model.contextLimit).toBe(1234);
+  expect(model.pricing).toEqual({inputPerMillion: 1, outputPerMillion: 2, currency: 'USD'});
   expect(model.metadataSource).toContain('models.dev');
   x.db.close();
 });
@@ -316,9 +406,43 @@ test('chat HTTP usage preserves explicit zero breakdowns without inventing missi
       expect(missing.cacheReadTokens).toBeUndefined();
       expect(missing.cacheWriteTokens).toBeUndefined();
       expect(missing.reasoningTokens).toBeUndefined();
+      reported = {
+        inputTokens: 7,
+        outputTokens: 3,
+        inputTokenDetails: {cacheReadTokens: 1},
+        outputTokenDetails: {reasoningTokens: 2},
+      };
+      expect(await read()).toMatchObject({inputTokens: 7, outputTokens: 3, cacheReadTokens: 1, reasoningTokens: 2});
       reported = {};
       expect(await read()).toMatchObject({inputTokens: null, outputTokens: null});
     }
+    // Cache counters are a breakdown of the reported input total. They must not make the
+    // aggregate cost disappear: without cache-specific prices this remains an explicitly marked
+    // estimate at the model's normal input rate.
+    const info = normalizeModel('fixture-model', 'fixture');
+    info.pricing = {inputPerMillion: 1, outputPerMillion: 2, currency: 'USD'};
+    reported = {
+      prompt_tokens: 10,
+      completion_tokens: 4,
+      prompt_tokens_details: {cached_tokens: 6, cache_write_tokens: 2},
+      completion_tokens_details: {reasoning_tokens: 1},
+    };
+    const priced = await new ProviderAdapter(transport, x.request.modelId, info).generate(x.request);
+    expect(priced.usage).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheReadTokens: 6,
+      cacheWriteTokens: 2,
+      reasoningTokens: 1,
+      costUSD: 0.000018,
+      costEstimated: true,
+    });
+    // A broken provider counter cannot create a negative usage value or fail an otherwise valid
+    // response; the cache detail stays visible while the non-cached remainder is clamped.
+    reported = {prompt_tokens: 4, completion_tokens: 2, prompt_tokens_details: {cached_tokens: 8}};
+    const malformedBreakdown = await new ProviderAdapter(transport, x.request.modelId, info).generate(x.request);
+    expect(malformedBreakdown.usage.cacheReadTokens).toBe(8);
+    expect(malformedBreakdown.usage.costUSD).toBe(0.000008);
   } finally {
     server.stop(true);
     x.db.close();

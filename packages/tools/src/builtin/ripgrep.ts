@@ -1,13 +1,13 @@
 import {isAbsolute, relative} from 'node:path';
 import {readDecision, type ToolDispatcherOptions} from '../context';
-import type {ResolvedPath, WorkspaceRoot} from '@futryn/workspace';
-import {FutrynError} from '@futryn/contracts';
+import type {ResolvedPath, WorkspaceRoot} from '@cosmew/workspace';
+import {FutrynError} from '@cosmew/contracts';
 import {LIMITS} from '../limits';
 
 /**
- * ripgrep backend for the grep tool (ADR 0038). rg only lists matches; Futryn still decides what
+ * ripgrep backend for the grep tool (ADR 0038). rg only lists matches; Cosmew still decides what
  * the model sees: every reported path is re-resolved inside the workspace and judged by the read
- * policy, so secret, Git and Futryn-state files never reach the model and symlink escapes are
+ * policy, so secret, Git and Cosmew-state files never reach the model and symlink escapes are
  * dropped. rg runs without a config file, without following symlinks and with an empty environment.
  */
 
@@ -60,7 +60,9 @@ function argsFor(query: GrepQuery, base: ResolvedPath): string[] {
     if (query.after) args.push('--after-context', String(query.after));
   }
   args.push('--regexp', query.pattern);
-  if (base.relative !== '.') args.push('--', base.relative);
+  // A granted directory's identity is absolute, so rg is given that path and prints absolute hits.
+  if (isAbsolute(base.relative)) args.push('--', base.absolute);
+  else if (base.relative !== '.') args.push('--', base.relative);
   return args;
 }
 
@@ -155,6 +157,7 @@ export function visibleHits(
   stateDirectory: string | undefined,
   filter?: {glob: string; base: string},
   readPolicy?: ToolDispatcherOptions['readPolicy'],
+  roots: readonly string[] = [],
 ): {files: FileHits[]; skippedSecret: number} {
   const files: FileHits[] = [];
   const glob = filter ? new Bun.Glob(filter.glob) : null;
@@ -165,7 +168,7 @@ export function visibleHits(
     if (glob && !(hit.path.startsWith(prefix) && glob.match(hit.path.slice(prefix.length)))) continue;
     let file: ResolvedPath;
     try {
-      file = workspace.resolve(hit.path);
+      file = workspace.resolve(hit.path, roots);
     } catch {
       continue;
     }
@@ -198,6 +201,7 @@ export async function ripgrepSearch(options: {
   // 0 = matches, 1 = none, 2 = error (with --no-messages only fatal ones such as a bad pattern).
   if (exitCode === 2 && !stdout.trim() && !cut)
     return {error: (stderr.trim().split('\n').slice(0, 6).join('\n') || 'ripgrep failed').slice(0, LIMITS.lineChars)};
+  const roots = options.base.root === options.workspace.root ? [] : [options.base.root];
   const {files, skippedSecret} = visibleHits(
     options.workspace,
     parseHits(stdout, options.query.mode),
@@ -206,6 +210,7 @@ export async function ripgrepSearch(options: {
       ? {glob: options.query.glob, base: options.base.relative}
       : undefined,
     options.readPolicy,
+    roots,
   );
   return {files, skippedSecret, cut};
 }

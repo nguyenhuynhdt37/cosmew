@@ -65,7 +65,8 @@ for (const protocol of ['chat', 'anthropic'] as const)
     await c.tui.handleKey('1');
     await c.tui.idle();
     expect(readFileSync(join(c.root, 'notes.txt'), 'utf8')).toBe('PATCH_MARKER\n');
-    expect(c.tui.computeFrameSnapshot().plainText).toContain('notes.txt · update · applied diff');
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('Update(notes.txt)'); // the edit keeps its own entry with the receipt and diff
+    expect(c.tui.computeFrameSnapshot().plainText).toContain('Added 1 line, removed 1 line');
     const answer = c.tui.getTranscript().at(-1)!;
     expect(answer.content).toContain('MODEL_CONTINUED');
     expect(answer.content).toContain('PATCH_MARKER');

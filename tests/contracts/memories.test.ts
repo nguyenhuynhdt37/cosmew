@@ -11,11 +11,11 @@ import {
 } from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import * as persistence from '@futryn/persistence';
-import {Redactor, SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
+import * as persistence from '@cosmew/persistence';
+import {Redactor, SessionGrants} from '@cosmew/security';
+import {DEFAULT_SANDBOX_CONFIG, ToolDispatcher} from '@cosmew/tools';
 import * as fs from 'node:fs';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {WorkspaceRoot} from '@cosmew/workspace';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -106,7 +106,7 @@ test('memory dispatcher state operations are audited, redacted, never request fi
   const dispatcher = new ToolDispatcher({
     workspace: new WorkspaceRoot(project),
     memories: store,
-    sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false}),
     grants: new SessionGrants(),
     redact: t => redactor.text(t),
     approve: async request => {
@@ -126,7 +126,7 @@ test('memory dispatcher state operations are audited, redacted, never request fi
   expect(audit.filter(p => p === 'completed')).toHaveLength(5);
 });
 
-for (const restriction of ['read-only', 'analysisOnly'] as const)
+for (const restriction of ['read-only', 'plan', 'analysisOnly'] as const)
   test(`memory ${restriction} refuses mutations but permits list/read`, async () => {
     const {store, project} = fixture();
     store.write(entry);
@@ -136,7 +136,11 @@ for (const restriction of ['read-only', 'analysisOnly'] as const)
       workspace: new WorkspaceRoot(project),
       memories: store,
       grants: new SessionGrants(),
-      sandbox: () => ({mode: restriction === 'read-only' ? 'read-only' : 'workspace-write', escalation: 'on-request'}),
+      sandbox: () => ({
+        ...DEFAULT_SANDBOX_CONFIG,
+        readOnly: restriction === 'read-only',
+        permissionMode: restriction === 'plan' ? 'plan' : 'default',
+      }),
       analysisOnly: () => restriction === 'analysisOnly',
       redact: t => t,
       approve: async () => {
@@ -166,7 +170,7 @@ test('memory mutation rechecks analysis mode after approval and cancellation nev
     workspace: new WorkspaceRoot(project),
     memories: store,
     grants: new SessionGrants(),
-    sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false}),
     analysisOnly: () => analysis,
     redact: t => t,
     approve: async () => {

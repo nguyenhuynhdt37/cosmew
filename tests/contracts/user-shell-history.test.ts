@@ -1,9 +1,9 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
-import type {ToolResult} from '@futryn/contracts';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
+import type {ToolResult} from '@cosmew/contracts';
 import {runUserShellCommand} from '../../apps/cli/src/bootstrap/user-shell';
 
 function fixture() {
@@ -136,7 +136,7 @@ test.skipIf(process.platform !== 'darwin')(
     const {existsSync} = await import('node:fs');
     expect(existsSync('/usr/bin/sandbox-exec')).toBe(true);
     const {startup} = await import('../../apps/cli/src/bootstrap/startup');
-    const {NativeCommandRuntime} = await import('@futryn/tools');
+    const {NativeCommandRuntime} = await import('@cosmew/tools');
     const {fixtureServer, memoryVault} = await import('../fixtures');
     const directory = mkdtempSync(join(tmpdir(), 'futryn-shell-native-'));
     const server = fixtureServer();
@@ -144,6 +144,12 @@ test.skipIf(process.platform !== 'darwin')(
       vault: memoryVault(),
       commands: (workspaceRoot, stateDirectory) => new NativeCommandRuntime({workspaceRoot, stateDirectory}),
     });
+    // Keep the approval path under test: with autoAllowBashIfSandboxed off a sandboxed command still asks.
+    writeFileSync(
+      join(directory, 'state', 'settings.json'),
+      JSON.stringify({sandbox: {autoAllowBashIfSandboxed: false}}),
+      {mode: 0o600},
+    );
     try {
       app.registry.add(server.provider('chat', {id: 'shell-native', auth: 'none'}));
       await app.accounts.add('shell-native', 'shell-native', {kind: 'none'});

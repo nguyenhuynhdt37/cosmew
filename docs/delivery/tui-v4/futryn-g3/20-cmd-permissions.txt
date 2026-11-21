@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /…/demo-g3b
+04|
+05|❯ /help
+06|  ⎿  Closed help
+07|
+08|❯ /config
+09|  ⎿  Closed config
+10|
+11|❯ /status
+12|  ⎿  Closed status
+13|
+14|❯ /cost
+15|  ⎿  Closed cost
+16|
+17|
+18|
+19|
+20|
+21|
+22|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+23|  Permissions  Recently blocked   Allow   Ask   Deny   Mode   Workspace
+24|
+25|  Cosmew won't ask before using allowed tools.
+26|
+27|  ❯ Add a new rule…
+28|
+29|  ↓ to navigate · ←/→ to switch · type to search · Enter to remove a rule · Esc to close

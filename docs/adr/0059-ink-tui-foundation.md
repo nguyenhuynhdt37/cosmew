@@ -35,6 +35,7 @@ root typecheck/Bun nhận React mà không đổi renderer cũ.
 2. [ĐÃ ĐỔI 2026-11-18, Pha 3] Ink là TUI duy nhất; `FUTRYN_TUI` và renderer cũ đã bị xoá. Nội dung gốc: trong thời gian chuyển đổi, `FUTRYN_TUI=ink` lazy-load runtime mới; mọi giá trị
    khác giữ runtime cũ. Không bật Ink mặc định ở Pha 0. Non-TTY in một frame
    rồi thoát; TTY dùng scrollback thường, không alternate buffer.
+   [ĐÃ ĐỔI 2026-11-19, ADR 0064] TTY tương tác chiếm alternate screen và khung đúng số hàng. Non-TTY vẫn một frame.
 3. Pha 1 giữ feature boundaries của ADR 0015 trong các React feature folders;
    bốn agent chỉ sửa vùng của mình theo contracts. Pha 2 nối slots/lifecycle,
    startup consent, auth, command routing và event-driven views.

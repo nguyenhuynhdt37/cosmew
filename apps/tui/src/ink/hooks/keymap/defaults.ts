@@ -1,0 +1,193 @@
+/**
+ * Default bindings: one table for dispatch, `?`/`/help`, `/keybindings` and validation (docs/delivery/tui-v4/keys.md).
+ * Contexts and action ids follow the Claude Code keybinding schema so a user file ports over.
+ */
+export const KEY_CONTEXTS = [
+  'Global',
+  'Chat',
+  'Autocomplete',
+  'Confirmation',
+  'Select',
+  'Tabs',
+  'Transcript',
+  'HistorySearch',
+  'Scroll',
+  'Settings',
+  'ModelPicker',
+  'EffortSlider',
+  'Footer',
+  'MessageSelector',
+  'DiffDialog',
+  'DiffPanel',
+  'Help',
+] as const;
+export type KeyContext = (typeof KEY_CONTEXTS)[number];
+
+/** Dispatch order: the innermost (highest rank) context sees a key first; Global is last. */
+export const CONTEXT_RANK: Record<KeyContext, number> = {
+  Global: 0,
+  Scroll: 1,
+  Footer: 4,
+  Chat: 3,
+  Autocomplete: 4,
+  DiffPanel: 5,
+  HistorySearch: 5,
+  Transcript: 5,
+  Tabs: 6,
+  Select: 6,
+  Settings: 7,
+  Help: 7,
+  Confirmation: 7,
+  ModelPicker: 7,
+  EffortSlider: 7,
+  MessageSelector: 7,
+  DiffDialog: 7,
+};
+
+export interface DefaultBinding {
+  context: KeyContext;
+  action: string;
+  keys: readonly string[];
+  description: string;
+}
+const b = (context: KeyContext, action: string, keys: readonly string[], description: string): DefaultBinding => ({
+  context,
+  action,
+  keys,
+  description,
+});
+export const DEFAULT_BINDINGS: readonly DefaultBinding[] = [
+  b('Global', 'app:interrupt', ['ctrl+c'], 'Interrupt the turn, clear the input, press twice to exit'),
+  b('Global', 'app:exit', ['ctrl+d'], 'Exit on an empty input (twice); delete the character after the cursor'),
+  b('Global', 'app:toggleTodos', ['ctrl+t'], 'Show or hide the todo checklist'),
+  b('Global', 'app:toggleTranscript', ['ctrl+o'], 'Detailed transcript'),
+  b('Global', 'history:search', ['ctrl+r'], 'Search prompt history'),
+  b('Chat', 'chat:cancel', ['escape'], 'Interrupt the response / close the dialog'),
+  b('Chat', 'chat:submit', ['enter'], 'Send (queues while a turn runs)'),
+  b('Chat', 'chat:queueSubmit', ['ctrl+x enter'], 'Queue the message for after the turn'),
+  b('Chat', 'chat:sendNow', ['ctrl+enter', 'ctrl+x ctrl+s'], 'Send queued messages now'),
+  b('Chat', 'chat:newline', ['ctrl+j', 'alt+enter', 'shift+enter'], 'Insert a newline'),
+  b('Chat', 'chat:cycleMode', ['shift+tab'], 'Cycle the permission mode'),
+  b('Chat', 'chat:modelPicker', ['alt+p'], 'Switch model'),
+  b('Chat', 'chat:fastMode', ['alt+o'], 'Toggle fast mode'),
+  b('Chat', 'chat:thinkingToggle', ['alt+t'], 'Toggle extended thinking'),
+  b('Chat', 'chat:clearInput', ['ctrl+l'], 'Redraw the screen (keeps the input)'),
+  b('Chat', 'chat:undo', ['ctrl+_', 'ctrl+shift+-'], 'Undo the last edit'),
+  b('Chat', 'chat:externalEditor', ['ctrl+g', 'ctrl+x ctrl+e'], 'Edit the input in $VISUAL / $EDITOR'),
+  b('Chat', 'chat:stash', ['ctrl+s'], 'Stash the prompt / restore it from an empty input'),
+  b('Chat', 'chat:imagePaste', ['ctrl+v'], 'Paste an image'),
+  b('Chat', 'chat:suspend', ['ctrl+z'], 'Suspend (fg to return)'),
+  b('Chat', 'chat:killAgents', ['ctrl+x ctrl+k'], 'Stop all background subagents (press twice)'),
+  b('Chat', 'task:background', ['ctrl+b', 'ctrl+x ctrl+b'], 'Move the running command or agent to the background'),
+  b('Chat', 'history:previous', ['up', 'ctrl+p'], 'Move up a line, then to the previous prompt'),
+  b('Chat', 'history:next', ['down', 'ctrl+n'], 'Move down a line, then to the next prompt'),
+  b('Autocomplete', 'autocomplete:accept', ['tab'], 'Accept the suggestion'),
+  b('Autocomplete', 'autocomplete:dismiss', ['escape'], 'Close the suggestions'),
+  b('Autocomplete', 'autocomplete:previous', ['up', 'ctrl+p'], 'Previous suggestion'),
+  b('Autocomplete', 'autocomplete:next', ['down', 'ctrl+n'], 'Next suggestion'),
+  b('Confirmation', 'confirm:yes', ['enter'], 'Accept the highlighted choice'),
+  b('Confirmation', 'confirm:no', ['escape'], 'Decline / cancel'),
+  b('Confirmation', 'confirm:previous', ['up', 'ctrl+p'], 'Previous choice'),
+  b('Confirmation', 'confirm:next', ['down', 'ctrl+n'], 'Next choice'),
+  b('Confirmation', 'confirm:toggle', ['space'], 'Toggle the highlighted choice'),
+  b('Confirmation', 'confirm:amend', ['tab'], 'Open or close the comment field'),
+  b('Confirmation', 'confirm:cycleMode', ['shift+tab'], 'Allow for the rest of the session'),
+  b('Select', 'select:next', ['down', 'j', 'ctrl+n'], 'Next item'),
+  b('Select', 'select:previous', ['up', 'k', 'ctrl+p'], 'Previous item'),
+  b('Select', 'select:pageUp', ['pageup'], 'Page up'),
+  b('Select', 'select:pageDown', ['pagedown'], 'Page down'),
+  b('Select', 'select:first', ['home'], 'First item'),
+  b('Select', 'select:last', ['end'], 'Last item'),
+  b('Select', 'select:accept', ['enter'], 'Choose the highlighted item'),
+  b('Select', 'select:cancel', ['escape'], 'Cancel'),
+  b('Tabs', 'tabs:next', ['tab', 'right'], 'Next tab'),
+  b('Tabs', 'tabs:previous', ['shift+tab', 'left'], 'Previous tab'),
+  b('Tabs', 'tabs:focusContent', ['down'], 'Move focus from the tab row to the content'),
+  b('Tabs', 'tabs:focusTabs', ['up'], 'Move focus from the content to the tab row'),
+  // Claude Code 2.1.330 B1/B4: docs/delivery/tui-v4/reference/transcript-2.1.330/binary-evidence.txt.
+  // Search/match keys come from B4's controller; keep them remappable here too.
+  b('Transcript', 'transcript:toggleShowAll', ['ctrl+e'], 'Show all / collapse'),
+  b('Transcript', 'transcript:search', ['/'], 'search'),
+  b('Transcript', 'transcript:nextMatch', ['n'], 'cycle matches'),
+  b('Transcript', 'transcript:previousMatch', ['shift+n'], 'cycle matches'),
+  b('Transcript', 'scroll:halfPageUp', ['ctrl+u'], 'move half a page'),
+  b('Transcript', 'scroll:halfPageDown', ['ctrl+d'], 'move half a page'),
+  b('Transcript', 'scroll:fullPageUp', ['ctrl+b', 'b'], 'move a page'),
+  b('Transcript', 'scroll:fullPageDown', ['ctrl+f', 'space'], 'move a page'),
+  b('Transcript', 'scroll:lineUp', ['ctrl+p', 'k', 'up'], 'scroll'),
+  b('Transcript', 'scroll:lineDown', ['ctrl+n', 'j', 'down'], 'scroll'),
+  b('Transcript', 'scroll:top', ['g', 'home'], 'go to top/bottom'),
+  b('Transcript', 'scroll:bottom', ['shift+g', 'end'], 'go to top/bottom'),
+  b('Transcript', 'transcript:exit', ['q', 'ctrl+c', 'escape'], 'Leave the transcript'),
+  b('Transcript', 'transcript:previousPrompt', ['{'], 'jump between prompts'),
+  b('Transcript', 'transcript:nextPrompt', ['}'], 'jump between prompts'),
+  b('Transcript', 'transcript:dumpScrollback', ['['], 'print to scrollback'),
+  b('Transcript', 'transcript:openEditor', ['v'], 'Open the transcript in $VISUAL / $EDITOR'),
+  b('Transcript', 'transcript:help', ['?'], 'Show the transcript keys'),
+  b('Scroll', 'scroll:lineUp', ['up'], 'Scroll up a line'),
+  b('Scroll', 'scroll:lineDown', ['down'], 'Scroll down a line'),
+  b('Scroll', 'scroll:pageUp', ['pageup'], 'Scroll up half a screen'),
+  b('Scroll', 'scroll:pageDown', ['pagedown'], 'Scroll down half a screen'),
+  b('Scroll', 'scroll:top', ['ctrl+home'], 'Scroll to the top'),
+  b('Scroll', 'scroll:bottom', ['ctrl+end'], 'Scroll to the bottom and follow new output'),
+  b('HistorySearch', 'historySearch:previous', ['up'], 'Older match'),
+  b('HistorySearch', 'historySearch:next', ['down'], 'Newer match'),
+  b('HistorySearch', 'historySearch:accept', ['enter', 'tab'], 'Put the match in the input'),
+  b('HistorySearch', 'historySearch:cancel', ['escape'], 'Cancel the search'),
+  b('HistorySearch', 'historySearch:scope', ['ctrl+s'], 'Change the search scope'),
+  b('Settings', 'settings:search', ['/'], 'Search the settings'),
+  b('Settings', 'settings:retry', ['r'], 'Retry loading'),
+  b('Settings', 'settings:toggle', ['enter', 'space'], 'Change the highlighted value'),
+  b('Settings', 'settings:close', ['escape'], 'Close (changes are saved)'),
+  b('ModelPicker', 'modelPicker:decreaseEffort', ['left'], 'Lower the effort'),
+  b('ModelPicker', 'modelPicker:increaseEffort', ['right'], 'Raise the effort'),
+  b('ModelPicker', 'modelPicker:sessionOnly', ['s'], 'Apply to this session only'),
+  b('EffortSlider', 'effort:decrease', ['left'], 'Lower the effort'),
+  b('EffortSlider', 'effort:increase', ['right'], 'Raise the effort'),
+  b('EffortSlider', 'effort:confirm', ['enter'], 'Confirm'),
+  b('EffortSlider', 'effort:cancel', ['escape'], 'Cancel'),
+  b('EffortSlider', 'effort:sessionOnly', ['s'], 'Apply to this session only'),
+  b('Footer', 'footer:next', ['right'], 'Next item'),
+  b('Footer', 'footer:previous', ['left'], 'Previous item'),
+  b('Footer', 'footer:up', ['up', 'ctrl+p'], 'Move up / leave the footer'),
+  b('Footer', 'footer:down', ['down', 'ctrl+n'], 'Move down'),
+  b('Footer', 'footer:open', ['enter'], 'Open the item'),
+  b('Footer', 'footer:clearSelection', ['escape'], 'Leave the footer'),
+  b('Footer', 'footer:close', ['x'], 'Stop the selected task'),
+  b('Footer', 'footer:stop', [], 'Compatibility alias for footer:close'),
+  b('MessageSelector', 'rewind:previous', ['up'], 'Previous message'),
+  b('MessageSelector', 'rewind:next', ['down'], 'Next message'),
+  b('MessageSelector', 'rewind:first', ['home'], 'First message'),
+  b('MessageSelector', 'rewind:last', ['end'], 'Last message'),
+  b('MessageSelector', 'rewind:accept', ['enter'], 'Continue'),
+  b('MessageSelector', 'rewind:cancel', ['escape'], 'Cancel'),
+  b('DiffDialog', 'diff:previousFile', ['up', 'k'], 'Previous file'),
+  b('DiffDialog', 'diff:nextFile', ['down', 'j'], 'Next file'),
+  b('DiffDialog', 'diff:previousSource', ['left'], 'Previous source'),
+  b('DiffDialog', 'diff:nextSource', ['right'], 'Next source'),
+  b('DiffDialog', 'diff:open', ['enter'], 'Open the file'),
+  b('DiffDialog', 'diff:back', ['escape'], 'Back to the list / close'),
+  b('DiffDialog', 'diff:pageUp', ['pageup', 'b'], 'Page up'),
+  b('DiffDialog', 'diff:pageDown', ['pagedown', 'space'], 'Page down'),
+  b('DiffDialog', 'diff:top', ['g'], 'Top'),
+  b('DiffDialog', 'diff:bottom', ['shift+g'], 'Bottom'),
+  b('DiffPanel', 'app:cycleDiffBase', ['ctrl+x b'], 'Change the comparison base'),
+  b('DiffPanel', 'diff:changeBase', [], 'Compatibility alias for app:cycleDiffBase'),
+  b('DiffPanel', 'diff:scrollUp', ['ctrl+up', 'alt+up'], 'Scroll the file list up'),
+  b('DiffPanel', 'diff:scrollDown', ['ctrl+down', 'alt+down'], 'Scroll the file list down'),
+  b('Help', 'help:dismiss', ['escape'], 'Close the help'),
+];
+
+const actionSets = new Map<KeyContext, Set<string>>();
+for (const entry of DEFAULT_BINDINGS) {
+  let set = actionSets.get(entry.context);
+  if (!set) actionSets.set(entry.context, (set = new Set()));
+  set.add(entry.action);
+}
+/** Action ids a context knows (for validation). `command:<name>` is valid everywhere. */
+export function actionsOf(context: KeyContext): ReadonlySet<string> {
+  return actionSets.get(context) ?? new Set();
+}
+export function isKeyContext(name: string): name is KeyContext {
+  return (KEY_CONTEXTS as readonly string[]).includes(name);
+}

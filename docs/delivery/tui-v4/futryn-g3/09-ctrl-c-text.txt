@@ -1,0 +1,30 @@
+00|
+01|     MCP tools · /mcp
+02|     └ Not implemented
+03|
+04|     Custom agents · .cosmew/agents/
+05|     └ 0 agents
+06|
+07|     Skills · /skills
+08|     └ 111 skills
+09|
+10|     System prompt and tool schemas are not measured.
+11|
+12|❯ /rewind
+13|  ⎿  Rewind cancelled
+14|
+15|❯ /mcp
+16|  ⎿  Closed mcp
+17|
+18|❯ /hooks
+19|  ⎿  Closed hooks
+20|
+21|❯ /diff
+22|  ⎿  Diff panel hidden
+23|
+24|                                                                      ctrl+y to paste deleted text
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ Try "write a test for <filepath>"
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏵⏵ accept edits on (shift+tab to cycle)

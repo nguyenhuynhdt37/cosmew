@@ -1,21 +1,31 @@
 #!/usr/bin/env -S bun --config=/dev/null --no-env-file
-import {resolve} from 'node:path';
+import {existsSync} from 'node:fs';
+import {join, resolve} from 'node:path';
 import {parseArgs} from 'node:util';
-import {FutrynError, type Account, type AnimationConfig, type ModelInfo, type ThemeMode} from '@futryn/contracts';
-import {parseSlashCommand, SLASH_COMMANDS} from '@futryn/sdk';
-import {loadHostConfig, providerPresets, reservedProviderIds} from '@futryn/models';
-import {fetchModelsDev, terminalText} from '@futryn/security';
-import {reportRows, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@futryn/tui';
+import {
+  BYPASS_PERMISSIONS_WARNING,
+  FutrynError,
+  isCodingModel,
+  type Account,
+  type AnimationConfig,
+  type ModelInfo,
+  type ThemeMode,
+} from '@cosmew/contracts';
+import {parseSlashCommand, SLASH_COMMANDS} from '@cosmew/sdk';
+import {loadHostConfig, providerPresets, reservedProviderIds} from '@cosmew/models';
+import {fetchModelsDev, terminalText} from '@cosmew/security';
+import {reportRows, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@cosmew/tui';
 import {loginOAuth} from './subscriptions/login';
 import {loginWizard} from './auth-wizard';
+import {writeMcpNotices} from './bootstrap/mcp';
 import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
 import {execCli} from './exec';
 
-// Suppress third-party raw warning output; diagnostics are normalized by Futryn.
+// Suppress third-party raw warning output; diagnostics are normalized by Cosmew.
 (globalThis as typeof globalThis & {AI_SDK_LOG_WARNINGS: boolean}).AI_SDK_LOG_WARNINGS = false;
 
-const HELP = `Futryn (fyn) provider, authentication & TUI CLI
+const HELP = `Cosmew (cosmew) provider, authentication & TUI CLI
 
   providers list | add [id] | show <id> | test | remove <id>
     add --url <base-url> --protocol chat|responses|anthropic|gemini [--name <label>]
@@ -23,46 +33,49 @@ const HELP = `Futryn (fyn) provider, authentication & TUI CLI
         [--env-key NAME] [--header Name=Value]... [--env-header Name=ENV_NAME]... [--query name=value]...
         [--auth-command <exe> [--auth-arg <arg>]...] [--idle-timeout-ms n] [--request-retries n]
         [--stream-retries n] [--replay-reasoning]
-        Writes [model_providers.<id>] in ~/.futryn/config.toml (user-level only; no tokens in the file).
+        Writes [model_providers.<id>] in ~/.cosmew/config.toml (user-level only; no tokens in the file).
   login --provider <id> (alias of auth login)
   logout [--account <id-or-alias>] | status | doctor
+  mcp [list]
+    Connects the user mcp.json (stdio and HTTP) and prints status. Project MCP files are not started.
   auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
     [--method api-key|env|none|oauth-browser] [--model <manual-model-id>]
   auth list | methods | status [--account <id-or-alias>] | logout --account <id-or-alias>
     login --account <existing-id-or-alias> reauthenticates and preserves its stable ID.
   accounts list | use <id-or-alias> | rename <id-or-alias> --alias <new> | remove <id-or-alias>
   models list | search <query> | info <model-id> | add <manual-model-id> | select <model-id>
-    [--account <id-or-alias>] [--offline] [--capability streaming|tools|vision|reasoning]
-    models sync-metadata: explicitly fetch advisory https://models.dev/api.json
+    [--account <id-or-alias>] [--offline] [--all] [--capability streaming|tools|vision|reasoning]
+    models sync-metadata: refresh advisory https://models.dev/api.json (also used during online discovery)
   model doctor [--generate] [--account <id-or-alias>]
   themes list [--json] | get | set <auto|dark|light> [--project]
   themes mode <auto|dark|light> [--project] | animation [--speed <n>] [--motion smooth|grid]
     [--cell-size <1..4>] [--veil <0..0.95>] [--enabled true|false] [--reduced-motion true|false]
   themes export [<theme-id>]
   themes remove <custom-theme-id> | reset [--project]
-  fyn [tui] [--sandbox|-s read-only|workspace-write|danger-full-access]
-    [--ask-for-approval|--approval|-a untrusted|on-request|never]
-    [--full-auto] [--dangerously-bypass-approvals-and-sandbox|--yolo]
-  fyn [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
-  fyn run [--json] < message.txt
-  fyn exec <prompt|-> --cd|-C <dir> [--json] [--approval|--ask-for-approval|-a untrusted|on-request|never]
-    [--sandbox|-s read-only|workspace-write|danger-full-access] [--full-auto]
-    [--dangerously-bypass-approvals-and-sandbox|--yolo] [--output-last-message|-o <file>] [--account <id>] [--model <id>]
+  cosmew resume <id> | cosmew --resume <id>
+  cosmew [tui] [--permission-mode default|acceptEdits|plan|bypassPermissions] [--dangerously-skip-permissions]
+    [--allowedTools <rules>] [--disallowedTools <rules>]
+  cosmew [chat] [--project] [--max-output-tokens <n>] [--max-estimated-cost-usd <n>]
+  cosmew run [--json] < message.txt
+  cosmew exec <prompt|-> --cd|-C <dir> [--json] [--permission-mode default|acceptEdits|plan|bypassPermissions]
+    [--dangerously-skip-permissions] [--allowedTools <rules>] [--disallowedTools <rules>]
+    [--output-last-message|-o <file>] [--account <id>] [--model <id>]
 
 Options: --json, --help, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
-variable NAME. Never pass a key as an argument. Default storage: ~/.futryn (0700); existing ~/.hannes is reused.
-FUTRYN_HOME overrides storage; HANNES_HOME remains compatible.
-Canonical TUI commands: /login (/connect), /logout, /model, /status,
-  /config, /permissions, /mcp, /plugin, /theme, /resume,
-  /usage (/cost), /context, /effort <level|auto|status>,
-  /clear, /compact [focus], /help, /doctor, /exit. Unsupported backends report diagnostics.
-Start Futryn in any project: fyn (or futryn). From source: bun run fyn. Existing administration commands remain supported.
+variable NAME. Never pass a key as an argument. Default storage: ~/.cosmew (0700); existing ~/.futryn and ~/.hannes are reused.
+COSMEW_HOME overrides storage; FUTRYN_HOME and HANNES_HOME remain compatible.
+Canonical TUI commands follow Claude Code: /login, /logout, /model, /status,
+  /config [key=value ...], /permissions, /mcp, /theme, /resume,
+  /usage (/cost /stats), /context [all], /effort <level|auto|status>,
+  /clear [name], /compact [focus], /code-review (/review), /help, /doctor (/checkup), /exit.
+  Commands unavailable in this build stay parseable and report an explicit diagnostic.
+Start Cosmew in any project: cosmew (or fyn, futryn, hannes). From source: bun run cosmew. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
-are automatic. ChatGPT signs in through the API (OAuth); Futryn runs every request itself,
+are automatic. ChatGPT signs in through the API (OAuth); Cosmew runs every request itself,
 no external agent runtime is started. Claude subscription
 sign-in requires Anthropic approval. OpenRouter OAuth uses OpenRouter API credits.
-Local logout deletes FUTRYN credentials; remote revocation is provider-managed.
+Local logout deletes COSMEW credentials; remote revocation is provider-managed.
 `;
 
 const stringOptions = [
@@ -106,6 +119,7 @@ const booleanOptions = [
   'help',
   'key-stdin',
   'offline',
+  'all',
   'project',
   'generate',
   'stream-usage',
@@ -140,6 +154,34 @@ function numberOption(options: Options, key: string, fallback: number): number {
 function output(app: Application, value: unknown, json = false) {
   const render = typeof value === 'string' && !json ? value : JSON.stringify(value, null, json ? 0 : 2);
   process.stdout.write(terminalText(app.redactor.text(render)) + '\n');
+}
+
+const MCP_NOTE = 'Project MCP files are not started. OAuth, resources and install are not in this slice.';
+
+/** Paths that exist and are ignored. Their contents are not read and nothing in them is started. */
+function ignoredProjectMcpFiles(): string[] {
+  return [
+    join(process.cwd(), '.cosmew', 'mcp.json'),
+    join(process.cwd(), '.futryn', 'mcp.json'),
+    join(process.cwd(), '.mcp.json'),
+  ].filter(path => existsSync(path));
+}
+
+function mcpReportView(report: Awaited<ReturnType<Application['connectMcp']>>) {
+  return {...report, ignoredProjectFiles: ignoredProjectMcpFiles(), note: MCP_NOTE};
+}
+
+/** Spawns user MCP servers. A failed server is a notice, not a failed command, unless `required`. */
+async function connectUserMcp(app: Application, signal?: AbortSignal, required = false) {
+  try {
+    const report = await app.connectMcp(signal);
+    writeMcpNotices(report);
+    return report;
+  } catch (error) {
+    if (required || signal?.aborted) throw error instanceof FutrynError ? error : new FutrynError('CANCELLED');
+    process.stderr.write('Notice: MCP servers were not started.\n');
+    return undefined;
+  }
 }
 
 async function progress<T>(label: string, work: () => Promise<T>): Promise<T> {
@@ -403,6 +445,7 @@ async function handleThemesCli(
 }
 
 async function chat(app: Application, options: Options, signal: AbortSignal, single = false) {
+  await connectUserMcp(app, signal);
   // Absent: the model's own output limit (Codex sends no cap).
   const maxOutput =
     str(options, 'max-output-tokens') === undefined ? undefined : numberOption(options, 'max-output-tokens', 0);
@@ -488,12 +531,12 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     await send(message.trim());
     return;
   }
-  output(app, 'Futryn · /login /logout /model /theme /status /clear /exit. Ctrl-C cancels and exits.');
+  output(app, 'Cosmew · /login /logout /model /theme /status /clear /exit. Ctrl-C cancels and exits.');
   if (!conversation) output(app, 'Chưa đăng nhập hoặc chưa chọn model. Gõ /login để bắt đầu.');
   const input = new ChatInput(signal);
   try {
     while (true) {
-      const line = await input.line('fyn> ');
+      const line = await input.line('cosmew> ');
       if (signal.aborted) throw new FutrynError('CANCELLED');
       if (line === undefined) break;
       const parsedCommand = line.trim().startsWith('/') ? parseSlashCommand(line) : null;
@@ -508,8 +551,19 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       try {
         if (parsedCommand?.definition?.unavailable) {
           output(app, parsedCommand.definition.unavailable);
-        } else if (text === '/usage' || text === '/context') {
-          output(app, reportRows(telemetryClient(), text.slice(1) as 'usage' | 'context', '', true).join('\n'));
+        } else if (
+          parsedCommand?.definition?.command === '/usage' ||
+          parsedCommand?.definition?.command === '/context'
+        ) {
+          output(
+            app,
+            reportRows(
+              telemetryClient(),
+              parsedCommand.definition.command.slice(1) as 'usage' | 'context',
+              parsedCommand.args,
+              true,
+            ).join('\n'),
+          );
         } else if (text === '/effort' || text.startsWith('/effort ')) {
           const client = telemetryClient();
           if (parsedCommand?.args && parsedCommand.args !== 'status')
@@ -631,7 +685,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           resetConversation();
           output(app, 'Model switched; started a fresh conversation.');
         } else if (text === '/model') {
-          output(app, 'Use /model in the FUTRYN TUI to choose, or /model <model-id>.');
+          output(app, 'Use /model in the Cosmew TUI to choose, or /model <model-id>.');
         } else if (text === '/theme') {
           const engine = new ThemeEngine({client: app.createFutrynClient(resolve('.'))});
           await engine.initialize();
@@ -647,22 +701,33 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           const added = await login(app, {provider, alias, env, model}, signal);
           app.accounts.use(added.id);
           output(app, 'Account connected. Use /models then /model <model-id> to start a fresh conversation.');
-        } else if (['/mcp', '/plugin', '/plugins', '/compact'].some(c => text === c || text.startsWith(c + ' '))) {
+        } else if (text === '/mcp' || text.startsWith('/mcp ')) {
+          const report = await connectUserMcp(app, signal, true);
+          if (report) output(app, mcpReportView(report));
+        } else if (['/plugin', '/plugins', '/compact'].some(c => text === c || text.startsWith(c + ' '))) {
           output(app, `${text.split(' ')[0]}: Not implemented in PA1/TUI1. No backend operation was performed.`);
         } else if (text === '/doctor') {
           output(app, await app.createFutrynClient(resolve('.')).diagnose(signal));
         } else if (text === '/help' || text === '/?') {
-          output(app, SLASH_COMMANDS.map(c => `${c.command}: ${c.description}`).join('\n'));
-        } else if (['/config', '/settings', '/theme', '/permissions', '/resume'].includes(text)) {
+          output(
+            app,
+            SLASH_COMMANDS.filter(c => c.help !== false)
+              .map(c => `${c.command}: ${c.description}`)
+              .join('\n'),
+          );
+        } else if (
+          parsedCommand?.definition?.command &&
+          ['/config', '/theme', '/permissions', '/resume', '/code-review'].includes(parsedCommand.definition.command)
+        ) {
           if (process.stdin.isTTY && process.stdout.isTTY) {
             await runInteractiveTui({client: app.createFutrynClient(resolve('.')), initialCommand: text});
             resetConversation();
           } else
             output(
               app,
-              'Interactive dialog requires a terminal. Start bun run futryn, or use the documented administration commands.',
+              'Interactive dialog requires a terminal. Start bun run cosmew, or use the documented administration commands.',
             );
-        } else if (text === '/new' || text === '/clear') {
+        } else if (parsedCommand?.definition?.command === '/clear') {
           resetConversation();
           output(app, conversation ? 'Started a fresh conversation.' : 'Gõ /login để bắt đầu.');
         } else if (text.startsWith('/')) {
@@ -673,7 +738,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       } catch (e) {
         if (signal.aborted) throw e;
         const safe = e instanceof FutrynError ? e : new FutrynError('INVALID_INPUT');
-        if (safe.code === 'CANCELLED') output(app, 'Đã hủy. Bạn vẫn ở trong Futryn; gõ /login để thử lại.');
+        if (safe.code === 'CANCELLED') output(app, 'Đã hủy. Bạn vẫn ở trong Cosmew; gõ /login để thử lại.');
         else process.stderr.write(JSON.stringify(safe) + '\n');
       }
     }
@@ -700,20 +765,22 @@ async function main() {
           ...booleanOptions.map(name => [name, {type: 'boolean' as const}]),
         ]),
         ...PERMISSION_CLI_OPTIONS,
+        resume: {type: 'string'},
       },
     });
   } catch {
     throw new FutrynError('INVALID_INPUT');
   }
   const options = parsed.values as Options;
-  const [group, action, argument] = parsed.positionals;
+  const [group, action, argument] = str(options, 'resume')
+    ? ['resume', str(options, 'resume'), undefined]
+    : parsed.positionals;
   if (options.help || group === 'help') {
     process.stdout.write(HELP);
     return;
   }
   const launchPermissions = resolvePermissionFlags(options);
-  if (launchPermissions.approval !== undefined) process.env.FUTRYN_APPROVAL_POLICY = launchPermissions.approval;
-  if (launchPermissions.sandbox !== undefined) process.env.FUTRYN_SANDBOX_MODE = launchPermissions.sandbox;
+  if (launchPermissions.mode === 'bypassPermissions') process.stderr.write(`${BYPASS_PERMISSIONS_WARNING}\n`);
   const app = startup(undefined, {permissions: launchPermissions});
   // One-time migration notices (ADR 0045) go to stderr so --json output stays clean.
   for (const notice of app.takeStartupNotices()) process.stderr.write(`Notice: ${notice}\n`);
@@ -745,9 +812,8 @@ async function main() {
           account: status.activeAccount?.alias ?? null,
           provider: status.activeProvider?.id ?? null,
           model: status.selection?.modelId ?? null,
-          permissionPreset: status.permissionPreset,
-          sandboxMode: status.sandboxMode,
-          approvalPolicy: status.approvalPolicy,
+          permissionMode: status.permissionMode,
+          sandbox: status.sandbox,
           validatedAt: status.activeAccount?.validatedAt ?? null,
           connectivity: 'Historical validation only; run doctor for a live check.',
           capabilities: status.capabilities,
@@ -756,7 +822,11 @@ async function main() {
       );
     } else if (group === 'doctor') {
       output(app, await app.createFutrynClient(resolve('.')).diagnose(controller.signal), !!options.json);
-    } else if (['mcp', 'plugin', 'plugins', 'compact'].includes(group ?? '')) {
+    } else if (group === 'mcp') {
+      if (action && action !== 'list') throw new FutrynError('INVALID_INPUT');
+      const report = await connectUserMcp(app, controller.signal, true);
+      if (report) output(app, mcpReportView(report), !!options.json);
+    } else if (['plugin', 'plugins', 'compact'].includes(group ?? '')) {
       throw new FutrynError('UNSUPPORTED');
     } else if (group === 'logout') {
       await app.accounts.logout(account().id, true);
@@ -768,6 +838,7 @@ async function main() {
         !(group === 'model' && action === 'doctor')) ||
       (!group && process.stdin.isTTY && process.stdout.isTTY)
     ) {
+      await connectUserMcp(app, controller.signal);
       await runInteractiveTui({
         client: app.createFutrynClient(resolve('.')),
         initialCommand: group ? `/${group}${action ? ' ' + action : ''}` : undefined,
@@ -863,7 +934,7 @@ async function main() {
                 reason: 'Third-party subscription sign-in requires Anthropic approval; use API access.',
               },
             ],
-            note: 'Futryn calls provider APIs only; no external agent runtime is started. Account entitlements apply.',
+            note: 'Cosmew calls provider APIs only; no external agent runtime is started. Account entitlements apply.',
           },
           !!options.json,
         );
@@ -907,6 +978,7 @@ async function main() {
       const catalog = app.catalog(a);
       if (action === 'add') output(app, catalog.manual(argument ?? str(options, 'model') ?? fail()), !!options.json);
       else if (action === 'sync-metadata') {
+        if (options.offline) throw new FutrynError('INVALID_INPUT');
         const metadata = await progress('Fetching advisory metadata', () => fetchModelsDev(controller.signal));
         catalog.enrichModelsDev(metadata);
         output(app, 'Advisory metadata updated; model capabilities remain unverified.');
@@ -915,6 +987,11 @@ async function main() {
           ? {models: catalog.cached(), stale: true, warning: 'Offline cache; availability unverified.'}
           : await progress('Discovering models', () => app.discoverModels(a, controller.signal));
         let models = action === 'search' ? catalog.search(argument ?? '', result.models) : result.models;
+        if (!options.all && action !== 'info') {
+          const state = app.settings.read();
+          const selected = (options.project ? state.projects[resolve('.')] : undefined) ?? state.selection;
+          models = models.filter(m => isCodingModel(m, selected?.accountId === a.id ? selected.modelId : undefined));
+        }
         const capability = str(options, 'capability');
         if (capability) {
           if (!['text', 'tools', 'streaming', 'vision', 'reasoning'].includes(capability)) fail();
@@ -953,6 +1030,7 @@ async function main() {
     } else if (group === 'themes' || group === 'theme') {
       await handleThemesCli(app, action, argument, options);
     } else if (group === 'tui' || options.tui) {
+      await connectUserMcp(app, controller.signal);
       const client = app.createFutrynClient(resolve('.'));
       await runInteractiveTui({
         client,

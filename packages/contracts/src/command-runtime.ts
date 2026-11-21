@@ -1,30 +1,52 @@
+import type {BackgroundTask, BackgroundTaskEvent} from './background-tasks';
+
 export interface CommandOutputChunk {
   stream: 'stdout' | 'stderr';
   text: string;
 }
 
 /**
- * Effective sandbox for one command (ADR 0034, Codex `SandboxPolicy` subset). `read-only` and
- * `workspace-write` are enforced by the runtime's mount namespace, never by parsing the command.
- * `network` is an explicitly approved additional permission. `unsandboxed` (ADR 0053, Codex
- * `SandboxPermissions::RequireEscalated`) runs that one command with no OS sandbox; it exists only
- * after the user approved exactly that command, and a runtime that cannot do it refuses.
+ * Effective sandbox for one command (ADR 0034, 0061). `read-only` and `workspace-write` are
+ * enforced by the OS sandbox, never by parsing the command. `unsandboxed` runs that one command
+ * with no OS sandbox; it exists only when the sandbox is disabled, the command is excluded from it
+ * or the user approved exactly that command, and a runtime that cannot do it refuses.
  */
 export interface CommandSandbox {
   /**
-   * `danger-full-access` (ADR 0055, Codex `SandboxMode::DangerFullAccess`) is the session's Full
-   * Access preset: the command runs with `unsandboxed: true` and no prompt. Only a runtime that
-   * lists it in `capabilities().modes` can run it; Docker refuses.
+   * `workspace-write` and `read-only` are OS sandboxes. `danger-full-access` marks a command that
+   * runs with `unsandboxed: true` (ADR 0061: sandbox disabled in settings, a command excluded from
+   * the sandbox, or an approved `dangerouslyDisableSandbox`); only a runtime that lists it in
+   * `capabilities().modes` can run it. A runtime that does not list it refuses.
    */
   mode: 'read-only' | 'workspace-write' | 'danger-full-access';
+  /** Unrestricted network. Only an unsandboxed command has it; sandboxed commands use `proxyUrl`. */
   network: boolean;
   unsandboxed?: boolean;
+  /** Loopback URL of the domain-filtering proxy a sandboxed command reaches the network through. Absent: no network. */
+  proxyUrl?: string;
+  /** Absolute directories besides the workspace whose files may be written (`permissions.additionalDirectories`). */
+  writableRoots?: string[];
+  /** Absolute globs the command can neither read nor write (`Read(...)` deny rules). */
+  denyRead?: string[];
+  /** Absolute globs the command cannot write (`Edit(...)` deny rules). */
+  denyWrite?: string[];
 }
 
-/** One command to run in the sandbox. `cwd` is canonical and already inside the workspace. */
+/**
+ * One command to run in the sandbox. `cwd` is canonical and already inside a working
+ * directory: the session project, or a trusted additional directory (`cwdRoots`).
+ */
 export interface CommandRequest {
   command: string;
+  /** Trusted composition metadata; never accepted from model tool arguments. */
+  taskSessionId?: string;
   cwd: string;
+  /**
+   * Trusted `permissions.additionalDirectories`. Set even when `sandbox.writableRoots` is
+   * omitted (sandbox off, read-only, or an excluded command). The runtime allows `cwd` in
+   * the project or these directories. The OS sandbox does not read this field.
+   */
+  cwdRoots?: string[];
   /** Hard lease: the runtime terminates the whole process tree at this deadline. */
   timeoutMs: number;
   maxOutputBytes: number;
@@ -121,6 +143,13 @@ export interface CommandRuntime {
     interrupt?: 'SIGINT' | 'SIGTERM',
     onOutput?: (chunk: CommandOutputChunk) => void,
   ): Promise<CommandOutcome>;
+  /** Non-consuming live background task snapshots. Never starts a process. */
+  backgroundTasks?(): BackgroundTask[];
+  observeBackgroundTasks?(listener: (event: BackgroundTaskEvent) => void): () => void;
+  /** Yield the currently waiting foreground session without changing its process or lease. */
+  backgroundCurrentTask?(sessionId?: string): BackgroundTask | undefined;
+  /** Stop an owned existing session; false for finished/unknown tasks. */
+  stopBackgroundTask?(id: string): Promise<boolean>;
   /** Resize an owned PTY session; refused for pipe sessions. */
   resize?(id: string, cols: number, rows: number): void;
   /**

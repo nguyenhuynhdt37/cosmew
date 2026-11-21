@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {MEMORY_READ_GUIDANCE, memoryNameSchema, memoryWriteSchema} from '@futryn/contracts';
+import {MEMORY_READ_GUIDANCE, memoryNameSchema, memoryWriteSchema} from '@cosmew/contracts';
 import type {ToolDispatcherOptions} from '../context';
 import type {ToolHandler} from './types';
 const schema = z.discriminatedUnion('action', [

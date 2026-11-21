@@ -40,7 +40,7 @@ const toolRequests = (s: ReturnType<typeof fixtureServer>) =>
 test('no tools are offered before folder consent', async () => {
   const c = await make({name: 'read', args: '{"path":"notes.txt"}'}, false);
   // The startup gate owns the screen: nothing is sent and no tool is offered until consent + verification.
-  expect(c.tui.frame()).toContain('Trust this folder?');
+  expect(c.tui.frame()).toContain('Accessing workspace:');
   expect(c.client.toolsEnabled()).toBe(false);
   expect(toolRequests(c.server)).toHaveLength(0);
   const before = c.server.requests.length;
@@ -59,7 +59,7 @@ test('model reads a workspace file through the tool loop; result returns to the 
   expect(answer.content).toContain('banana'); // the model saw the tool result
   expect(answer.toolCalls?.[0]?.name).toBe('read');
   expect(answer.toolResults?.[0]?.status).toBe('ok');
-  expect(c.tui.frame()).toContain('⏺ read(notes.txt) · ok');
+  expect(c.tui.frame()).toContain('Read 1 file');
   expect(
     toolRequests(c.server)
       .map(r => r.body.tools.map((t: any) => t.function.name))
@@ -69,6 +69,7 @@ test('model reads a workspace file through the tool loop; result returns to the 
     'glob',
     'grep',
     'memory',
+    'tool_output',
     'apply_patch',
     'edit',
     'write',
@@ -94,14 +95,20 @@ test('reading .env opens the permission dialog; Esc denies and the secret never 
   await c.tui.submitPrompt('show env');
   await c.tui.nextPermission();
   expect(c.client.listPendingPermissions()).toHaveLength(1);
-  expect(c.tui.frame()).toContain('4 Không và nói lý do');
+  for (const label of ['1. Yes', '2. Yes, and', '3. Yes, and save this rule in project settings'])
+    expect(c.tui.frame()).toContain(label);
+  expect(c.tui.frame()).toContain('Read file');
+  expect(c.tui.frame()).not.toContain('Type to filter');
+  expect(c.tui.frame()).not.toContain('4/4');
+  expect(c.tui.frame()).toContain('4. No');
+  expect(c.tui.frame()).toContain('Esc to cancel · Tab to amend');
   expect(c.tui.frame()).toContain('.env');
   await c.tui.handleKey('Escape');
   await c.tui.idle();
   const answer = c.tui.getTranscript().at(-1)!;
   expect(answer.toolResults?.[0]).toMatchObject({status: 'denied', code: 'DENIED'});
   expect(JSON.stringify(c.server.requests)).not.toContain('very-secret-value');
-  expect(c.tui.frame()).not.toContain('4 Không và nói lý do');
+  expect(c.tui.frame()).not.toContain('Esc to cancel · Tab to amend');
 });
 
 test('"Allow for session" reads the secret once approved and is remembered until revoked', async () => {
@@ -115,10 +122,11 @@ test('"Allow for session" reads the secret once approved and is remembered until
   await c.tui.submitPrompt('again'); // no second prompt
   expect(c.client.listPermissions().filter(p => p.status === 'pending')).toHaveLength(0);
   await c.tui.executeSlashCommand('/permissions');
-  expect(c.tui.frame()).toContain('Session grants: 1');
+  for (let tab = 0; tab < 3; tab++) await c.tui.handleKey('ArrowRight'); // Allow -> Ask -> Deny -> Mode
+  expect(c.tui.frame()).toContain('session grants 1');
   await c.tui.handleKey('Ctrl+X');
   expect(c.client.listToolGrants()).toEqual([]);
-  expect(c.tui.frame()).toContain('Session grants: 0');
+  expect(c.tui.frame()).toContain('session grants 0');
   await c.tui.handleKey('Escape');
 });
 

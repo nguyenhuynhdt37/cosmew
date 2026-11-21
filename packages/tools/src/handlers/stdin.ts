@@ -1,12 +1,13 @@
 import {z} from 'zod';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
+import {resolveWorkspacePath} from '../working-roots';
 import {EXEC_LIMITS, clampYield} from '../exec/command';
 import {commandOutcomeResult} from '../runtimes/process';
 import type {ToolHandler} from './types';
 
 /**
  * Codex `write_stdin` (handlers/unified_exec/write_stdin.rs, pinned 75fc67e8). Session IDs are
- * runtime-owned UUIDs, never PIDs, and are not restored after restart. `signal` is a Futryn extension.
+ * runtime-owned UUIDs, never PIDs, and are not restored after restart. `signal` is a Cosmew extension.
  */
 
 /** Input longer than this cannot be shown in full in the approval prompt, so it is refused. */
@@ -79,7 +80,7 @@ export function stdinHandler(options: ToolDispatcherOptions): ToolHandler {
         data.yield_time_ms,
         isWrite ? EXEC_LIMITS.stdinDefaultYieldMs : EXEC_LIMITS.pollDefaultYieldMs,
       );
-      const file = options.workspace.resolve(session.cwd);
+      const file = resolveWorkspacePath(options, session.cwd);
       const command = `stdin ${data.session_id}: ${data.signal ?? JSON.stringify(data.chars)}`;
       const launch = session.sandbox ?? {mode: 'read-only' as const, network: false};
 

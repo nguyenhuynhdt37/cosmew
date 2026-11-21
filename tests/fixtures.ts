@@ -1,4 +1,4 @@
-import {providerSchema, type CredentialVault} from '@futryn/contracts';
+import {providerSchema, type CredentialVault} from '@cosmew/contracts';
 
 export const memoryVault = (): CredentialVault & {values: Map<string, string>} => ({
   values: new Map(),

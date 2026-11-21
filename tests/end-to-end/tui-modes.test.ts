@@ -150,10 +150,10 @@ test('review never inspects an unapproved workspace and session aliases use cano
   await c.tui.submitPrompt('/new');
   expect(c.client.activeSession()?.id).not.toBe(session);
   await c.tui.executeSlashCommand('/sessions');
-  expect(c.tui.frame()).toContain('Sessions');
+  expect(c.tui.frame()).toContain('Resume session');
   await c.tui.handleKey('Escape');
   await c.tui.executeSlashCommand('/?');
-  expect(c.tui.frame()).toContain('Keyboard & commands');
+  expect(c.tui.frame()).toContain('General   Commands   Custom commands');
 });
 
 test('analysis modes reject a mutation even when the model calls a hidden tool', async () => {
@@ -204,7 +204,7 @@ test('fork copies committed transcript without replay, preserves the source and 
   await c.tui.submitPrompt('Read notes.');
   const source = c.client.activeSession()!;
   const requests = c.server.requests.length;
-  c.client.setPermissionMode('auto');
+  c.client.setPermissionMode('acceptEdits');
   c.client.setMode('plan');
   await c.tui.submitPrompt('/fork');
   const fork = c.client.activeSession()!;
@@ -232,7 +232,8 @@ test('review refresh cannot send its old request into a newly selected session',
     });
   await c.tui.submit('/review original review request');
   const requests = c.server.requests.length;
-  await c.tui.handleKey('Ctrl+N'); // new conversation shortcut while the draft command is still pending
+  // Ctrl+N is history navigation now; start the new conversation the way `/clear` does while the command is pending.
+  c.client.clearSessionView();
   await Bun.sleep(100);
   complete({
     workspace: c.dir,
@@ -257,60 +258,41 @@ test('review refresh cannot send its old request into a newly selected session',
   expect(c.tui.frame()).toContain('Review cancelled');
 });
 
-test('Shift+Tab and /permissions manage Codex presets (Read Only / Auto / Full Access with warning) and [4] saves Always rules', async () => {
+test('Shift+Tab and /permissions cycle the Claude Code modes, bypassPermissions is launch-only, and [3] saves an allowed domain', async () => {
   const c = await context();
-  // `tests/preload.ts` sets `untrusted`, so starting state is `custom`; first Shift+Tab enters Auto.
-  expect(c.client.permissionPreset()).toBe('custom');
+  expect(c.client.permissionMode()).toBe('default');
   await c.tui.handleKey('Shift+Tab');
-  expect(c.client.permissionPreset()).toBe('auto');
-  expect(c.client.sandboxMode()).toBe('workspace-write');
-  expect(c.client.status().approvalPolicy).toBe('on-request');
-
-  // Next Shift+Tab asks for explicit Full Access confirmation (Esc keeps the sandbox), then wraps.
+  expect(c.client.permissionMode()).toBe('acceptEdits');
   await c.tui.handleKey('Shift+Tab');
-  expect(c.client.permissionPreset()).toBe('auto');
-  await c.tui.waitFor('Enable Full Access');
-  await c.tui.handleKey('Down');
-  await c.tui.handleKey('Enter');
-  expect(c.client.permissionPreset()).toBe('full-access');
-  await c.tui.handleKey('Escape'); // the permissions dialog stays open after confirming
-  expect(c.client.sandboxMode()).toBe('danger-full-access');
-  expect(c.client.status().approvalPolicy).toBe('never');
-  expect(c.tui.frames()).toContain('Full Access');
-
+  expect(c.client.permissionMode()).toBe('plan');
+  expect(c.tui.frames()).toContain('plan mode');
+  // bypassPermissions is not part of the cycle unless the session started in it.
   await c.tui.handleKey('Shift+Tab');
-  expect(c.client.permissionPreset()).toBe('read-only');
-  expect(c.client.sandboxMode()).toBe('read-only');
+  expect(c.client.permissionMode()).toBe('default');
+  expect(() => c.client.setPermissionMode('bypassPermissions')).toThrow();
 
-  // `/permissions` opens the Mode tab; selecting Full Access needs the explicit confirmation dialog.
+  // `/permissions` opens the dialog; slash arguments switch modes directly.
   await c.tui.executeSlashCommand('/permissions');
   await c.tui.waitFor('Permissions');
   await c.tui.handleKey('Escape');
+  await c.tui.submitPrompt('/permissions acceptEdits');
+  expect(c.client.permissionMode()).toBe('acceptEdits');
+  await c.tui.submitPrompt('/permissions bypass');
+  expect(c.client.permissionMode()).toBe('acceptEdits');
+  await c.tui.submitPrompt('/permissions default');
 
-  // Slash command arguments switch presets directly.
-  await c.tui.submitPrompt('/permissions auto');
-  expect(c.client.permissionPreset()).toBe('auto');
-
-  // Prompt dialog `[4]` saves `alwaysRule` into project Allow rules and resolves the request.
-  const waiting = c.client.requestPermission({
-    capability: 'network.connect',
-    kind: 'network',
-    ruleTool: 'Network',
-    action: 'Run in . · sandbox',
-    target: 'curl https://example.com',
-    reason: 'network',
-    decisions: ['once', 'session', 'always'],
-    alwaysRule: 'Network(curl:*)',
-  });
+  // A new network domain asks; `[3]` saves it to sandbox.network.allowedDomains of the local settings.
+  const waiting = c.client.authorizeNetwork('registry.example.org', 443);
   await Bun.sleep(10);
   await c.tui.nextPermission();
-  expect(c.tui.frame()).toContain('Allow: Network(curl:*)');
+  expect(c.tui.frame()).toContain('sandbox.network.allowedDomains: registry.example.org');
   await c.tui.handleKey('3');
-  expect(await waiting).toBe('always');
-  expect(c.client.permissionRules().allow).toContain('Network(curl:*)');
+  expect(await waiting).toBe(true);
+  expect(c.client.permissionSettings().sandbox.allowedDomains).toContain('registry.example.org');
+  expect(await c.client.authorizeNetwork('registry.example.org', 443)).toBe(true);
 });
 
-test('interactive CLI/TUI entry accepts Codex launch flags (--yolo, --full-auto, -s, -a), warns on Full Access and rejects conflicts', async () => {
+test('interactive CLI/TUI entry accepts the Claude Code launch flags, warns on bypass and rejects conflicts', async () => {
   const home = mkdtempSync(join(tmpdir(), 'futryn-cli-launch-flags-'));
   cleanup.push(() => rmSync(home, {recursive: true, force: true}));
   const run = async (args: string[]) => {
@@ -329,42 +311,27 @@ test('interactive CLI/TUI entry accepts Codex launch flags (--yolo, --full-auto,
     return {stdout, stderr, code};
   };
 
-  const yoloTui = await run(['tui', '--yolo']);
-  expect(yoloTui.code).toBe(0);
-  expect(yoloTui.stderr).toContain('WARNING: Full Access');
-  expect(yoloTui.stdout).toContain('WARNING: Full Access');
-  expect(yoloTui.stdout).toContain('Full Access');
+  const skipTui = await run(['tui', '--dangerously-skip-permissions']);
+  expect(skipTui.code).toBe(0);
+  expect(skipTui.stderr).toContain('WARNING: bypassPermissions');
+  expect(skipTui.stdout).toContain('WARNING: bypassPermissions');
 
-  const bypassStatus = await run(['status', '--dangerously-bypass-approvals-and-sandbox', '--json']);
+  const bypassStatus = await run(['status', '--dangerously-skip-permissions', '--json']);
   expect(bypassStatus.code).toBe(0);
-  expect(bypassStatus.stderr).toContain('WARNING: Full Access');
-  expect(JSON.parse(bypassStatus.stdout)).toMatchObject({
-    permissionPreset: 'full-access',
-    sandboxMode: 'danger-full-access',
-    approvalPolicy: 'never',
-  });
+  expect(bypassStatus.stderr).toContain('WARNING: bypassPermissions');
+  expect(JSON.parse(bypassStatus.stdout)).toMatchObject({permissionMode: 'bypassPermissions'});
 
-  const fullAutoStatus = await run(['status', '--full-auto', '--json']);
-  expect(fullAutoStatus.code).toBe(0);
-  expect(JSON.parse(fullAutoStatus.stdout)).toMatchObject({
-    permissionPreset: 'auto',
-    sandboxMode: 'workspace-write',
-    approvalPolicy: 'on-request',
-  });
-
-  const readOnlyStatus = await run(['status', '-s', 'read-only', '-a', 'on-request', '--json']);
-  expect(readOnlyStatus.code).toBe(0);
-  expect(JSON.parse(readOnlyStatus.stdout)).toMatchObject({
-    permissionPreset: 'read-only',
-    sandboxMode: 'read-only',
-    approvalPolicy: 'on-request',
-  });
+  const planStatus = await run(['status', '--permission-mode', 'plan', '--json']);
+  expect(planStatus.code).toBe(0);
+  expect(JSON.parse(planStatus.stdout)).toMatchObject({permissionMode: 'plan', sandbox: {enabled: true}});
 
   for (const bad of [
-    ['tui', '--yolo', '--sandbox', 'read-only'],
-    ['tui', '--yolo', '--full-auto'],
-    ['tui', '--full-auto', '-a', 'never'],
-    ['tui', '--approval', 'never', '--ask-for-approval', 'on-request'],
+    ['tui', '--dangerously-skip-permissions', '--permission-mode', 'plan'],
+    ['tui', '--permission-mode', 'auto'],
+    ['tui', '--allowedTools', 'Nonsense(('],
+    ['tui', '--yolo'],
+    ['tui', '--sandbox', 'read-only'],
+    ['tui', '--full-auto'],
   ]) {
     const conflict = await run(bad);
     expect(conflict.code).toBe(1);

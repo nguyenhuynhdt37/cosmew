@@ -1,11 +1,12 @@
 /** @jsxImportSource react */
 import {useState} from 'react';
-import {parseMemoryCitations} from '@futryn/sdk';
+import {parseMemoryCitations} from '@cosmew/sdk';
 import {Box, Text} from 'ink';
-import type {SubagentSummaryView, Usage} from '@futryn/contracts';
+import type {SubagentSummaryView, Usage} from '@cosmew/contracts';
 import {useEvents, useFutrynClient, useKeymap} from '../../hooks';
 import {useTheme} from '../../theme';
-import {Markdown, TextLine, Truncate} from '../../ui';
+import {Markdown, ResultLine, TextLine, Truncate, formatElapsed, plural, safeText} from '../../ui';
+import {useUiTheme} from '../../ui/ui-theme';
 export function tokenTotal(usage: Usage | null): number | undefined {
   return usage?.inputTokens == null && usage?.outputTokens == null
     ? undefined
@@ -35,6 +36,7 @@ export function Subagents({
   onOpenTranscript,
 }: SubagentsProps) {
   const {color} = useTheme();
+  const ui = useUiTheme();
   const [index, setIndex] = useState(0);
   const [openedId, setOpenedId] = useState<string>();
   const [expanded, setExpanded] = useState(false);
@@ -75,27 +77,55 @@ export function Subagents({
   ];
   return (
     <Box width={width} flexDirection="column" minWidth={0}>
-      <Text color={color('foregroundMuted')}>
-        Subagents · {agents.filter(agent => agent.status === 'running').length} running / {agents.length}
-      </Text>
       {agents.slice(start, start + room).map((agent, at) => {
         const tokens = tokenTotal(agent.usage);
-        const status = `${agent.status} · ${agent.background ? 'bg' : 'fg'} · ${agent.toolCount} tools · ${tokens === undefined ? 'tokens not reported' : `${tokens} tokens`}`;
-        const elapsed = agent.finishedAt
-          ? ` · ${Math.max(0, Math.round((Date.parse(agent.finishedAt) - Date.parse(agent.createdAt)) / 1000))}s`
-          : '';
+        const ended = agent.finishedAt ? Date.parse(agent.finishedAt) : Date.now();
+        const seconds = Math.max(0, Math.round((ended - Date.parse(agent.createdAt)) / 1000));
         const current = agent.steps.findLast(step => step.status === 'running');
+        const detail = [
+          plural(agent.toolCount, 'tool use'),
+          ...(tokens === undefined ? [] : [`${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens`]),
+          ...(Number.isFinite(seconds) ? [formatElapsed(seconds * 1000)] : []),
+        ].join(' · ');
+        const outcome =
+          agent.status === 'running'
+            ? `${agent.background ? 'Running in the background' : 'Running…'} (${detail})${current?.toolName ? ` · ${current.toolName}` : ''}`
+            : agent.status === 'completed'
+              ? `Done (${detail})`
+              : agent.status === 'failed'
+                ? `Failed${agent.errorCode ? `: ${agent.errorCode}` : ''} (${detail})`
+                : `Stopped (${detail})`;
+        const picked = isActive && selected === start + at;
         return (
-          <TextLine
-            key={agent.id}
-            width={width}
-            color={color(
-              agent.status === 'failed' ? 'error' : agent.status === 'running' ? 'accent' : 'foregroundMuted',
-            )}
-          >{`${isActive && selected === start + at ? '›' : ' '} ${'  '.repeat(Math.min(16, Math.max(0, agent.depth - 1)))}${at === Math.min(room, agents.length - start) - 1 ? '└─' : '├─'} ${agent.agentType}: ${agent.description} · ${status}${elapsed}${current?.toolName ? ` · ${current.toolName}` : ''}${agent.errorCode ? ` · ${agent.errorCode}` : ''}`}</TextLine>
+          <Box key={agent.id} flexDirection="column" width={width} minWidth={0}>
+            <Text wrap="wrap">
+              <Text
+                color={
+                  picked
+                    ? ui.color('selected')
+                    : agent.status === 'failed'
+                      ? color('error')
+                      : agent.status === 'running'
+                        ? color('foregroundMuted')
+                        : color('success')
+                }
+              >
+                {picked ? '❯ ' : '⏺ '}
+              </Text>
+              <Text bold>{safeText(agent.agentType)}</Text>
+              {safeText(`(${agent.description})`)}
+            </Text>
+            <ResultLine width={width}>
+              <Text color={color(agent.status === 'failed' ? 'error' : 'foregroundMuted')} wrap="wrap">
+                {safeText(`${'  '.repeat(Math.min(16, Math.max(0, agent.depth - 1)))}${outcome}`)}
+              </Text>
+            </ResultLine>
+          </Box>
         );
       })}
-      {agents.length > room ? <Text dimColor>{agents.length - room} other agents · ↑/↓ navigate</Text> : null}
+      {agents.length > room ? (
+        <Text color={color('foregroundMuted')}>{`     … +${agents.length - room} other agents · ↑/↓ navigate`}</Text>
+      ) : null}
       {detail ? (
         <Box flexDirection="column" minWidth={0}>
           <TextLine width={width}>{`${detail.agentType} · ${detail.id} · ${detail.status}`}</TextLine>

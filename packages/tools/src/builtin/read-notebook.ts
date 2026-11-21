@@ -1,4 +1,4 @@
-import {MAX_ATTACHMENT_BYTES, type Attachment} from '@futryn/contracts';
+import {MAX_ATTACHMENT_BYTES, type Attachment} from '@cosmew/contracts';
 
 /**
  * Jupyter notebooks for `read` (ADR 0041), as Claude Code's Read presents `.ipynb`: every cell with

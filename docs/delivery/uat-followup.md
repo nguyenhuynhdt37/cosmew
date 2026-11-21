@@ -17,7 +17,7 @@ SQLite schema 8. Host: Darwin 24.6.0, Bun 1.4.4, TypeScript 7.0.2. No dependency
 
 ## Verification commands
 
-- `FUTRYN_TEST_REAL_LSP=1 bun test tests/contracts/lsp-rpc.test.ts tests/end-to-end/lsp.test.ts`:
+- `COSMEW_TEST_REAL_LSP=1 bun test tests/contracts/lsp-rpc.test.ts tests/end-to-end/lsp.test.ts`:
   22 pass, 0 fail, 94 assertions.
 - `./node_modules/.bin/tsc --project uat-agent-20261117T140842Z/tsconfig.json`: exit 0.
 - `bun test tests/security/native-exec.test.ts tests/security/exec-command.test.ts`:
@@ -31,7 +31,7 @@ SQLite schema 8. Host: Darwin 24.6.0, Bun 1.4.4, TypeScript 7.0.2. No dependency
 
 The first integrated run found only the expected obsolete golden footer (669 pass, 31 skip,
 1 fail); the regenerated baseline was inspected, not accepted blindly. Final integrated rerun:
-`FUTRYN_TEST_REAL_LSP=1 bun test tests` — **670 pass, 31 skip, 0 fail**, 86,158 assertions,
+`COSMEW_TEST_REAL_LSP=1 bun test tests` — **670 pass, 31 skip, 0 fail**, 86,158 assertions,
 701 tests across 87 files (138.07 s), including real installed TypeScript LSP checks.
 
 ## Retained evidence artifact
@@ -52,7 +52,7 @@ The original UAT report's historical limitations are preserved; follow-up result
 ## Remaining limits
 
 Repository-wide lint's TypeScript checks pass; Prettier still flags the four pre-existing UAT files
-`uat-futryn/calculator.test.ts`, `uat-stress/cli.ts`, `uat-stress/ledger.test.ts`, `uat-stress/ledger.ts`.
+`uat-cosmew/calculator.test.ts`, `uat-stress/cli.ts`, `uat-stress/ledger.test.ts`, `uat-stress/ledger.ts`.
 These unrelated files were preserved. No new live model request was needed for these fixes.
 Linux/Windows live cancellation, arbitrary detached descendants, MCP/subagent availability and
 capabilities outside the supplied session remain **Needs verification**. No full-product certification

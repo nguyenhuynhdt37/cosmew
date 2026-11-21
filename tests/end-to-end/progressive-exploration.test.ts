@@ -1,11 +1,11 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {dirname, join} from 'node:path';
 /** User budgets used by the budget tests (ADR 0030); there is no default ceiling. */
 const MAX_TOOL_ROUNDS = 16,
   MAX_TOOL_CALLS = 32;
-import type {ModelEvent} from '@futryn/contracts';
+import type {ModelEvent} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -56,6 +56,7 @@ const OFFERED = [
   'glob',
   'grep',
   'memory',
+  'tool_output',
   'apply_patch',
   'edit',
   'write',
@@ -374,6 +375,7 @@ for (const protocol of ['chat', 'anthropic'] as const)
         'glob',
         'grep',
         'memory',
+        'tool_output',
         'apply_patch',
         'edit',
         'write',
@@ -439,4 +441,122 @@ test('a user time budget stops tool use with a named stop reason, not a hidden c
     .query('select data from turn_receipts where conversation = ? order by revision desc')
     .get(id) as {data: string};
   expect(JSON.parse(receipt.data).stopReason).toBe('budget_time');
+});
+
+test('middle evidence in a bounded read page reaches the next model request and determines the dependency hop', async () => {
+  // The import is outside the old 12k prefix / 6k suffix context view, but inside one real read page.
+  const padding = Array.from({length: 180}, (_, i) => `// ${i} ${'padding '.repeat(13)}\n`).join('');
+  const c = await make(explorer, {
+    ...repository,
+    'src/routes.ts': padding + repository['src/routes.ts'] + padding,
+  });
+  const {answer} = await ask(c.client, 'Follow the login implementation and report the real token check.');
+  expect(answer).toContain('verifyToken is defined in src/service.ts');
+  expect(answer).toContain('SERVICE_MARKER');
+  expect(c.targets()).toEqual(['glob .', 'read src/routes.ts', 'read src/service.ts']);
+  expect(c.views().every(v => v.orphanResults === 0 && v.unansweredCalls === 0)).toBe(true);
+  expect(JSON.stringify(c.server.requests)).not.toContain('UNRELATED_MARKER');
+});
+
+test('investigation follows middle evidence, makes a focused edit, and verifies the changed behavior', async () => {
+  const padding = Array.from({length: 180}, (_, i) => `// ${i} ${'padding '.repeat(13)}\n`).join('');
+  const c = await make(
+    view => {
+      const edited = view.results.find(r => r.name === 'edit');
+      if (edited) {
+        const verified = view.results.find(
+          r =>
+            r.name === 'read' &&
+            r.callId !== view.results.find(x => x.input.path === edited.input.path)?.callId &&
+            r.content.includes('token.trim()'),
+        );
+        return verified
+          ? {text: `Changed and read back ${verified.input.path}; runtime behavior still needs checking.`}
+          : {calls: [{name: 'read', input: {path: edited.input.path}}]};
+      }
+      const last = view.results.at(-1);
+      if (last?.name === 'read' && last.content.includes('function verifyToken')) {
+        const definition = last.content
+          .split('\n')
+          .find(line => line.includes('function verifyToken'))!
+          .replace(/^\s*\d+\t/, '');
+        return {
+          calls: [
+            {
+              name: 'edit',
+              input: {
+                path: last.input.path,
+                old_string: definition,
+                new_string: definition.replace('token ===', 'token.trim() ==='),
+              },
+            },
+          ],
+        };
+      }
+      return explorer(view);
+    },
+    {...repository, 'src/routes.ts': padding + repository['src/routes.ts'] + padding},
+  );
+  c.client.setPermissionMode('acceptEdits');
+  const {answer} = await ask(
+    c.client,
+    'Accept surrounding whitespace in login tokens. Preserve case sensitivity and unrelated code.',
+  );
+  expect(answer).toContain('Changed and read back src/service.ts');
+  expect(readFileSync(join(c.ws, 'src/routes.ts'), 'utf8')).toBe(padding + repository['src/routes.ts'] + padding);
+  expect(readFileSync(join(c.ws, 'src/billing.ts'), 'utf8')).toBe(repository['src/billing.ts']);
+  const module = await import(join(c.ws, 'src/service.ts'));
+  expect(module.verifyToken(' SERVICE_MARKER ')).toBe(true);
+  expect(module.verifyToken('service_marker')).toBe(false);
+  expect(module.verifyToken('wrong')).toBe(false);
+  expect(c.targets().filter(t => !t.startsWith('edit '))).toEqual([
+    'glob .',
+    'read src/routes.ts',
+    'read src/service.ts',
+    'read src/service.ts',
+  ]);
+  expect(
+    c
+      .views()
+      .at(-1)!
+      .results.find(r => r.name === 'edit')?.input.path,
+  ).toBe('src/service.ts');
+  expect(c.views().every(v => v.orphanResults === 0 && v.unansweredCalls === 0)).toBe(true);
+});
+
+test('archived output retrieval crosses the real model/tool boundary and drives a later source read', async () => {
+  const padding = Array.from({length: 180}, (_, i) => `// ${i} ${'padding '.repeat(13)}\n`).join('');
+  const c = await make(
+    view => {
+      const archive = view.results.find(r => r.name === 'tool_output');
+      if (archive) {
+        const imported = /from '\.\/([\w.-]+)'/.exec(archive.content);
+        if (!imported) return {text: 'MISSING: archive did not preserve the dependency evidence'};
+        const path = `src/${imported[1]}.ts`;
+        const definition = view.results.find(r => r.name === 'read' && r.input.path === path);
+        return definition
+          ? {text: `Observed dependency ${path}: ${definition.content}`}
+          : {calls: [{name: 'read', input: {path}}]};
+      }
+      const page = view.results.find(r => r.name === 'read');
+      if (page) {
+        const id = /\[tool_output output_id=([\da-f-]+);/.exec(page.content)?.[1];
+        return id
+          ? {calls: [{name: 'tool_output', input: {output_id: id, query: 'import', limit: 1000}}]}
+          : {text: 'MISSING: no archive handle'};
+      }
+      return explorer(view);
+    },
+    {...repository, 'src/routes.ts': padding + repository['src/routes.ts'] + padding},
+  );
+  const {answer} = await ask(c.client, 'Use the archived import evidence to locate the token implementation.');
+  expect(answer).toContain('Observed dependency src/service.ts');
+  expect(answer).toContain('SERVICE_MARKER');
+  expect(c.audit().some(r => r.tool === 'tool_output' && r.phase === 'completed' && r.outcome === 'ok')).toBe(true);
+  const result = c
+    .views()
+    .at(-1)!
+    .results.find(r => r.name === 'tool_output')!;
+  expect(result.content).toContain('"coverage"');
+  expect(c.views().every(v => v.orphanResults === 0 && v.unansweredCalls === 0)).toBe(true);
 });

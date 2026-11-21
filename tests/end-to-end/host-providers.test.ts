@@ -2,7 +2,7 @@ import {afterEach, expect, setDefaultTimeout, test} from 'bun:test';
 import {chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import type {ModelEvent} from '@futryn/contracts';
+import type {ModelEvent} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {fixtureServer, memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
@@ -323,7 +323,7 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
   await tui.handleKey('Enter');
   await tui.waitFor('Sign in');
   await tui.handleKey('Enter');
-  await tui.waitFor('Type to filter');
+  await tui.waitFor('Custom provider'); // the provider list of the shared connect dialog
   for (let i = 0; i < 7; i++) await tui.handleKey('Down'); // last row: the custom provider
   await tui.handleKey('Enter');
   await type('gw1');
@@ -358,7 +358,7 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
 
 test('a cached command token is bound to its destination: changed base_url, command or removal never reuses it', async () => {
   const {TokenCommandRunner} = await import('../../apps/cli/src/bootstrap/host-config');
-  const {providerSchema} = await import('@futryn/contracts');
+  const {providerSchema} = await import('@cosmew/contracts');
   const base = {
     id: 'cmd',
     name: 'cmd',

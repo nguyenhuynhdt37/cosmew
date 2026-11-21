@@ -1,30 +1,32 @@
 # Model provider port
 
+Current contract **1.40** includes optional `Provider.reasoning`: `{supported?: boolean, efforts?: string[], models?: Record<modelId, {supported?: boolean, efforts?: string[]}>}`. This is user-level host configuration only, resolved by ModelCatalog into `ModelInfo.capabilities.reasoning` and `reasoningEfforts`. Per-model config > provider defaults > discovered metadata > unknown; explicit unsupported clears efforts. Levels are unique, non-empty, bounded (20 levels, 40 characters each; no whitespace/control characters or reserved `default`); unknown keys and contradictory declarations are rejected. Auto reset needs no declared levels; only explicit effort needs capabilities. Chat sends `reasoning_effort`, Responses sends `reasoning.effort` without requesting summaries on compatible endpoints; native OpenAI Responses keeps `auto`. Anthropic/Gemini return fixed `UNSUPPORTED` diagnostics naming the protocol. See [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md), folded into the uncommitted 1.40 rename (no 1.41).
+
 Contract 1.9 ([ADR 0023](../adr/0023-process-supervision.md)) carries optional runtime lifecycle observations; provider requests/adapters are unchanged. Missing historical observations remain unknown. No command exposure is enabled.
 
 Contract 1.8 Task 03A adds execution result metadata and the injected runtime port only; see [tool contract and migration](tools-and-permissions.md) and [ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md). Provider adapters and request roles are unchanged. Production descriptors still exclude exec_command while its security gate is closed; injected fixtures cover future direct/Codex call-result pairing without enabling native runtime shell.
 
 **Original full-agent v1 proposal; partially implemented by PA1 as specified below.** `models` sở hữu chuyển đổi provider; core chỉ biết normalized request/stream/result. Không để AI SDK điều khiển loop/tool execution thay core. AI SDK cung cấp primitives; tool descriptors không có privileged execute callbacks truyền cho model layer.
 
-| Request field | Quy tắc |
-|---|---|
-| requestId, runId, stepId, attemptId | Attempt mới khi retry; trace ID không chứa prompt |
-| providerRef, modelId, configHash | Model được pin; không tự đổi endpoint |
-| messages | role + typed content parts; tool results liên kết callId |
-| systemInstructions | Trusted/untrusted segments và provenance phân biệt |
-| toolDescriptors | Namespaced name, schemaVersion, inputSchema; không code |
-| limits | maxInputTokens, maxOutputTokens, deadline, cost ceiling |
-| generation | sampling hỗ trợ thực tế; unsupported field gây diagnostic |
-| abortSignal | Port nội bộ; wire dùng cancellation ID |
-| credentialRef | Resolve trong adapter; không serialize credential vào events |
+| Request field                       | Quy tắc                                                      |
+| ----------------------------------- | ------------------------------------------------------------ |
+| requestId, runId, stepId, attemptId | Attempt mới khi retry; trace ID không chứa prompt            |
+| providerRef, modelId, configHash    | Model được pin; không tự đổi endpoint                        |
+| messages                            | role + typed content parts; tool results liên kết callId     |
+| systemInstructions                  | Trusted/untrusted segments và provenance phân biệt           |
+| toolDescriptors                     | Namespaced name, schemaVersion, inputSchema; không code      |
+| limits                              | maxInputTokens, maxOutputTokens, deadline, cost ceiling      |
+| generation                          | sampling hỗ trợ thực tế; unsupported field gây diagnostic    |
+| abortSignal                         | Port nội bộ; wire dùng cancellation ID                       |
+| credentialRef                       | Resolve trong adapter; không serialize credential vào events |
 
-| Capability field | Giá trị và invariant |
-|---|---|
-| text / image / audio | supported / unsupported / unknown |
-| toolCalling / parallelTools | Chỉ dùng khi verified; unknown không suy ra từ tên model |
-| structuredOutput / reasoning | Semantics riêng provider; không ép equivalence |
-| contextLimit / outputLimit | Metadata có source/revision; thiếu thì ceiling bảo thủ |
-| usage / cancellation | Mức hỗ trợ; cancel remote không bảo đảm rollback |
+| Capability field             | Giá trị và invariant                                     |
+| ---------------------------- | -------------------------------------------------------- |
+| text / image / audio         | supported / unsupported / unknown                        |
+| toolCalling / parallelTools  | Chỉ dùng khi verified; unknown không suy ra từ tên model |
+| structuredOutput / reasoning | Semantics riêng provider; không ép equivalence           |
+| contextLimit / outputLimit   | Metadata có source/revision; thiếu thì ceiling bảo thủ   |
+| usage / cancellation         | Mức hỗ trợ; cancel remote không bảo đảm rollback         |
 
 Stream events: started; textDelta; reasoningDelta (ẩn theo policy); toolCallStart(callId,name); toolCallDelta(callId,fragment); toolCallComplete(callId,args); usageUpdate; completed(finishReason); failed(error). Deltas không được mutate canonical call đã complete; callId không trùng trong response. Tool JSON phải parse/schema validate sau completion, giới hạn size/depth, reject incomplete/truncated arguments. Out-of-order fragments chỉ buffer trong limit; unknown call ID là protocol error.
 
@@ -36,35 +38,32 @@ Retry: 429/temporary transport trước effects có backoff + Retry-After ceilin
 
 Version migration cần ADR khi đổi role/part semantics. Acceptance fixtures: interleaved calls, malformed JSON, SSE disconnect, no usage, provider refusing tools, cancellation và secret redaction. 9Router model list/auth/limits là Needs verification trước Phase 1.
 
-
 ## Implemented PA1 model/conversation contract 1.0
 
 [ADR 0005](../adr/0005-provider-auth-product.md) scopes the first executable API. The original table above is not a claim that the full agent loop/event protocol exists. `packages/contracts/src/index.ts` is the only public entry. Contracts export no SDK or Bun types; Zod validates strict records. All new consumers migrate together from the zero-byte baseline; no deployed v0 data/API exists. Optional `streamUsage` and `authGeneration` fields preserve schema-1 compatibility; absent auth generation means generation 1. Newer storage/config versions fail closed. Future incompatible semantics require ADR and migration.
 
-| API | Actual fields/semantics |
-|---|---|
-| Provider | id/name, protocol(chat/responses/anthropic/gemini), baseURL, auth(api-key/none), catalog(openai/anthropic/gemini/ollama/manual), metadataVersion=1, timeoutMs, optional streamUsage |
-| Account | UUID id, providerId, unique alias, CredentialRef(keyring UUID/env NAME/none), status, validatedAt, optional defaultModel/authGeneration |
-| ModelInfo | Opaque model ID including provider namespaces/aliases (`~` supported), name, five tri-state capabilities, nullable limits/pricing and source/fetch/metadata provenance |
-| SettingsStore | read and transactional update; schema 1 checks duplicate IDs/aliases/credential refs and provider/account/selection relationships |
-| CredentialVault | get/set/delete reference; secret bytes are runtime-only return values, never serialized account/model/event fields |
-| ModelRequest | UUID requestId, pinned modelId, bounded user/assistant text messages, maxOutputTokens, optional maxEstimatedCostUSD and descriptor-only tools; no credential/SDK fields |
-| ModelPort | stream(request, AbortSignal?) and generate(request, AbortSignal?); bound provider/account resolved by injected adapter |
-| ModelEvent | started(requestId), textDelta(text), toolCallComplete(call), completed(finishReason, usage); exceptions are HannesError safe diagnostics |
+| API                      | Actual fields/semantics                                                                                                                                                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider                 | id/name, protocol(chat/responses/anthropic/gemini), baseURL, auth(api-key/none), catalog(openai/anthropic/gemini/ollama/manual), metadataVersion=1, timeoutMs, optional streamUsage                                  |
+| Account                  | UUID id, providerId, unique alias, CredentialRef(keyring UUID/env NAME/none), status, validatedAt, optional defaultModel/authGeneration                                                                              |
+| ModelInfo                | Opaque model ID including provider namespaces/aliases (`~` supported), name, five tri-state capabilities, nullable limits/pricing and source/fetch/metadata provenance                                               |
+| SettingsStore            | read and transactional update; schema 1 checks duplicate IDs/aliases/credential refs and provider/account/selection relationships                                                                                    |
+| CredentialVault          | get/set/delete reference; secret bytes are runtime-only return values, never serialized account/model/event fields                                                                                                   |
+| ModelRequest             | UUID requestId, pinned modelId, bounded user/assistant text messages, maxOutputTokens, optional maxEstimatedCostUSD and descriptor-only tools; no credential/SDK fields                                              |
+| ModelPort                | stream(request, AbortSignal?) and generate(request, AbortSignal?); bound provider/account resolved by injected adapter                                                                                               |
+| ModelEvent               | started(requestId), textDelta(text), toolCallComplete(call), completed(finishReason, usage); exceptions are HannesError safe diagnostics                                                                             |
 | Tool descriptors/results | Draft-07 JSON Schema validated explicitly with Ajv; invalid/unknown names, async/external unresolved schemas, duplicates, incomplete arguments and oversized content fail. No execute callback or dispatcher exists. |
-| Usage | inputTokens/outputTokens/costUSD are number or null; costEstimated=true labels cost computed from advisory prices and reported usage |
-| NetworkPolicy | authorize(provider, account); root rereads durable auth generation/status and endpoint snapshot per operation/wire chunk |
-| ConversationStore | create(selection), append pending/committed, complete with revision fencing, interrupt. Full event log/recovery protocol is not implemented. |
+| Usage                    | inputTokens/outputTokens/costUSD are number or null; costEstimated=true labels cost computed from advisory prices and reported usage                                                                                 |
+| NetworkPolicy            | authorize(provider, account); root rereads durable auth generation/status and endpoint snapshot per operation/wire chunk                                                                                             |
+| ConversationStore        | create(selection), append pending/committed, complete with revision fencing, interrupt. Full event log/recovery protocol is not implemented.                                                                         |
 
 Adapters normalize SDK `tool-calls`/`content-filter` into underscore finish reasons. Missing/error/other/interrupted terminal results are rejected, not committed as complete. Total provider deadline propagates into fetch and stream consumption; caller cancellation aborts it. Safe GET discovery has at most 3 attempts and Retry-After/jitter ceilings; generation has no automatic retry because remote acceptance/cost is uncertain. Text output is capped at 256 KiB; request serialization at 1 MiB; HTTP wire response at 4 MiB; complete tool arguments at 64 KiB and 32 calls. Core history is capped at 200 messages and bounded serialized bytes.
 
 Optional maxEstimatedCostUSD is an explicit estimate guard: missing prices or an input-byte/output-token cost estimate above the limit deny before network. The estimate includes message/tool JSON bytes plus framing allowance; it is not an exact tokenizer or billing ceiling. No implicit cross-provider fallback, reasoning transcript exposure, tool execution, multimodal inputs, provider-specific sampling options, hard dollar budgets, exact provider token counting or delegated-agent execution is advertised by this contract. Metadata capabilities remain unknown when not independently verified. See [runtime/CLI](../subsystems/providers-and-auth.md) and [acceptance](../delivery/provider-auth-acceptance.md).
 
-
 ## Provider Connect contract 1.1
 
 [ADR 0007](../adr/0007-provider-connect-and-commands.md) adds Integration, AuthMethod and ProviderAuthChallenge metadata, optional SDK auth-challenge ports and optional connect input fields. All current consumers migrate together. Storage remains schema 1: OpenRouter's official PKCE yields an existing keyring API-key reference; verifiers/codes are never durable. TUI consumes registry metadata, not a hardcoded provider list. No plugin host/vault access or MCP auth is exposed. Model changes start a fresh pinned conversation; permission scopes hash full targets and session grants are cleared at conversation boundaries. Existing schema-1 data loads without rewriting.
-
 
 Contract 1.2 ([ADR 0008](../adr/0008-subscription-runtime-auth.md)) adds optional runtime/family provider metadata, runtime credential references, automatic/polling auth and method target/advanced metadata. Existing schema-1 rows remain unchanged. New runtime refs must match their provider runtime and cannot resolve through API-key credential access. All current consumers migrate together; older readers reject unfamiliar runtime data.
 
@@ -74,7 +73,7 @@ Contract 1.2 ([ADR 0008](../adr/0008-subscription-runtime-auth.md)) adds optiona
 
 SQLite schema 2 adds turn receipts alongside existing schema-1 messages. `ConversationStore.append`, `complete`, `interrupt` accept optional receipts; `observeTurn` durably records intermediate usage/context without committing the answer. Complete/interrupt share transactions with their final receipts. Existing sessions have missing historical coverage, never synthetic zero receipts. `/switch` forks committed history into a new selection-bound session after explicit UI confirmation, without copying usage or permissions. Source sessions remain unchanged.
 
-Effort requires provider-advertised model values. Native Codex/Copilot and supported Responses requests carry the selected value; unsupported models expose no effective control. Context includes a labelled local heuristic and separately dated runtime measurements; no exact tokenizer, complete hidden runtime context or billing reconciliation is claimed.
+Effort requires provider-advertised model values. Native Codex/Copilot, supported Responses requests, and OpenAI-compatible Chat requests carry the selected value when their model metadata advertises it; Anthropic/Gemini remain unsupported until a verified wire mapping exists. Unsupported models expose no effective control. Context includes a labelled local heuristic and separately dated runtime measurements; no exact tokenizer, complete hidden runtime context or billing reconciliation is claimed.
 
 ## Contract 1.4: complete user logout and observed context windows
 
@@ -84,7 +83,7 @@ Reactive/streaming clarification (ADR 0009 follow-up, no schema change): support
 
 ## Contract 1.5: interactive startup verification
 
-[ADR 0014](../adr/0014-interactive-startup-verification.md) adds optional `generate` to SDK `diagnose(signal, generate)`. `true` probes the active model with a small real request; `false` or omitted retains the prior discovery-only diagnostic. The TUI requires session-scoped workspace consent and a successful probe before interactive chat; no write or tool grants are implied. Existing settings and durable schemas need no migration; callers omitting the new parameter retain their behavior.
+[ADR 0014](../adr/0014-interactive-startup-verification.md) adds optional `generate` to SDK `diagnose(signal, generate)`. `true` probes the active model with a small real request; `false` or omitted retains the prior discovery-only diagnostic. The TUI requires persistent per-workspace consent (ADR 0075) and a successful probe before interactive chat; no write or tool grants are implied. Existing settings and durable schemas need no migration; callers omitting the new parameter retain their behavior.
 
 ## Contract 1.6: Codex inline read bridge
 
@@ -103,3 +102,34 @@ CLI composition gates discovery on approved workspace access and wires workspace
 ## Hannes-owned recovery and context
 
 [ADR 0030](../adr/0030-durable-conversation-recovery.md) keeps provider SDK types outside core. Direct providers receive normalized call/result pairs and labeled historical checkpoints; no adapter replays stored tools. Catalog context/output limits and measured usage inform token budgets, with conservative estimates otherwise. ContextCompactor is provider-neutral; the production default is deterministic extractive compaction, not a claim that any adapter supports Codex-native compaction. Unsupported safe compaction fails explicitly. Existing subscription backend labels and opt-in rules remain unchanged.
+
+## Contract 1.40 follow-up: advisory efforts and coding model listing
+
+[ADR 0078](../adr/0078-user-declared-reasoning-efforts.md) also resolves models.dev
+`reasoning_options` (`effort.values`, `toggle`, `budget_tokens`) and `reasoning: true`.
+Effort values keep order, are unique and capped at 20; the contract already accepts
+`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Precedence is user model >
+user provider defaults > advertised `reasoning_efforts` > models.dev > unknown.
+Toggle/budget metadata establishes support without levels. Chat/Responses serialize
+strings unchanged; live acceptance of each level is **Needs verification**.
+
+Provider mapping uses exact provider keys, or a unique exact `api`/configured base
+URL match (trailing slash ignored), falling back to an exact unique existing
+provider preset URL when the catalog omits `api`; model keys must match exactly. Online discovery
+and startup validation enrich existing caches. Metadata failures are nonfatal;
+offline reads never fetch. Source: https://models.dev/api.json, accessed 2026-11-21,
+community-maintained advisory data, not proof of live xAI compatibility.
+
+`isCodingModel(ModelInfo, selectedModelId?)` checks provider text/tools capabilities
+and optional `ModelInfo.codingEvidence: {text, tools}` tri-state evidence. Advisory
+models.dev evidence is persisted separately and never changes capability claims
+except reasoning under the precedence above. This optional field is additive within
+contract 1.40. Explicit non-text output, excluded non-chat model types, or disabled
+tools are hidden by default; unknown/manual/current models remain visible.
+SDK `discoverModels({all: true})`, CLI `models list --all`, and the model panel's
+`a` toggle expose the complete catalog. `cachedModels` remains complete so active
+model resolution and explicit expanded-list selections work. No SQLite migration
+or new persisted preference is needed. Successful ChatGPT account discovery replaces
+configured preset fallback IDs; user-added manual IDs remain available. Optional
+`manualOrigin` (`user` / `provider-config`) records that distinction. Legacy manual
+IDs matching configured fallbacks are omitted from that merge.

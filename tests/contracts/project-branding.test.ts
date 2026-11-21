@@ -8,25 +8,29 @@ afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, {recursive: true, force: true});
 });
 const manifest = (path: string) => JSON.parse(readFileSync(join(root, path), 'utf8'));
-test('Futryn package identity exposes fyn and futryn as the same executable', () => {
-  expect(manifest('package.json').name).toBe('futryn');
+test('Cosmew package identity exposes the canonical and compatibility executables', () => {
+  expect(manifest('package.json').name).toBe('cosmew');
   const cli = manifest('apps/cli/package.json');
-  expect(cli.name).toBe('@futryn/cli');
+  expect(cli.name).toBe('@cosmew/cli');
+  expect(cli.bin.cosmew).toBe('./src/index.ts');
   expect(cli.bin.fyn).toBe('./src/index.ts');
   expect(cli.bin.futryn).toBe(cli.bin.fyn);
+  expect(cli.bin.hannes).toBe(cli.bin.fyn);
 });
-test('fyn resolves its source from another project and displays Futryn help', () => {
+test('cosmew and all legacy aliases resolve from another project and display Cosmew help', () => {
   const project = mkdtempSync(join(tmpdir(), 'futryn-cli-project-'));
   cleanup.push(project);
-  const entry = manifest('apps/cli/package.json').bin.fyn;
+  const entry = manifest('apps/cli/package.json').bin.cosmew;
   expect(typeof entry).toBe('string');
-  const binary = join(project, 'fyn');
-  symlinkSync(resolve(root, 'apps/cli', entry), binary);
-  const child = Bun.spawnSync([binary, '--help'], {cwd: project, stdout: 'pipe', stderr: 'pipe'});
-  expect(child.exitCode).toBe(0);
-  expect(child.stdout.toString()).toContain('Futryn');
-  expect(child.stdout.toString()).toContain('fyn');
-  expect(child.stdout.toString()).not.toContain('Hannes /');
+  for (const name of ['cosmew', 'fyn', 'futryn', 'hannes']) {
+    const binary = join(project, name);
+    symlinkSync(resolve(root, 'apps/cli', entry), binary);
+    const child = Bun.spawnSync([binary, '--help'], {cwd: project, stdout: 'pipe', stderr: 'pipe'});
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.toString()).toContain('Cosmew');
+    expect(child.stdout.toString()).toContain('cosmew');
+    expect(child.stdout.toString()).not.toContain('Hannes /');
+  }
 });
 
 test('new storage names preserve legacy accounts without merging or moving state', async () => {
@@ -34,12 +38,18 @@ test('new storage names preserve legacy accounts without merging or moving state
   const {mkdirSync} = await import('node:fs');
   const home = mkdtempSync(join(tmpdir(), 'futryn-state-home-'));
   cleanup.push(home);
-  expect(defaultStateDirectory({}, home)).toBe(join(home, '.futryn'));
+  expect(defaultStateDirectory({}, home)).toBe(join(home, '.cosmew'));
   mkdirSync(join(home, '.hannes'));
   expect(defaultStateDirectory({}, home)).toBe(join(home, '.hannes'));
   mkdirSync(join(home, '.futryn'));
   expect(defaultStateDirectory({}, home)).toBe(join(home, '.futryn'));
   expect(defaultStateDirectory({HANNES_HOME: '/legacy-state'}, home)).toBe('/legacy-state');
+  expect(
+    defaultStateDirectory(
+      {COSMEW_HOME: '/cosmew-state', FUTRYN_HOME: '/new-state', HANNES_HOME: '/legacy-state'},
+      home,
+    ),
+  ).toBe('/cosmew-state');
   expect(defaultStateDirectory({FUTRYN_HOME: '/new-state', HANNES_HOME: '/legacy-state'}, home)).toBe('/new-state');
 });
 test('fyn uses FUTRYN_HOME from a different project and keeps HANNES_HOME as a fallback', () => {
@@ -61,8 +71,8 @@ test('fyn uses FUTRYN_HOME from a different project and keeps HANNES_HOME as a f
   }
 });
 test('the legacy error alias keeps instanceof compatible and both state directory names deny writes', async () => {
-  const {FutrynError, HannesError} = await import('@futryn/contracts');
-  const {evaluateWrite} = await import('@futryn/security');
+  const {FutrynError, HannesError} = await import('@cosmew/contracts');
+  const {evaluateWrite} = await import('@cosmew/security');
   expect(HannesError).toBe(FutrynError);
   expect(new FutrynError('POLICY')).toBeInstanceOf(HannesError);
   for (const path of ['.futryn/state', 'nested/.FUTRYN/state', '.hannes/state', '.futryn-patch-temporary'])
@@ -79,5 +89,5 @@ test('installed CLI entry ignores project Bun preloads before workspace consent'
   const child = Bun.spawnSync([binary, '--help'], {cwd: project, stdout: 'pipe', stderr: 'pipe'});
   expect(child.exitCode).toBe(0);
   expect(child.stdout.toString()).not.toContain('PROJECT_CODE_BEFORE_CONSENT');
-  expect(child.stdout.toString()).toContain('Futryn');
+  expect(child.stdout.toString()).toContain('Cosmew');
 });

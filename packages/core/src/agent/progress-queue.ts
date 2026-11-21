@@ -1,4 +1,4 @@
-import type {CommandOutputChunk, ModelEvent, SubagentEvent, ToolCall} from '@futryn/contracts';
+import type {CommandOutputChunk, ModelEvent, SubagentEvent, ToolCall} from '@cosmew/contracts';
 
 /** Bounds on live command output buffered between the tool and the event stream. */
 const MAX_QUEUED_EVENTS = 128;

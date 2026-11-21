@@ -1,4 +1,4 @@
-import type {TurnReceipt, Usage} from '@futryn/contracts';
+import type {TurnReceipt, Usage} from '@cosmew/contracts';
 export function summarizeUsage(receipts: TurnReceipt[], historicalTurns: number) {
   const turns = receipts.filter(turn => turn.kind !== 'user-shell');
   const known = (field: keyof Usage, subset = turns): number | null => {

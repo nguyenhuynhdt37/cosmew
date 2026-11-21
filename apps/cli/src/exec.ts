@@ -1,17 +1,15 @@
 import {closeSync, constants, openSync, realpathSync, statSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
+import {BYPASS_PERMISSIONS_WARNING, CONTRACT_VERSION, FutrynError, type HeadlessEvent} from '@cosmew/contracts';
 import {
-  APPROVAL_POLICY_FOR_MODE,
-  CONTRACT_VERSION,
-  FULL_ACCESS_WARNING,
-  FutrynError,
-  MODE_FOR_APPROVAL_POLICY,
-  type ApprovalPolicy,
-  type HeadlessEvent,
-  type SandboxModeSetting,
-} from '@futryn/contracts';
-import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';
+  PERMISSION_CLI_OPTIONS,
+  resolvePermissionFlags,
+  startup,
+  type Application,
+  type LaunchPermissionFlags,
+} from './bootstrap/startup';
+import {writeMcpNotices} from './bootstrap/mcp';
 import {ChatInput} from './input';
 
 type WithoutEnvelope<T> = T extends unknown ? Omit<T, 'seq' | 'contractVersion'> : never;
@@ -19,8 +17,8 @@ type WithoutEnvelope<T> = T extends unknown ? Omit<T, 'seq' | 'contractVersion'>
 export interface ExecOptions {
   prompt: string;
   workspace?: string;
-  approval?: ApprovalPolicy;
-  sandbox?: SandboxModeSetting;
+  /** Claude Code launch flags (`--permission-mode`, `--dangerously-skip-permissions`, `--allowedTools`, `--disallowedTools`). */
+  permissions?: LaunchPermissionFlags;
   json: boolean;
   account?: string;
   model?: string;
@@ -28,20 +26,21 @@ export interface ExecOptions {
 }
 
 const HELP = `fyn exec <prompt|-> [--cd|-C <dir>] [--json]
-  [--approval|--ask-for-approval|-a untrusted|on-request|never] [--sandbox|-s read-only|workspace-write|danger-full-access]
-  [--full-auto] [--dangerously-bypass-approvals-and-sandbox|--yolo]
+  [--permission-mode default|acceptEdits|plan|bypassPermissions] [--dangerously-skip-permissions]
+  [--allowedTools <rules>] [--disallowedTools <rules>]
   [--output-last-message|-o <file>] [--account <id-or-alias>] [--model <id>]
-Explicit --cd grants folder consent. Without a TTY approvals default to never. --sandbox danger-full-access
-(Codex Full Access, with --approval never or --dangerously-bypass-approvals-and-sandbox/--yolo) runs commands WITHOUT
-the sandbox: use it only in a disposable environment. Without --sandbox, FUTRYN_SANDBOX_MODE or the config
-sandbox_mode applies; FUTRYN_SANDBOX_NETWORK=1 or [sandbox_workspace_write] network_access = true gives sandboxed commands network.
+Explicit --cd grants folder consent. Like \`claude -p\`, there is no one to ask without a TTY: anything that would
+prompt is denied (file edits in default mode, commands outside the sandbox, new network domains). --allowedTools /
+--disallowedTools take comma or space separated rules such as "Bash(npm test:*) Edit". --dangerously-skip-permissions
+(bypassPermissions) approves everything without asking; the OS sandbox and deny rules still apply. Settings come from
+~/.cosmew/settings.json and the project's .cosmew/settings.json / settings.local.json (legacy .futryn/.hannes roots are read); repository settings that loosen
+anything are ignored here unless approved earlier in the TUI.
 Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 64 invalid arguments.
 `;
 
 /** Own lifecycle so invalid exec arguments never open state or enter an interactive command. */
 export async function execCli(args: string[]): Promise<number> {
   let options: ExecOptions;
-  let sandbox: SandboxModeSetting | undefined;
   try {
     const {values, positionals} = parseArgs({
       args,
@@ -63,8 +62,6 @@ export async function execCli(args: string[]): Promise<number> {
     }
     if (positionals.length !== 1 || !positionals[0]?.trim()) throw new FutrynError('INVALID_INPUT');
     const permissionFlags = resolvePermissionFlags(values);
-    sandbox = permissionFlags.sandbox;
-    const approval = permissionFlags.approval ?? (process.stdin.isTTY ? undefined : 'never');
     const workspace = values.cd === undefined ? undefined : realpathSync(resolve(values.cd));
     if (workspace && !statSync(workspace).isDirectory()) throw new FutrynError('INVALID_INPUT');
     for (const value of [values.cd, values.account, values.model, values['output-last-message']])
@@ -72,8 +69,7 @@ export async function execCli(args: string[]): Promise<number> {
     options = {
       prompt: positionals[0]!,
       workspace,
-      ...(approval !== undefined ? {approval} : {}),
-      ...(sandbox !== undefined ? {sandbox} : {}),
+      permissions: permissionFlags,
       json: values.json ?? false,
       account: values.account,
       model: values.model,
@@ -83,9 +79,6 @@ export async function execCli(args: string[]): Promise<number> {
     process.stderr.write(HELP);
     return 64;
   }
-  // These process-local settings are read by the existing composition root/runtime. No new tool path.
-  if (options.approval !== undefined) process.env.FUTRYN_APPROVAL_POLICY = options.approval;
-  if (sandbox) process.env.FUTRYN_SANDBOX_MODE = sandbox;
   const interactive = !!process.stdin.isTTY && options.prompt !== '-';
   const controller = new AbortController();
   const interrupt = () => {
@@ -108,7 +101,7 @@ export async function execCli(args: string[]): Promise<number> {
       options.prompt = Buffer.concat(chunks).toString('utf8');
       if (!options.prompt.trim()) return 64;
     }
-    app = startup();
+    app = startup(undefined, {permissions: options.permissions ?? {}});
     for (const notice of app.takeStartupNotices()) process.stderr.write(`Notice: ${notice}\n`);
     await app.migrationCleanup;
     return await runExec(app, options, controller.signal, interactive);
@@ -161,15 +154,35 @@ export async function runExec(
     failed(new FutrynError('AUTH'));
     return 2;
   }
+  const metadata = client.refreshModelMetadata({effortOnly: true});
+  if (metadata) {
+    let cancel: () => void = () => {};
+    try {
+      await Promise.race([
+        metadata,
+        new Promise<void>(resolve => {
+          cancel = resolve;
+          signal?.addEventListener('abort', cancel, {once: true});
+          if (signal?.aborted) resolve();
+        }),
+      ]);
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
+  }
   client.setToolsEnabled(true);
   client.setUserInputAvailable(false);
-  const wasFullAccess = client.sandboxMode() === 'danger-full-access';
-  if (options.sandbox) client.setSandboxMode(options.sandbox);
-  const effectiveApproval: ApprovalPolicy =
-    options.approval ?? (interactive ? APPROVAL_POLICY_FOR_MODE[client.permissionMode()] : 'never');
-  client.setPermissionMode(MODE_FOR_APPROVAL_POLICY[effectiveApproval]);
-  // The warning goes to stderr: stdout stays the model's answer (or the JSON event stream).
-  if (!wasFullAccess && client.sandboxMode() === 'danger-full-access') process.stderr.write(`${FULL_ACCESS_WARNING}\n`);
+  // A headless run never asks about repository settings: untrusted ones stay tightening-only.
+  client.setSettingsTrustPrompts(false);
+  client.setPromptsAvailable(interactive);
+  const launchMode = options.permissions?.mode;
+  if (launchMode) client.setPermissionMode(launchMode);
+  // Warnings go to stderr: stdout stays the model's answer (or the JSON event stream).
+  if (client.permissionMode() === 'bypassPermissions') process.stderr.write(`${BYPASS_PERMISSIONS_WARNING}\n`);
+  for (const pending of client.permissionSettings().pendingTrust)
+    process.stderr.write(
+      `Notice: ignoring the loosening parts of ${pending.path} (untrusted repository settings: ${pending.grants.join('; ')}). Approve it once in the TUI to use them.\n`,
+    );
   const status = client.status();
   if (
     !status.activeAccount ||
@@ -180,6 +193,15 @@ export async function runExec(
     failed(new FutrynError('AUTH'));
     return 2;
   }
+  try {
+    writeMcpNotices(await app.connectMcp(signal));
+  } catch (error) {
+    if (signal?.aborted) {
+      failed(error instanceof FutrynError ? error : new FutrynError('CANCELLED'));
+      return 1;
+    }
+    process.stderr.write('Notice: MCP servers were not started.\n');
+  }
   let input: ChatInput | undefined;
   let approvals = Promise.resolve();
   const unsubscribe = client.onInteractionEvent(event => {
@@ -188,7 +210,7 @@ export async function runExec(
     const request = event.request;
     approvals = approvals.then(async () => {
       let decision: 'once' | 'deny' = 'deny';
-      if (interactive && !signal?.aborted && effectiveApproval !== 'never') {
+      if (interactive && !signal?.aborted) {
         input ??= new ChatInput(signal);
         try {
           const prefix = request.subagent
@@ -223,11 +245,16 @@ export async function runExec(
       }
     };
     await runTurn(options.prompt);
-    // Background subagents (S5c): headless mode has no UI to wake the parent, so wait for them here and give each
-    // finished child's queued `<subagent>` result to the parent as its next turn, until nothing is running or queued.
+    // Headless runs drain the same durable inbox for background shell and subagent completions.
+    // Wait for existing tasks, then give their notifications to the parent through its normal next turn.
     let noticed = false;
     let wake: (() => void) | undefined;
     const stopNotices = client.onSubagentNotice(() => {
+      noticed = true;
+      wake?.();
+    });
+    const stopTaskNotices = client.onBackgroundTaskEvent(event => {
+      if (event.type !== 'task.finished') return;
       noticed = true;
       wake?.();
     });
@@ -240,7 +267,7 @@ export async function runExec(
           await runTurn(queued);
           continue;
         }
-        if (!client.subagents().some(child => child.background && child.status === 'running')) break;
+        if (!client.backgroundTasks().some(task => task.status === 'running')) break;
         await new Promise<void>(resolve => {
           wake = resolve;
           const timer = setTimeout(resolve, 500);
@@ -252,6 +279,7 @@ export async function runExec(
       }
     } finally {
       stopNotices();
+      stopTaskNotices();
       signal?.removeEventListener('abort', abortWake);
     }
     if (signal?.aborted) throw new FutrynError('CANCELLED');

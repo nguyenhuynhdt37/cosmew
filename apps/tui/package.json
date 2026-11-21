@@ -1,5 +1,5 @@
 {
-  "name": "@futryn/tui",
+  "name": "@cosmew/tui",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -8,8 +8,8 @@
     "./theme": "./src/theme/theme.ts"
   },
   "dependencies": {
-    "@futryn/contracts": "workspace:*",
-    "@futryn/sdk": "workspace:*",
+    "@cosmew/contracts": "workspace:*",
+    "@cosmew/sdk": "workspace:*",
     "cli-highlight": "2.1.11",
     "ink": "8.0.0",
     "marked": "18.1.2",

@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /private/tmp/fyn-g2-demo
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+14| Help
+15| [All]  Keyboard  Commands
+16| Type to filter
+17| ❯ 1. Esc  Close overlay / interrupt
+18|   2. Enter  Submit / select
+19|   3. Shift+Enter  New line
+20|   4. ↑  Previous item
+21|   5. ↓  Next item
+22|   6. Ctrl+O  Expand / collapse output
+23|   7. Ctrl+R  Search history
+24|   8. Shift+Tab  Cycle permission mode
+25|   9. Ctrl+C twice  Exit
+26|   10. /usage (/cost, /stats)  Per-turn and session usage with coverage and pricing provenance
+27|   11. /context  Model limits, output reserve, measured or estimated context
+28| 1/37
+29| Enter to confirm · Esc to exit

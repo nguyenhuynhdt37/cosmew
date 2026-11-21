@@ -1,16 +1,15 @@
 // Bun Snapshot v1, https://bun.sh/docs/test/snapshots
 
 exports[`shared primitives render readable plain text 1`] = `
-"╭──────────────────────────────────────╮
-│ Preview                              │
-│ Esc close                            │
-│ ✻ Reading… (2s · 42 tokens)          │
-│ 你好世界                             │
-│ hello                                │
-│ a                                    │
-│ b                                    │
-│ Ctrl+O expand · +1 lines             │
-╰──────────────────────────────────────╯"
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Preview
+  Esc close
+  ✻ Reading… (2s · ↓ 42 tokens)
+  你好世界
+  hello
+  a
+  b
+  Ctrl+O expand · +1 lines"
 `;
 
 exports[`Markdown renders structural blocks and code without terminal injection 1`] = `
@@ -18,19 +17,16 @@ exports[`Markdown renders structural blocks and code without terminal injection 
 
 bold italic inline docs (https://example.com)
 
-• first
-• second
+- first
+- second
 
 │ quote
-│
 
 A                               B
 ───────────────────────────────────────────────────────────────
 x                               y
 
-typescript
-const x = 1;
-"
+const x = 1;"
 `;
 
 exports[`CodeBlock falls back for unknown languages 1`] = `
@@ -57,9 +53,9 @@ exports[`Diff numbers hunk lines, handles header-like source and folds 2`] = `
 `;
 
 exports[`ListPicker filters, navigates, selects and cancels 1`] = `
-"Type to filter
-› 1. Alpha
-  2. Beta
-1/4
-↑↓ Enter Esc navigate · select · close"
+"❯ Alpha
+  Beta
+    ↓ 2 more
+
+↑/↓ to navigate · Enter to select · Esc to close"
 `;

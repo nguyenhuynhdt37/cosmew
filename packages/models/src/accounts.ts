@@ -5,7 +5,7 @@ import {
   type CredentialRef,
   type CredentialVault,
   type SettingsStore,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 /** API-key and OAuth providers keep a credential; `none` and `command` providers have none to store. */
 const holdsCredential = (provider: {auth: string}) => provider.auth === 'api-key' || provider.auth === 'oauth';
@@ -78,18 +78,29 @@ export class AccountManager {
     const provider = this.store.read().providers.find(p => p.id === current.providerId)!;
     accountSchema.parse({...current, credential});
     if (holdsCredential(provider) === (credential.kind === 'none')) throw new FutrynError('AUTH');
+    // Stage all user input before fencing the existing identity. A missing key or a keyring
+    // failure must leave the current account usable so a retry does not require a second login.
+    if (
+      credential.kind === 'keyring' &&
+      current.credential.kind === 'keyring' &&
+      credential.key === current.credential.key
+    )
+      throw new FutrynError('INVALID_INPUT');
+    if (credential.kind === 'keyring' && !secret) throw new FutrynError('AUTH');
     if (
       credential.kind === 'keyring' &&
       this.list().some(a => a.credential.kind === 'keyring' && a.credential.key === credential.key)
     )
       throw new FutrynError('INVALID_INPUT');
     await this.rejectDuplicate(current.providerId, credential, secret, current.id);
-    await this.logout(current.id);
     if (credential.kind === 'keyring') {
       if (!secret) throw new FutrynError('AUTH');
       await this.vault.set(credential.key, secret);
     }
     try {
+      // Logout fences routing and removes the old secret. It is intentionally after staging the
+      // replacement so invalid input or an unavailable keyring cannot strand the account.
+      await this.logout(current.id);
       this.store.update(s => {
         const a = s.accounts.find(a => a.id === current.id)!;
         a.credential = credential;

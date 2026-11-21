@@ -1,5 +1,5 @@
 {
-  "name": "@futryn/models",
+  "name": "@cosmew/models",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@futryn/contracts": "workspace:*",
+    "@cosmew/contracts": "workspace:*",
     "ai": "7.0.173",
     "@ai-sdk/openai": "4.0.118",
     "@ai-sdk/anthropic": "4.0.105",

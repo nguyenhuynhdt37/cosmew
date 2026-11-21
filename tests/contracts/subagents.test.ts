@@ -8,7 +8,7 @@ import {
   DEFAULT_AGENT_MAX_THREADS,
   agentToolInputSchema,
   type ToolDescriptor,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {
   BUILTIN_AGENT_PROFILES,
   SubagentScheduler,
@@ -23,10 +23,10 @@ import {
   prepareForkedParentMessages,
   resolveAgentProfile,
   resolveSubagentModelAndEffort,
-} from '@futryn/agents';
-import {loadHostAgents} from '@futryn/models';
-import {SqliteConversations, openPrivateDatabase} from '@futryn/persistence';
-import {SessionGrants} from '@futryn/security';
+} from '@cosmew/agents';
+import {loadHostAgents} from '@cosmew/models';
+import {SqliteConversations, openPrivateDatabase} from '@cosmew/persistence';
+import {SessionGrants} from '@cosmew/security';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -48,14 +48,13 @@ const SAMPLE_DESCRIPTORS: ToolDescriptor[] = [
   {name: 'apply_patch', capability: 'fs.write', description: 'apply_patch', inputSchema: {}},
   {name: 'edit', capability: 'fs.write', description: 'edit', inputSchema: {}},
   {name: 'write', capability: 'fs.write', description: 'write', inputSchema: {}},
-  {name: 'request_permissions', capability: 'process.execute', description: 'request_permissions', inputSchema: {}},
   {name: 'update_plan', capability: 'agent.state', description: 'update_plan', inputSchema: {}},
   {name: 'request_user_input', capability: 'user.input', description: 'request_user_input', inputSchema: {}},
   {name: 'agent', capability: 'agent.spawn', parallel: true, description: 'agent', inputSchema: {}},
 ];
 
-test('contract version is bumped to 1.35 and Codex defaults are preserved', () => {
-  expect(CONTRACT_VERSION).toBe('1.35');
+test('contract version is bumped to 1.40 and Codex defaults are preserved', () => {
+  expect(CONTRACT_VERSION).toBe('1.40');
   expect(DEFAULT_AGENT_MAX_THREADS).toBe(6);
   expect(DEFAULT_AGENT_MAX_DEPTH).toBe(1);
   expect(
@@ -111,19 +110,30 @@ test('built-in profiles restrict tool sets and sandbox modes (never widening par
   expect(planTools).toEqual(['read', 'glob', 'grep', 'lsp', 'web_search', 'web_fetch', 'skill', 'update_plan']);
 
   // Explore and Plan clamp parent sandbox to read-only with escalation disabled.
-  expect(
-    effectiveSubagentSandbox({mode: 'danger-full-access', escalation: 'on-request', network: true}, explore),
-  ).toEqual({
-    mode: 'read-only',
-    escalation: 'never',
+  const parent: {
+    enabled: boolean;
+    readOnly?: boolean;
+    allowUnsandboxed: boolean;
+    excludedCommands: string[];
+    additionalDirectories: string[];
+    network: boolean;
+  } = {
+    enabled: false,
+    allowUnsandboxed: true,
+    excludedCommands: ['git'],
+    additionalDirectories: ['/tmp/extra'],
+    network: true,
+  };
+  expect(effectiveSubagentSandbox(parent, explore)).toEqual({
+    enabled: true,
+    readOnly: true,
+    allowUnsandboxed: false,
+    excludedCommands: [],
+    additionalDirectories: [],
     network: false,
   });
   // Worker inherits parent sandbox.
-  expect(effectiveSubagentSandbox({mode: 'workspace-write', escalation: 'on-request', network: true}, worker)).toEqual({
-    mode: 'workspace-write',
-    escalation: 'on-request',
-    network: true,
-  });
+  expect(effectiveSubagentSandbox(parent, worker)).toEqual(parent);
 });
 
 test('host config parses [agents] max_threads, max_depth and per-role overrides with diagnostics', () => {
@@ -366,4 +376,24 @@ test('depth and model resolution helpers follow Codex and OpenCode precedence', 
     availableModelIds: () => Object.keys(models),
   });
   expect(byExplicit.ok && byExplicit.value.selection.modelId).toBe('explicit-model');
+});
+
+test('read-only explorers and planners can retrieve their own bounded evidence without receiving write tools', () => {
+  const output: ToolDescriptor = {
+    name: 'tool_output',
+    capability: 'agent.state',
+    parallel: true,
+    description: 'captured output',
+    inputSchema: {},
+  };
+  for (const role of ['explore', 'plan'] as const) {
+    const tools = filterSubagentTools([...SAMPLE_DESCRIPTORS, output], BUILTIN_AGENT_PROFILES[role], {
+      depth: 1,
+      maxDepth: 1,
+      parentAnalysisOnly: true,
+    }).map(d => d.name);
+    expect(tools).toContain('tool_output');
+    expect(tools).not.toContain('edit');
+    expect(tools).not.toContain('exec_command');
+  }
 });

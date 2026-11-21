@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|                                                                  │1 file changed +1 -1               source: Current ▾
+02|✻ Crunched for 8s · done 11:00 PM                                 │
+03|                                                                  │a.txt                                          +1 -1
+04|❯ In a.txt replace the word hello with HELLO.                     │
+05|                                                                  │────────────────────────────────────────────────────
+06|  Read 1 file                                                     │a.txt                                        [ ask ]
+07|                                                                  │────────────────────────────────────────────────────
+08|⏺ Update(a.txt)                                                   │ 1 -hello
+09|  ⎿  Added 1 line, removed 1 line                                 │ 1 +HELLO
+10|      1 -hello                                                    │ 2  world
+11|      1 +HELLO                                                    │
+12|      2  world                                                    │
+13|                                                                  │
+14|⏺ I changed hello to HELLO in a.txt. It was the only "hello" in   │
+15|  the file, so the file now reads:                                │
+16|                                                                  │
+17|  HELLO                                                           │
+18|  world                                                           │
+19|                                                                  │
+20|✻ Crunched for 8s · done 11:02 PM                                 │
+21|                                                                  │
+22|❯ Use the AskUserQuestion tool to ask me which color I prefer,    │
+23|  red or blue, then reply with my choice.                         │
+24|                                                                  │
+25|⏺ Answered Claude's questions:                                    │
+26|  ⎿  · Which color do you prefer, red or blue? → Red              │
+27|                                                                  │
+28|✻ Moseying… (3s · ↓ 132 tokens)                                   │
+29|  ⎿  Tip: Name sessions with /rename to find them in /resume      │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

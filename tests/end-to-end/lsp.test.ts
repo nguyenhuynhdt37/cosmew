@@ -3,11 +3,11 @@ import {spawn} from 'node:child_process';
 import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {LspManager, SERVERS, toUtf16Character, toCodePointColumn, type ServerSpec} from '@futryn/code-intel';
-import type {ServiceProcess} from '@futryn/contracts';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher, NativeCommandRuntime, type ApprovalRequest} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {LspManager, SERVERS, toUtf16Character, toCodePointColumn, type ServerSpec} from '@cosmew/code-intel';
+import type {ServiceProcess} from '@cosmew/contracts';
+import {SessionGrants} from '@cosmew/security';
+import {DEFAULT_SANDBOX_CONFIG, ToolDispatcher, NativeCommandRuntime, type ApprovalRequest} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 
 const clean: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -178,7 +178,7 @@ test.skipIf(process.platform !== 'darwin')(
     const localFixture = join(root, 'server.ts');
     writeFileSync(localFixture, readFileSync(fixture));
     const child = runtime.spawnService!([process.execPath, '--config=/dev/null', '--no-env-file', localFixture], root);
-    const {LspClient} = await import('@futryn/code-intel');
+    const {LspClient} = await import('@cosmew/code-intel');
     const client = new LspClient(child, root);
     clean.push(() => client.shutdown());
     await client.initialize();
@@ -292,7 +292,7 @@ test.skipIf(process.env.FUTRYN_TEST_REAL_LSP !== '1')(
       grants: new SessionGrants(),
       approve: async () => 'once',
       redact: t => t,
-      sandbox: () => ({mode: 'workspace-write', escalation: 'on-request'}),
+      sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false}),
     });
     const definition = await tools.invoke({
       id: crypto.randomUUID(),

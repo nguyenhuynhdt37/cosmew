@@ -1,0 +1,30 @@
+00|       • ~/.claude/agents/     (all projects)
+01|
+02|     Docs: https://code.claude.com/docs/en/sub-agents
+03|
+04|❯ /memory
+05|  ⎿  Closed memory
+06|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+07|  Theme
+08|
+09|  Choose the text style that looks best with your terminal
+10|
+11|      Auto (match terminal)
+12|      Dark mode
+13|      Light mode
+14|      Dark mode (colorblind-friendly)
+15|      Light mode (colorblind-friendly)
+16|      Dark mode (ANSI colors only)
+17|      Light mode (ANSI colors only)
+18|  ❯ ✔ Orca   custom
+19|      New custom theme…
+20|
+21|  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+22|   1  function greet() {
+23|   2 -  console.log("Hello, World!");
+24|   2 +  console.log("Hello, Claude!");
+25|   3  }
+26|  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+27|   Syntax theme: GitHub (ctrl+t to disable)
+28|
+29|  Enter to select · ctrl+e to edit · Esc to cancel

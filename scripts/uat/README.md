@@ -38,7 +38,7 @@ bun scripts/uat/agent-run.ts --workspace <thư-mục> --prompts <file.txt> --rep
 - Câu hỏi `request_user_input` được trả lời bằng lựa chọn đầu tiên.
 - Contract 1.24: driver đăng ký `client.onInteractionEvent` cho `permission.requested` /
   `question.asked` thay polling; CLI cũ giữ nguyên, option lập trình `pollMs` bị bỏ qua.
-  Snapshot thêm `approvalPolicy`. Driver bật user input riêng vì có bộ trả lời tự động;
+  Snapshot thêm `permissionMode` (ADR 0061). Driver bật user input riêng vì có bộ trả lời tự động;
   hành vi này khác exec một lượt ở trên.
 - Thư mục trạng thái giống CLI: `FUTRYN_HOME`/`HANNES_HOME`, mặc định `~/.futryn` (dùng lại `~/.hannes` nếu có). Cần đã chọn account và model.
 - Timeout mỗi lượt mặc định 20 phút (huỷ bằng AbortSignal). Ctrl+C huỷ gọn. Mã thoát 0 chỉ khi mọi lượt hoàn tất không lỗi.

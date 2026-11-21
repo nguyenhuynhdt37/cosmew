@@ -14,11 +14,12 @@ import {
   type ModelPort,
   type ModelRequest,
   type ToolCall,
+  toolCallSchema,
   type Usage,
   usageSchema,
   GENERATION_LIMITS,
   codexBackoffMs,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 export interface MediaOptions {
   /** Send assistant reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
@@ -35,7 +36,7 @@ const mediaNote = (count: number) =>
   `[${count} attachment(s) from this result were not sent: the current model cannot view images or PDFs.]`;
 
 /**
- * Futryn messages → AI SDK messages, including assistant tool calls and tool results. Tool media
+ * Cosmew messages → AI SDK messages, including assistant tool calls and tool results. Tool media
  * (ADR 0041): Anthropic carries images and PDFs inside the tool result; other protocols cannot, so
  * the media follows the run of tool results as one user message (OpenAI chat: images only). A model
  * known to lack vision gets a note instead of the media.
@@ -97,6 +98,19 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
       });
       continue;
     }
+    if (m.role === 'user' && m.attachments?.length) {
+      out.push({
+        role: 'user',
+        content:
+          media.vision === 'unsupported'
+            ? m.content + '\n' + mediaNote(m.attachments.length)
+            : [
+                {type: 'text', text: m.content},
+                ...m.attachments.map(a => ({type: 'file' as const, data: a.data, mediaType: a.mime, filename: a.name})),
+              ],
+      });
+      continue;
+    }
     if (m.role === 'assistant' && m.toolCalls) {
       out.push({
         role: 'assistant',
@@ -116,6 +130,29 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
 import {normalizeError, ProviderTransport, wait} from './http';
 
 type ChatUsageConverter = NonNullable<Parameters<typeof createOpenAICompatible>[0]['convertUsage']>;
+/** Provider usage fields are user supplied JSON. Invalid/negative counters are unknown, never zero. */
+const tokenCount = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+
+const firstTokenCount = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    const count = tokenCount(value);
+    if (count !== undefined) return count;
+  }
+  return undefined;
+};
+
+const moneyAmount = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+const firstMoneyAmount = (...values: unknown[]): number | undefined => {
+  for (const value of values) {
+    const amount = moneyAmount(value);
+    if (amount !== undefined) return amount;
+  }
+  return undefined;
+};
+
 /**
  * OpenAI-compatible usage with DeepSeek's cache counters: `prompt_cache_hit_tokens` counts as cache
  * reads when the standard `prompt_tokens_details.cached_tokens` is absent (ADR 0048).
@@ -127,16 +164,47 @@ const chatUsage: ChatUsageConverter = usage => {
       outputTokens: {total: undefined, text: undefined, reasoning: undefined},
     };
   const raw = usage as Record<string, any>;
-  const prompt = raw.prompt_tokens ?? undefined;
-  const completion = raw.completion_tokens ?? undefined;
-  const cached = raw.prompt_tokens_details?.cached_tokens ?? raw.prompt_cache_hit_tokens ?? undefined;
-  const reasoning = raw.completion_tokens_details?.reasoning_tokens ?? undefined;
+  const prompt = firstTokenCount(raw.prompt_tokens, raw.input_tokens, raw.inputTokens, raw.promptTokens);
+  const completion = firstTokenCount(raw.completion_tokens, raw.output_tokens, raw.outputTokens, raw.completionTokens);
+  const cached = firstTokenCount(
+    raw.prompt_tokens_details?.cached_tokens,
+    raw.prompt_tokens_details?.cache_read_tokens,
+    raw.input_token_details?.cached_tokens,
+    raw.input_token_details?.cache_read_tokens,
+    raw.inputTokenDetails?.cacheReadTokens,
+    raw.cachedInputTokens,
+    raw.prompt_cache_hit_tokens,
+    raw.cache_read_input_tokens,
+    raw.cache_read_tokens,
+  );
+  const cacheWrite = firstTokenCount(
+    raw.prompt_tokens_details?.cache_write_tokens,
+    raw.prompt_tokens_details?.cache_creation_tokens,
+    raw.input_token_details?.cache_write_tokens,
+    raw.inputTokenDetails?.cacheWriteTokens,
+    raw.prompt_cache_write_tokens,
+    raw.cache_write_input_tokens,
+  );
+  const reasoning = firstTokenCount(
+    raw.completion_tokens_details?.reasoning_tokens,
+    raw.output_token_details?.reasoning_tokens,
+    raw.outputTokenDetails?.reasoningTokens,
+    raw.reasoning_tokens,
+    raw.reasoningTokens,
+  );
+  const noCache = firstTokenCount(
+    raw.prompt_tokens_details?.no_cache_tokens,
+    raw.input_token_details?.no_cache_tokens,
+    raw.inputTokenDetails?.noCacheTokens,
+  );
   return {
     inputTokens: {
       total: prompt,
-      noCache: prompt !== undefined && cached !== undefined ? prompt - cached : undefined,
+      noCache:
+        noCache ??
+        (prompt !== undefined && cached !== undefined ? Math.max(0, prompt - cached - (cacheWrite ?? 0)) : undefined),
       cacheRead: cached,
-      cacheWrite: undefined,
+      cacheWrite,
     },
     outputTokens: {
       total: completion,
@@ -151,38 +219,62 @@ const usage = (
   u: {
     inputTokens?: number;
     outputTokens?: number;
-    inputTokenDetails?: {cacheReadTokens?: number; cacheWriteTokens?: number};
-    outputTokenDetails?: {reasoningTokens?: number};
+    inputTokenDetails?: {
+      cacheReadTokens?: number;
+      cacheWriteTokens?: number;
+      noCacheTokens?: number;
+    };
+    outputTokenDetails?: {reasoningTokens?: number; textTokens?: number};
+    /** AI SDK 4/5 compatibility fields retained by some provider adapters. */
+    cachedInputTokens?: number;
+    reasoningTokens?: number;
+    raw?: unknown;
   },
   info?: ModelInfo,
-): Usage => ({
-  inputTokens: u.inputTokens ?? null,
-  outputTokens: u.outputTokens ?? null,
-  ...(u.inputTokenDetails?.cacheReadTokens != null ? {cacheReadTokens: u.inputTokenDetails?.cacheReadTokens} : {}),
-  ...(u.inputTokenDetails?.cacheWriteTokens != null ? {cacheWriteTokens: u.inputTokenDetails?.cacheWriteTokens} : {}),
-  ...(u.outputTokenDetails?.reasoningTokens != null ? {reasoningTokens: u.outputTokenDetails?.reasoningTokens} : {}),
-  ...(info?.pricing ? {pricingSource: info.metadataSource, pricingAt: info.metadataFetchedAt} : {}),
-  costUSD:
-    info?.pricing &&
-    !u.inputTokenDetails?.cacheReadTokens &&
-    !u.inputTokenDetails?.cacheWriteTokens &&
-    u.inputTokens !== undefined &&
-    u.outputTokens !== undefined
-      ? (u.inputTokens * info.pricing.inputPerMillion + u.outputTokens * info.pricing.outputPerMillion) / 1000000
-      : null,
-  ...(info?.pricing &&
-  !u.inputTokenDetails?.cacheReadTokens &&
-  !u.inputTokenDetails?.cacheWriteTokens &&
-  u.inputTokens !== undefined &&
-  u.outputTokens !== undefined
-    ? {costEstimated: true}
-    : {}),
-});
+): Usage => {
+  const inputTokens = tokenCount(u.inputTokens);
+  const outputTokens = tokenCount(u.outputTokens);
+  const cacheReadTokens = firstTokenCount(u.inputTokenDetails?.cacheReadTokens, u.cachedInputTokens);
+  const cacheWriteTokens = tokenCount(u.inputTokenDetails?.cacheWriteTokens);
+  const reasoningTokens = firstTokenCount(u.outputTokenDetails?.reasoningTokens, u.reasoningTokens);
+  const raw = u.raw && typeof u.raw === 'object' ? (u.raw as Record<string, unknown>) : undefined;
+  // Some gateways return an exact USD amount. Trust it only when the field is explicitly named in USD.
+  const reportedCost = firstMoneyAmount(raw?.costUSD, raw?.cost_usd);
+  const estimatedCost =
+    reportedCost === undefined && info?.pricing && inputTokens !== undefined && outputTokens !== undefined
+      ? (inputTokens * info.pricing.inputPerMillion + outputTokens * info.pricing.outputPerMillion) / 1000000
+      : undefined;
+  return {
+    inputTokens: inputTokens ?? null,
+    outputTokens: outputTokens ?? null,
+    ...(cacheReadTokens !== undefined ? {cacheReadTokens} : {}),
+    ...(cacheWriteTokens !== undefined ? {cacheWriteTokens} : {}),
+    ...(reasoningTokens !== undefined ? {reasoningTokens} : {}),
+    ...(info?.pricing ? {pricingSource: info.metadataSource, pricingAt: info.metadataFetchedAt} : {}),
+    costUSD: reportedCost ?? estimatedCost ?? null,
+    ...(estimatedCost !== undefined || reportedCost !== undefined ? {costEstimated: estimatedCost !== undefined} : {}),
+  };
+};
 /** Unparseable or non-object arguments still reach the router, which rejects them as INVALID_INPUT. */
 const objectInput = (input: unknown): Record<string, unknown> =>
   input && typeof input === 'object' && !Array.isArray(input)
     ? (input as Record<string, unknown>)
     : {invalidArguments: String(JSON.stringify(input) ?? input).slice(0, 1000)};
+
+/**
+ * Provider SDKs type tool names and ids as arbitrary strings.  Keep the wire boundary strict so a
+ * malformed call cannot enter the core journal (the tool router still owns unknown, but well-formed,
+ * tool names).  Invalid arguments deliberately remain data for the router to reject.
+ */
+const normalizeToolCall = (id: unknown, name: unknown, input: unknown): ToolCall => {
+  const call = {
+    id: typeof id === 'string' ? id : '',
+    name: typeof name === 'string' ? name : '',
+    input: objectInput(input),
+  };
+  if (!toolCallSchema.safeParse(call).success) throw new FutrynError('PROTOCOL');
+  return call;
+};
 
 /** Aborts with a TimeoutError after `ms` without `touch()`; `stop()` disarms it. */
 function idleDeadline(ms: number): {signal: AbortSignal; touch: () => void; stop: () => void} {
@@ -233,12 +325,16 @@ export class ProviderAdapter implements ModelPort {
       )
         throw new FutrynError('BUDGET');
     }
-    if (
-      request.reasoningEffort &&
-      (!this.info?.reasoningEfforts?.includes(request.reasoningEffort) ||
-        this.transport.provider.protocol !== 'responses')
-    )
-      throw new FutrynError('UNSUPPORTED');
+    if (request.reasoningEffort) {
+      const protocol = this.transport.provider.protocol;
+      if (protocol === 'anthropic' || protocol === 'gemini')
+        throw new FutrynError('UNSUPPORTED', false, null, protocol);
+      if (
+        this.info?.capabilities.reasoning === 'unsupported' ||
+        !this.info?.reasoningEfforts?.includes(request.reasoningEffort)
+      )
+        throw new FutrynError('UNSUPPORTED', false, null, 'levels');
+    }
     if (this.info?.contextLimit && maxOutputTokens !== undefined && maxOutputTokens >= this.info.contextLimit)
       throw new FutrynError('CONTEXT_LIMIT');
     const key = await this.transport.credential(signal);
@@ -271,7 +367,7 @@ export class ProviderAdapter implements ModelPort {
         convertUsage: chatUsage,
       }).chatModel(this.modelId);
     // Adapters convert, never decide (ADR 0029): a call with wrong arguments or an unknown name is
-    // passed to the Futryn ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
+    // passed to the Cosmew ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
     // Codex responds-to-model. Only genuine wire faults (duplicate ids, >32 calls, oversize) fail here.
     const tools: ToolSet = {};
     const names = new Set<string>();
@@ -308,16 +404,32 @@ export class ProviderAdapter implements ModelPort {
     // OpenAI prompt caching (Responses API `prompt_cache_key`): a stable per-conversation value so the
     // provider routes every round of one session to the same cache. It is a hash, never the raw id.
     // Needs verification: xAI `x-grok-conv-id` is not sent until its documentation is cited.
-    const openaiOptions =
+    const providerOptions =
       p.protocol === 'responses'
         ? {
             ...(p.auth === 'oauth' ? {store: false} : {}),
             ...(request.cacheKey ? {promptCacheKey: promptCacheKey(request.cacheKey)} : {}),
             ...(request.reasoningEffort
-              ? {reasoningEffort: request.reasoningEffort, reasoningSummary: 'auto', forceReasoning: true}
+              ? {
+                  reasoningEffort: request.reasoningEffort,
+                  forceReasoning: true,
+                  // Explicit null suppresses the AI SDK's implicit detailed summary.
+                  reasoningSummary: p.id === 'openai' && p.baseURL === 'https://api.openai.com/v1' ? 'auto' : null,
+                }
               : {}),
           }
-        : undefined;
+        : p.protocol === 'chat' && request.reasoningEffort
+          ? {reasoningEffort: request.reasoningEffort}
+          : undefined;
+    // The OpenAI-compatible AI SDK adapter names its provider options after the configured
+    // provider (`<id>.chat` -> `<id>`). This is the only generic Chat transport option we
+    // pass through: model metadata must explicitly advertise the effort first (above).
+    const providerOptionsByProtocol =
+      providerOptions === undefined
+        ? undefined
+        : p.protocol === 'responses'
+          ? {openai: providerOptions}
+          : {[p.id]: providerOptions};
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
@@ -327,7 +439,7 @@ export class ProviderAdapter implements ModelPort {
         replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
       }),
       ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
-      ...(openaiOptions ? {providerOptions: {openai: openaiOptions}} : {}),
+      ...(providerOptionsByProtocol ? {providerOptions: providerOptionsByProtocol} : {}),
       maxRetries: 0,
       abortSignal,
       tools: request.tools.length ? tools : undefined,
@@ -400,7 +512,7 @@ export class ProviderAdapter implements ModelPort {
           if (calls.has(part.toolCallId)) throw new FutrynError('PROTOCOL');
           calls.add(part.toolCallId);
           pending.delete(part.toolCallId);
-          const call = {id: part.toolCallId, name: part.toolName, input: objectInput(part.input)};
+          const call = normalizeToolCall(part.toolCallId, part.toolName, part.input);
           if ('invalid' in part && part.invalid) held.push(call);
           else yield {type: 'toolCallComplete', call};
         } else if (part.type === 'finish') {
@@ -457,11 +569,7 @@ export class ProviderAdapter implements ModelPort {
         throw new FutrynError('PROTOCOL');
       return {
         text: result.text,
-        calls: result.toolCalls.map(call => ({
-          id: call.toolCallId,
-          name: call.toolName,
-          input: objectInput(call.input),
-        })),
+        calls: result.toolCalls.map(call => normalizeToolCall(call.toolCallId, call.toolName, call.input)),
         usage: usageSchema.parse(usage(result.totalUsage, this.info)),
         finishReason: result.finishReason.replaceAll('-', '_'),
       };

@@ -64,7 +64,7 @@ test('session modes persist per conversation and forks across restart while sess
     const second = client.createSession();
     expect(client.mode()).toBe('review');
     client.setMode('chat');
-    client.setPermissionMode('bypassPermissions');
+    client.setPermissionMode('plan');
     client.resumeSession(first.id);
     expect(client.mode()).toBe('review');
     expect(client.permissionMode()).toBe('default');
@@ -88,7 +88,7 @@ test('session modes persist per conversation and forks across restart while sess
     client.deleteSession(fork.id);
     expect(app.settings.read().sessionModes?.[fork.id]).toBeUndefined();
     expect(app.settings.read().sessionModes?.[first.id]).toBe('review');
-    client.setPermissionMode('auto');
+    client.setPermissionMode('acceptEdits');
     client.clearSessionView();
     expect(client.permissionMode()).toBe('default');
   } finally {
@@ -111,7 +111,7 @@ test('failed session deletion preserves selected history and authorization; resu
     client.selectModel('fixture-model');
     const session = client.createSession();
     client.setMode('plan');
-    client.setPermissionMode('auto');
+    client.setPermissionMode('acceptEdits');
     const originalDelete = app.conversations.delete.bind(app.conversations);
     app.conversations.delete = () => {
       throw new Error('injected storage failure');
@@ -119,7 +119,7 @@ test('failed session deletion preserves selected history and authorization; resu
     expect(() => client.deleteSession(session.id)).toThrow('injected storage failure');
     expect(client.activeSession()?.id).toBe(session.id);
     expect(client.mode()).toBe('plan');
-    expect(client.permissionMode()).toBe('auto');
+    expect(client.permissionMode()).toBe('acceptEdits');
     expect(app.settings.read().sessionModes?.[session.id]).toBe('plan');
     app.conversations.delete = originalDelete;
     app.settings.update(settings => {
@@ -138,7 +138,7 @@ test('failed session deletion preserves selected history and authorization; resu
 });
 
 test('new and resumed sessions reset the permission mode while invalid resume leaves it intact', async () => {
-  const {providerPresets} = await import('@futryn/models');
+  const {providerPresets} = await import('@cosmew/models');
   const dir = mkdtempSync(join(tmpdir(), 'futryn-session-mode-'));
   const app = startup(dir, {vault: memoryVault()});
   try {
@@ -149,12 +149,12 @@ test('new and resumed sessions reset the permission mode while invalid resume le
     client.selectModel('gpt-5');
     const first = client.createSession();
     client.setToolsEnabled(true);
-    client.setPermissionMode('bypassPermissions');
+    client.setPermissionMode('plan');
     expect(() => client.resumeSession('invalid-session')).toThrow();
-    expect(client.permissionMode()).toBe('bypassPermissions');
+    expect(client.permissionMode()).toBe('plan');
     client.createSession();
     expect(client.permissionMode()).toBe('default');
-    client.setPermissionMode('auto');
+    client.setPermissionMode('acceptEdits');
     client.resumeSession(first.id);
     expect(client.permissionMode()).toBe('default');
   } finally {

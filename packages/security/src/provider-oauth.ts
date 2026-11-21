@@ -1,4 +1,4 @@
-import {FutrynError, type ProviderAuthChallenge} from '@futryn/contracts';
+import {FutrynError, type ProviderAuthChallenge} from '@cosmew/contracts';
 import {Redactor} from './secrets';
 
 /** Official OpenRouter headless PKCE flow. No consumer subscription tokens,
@@ -21,7 +21,7 @@ export class OpenRouterPKCE {
     const url = new URL('https://openrouter.ai/auth');
     url.searchParams.set('code_challenge', Buffer.from(digest).toString('base64url'));
     url.searchParams.set('code_challenge_method', 'S256');
-    url.searchParams.set('key_label', 'FUTRYN');
+    url.searchParams.set('key_label', 'COSMEW');
     const expires = this.now() + 600_000;
     this.challenges.set(id, {verifier, expires});
     return {id, authorizationURL: url.href, expiresAt: new Date(expires).toISOString()};

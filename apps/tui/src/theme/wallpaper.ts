@@ -1,5 +1,6 @@
-import {WALLPAPER_PRESET_IDS, type AnimationConfig, type WallpaperPresetId} from '@futryn/contracts';
+import {WALLPAPER_PRESET_IDS, type AnimationConfig, type WallpaperPresetId} from '@cosmew/contracts';
 import {formatRgbHex, mixHex, parseHexRgb} from './presets';
+import {COSMEW_MASCOT_FRAMES} from './cosmew-mascot';
 
 export interface SceneCell {
   ch: string;
@@ -183,18 +184,13 @@ const MOONLIT_CLOUDS: [number, number, number, number][] = [
 const MOONLIT_NIGHT = tint('#7088d8', '#18214a', [0.35, 0.5, 0.65, 0.82]);
 
 // ============================================================================
-// 2. FUTRYN SPARK SCENE (Original FUTRYN branding/sentinel, inspired by clawd)
+// 2. COSMEW SPARK SCENE (Original COSMEW branding/sentinel, inspired by clawd)
 // ============================================================================
-const FUTRYN_BOT_BASE = ['.==###==.', '.#o#F#o#.', '#########', '.#######.'];
-const FUTRYN_BOT_FRAMES = [
-  [...FUTRYN_BOT_BASE, '.#.#.#.#.'],
-  [...FUTRYN_BOT_BASE, '#.#.#.#..'],
-];
-const FUTRYN_BOT_PAL: Record<string, PaletteTile> = {
-  '#': {bg: '#d97757', fg: '#3b1d12', a: 0.95},
-  '=': {bg: '#f0883e', fg: '#2a1208', a: 0.95},
-  o: {bg: '#2a1a14', fg: '#ffbe85', a: 0.95, ch: 'o'},
-  F: {bg: '#2a1a14', fg: '#ffffff', a: 0.98, ch: 'F'},
+const COSMEW_BOT_FRAMES = COSMEW_MASCOT_FRAMES;
+const COSMEW_BOT_PAL: Record<string, PaletteTile> = {
+  '▀': {fg: '#d97757', a: 0.95, ch: '▀'},
+  '▄': {fg: '#d97757', a: 0.95, ch: '▄'},
+  '█': {fg: '#d97757', a: 0.95, ch: '█'},
 };
 
 // ============================================================================
@@ -699,8 +695,8 @@ export const WALLPAPER_SCENES: Record<WallpaperPresetId, WallpaperSceneDefinitio
 
   'futryn-spark': {
     id: 'futryn-spark',
-    name: 'FUTRYN Spark',
-    tagline: 'A turning amber spark, drifting embers, FUTRYN sentinel on patrol',
+    name: 'COSMEW Spark',
+    tagline: 'A turning amber spark, drifting embers, COSMEW sentinel on patrol',
     defaultBg: '#1f1714',
     defaultFg: '#f2e6df',
     defaultAccent: '#d97757',
@@ -748,8 +744,8 @@ export const WALLPAPER_SCENES: Record<WallpaperPresetId, WallpaperSceneDefinitio
           glow: {r: 10, color: '#d97757', a: 0.28 + 0.05 * Math.sin(t * 1.4)},
         },
         {
-          art: frame(FUTRYN_BOT_FRAMES, t, 5),
-          pal: FUTRYN_BOT_PAL,
+          art: [...frame(COSMEW_BOT_FRAMES, t, 2.4)],
+          pal: COSMEW_BOT_PAL,
           x: lo + (hi - lo) * (p < 1 ? p : 2 - p),
           y: Math.max(2, rows - 7),
           key: 1,

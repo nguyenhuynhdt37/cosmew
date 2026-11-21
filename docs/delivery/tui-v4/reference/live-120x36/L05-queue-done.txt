@@ -1,0 +1,36 @@
+00|  isn't among my available tools or the extra tools that can be   │                                                   ✕
+01|  loaded on demand. You asked me to use no other tools, so I      │2 files changed +1 -1              source: Current ▾
+02|  haven't substituted anything.                                   │
+03|                                                                  │a.txt                                          +1 -1
+04|  I could run the same alpha → beta → gamma sequence another way, │poem.txt
+05|  for example by updating a checklist file after each step. If    │
+06|  you'd like that, tell me which way to use.                      │────────────────────────────────────────────────────
+07|                                                                  │a.txt                                        [ ask ]
+08|✻ Cooked for 3s · done 11:02 PM                                   │────────────────────────────────────────────────────
+09|                                                                  │ 1 -hello
+10|❯ Write a 60-line poem about terminals to poem.txt.               │ 1 +HELLO
+11|                                                                  │ 2  world
+12|⏺ Write(poem.txt)                                                 │
+13|  ⎿  Wrote 60 lines to poem.txt                                   │────────────────────────────────────────────────────
+14|       1 A cursor blinks against the black,                       │poem.txt (untracked)
+15|       2 a heartbeat on an empty line;                            │────────────────────────────────────────────────────
+16|       3 it never hurries, never asks,                            │New file not yet staged.
+17|       4 it only waits for your design.                           │Run `git add :/poem.txt` to see line counts.
+18|       5 The prompt is small, a dollar sign,                      │
+19|       6 a humble gate, a narrow door,                            │
+20|       7 yet through it pour the oldest spells                    │
+21|       8 that ran on glass and tape before.                       │
+22|       9 I type a word, the shell replies,                        │
+23|      10 a pipe connects one thought to two,                      │
+24|     … +50 lines                                                  │
+25|                                                                  │
+26|❯ also give it a title                                            │
+27|                                                                  │
+28|✽ Forging… (23s · ↓ 1.8k tokens)                                  │
+29|  ⎿  Tip: Use /color and /rename to tell your sessions apart      │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

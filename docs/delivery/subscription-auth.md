@@ -5,7 +5,7 @@
 ## ChatGPT API sign-in troubleshooting (2026-11-17)
 
 The browser callback waits for the code exchange, token-sharing scope check and ID-token verification.
-It reports identity verification only after those checks; API/model validation still finishes in Futryn.
+It reports identity verification only after those checks; API/model validation still finishes in Cosmew.
 Failure pages identify the failed stage with fixed text and never echo callback parameters, provider
 response bodies or tokens. Token-exchange failures include the HTTP status and only an allowlisted
 standard OAuth error name; arbitrary provider error text is discarded. Authorization-code `invalid_grant`
@@ -25,7 +25,7 @@ advertises issuer `https://auth.openai.com`, RS256, and
 Source comparison: [OpenCode `chatgpt.ts` at 0ac0d7e](https://github.com/anomalyco/opencode/blob/0ac0d7e/packages/core/src/plugin/provider/chatgpt.ts).
 Neither public discovery check used user credentials; authenticated evidence is recorded separately below.
 
-Live sign-in diagnostic on this host (2026-11-17): a fresh, isolated Futryn OAuth attempt reached
+Live sign-in diagnostic on this host (2026-11-17): a fresh, isolated Cosmew OAuth attempt reached
 `POST https://auth.openai.com/api/accounts/oauth/token` and received **HTTP 400 / `invalid_grant`**.
 No model API request was sent. The temporary state and any account/vault entries were cleaned up;
 no authorization code, verifier, token or raw provider response was logged. This establishes the
@@ -51,7 +51,7 @@ attempt. Other accounts, live refresh/revocation, tools and broader capability a
 Final local verification: `bun test tests` **658 pass, 32 skip, 0 fail** (690 tests/86 files);
 the focused OAuth suite **17 pass**; `bun run typecheck` passed. Repository lint's TypeScript
 checks passed, but its formatting stage reported four pre-existing, unrelated UAT files:
-`uat-futryn/calculator.test.ts`, `uat-stress/cli.ts`, `uat-stress/ledger.test.ts`,
+`uat-cosmew/calculator.test.ts`, `uat-stress/cli.ts`, `uat-stress/ledger.test.ts`,
 `uat-stress/ledger.ts`. Formatting of the changed TypeScript files and `git diff --check` passed.
 
 
@@ -59,7 +59,7 @@ checks passed, but its formatting stage reported four pre-existing, unrelated UA
 
 ## Login UX
 
-`bun run futryn` → `/login` → **vendor** → **sign-in method** → model → chat.
+`bun run cosmew` → `/login` → **vendor** → **sign-in method** → model → chat.
 
 OpenAI appears once and contains **Sign in with ChatGPT**, **API key**, and **More options…** (device code and environment reference). Google similarly groups subscription and API access. GitHub Copilot and Qwen have their own vendor rows. xAI Grok groups **Sign in with Grok** (Grok Build subscription) with **API key** ([ADR 0026](../adr/0026-xai-grok-api-and-subscription.md)). Internal runtime/provider IDs are not separate login choices. Selecting subscription starts the official browser/device flow immediately; approved auth links open via a fixed OS opener with no shell interpolation. Selecting API key asks only for the hidden key. Account names are generated automatically (`openai`, `openai-2`, `chatgpt`, etc.); rename is optional in account management. No alias or environment-variable prompt interrupts the ordinary sign-in path. Advanced custom endpoints remain explicit because URL/protocol/model data is necessary for a custom server.
 
@@ -76,9 +76,9 @@ The line-mode wizard follows the same vendor grouping and automatic account nami
 | Google AI subscription | Official Gemini CLI ACP Google OAuth, models and prompt streaming | Official `gemini` on PATH | Deterministic ACP subprocess fixtures; CLI not installed on this host, live compatibility Needs verification |
 | Qwen | Official Qwen Code ACP `qwen-oauth`, model discovery and streaming | Official `qwen` exposing the documented ACP/OAuth path | Deterministic ACP subprocess fixtures; CLI not installed on this host. Current source accepts `qwen-oauth` but advertises only API auth in its auth-method list, so installed-version/browser compatibility explicitly Needs verification |
 | xAI Grok (SuperGrok) | Official Grok Build ACP (`grok agent --no-leader stdio`), auth method `grok.com`, model discovery and streaming; isolated `GROK_HOME`/`HOME` | Official `grok` on PATH (https://x.ai/cli) | Deterministic ACP subprocess fixtures; actual unauthenticated `initialize`/`session/new` and `grok inspect` with installed 1.0.77 on 2026-11-15. Browser login, authenticated model shape and plan entitlement Need verification |
-| xAI Grok API | API key / env reference, `https://api.x.ai/v1` OpenAI-compatible chat with `include_usage` | None beyond FUTRYN | Existing OpenAI-compatible adapter fixtures; live xAI request not run |
+| xAI Grok API | API key / env reference, `https://api.x.ai/v1` OpenAI-compatible chat with `include_usage` | None beyond COSMEW | Existing OpenAI-compatible adapter fixtures; live xAI request not run |
 | Claude | Anthropic API key | Existing native API adapter | Existing HTTP fixtures; subscription login in a third-party product requires Anthropic approval and is not offered as working |
-| OpenRouter | Official PKCE code-to-API-key flow | None beyond FUTRYN | Existing HTTP/OS-keyring tests; uses OpenRouter credits, not another subscription |
+| OpenRouter | Official PKCE code-to-API-key flow | None beyond COSMEW | Existing HTTP/OS-keyring tests; uses OpenRouter credits, not another subscription |
 
 No runtime is silently downloaded, updated or authenticated using other apps' credentials. Missing runtime is a real prerequisite, not successful integration evidence. In particular, Gemini/Qwen fixture success is not a claim that their installed/vendor flows were observed here. Model access and quota depend on the actual account. Subscription usage/cost stays unknown unless reported; no invented zero-cost or entitlement guarantee.
 
@@ -92,9 +92,9 @@ Each account stores a versioned allowlisted credential snapshot in the OS keyrin
 
 Child environments omit inherited provider tokens, `NODE_OPTIONS`, shell auto-approval and user proxy/config injection. Provider-specific home overrides isolate official auth caches. Process execution uses fixed argv, no shell, and no project cwd. OAuth browser opening accepts only recognized provider HTTPS authorization hosts. Native runtimes may also use their own documented browser flow.
 
-Codex runs with read-only policy and disabled shell/web/agents/MCP/apps/plugins; approval requests are declined. Copilot uses `availableTools: []`, excluded tool sources, no config discovery/plugins/skills and denied permission requests. Gemini uses `tools.core: []`. Qwen deliberately uses a **nonempty impossible core allowlist**, `permissions.deny: ['*']` and disabled tool search; its empty core list would enable defaults. Grok Build uses `permission.deny = ["*"]` (its read-only tools are otherwise auto-approved in every mode), disabled web search/backend tools/subagents/memory/managed MCP/relay/telemetry and disabled Claude/Codex/Cursor compat discovery; `HOME` points into the profile. ACP client filesystem/terminal capabilities are absent, and client-side requests are denied. Tool-start events fail the turn rather than becoming a committed success. These are runtime controls, not a claim of a separate OS sandbox; general FUTRYN tool execution remains Not implemented.
+Codex runs with read-only policy and disabled shell/web/agents/MCP/apps/plugins; approval requests are declined. Copilot uses `availableTools: []`, excluded tool sources, no config discovery/plugins/skills and denied permission requests. Gemini uses `tools.core: []`. Qwen deliberately uses a **nonempty impossible core allowlist**, `permissions.deny: ['*']` and disabled tool search; its empty core list would enable defaults. Grok Build uses `permission.deny = ["*"]` (its read-only tools are otherwise auto-approved in every mode), disabled web search/backend tools/subagents/memory/managed MCP/relay/telemetry and disabled Claude/Codex/Cursor compat discovery; `HOME` points into the profile. ACP client filesystem/terminal capabilities are absent, and client-side requests are denied. Tool-start events fail the turn rather than becoming a committed success. These are runtime controls, not a claim of a separate OS sandbox; general COSMEW tool execution remains Not implemented.
 
-Account generation/reference checks fence streams, model discovery and refresh persistence. Logout terminates owned active connections, deletes the vault entry, clears selection/catalog and cannot be undone by a late credential refresh. Separate accounts never share a profile/key. SQLite owner/PID leases serialize operations on the same account across processes, preventing competing token rotations; dead-process lease reclamation is transactional. Local logout deletes FUTRYN's credential material; remote revocation remains the provider's responsibility. API keys and runtime snapshot persistence never fall back to a durable plaintext credentials file.
+Account generation/reference checks fence streams, model discovery and refresh persistence. Logout terminates owned active connections, deletes the vault entry, clears selection/catalog and cannot be undone by a late credential refresh. Separate accounts never share a profile/key. SQLite owner/PID leases serialize operations on the same account across processes, preventing competing token rotations; dead-process lease reclamation is transactional. Local logout deletes COSMEW's credential material; remote revocation remains the provider's responsibility. API keys and runtime snapshot persistence never fall back to a durable plaintext credentials file.
 
 ## Tests and actual evidence
 
@@ -149,7 +149,7 @@ Inspected dynamic source SHA-256 snapshots:
 
 ## Copilot saved-sign-in fix
 
-The first live user report found `AUTH` after GitHub consent. The Copilot runtime recipe incorrectly passed `--no-auto-login`: official SDK documentation states this ignores saved CLI credentials (`useLoggedInUser: false`). FUTRYN restores its own credential snapshot into a private `COPILOT_HOME`, so that flag prevented the runtime from using the sign-in it had just saved. The flag is removed; inherited tokens remain excluded, keytar stays disabled, and `GH_CONFIG_DIR`/XDG paths point inside the same private profile to prevent unrelated `gh`/user-config fallback. No global Copilot credential cache is imported.
+The first live user report found `AUTH` after GitHub consent. The Copilot runtime recipe incorrectly passed `--no-auto-login`: official SDK documentation states this ignores saved CLI credentials (`useLoggedInUser: false`). COSMEW restores its own credential snapshot into a private `COPILOT_HOME`, so that flag prevented the runtime from using the sign-in it had just saved. The flag is removed; inherited tokens remain excluded, keytar stays disabled, and `GH_CONFIG_DIR`/XDG paths point inside the same private profile to prevent unrelated `gh`/user-config fallback. No global Copilot credential cache is imported.
 
 The subprocess fixture now honors `--no-auto-login` semantics, so the existing full Copilot login/model/chat/restart tests detect this regression. Subscription errors use the provider's sign-in context, not API-key instructions, and longer diagnostics wrap inside the dialog. An isolated native `copilot login --device-code` probe reached the authorization URL/code without a TTY or API key and was cancelled without consent; no real tokens were read or model request sent. Full post-consent vendor validation still needs the user's next sign-in.
 
@@ -171,7 +171,7 @@ Persistence now accepts that exact managed header (LF or CRLF) for allowlisted `
 Evidence recorded 2026-11-14:
 
 - Installed native runtime: `/opt/homebrew/Caskroom/copilot-cli/1.0.107/copilot`. Its extracted `prebuilds/darwin-arm64/runtime.node` SHA-256 is `0eae290b7e80529f44935ddce0e87919a49c017353269fad5e239579bc3ade3a`; no vendor binary/source is added to the repository.
-- A fresh isolated native runtime writes benign `appTipShown` state through `globalState.writeKey`; FUTRYN captures the resulting native document, restores it in a different private profile, and a second native process reads the saved value via `globalState.load`. Automated opt-in: `HANNES_TEST_COPILOT=1 bun test tests/end-to-end/subscriptions.test.ts`. No existing auth cache is imported, browser consent requested, token read or model request sent by this probe.
+- A fresh isolated native runtime writes benign `appTipShown` state through `globalState.writeKey`; COSMEW captures the resulting native document, restores it in a different private profile, and a second native process reads the saved value via `globalState.load`. Automated opt-in: `HANNES_TEST_COPILOT=1 bun test tests/end-to-end/subscriptions.test.ts`. No existing auth cache is imported, browser consent requested, token read or model request sent by this probe.
 - Deterministic Copilot lifecycle tests now use the native header for authentication output. Actual PTY coverage includes GitHub Copilot → device-flow fixture → model → streamed fixture response → logout.
 - A disposable native OS-vault test checks capture of a header-bearing synthetic token document, nested secret redaction, vault retrieval and deletion.
 - Verification on a separate checkout of `4c412d3` plus this fix: typecheck/lint pass; `HANNES_TEST_KEYRING=1 HANNES_TEST_COPILOT=1 bun test tests` reports **123 pass, 0 fail**, including unit/integration, PTY and native-state tests. The shared working tree reports 122 pass / 2 fail in Fyn rendering assertions affected by concurrent, uncommitted TUI edits; those edits are preserved and excluded from this auth fix.

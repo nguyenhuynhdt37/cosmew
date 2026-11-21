@@ -1,12 +1,15 @@
 /** @jsxImportSource react */
-import {Box, Text, useApp, useWindowSize} from 'ink';
+import {useTerminalSize} from './hooks/use-terminal-size';
+import {Box, Text, useApp} from 'ink';
 import type {ReactNode} from 'react';
-import type {FutrynClient} from '@futryn/sdk';
+import type {FutrynClient} from '@cosmew/sdk';
 import {ThemeEngine} from '../theme/theme';
 import {OverlayProvider, useOverlay} from './core/overlay';
-import {FutrynClientProvider, InputScope, useKeymap} from './hooks';
+import {FutrynClientProvider, InputScope, KeymapProvider, useKeymap} from './hooks';
 import {ThemeProvider} from './theme';
 import {IntegratedShell, type IntegratedShellProps} from './integrated-shell';
+import {LiveDialog} from './ui';
+import {useLiveRows} from './screen';
 
 export interface AppSlots {
   transcript?: ReactNode;
@@ -25,7 +28,8 @@ const defaultTheme = new ThemeEngine({systemDarkPreference: true});
 function Shell({slots = {}, width, onInterrupt}: Omit<InkAppProps, 'client' | 'themeEngine'>) {
   const {active, close} = useOverlay();
   const {exit} = useApp();
-  const {columns} = useWindowSize();
+  const {columns} = useTerminalSize();
+  const rows = useLiveRows();
   useKeymap({
     close: () => {
       if (active) close();
@@ -42,14 +46,14 @@ function Shell({slots = {}, width, onInterrupt}: Omit<InkAppProps, 'client' | 't
         <Box flexDirection="column" minWidth={0}>
           {slots.plan}
         </Box>
-        <Box flexDirection="column" minWidth={0}>
+        <Box flexDirection="column" minWidth={0} display={active ? 'none' : 'flex'}>
           {slots.composer}
         </Box>
-        <Box flexDirection="column" minWidth={0}>
+        <Box flexDirection="column" minWidth={0} display={active ? 'none' : 'flex'}>
           {slots.status}
         </Box>
       </InputScope>
-      {active?.content}
+      {active ? <LiveDialog rows={rows}>{active.content}</LiveDialog> : null}
     </Box>
   );
 }
@@ -58,7 +62,9 @@ export function InkApp({client, themeEngine = defaultTheme, ...props}: InkAppPro
   return (
     <FutrynClientProvider client={client}>
       <ThemeProvider engine={themeEngine}>
-        <OverlayProvider>{props.slots ? <Shell {...props} /> : <IntegratedShell {...props} />}</OverlayProvider>
+        <KeymapProvider>
+          <OverlayProvider>{props.slots ? <Shell {...props} /> : <IntegratedShell {...props} />}</OverlayProvider>
+        </KeymapProvider>
       </ThemeProvider>
     </FutrynClientProvider>
   );
@@ -66,7 +72,7 @@ export function InkApp({client, themeEngine = defaultTheme, ...props}: InkAppPro
 export function FoundationNotice({initialCommand, warning}: {initialCommand?: string; warning?: string}) {
   return (
     <Box flexDirection="column">
-      <Text>Futryn · Ink preview</Text>
+      <Text>Cosmew · Ink preview</Text>
       <Text>Non-TTY preview · workspace access and interactive input are disabled.</Text>
       {warning ? <Text>{warning}</Text> : null}
       {initialCommand ? (

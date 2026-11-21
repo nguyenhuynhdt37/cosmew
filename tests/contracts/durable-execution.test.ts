@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
-import {Conversation, compactHistory, useContextSnapshot, normalizeHistory} from '@futryn/core';
-import {FutrynError, type ModelPort, type Message, type TurnReceipt} from '@futryn/contracts';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
+import {Conversation, compactHistory, useContextSnapshot, normalizeHistory} from '@cosmew/core';
+import {FutrynError, type ModelPort, type Message, type TurnReceipt} from '@cosmew/contracts';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const f of cleanup.splice(0).reverse()) f();

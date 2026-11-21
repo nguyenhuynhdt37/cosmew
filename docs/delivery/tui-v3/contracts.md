@@ -2,18 +2,19 @@
 
 Ngày 2026-11-18. Contract này dành cho bốn agent Pha 1 theo [plan](plan.md).
 Mã nguồn chuẩn: `apps/tui/src/ink/`. Không đổi contract SDK/agent events,
-public exports của `@futryn/tui` hay default runtime. Quyết định: [ADR 0059](../../adr/0059-ink-tui-foundation.md).
+public exports của `@cosmew/tui` hay default runtime. Quyết định: [ADR 0059](../../adr/0059-ink-tui-foundation.md).
 
 ## Runtime và composition
 
 `src/runtime.tsx::runInteractiveTui(options)` lazy-load Ink chỉ khi
-(đã bỏ ở Pha 3) Ink là runtime duy nhất; `FUTRYN_TUI` không còn được đọc.
+(đã bỏ ở Pha 3) Ink là runtime duy nhất; `COSMEW_TUI` không còn được đọc.
 `ink/runtime.tsx` export `selectTuiRuntime(env?)` và `runInkTui(options)`.
-Options kế thừa `FutrynTuiOptions`, thêm `initialCommand?`, `stdin?`, `stdout?`,
+Options kế thừa `CosmewTuiOptions`, thêm `initialCommand?`, `stdin?`, `stdout?`,
 `stderr?`, `slots?`. Streams có thể được inject để test. Non-TTY render đúng một
 frame bằng `renderToString`, không listener input, không animation còn sống.
-TTY dùng scrollback thường, không alternate buffer, 30 FPS; Ctrl+C/SIGINT/SIGTERM
-thoát, unmount và dọn listeners. Không đóng SDK/backend do CLI sở hữu.
+TTY tương tác (ADR 0064, 2026-11-19) dùng alternate screen của Ink 8, khung đúng số cột và số hàng, 30 FPS; Ctrl+C/SIGINT/SIGTERM
+thoát, unmount và dọn listeners (kể cả thoát alternate screen). Không đóng SDK/backend do CLI sở hữu.
+Câu "scrollback thường, không alternate buffer" ở ADR 0059 là lịch sử. Non-TTY không đổi.
 
 Pha 0 chỉ là nền: runtime tắt tools và khả năng hỏi user, không gửi prompt,
 không đọc workspace, không chạy slash command. `initialCommand` nhận diagnostic
@@ -34,11 +35,11 @@ Import từ `ink/hooks/index.ts`; hooks không gọi core/security và không t�
 
 | API                                                           | Trả về / hành vi                                                                                                                                                                                                      |
 | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FutrynClientProvider({client, children})`                    | Cung cấp đúng instance SDK của host.                                                                                                                                                                                  |
-| `useFutrynClient(): FutrynClient`                             | Throw nếu thiếu provider. Chỉ gọi public API SDK.                                                                                                                                                                     |
+| `CosmewClientProvider({client, children})`                    | Cung cấp đúng instance SDK của host.                                                                                                                                                                                  |
+| `useCosmewClient(): CosmewClient`                             | Throw nếu thiếu provider. Chỉ gọi public API SDK.                                                                                                                                                                     |
 | `useClientEvents({reactive?, interaction?, subagent?}): void` | Callback có type suy ra từ `onReactiveEvent`, `onInteractionEvent`, `onSubagentNotice` của SDK. Giữ callback mới qua rerender, cleanup cả ba subscription khi unmount hoặc đổi client. Đăng ký trước khi gửi command. |
 | `useEvents`                                                   | Alias của `useClientEvents` theo tên trong plan.                                                                                                                                                                      |
-| `useStatus(projectScoped = false)`                            | Trả `ReturnType<FutrynClient['status']>`, cập nhật theo reactive event; dùng event snapshot ổn định với `useSyncExternalStore`, không đưa `status()` mới vào snapshot.                                                |
+| `useStatus(projectScoped = false)`                            | Trả `ReturnType<CosmewClient['status']>`, cập nhật theo reactive event; dùng event snapshot ổn định với `useSyncExternalStore`, không đưa `status()` mới vào snapshot.                                                |
 | `useKeymap(handlers, {isActive?})`                            | Map action → callback, tắt nếu ngoài input scope hoặc không hỗ trợ raw mode. Không tự gọi SDK.                                                                                                                        |
 | `useTextInput((input, key) => void, {isActive?})`             | Wrapper input cho composer/filter; tuân thủ cùng input scope. Shortcut có tên dùng `useKeymap`.                                                                                                                       |
 | `useInputEnabled(isActive = true): boolean`                   | Dùng nếu một feature thật sự cần `useInput` của Ink trực tiếp.                                                                                                                                                        |
@@ -62,7 +63,7 @@ Key release và modifier navigation không khớp bị bỏ qua. Chỉ một fea
 được sở hữu mỗi action trong cùng input scope; `Diff`/`Truncate` mặc định
 `isActive=false` để tránh nhiều output đồng loạt mở. Dùng `useTextInput` thay
 vì listener stdin riêng. Help/autocomplete/slash routing vẫn lấy canonical
-metadata từ `@futryn/sdk::SLASH_COMMANDS` và `commandForShortcut` (ADR 0013),
+metadata từ `@cosmew/sdk::SLASH_COMMANDS` và `commandForShortcut` (ADR 0013),
 không nhân bản registry slash commands trong keymap.
 
 ## Overlay
@@ -134,7 +135,7 @@ terminal, không thay redaction của SDK/security.
 
 Import `ink/testing/index.tsx` (chỉ test):
 
-- `createClientFixture(overrides?: Partial<FutrynBackendPorts>)` trả
+- `createClientFixture(overrides?: Partial<CosmewBackendPorts>)` trả
   `{client, ports, settings}`: SDK thật trên ports bộ nhớ, không network/OS;
   các thao tác chưa cung cấp throw `UNSUPPORTED`, không fake success.
 - `renderInk(element, {fixture?, themeEngine?})` trả instance của

@@ -4,7 +4,7 @@ import type {ToolCall} from './models';
 
 /**
  * TOOLS1 (ADR 0017): read-only workspace tools. Descriptors carry no executable code; the
- * dispatcher in `@futryn/tools` is the single enforcement point and `@futryn/security` decides.
+ * dispatcher in `@cosmew/tools` is the single enforcement point and `@cosmew/security` decides.
  */
 export const toolCapabilitySchema = z.enum([
   'fs.read',
@@ -55,6 +55,27 @@ export const planStateSchema = z.strictObject({
   updatedAt: z.string().datetime(),
 });
 export type PlanItem = z.infer<typeof planItemSchema>;
+
+/** Explicit plan review (ADR 0071). Stored history never restores execution authority. */
+export const planProposalSchema = z.strictObject({
+  id: z.string().uuid(),
+  sessionId: z.string().min(1),
+  plan: z.string().min(1).max(32000),
+  createdAt: z.string().datetime(),
+  /** Absent on legacy rows or hosts without artifact persistence. */
+  path: z.string().min(1).optional(),
+  revision: z.number().int().positive().optional(),
+  status: z.enum(['proposed', 'approved', 'feedback', 'cancelled']),
+  resolution: z.enum(['acceptEdits', 'manual']).optional(),
+  feedback: z.string().max(4000).optional(),
+});
+export type PlanProposal = z.infer<typeof planProposalSchema>;
+export type PlanApprovalResolution =
+  'acceptEdits' | 'manual' | {feedback: string} | {mode: 'manual' | 'acceptEdits'; feedback: string};
+export type PlanApprovalOutcome =
+  | {kind: 'approved'; mode: 'acceptEdits' | 'manual'; plan?: string; feedback?: string}
+  | {kind: 'feedback'; feedback: string; plan?: string}
+  | {kind: 'unavailable'; reason: string};
 
 /**
  * `request_user_input` (ADR 0042): Codex schema (1–3 questions, `header` ≤ 12 chars, options with

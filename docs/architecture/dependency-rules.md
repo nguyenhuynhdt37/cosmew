@@ -2,7 +2,7 @@
 
 > Current implementation scope: [Provider/Auth PA1](../delivery/provider-auth-plan.md) and [ADR 0005](../adr/0005-provider-auth-product.md). Remaining Phase 0 descriptions below are historical plans, not feature claims.
 
-**PA1 graph inspected; other planned edges remain Not implemented.** Mọi package được phép phụ thuộc `contracts`; contracts không phụ thuộc package Hannes nào và không xuất foreign SDK types. Public entry là `src/index.ts` tương lai; file khác private trừ subpath đã được ADR công bố. Không import trực tiếp `src/` của package khác. Không circular dependencies, kể cả type-only imports và event command cycles.
+**PA1 graph inspected; other planned edges remain Not implemented.** 2026-11-18: package chỉ toàn file 0 byte (`extensions`, `compat-opencode`, `compat-deepseek`, `testkit`, `apps/server`, `apps/web`, `apps/desktop`) đã xoá. Dòng của chúng trong bảng là kế hoạch, không còn cây thư mục. Mọi package được phép phụ thuộc `contracts`; contracts không phụ thuộc package Hannes nào và không xuất foreign SDK types. Public entry là `src/index.ts` tương lai; file khác private trừ subpath đã được ADR công bố. Không import trực tiếp `src/` của package khác. Không circular dependencies, kể cả type-only imports và event command cycles.
 
 | Consumer | Hannes dependencies được phép ngoài contracts | Lý do |
 |---|---|---|

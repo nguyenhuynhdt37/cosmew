@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|                                                                  │2 files changed +1 -1              source: Current ▾
+02|❯ Write a 60-line poem about terminals to poem.txt.               │
+03|                                                                  │a.txt                                          +1 -1
+04|⏺ Write(poem.txt)                                                 │poem.txt
+05|  ⎿  Wrote 60 lines to poem.txt                                   │
+06|       1 A cursor blinks against the black,                       │────────────────────────────────────────────────────
+07|       2 a heartbeat on an empty line;                            │a.txt                                        [ ask ]
+08|       3 it never hurries, never asks,                            │────────────────────────────────────────────────────
+09|       4 it only waits for your design.                           │ 1 -hello
+10|       5 The prompt is small, a dollar sign,                      │ 1 +HELLO
+11|       6 a humble gate, a narrow door,                            │ 2  world
+12|       7 yet through it pour the oldest spells                    │
+13|       8 that ran on glass and tape before.                       │────────────────────────────────────────────────────
+14|       9 I type a word, the shell replies,                        │poem.txt (untracked)
+15|      10 a pipe connects one thought to two,                      │────────────────────────────────────────────────────
+16|     … +50 lines                                                  │New file not yet staged.
+17|                                                                  │Run `git add :/poem.txt` to see line counts.
+18|❯ also give it a title                                            │
+19|                                                                  │
+20|⏺ Update(poem.txt)                                                │
+21|  ⎿  Added 2 lines                                                │
+22|      1 +Exit Zero                                                │
+23|      2 +                                                         │
+24|      3  A cursor blinks against the black,                       │
+25|      4  a heartbeat on an empty line;                            │
+26|      5  it never hurries, never asks,                            │
+27|                                                                  │
+28|✻ Forging… (28s · ↓ 2.1k tokens)                                  │
+29|  ⎿  Tip: Use /color and /rename to tell your sessions apart      │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

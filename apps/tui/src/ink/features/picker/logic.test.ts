@@ -1,7 +1,6 @@
 import {expect, test} from 'bun:test';
-import {defaultAppearance, FutrynError, type PendingQuestion} from '@futryn/contracts';
-import {SLASH_COMMANDS} from '@futryn/sdk';
-import {KEYMAP} from '../../hooks';
+import {defaultAppearance, FutrynError, type PendingQuestion} from '@cosmew/contracts';
+import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {permissionChoices, isEscalation} from '../permissions';
 import {stateFor, choose, answersFor, collect} from '../question';
 import {connectionChoices, parseHeaderDraft, describeProviderError} from '../connect';
@@ -10,21 +9,21 @@ import {formatDuration, tokenTotal, transcriptLines, typeRow, childRow} from '..
 import {helpItems} from '../help';
 import {describeDialogError} from './index';
 import {dialogFixture, provider, account, child} from './test-fixture';
-test('permission choices keep fixed number mapping and require an offered always rule', () => {
+test('permission choices number offered scopes contiguously and require an offered always rule', () => {
   const fixture = dialogFixture();
   const request = fixture.client.enqueuePermissionRequest({
     capability: 'network.connect',
-    action: 'request_permissions',
+    action: 'Allow network access to api.test',
     target: 'api.test',
     reason: 'Fetch',
     decisions: ['once'],
   });
-  expect(permissionChoices(request).map(c => c.key)).toEqual(['1', '4']);
+  expect(permissionChoices(request).map(c => c.key)).toEqual(['1', '2']);
   expect(permissionChoices({...request, decisions: ['session', 'always']} as typeof request).map(c => c.id)).toEqual([
     'session',
     'deny',
   ]);
-  expect(isEscalation({...request, alwaysRule: 'Unsandboxed(npm test)'})).toBe(true);
+  expect(isEscalation({...request, action: 'Run WITHOUT SANDBOX in .'})).toBe(true);
   expect(isEscalation(request)).toBe(false);
 });
 test('question logic preserves multiselect, free text, and locates missing answers', () => {
@@ -118,7 +117,7 @@ test('settings reports every supported section and every appearance control from
     configurationRows(fixture.client, 'General', defaultAppearance(), 'dark').find(
       r => r.label === 'Terminal shortcuts',
     )?.value,
-  ).toContain('Shift+Enter');
+  ).toContain('keybindings.json');
   expect(
     configurationRows(fixture.client, 'Sessions', defaultAppearance(), 'dark').find(
       r => r.label === 'Manual compaction',
@@ -142,9 +141,8 @@ test('agent transcript retains tool failure and text; bounded duration/usage for
     }).join('\n'),
   ).toContain('[denied]');
 });
-test('help is generated from KEYMAP and SLASH_COMMANDS with no duplicate command registry', () => {
+test('help commands are generated from SLASH_COMMANDS with no duplicate command registry', () => {
   const items = helpItems();
-  for (const entry of KEYMAP) expect(items.find(i => i.id === `key:${entry.action}`)?.label).toBe(entry.keys);
   for (const command of SLASH_COMMANDS.filter(c => c.help !== false))
     expect(items.some(i => i.id === command.command)).toBe(true);
 });

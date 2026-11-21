@@ -1,5 +1,5 @@
-import {FutrynError, type ProjectInstructionReadResult} from '@futryn/contracts';
-import {WorkspaceDenied} from '@futryn/workspace';
+import {FutrynError, type ProjectInstructionReadResult} from '@cosmew/contracts';
+import {WorkspaceDenied} from '@cosmew/workspace';
 import type {ToolAuditRecord, ToolDispatcherOptions} from '../context';
 import {ToolOrchestrator} from '../orchestrator';
 import {FileSystemRuntime} from '../runtimes/filesystem';

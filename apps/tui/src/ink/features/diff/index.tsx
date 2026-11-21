@@ -1,20 +1,30 @@
 /** @jsxImportSource react */
-import {useState} from 'react';
+import {useRef, useState} from 'react';
 import {Box, Text} from 'ink';
-import type {ToolResult, WorkspaceDiffReport} from '@futryn/contracts';
-import {useEvents, useFutrynClient, useKeymap, useTextInput} from '../../hooks';
+import type {ToolResult, WorkspaceDiffReport, WorkspaceDiffBase} from '@cosmew/sdk';
+import {useEvents, useFutrynClient, useKeybindings, useKeymap, useTextInput} from '../../hooks';
+import {useUiTheme} from '../../ui/ui-theme';
 import {useTheme} from '../../theme';
-import {Diff as UnifiedDiff, TextLine, Truncate} from '../../ui';
+import {DiffView, TextLine, Truncate} from '../../ui';
 import {changeReceipt, workspaceUnifiedDiff} from './logic';
 export * from './logic';
+export * from './panel';
 export interface ToolDiffProps {
   result?: ToolResult;
   expanded?: boolean;
   width?: number;
+  /** Rows of a changed file before `… +N lines` (a created file previews 10, like the reference). */
+  maxLines?: number;
 }
-export function ToolDiff({result, expanded = false, width}: ToolDiffProps) {
+/** Rows of a created file shown in the transcript before `… +N lines` (reference: `Wrote 60 lines` + 10 rows). */
+export const NEW_FILE_PREVIEW_ROWS = 10;
+export const UPDATE_PREVIEW_ROWS = 40;
+/** The body under `⎿  Added 1 line, removed 1 line`: numbered rows with add/remove backgrounds. */
+export function ToolDiff({result, expanded = false, width, maxLines}: ToolDiffProps) {
   const {color} = useTheme();
+  const ui = useUiTheme();
   const receipt = changeReceipt(result);
+  const rowWidth = Math.max(8, width ?? 80);
   return (
     <Box flexDirection="column" width={width} minWidth={0}>
       {receipt.partial ? <Text color={color('error')}>Partially applied</Text> : null}
@@ -25,8 +35,21 @@ export function ToolDiff({result, expanded = false, width}: ToolDiffProps) {
       ))}
       {receipt.changes.map((change, index) => (
         <Box key={index} flexDirection="column">
-          <TextLine width={width}>{`${change.path} · ${change.action} · applied diff`}</TextLine>
-          <UnifiedDiff diff={change.diff} width={width} maxLines={8} expanded={expanded} />
+          {receipt.changes.length > 1 ? (
+            <TextLine width={width} color={ui.color('path')}>{`${change.path} · ${change.action}`}</TextLine>
+          ) : null}
+          {change.action === 'delete' ? null : (
+            <DiffView
+              diff={change.diff}
+              width={rowWidth}
+              variant={change.action === 'add' ? 'new' : 'update'}
+              maxLines={
+                expanded
+                  ? undefined
+                  : (maxLines ?? (change.action === 'add' ? NEW_FILE_PREVIEW_ROWS : UPDATE_PREVIEW_ROWS))
+              }
+            />
+          )}
         </Box>
       ))}
       {receipt.diagnostics.map((diagnostic, index) => (
@@ -47,9 +70,12 @@ export function ToolDiff({result, expanded = false, width}: ToolDiffProps) {
 }
 export function useDiff() {
   const client = useFutrynClient();
+  const base = useRef<WorkspaceDiffBase>('session');
+  const generation = useRef(0);
+  const session = useRef(client.activeSession()?.id);
   const read = (): WorkspaceDiffReport => {
     try {
-      return client.getWorkspaceDiff();
+      return client.getWorkspaceDiff({base: base.current});
     } catch {
       return {
         workspace: '',
@@ -64,15 +90,28 @@ export function useDiff() {
   };
   const [report, setReport] = useState(read);
   const [error, setError] = useState<string>();
-  useEvents({reactive: () => setReport(read())});
-  const refresh = async () => {
+  useEvents({
+    reactive: () => {
+      const current = client.activeSession()?.id;
+      if (session.current !== current) {
+        session.current = current;
+        base.current = 'session';
+        generation.current++;
+      }
+      setReport(read());
+    },
+  });
+  const refresh = async (nextBase: WorkspaceDiffBase = base.current) => {
+    base.current = nextBase;
+    const request = ++generation.current;
+    const sessionId = client.activeSession()?.id;
     try {
-      await client.refreshWorkspaceDiff();
+      const next = await client.refreshWorkspaceDiff({base: nextBase});
+      if (request !== generation.current || client.activeSession()?.id !== sessionId) return;
+      setReport(next);
       setError(undefined);
     } catch {
-      setError('Workspace diff refresh failed');
-    } finally {
-      setReport(read());
+      if (request === generation.current) setError('Workspace diff refresh failed');
     }
   };
   return {report, error, refresh};
@@ -88,6 +127,7 @@ export interface DiffProps {
 /** Workspace /diff view; host owns clipboard and overlay lifecycle. */
 export function Diff({report, width, maxLines = 30, isActive = false, onRefresh, onCopy}: DiffProps) {
   const {color} = useTheme();
+  const ui = useUiTheme();
   const [layer, setLayer] = useState<'all' | 'staged' | 'unstaged' | 'untracked'>('all');
   const [index, setIndex] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -97,21 +137,39 @@ export function Diff({report, width, maxLines = 30, isActive = false, onRefresh,
   const file = files[selected];
   const lines = file?.lines ?? [];
   const start = Math.min(offset, Math.max(0, lines.length - maxLines));
-  useKeymap(
+  const LAYERS = ['all', 'staged', 'unstaged', 'untracked'] as const;
+  const maxStart = Math.max(0, lines.length - maxLines);
+  const goFile = (step: number) => {
+    setIndex((selected + step + files.length) % Math.max(1, files.length));
+    setOffset(0);
+  };
+  const goSource = (step: number) => {
+    setLayer(LAYERS[(LAYERS.indexOf(layer) + step + LAYERS.length) % LAYERS.length]!);
+    setIndex(0);
+    setOffset(0);
+  };
+  useKeymap({expand: () => setExpanded(value => !value)}, {isActive});
+  // DiffDialog keys: ↑/↓ and J/K pick a file, ←/→ the source, Enter shows the whole file, PgUp/PgDn/Space/B page, G/g ends.
+  useKeybindings(
     {
-      previous: () => setOffset(Math.max(0, start - 1)),
-      next: () => setOffset(Math.min(Math.max(0, lines.length - maxLines), start + 1)),
-      expand: () => setExpanded(value => !value),
+      DiffDialog: {
+        'diff:previousFile': () => goFile(-1),
+        'diff:nextFile': () => goFile(1),
+        'diff:previousSource': () => goSource(-1),
+        'diff:nextSource': () => goSource(1),
+        'diff:open': () => setExpanded(value => !value),
+        'diff:back': () => (expanded ? setExpanded(false) : false),
+        'diff:pageUp': () => setOffset(Math.max(0, start - maxLines)),
+        'diff:pageDown': () => setOffset(Math.min(maxStart, start + maxLines)),
+        'diff:top': () => setOffset(0),
+        'diff:bottom': () => setOffset(maxStart),
+      },
     },
     {isActive},
   );
   useTextInput(
     (input, key) => {
       if (key.ctrl || key.meta || key.shift || key.eventType === 'release') return;
-      if (key.leftArrow || key.rightArrow || key.tab) {
-        setIndex((selected + (key.leftArrow ? -1 : 1) + files.length) % Math.max(1, files.length));
-        setOffset(0);
-      }
       const target = ({a: 'all', s: 'staged', u: 'unstaged', n: 'untracked'} as const)[input.toLowerCase() as 'a'];
       if (target) {
         setLayer(target);
@@ -120,8 +178,6 @@ export function Diff({report, width, maxLines = 30, isActive = false, onRefresh,
       }
       if (input.toLowerCase() === 'r') onRefresh?.();
       if (input.toLowerCase() === 'c' && file) onCopy?.(`${file.path}\n${workspaceUnifiedDiff(file)}`);
-      if (key.pageDown) setOffset(Math.min(Math.max(0, lines.length - maxLines), start + maxLines));
-      if (key.pageUp) setOffset(Math.max(0, start - maxLines));
     },
     {isActive},
   );
@@ -140,6 +196,9 @@ export function Diff({report, width, maxLines = 30, isActive = false, onRefresh,
           {(expanded ? lines : lines.slice(start, start + maxLines)).map((line, at) => (
             <TextLine
               key={at}
+              backgroundColor={
+                line.type === 'add' ? ui.color('diffAdded') : line.type === 'del' ? ui.color('diffRemoved') : undefined
+              }
               width={width}
               color={color(
                 line.type === 'add'

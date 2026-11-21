@@ -1,5 +1,5 @@
 import {createRequire} from 'node:module';
-import type {ShellParsers} from '@futryn/security';
+import type {ShellParsers} from '@cosmew/security';
 
 /**
  * Bash parsing with tree-sitter, ported from Codex `shell-command/src/bash.rs` (openai/codex
@@ -52,11 +52,6 @@ export function ensureShellParser(): Promise<boolean> {
       return false;
     }
   })());
-}
-
-/** True once the parser is loaded. */
-export function shellParserReady(): boolean {
-  return parser !== null;
 }
 
 /** Longest script handed to the parser; a longer one is unparsed. */
@@ -260,5 +255,5 @@ export function parseLiteralCommands(script: string): string[][] | null {
   });
 }
 
-/** The parsers `@futryn/security` uses for command classification. */
+/** The parsers `@cosmew/security` uses for command classification. */
 export const shellParsers: ShellParsers = {plain: parsePlainCommands, literal: parseLiteralCommands};

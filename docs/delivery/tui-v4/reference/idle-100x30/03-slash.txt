@@ -1,0 +1,30 @@
+00|
+01| ▐▛███▛█   Claude Code v2.1.328
+02|▝▜██████▀  Opus 5.5 with medium effort · Claude Pro
+03| ▝▝   ▝▝   /…/<scratch>/demo2
+04|
+05|  ⎿  SessionStart:startup says: SonarQube plugin initialised.
+06|       sonarqube-cli: ✗ not found — run /sonarqube:sonar-integrate
+07|       SonarQube hooks: ✗ no hooks installed — run /sonarqube:sonar-integrate
+08|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+09|     protected, files are scanned as they are written
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|
+21|  ❯ /superpowers:systematic-debugging       (superpowers) Use when encountering any bug, test
+22|                                            failure, or unexpected behavior, before proposing fix…
+23|    /code-review                            3 free /ultrareview · Review the current diff or a PR
+24|                                            for bugs
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ /
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on

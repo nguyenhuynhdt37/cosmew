@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionGrants, evaluateRead} from '@futryn/security';
-import {ToolDispatcher, type ApprovalDecision, type ApprovalRequest, type ToolAuditRecord} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {SessionGrants, evaluateRead} from '@cosmew/security';
+import {ToolDispatcher, type ApprovalDecision, type ApprovalRequest, type ToolAuditRecord} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {

@@ -9,19 +9,8 @@ import {
   useDialogSize,
   useDialogRefresh,
   useDialogTask,
-  usePicker,
   type DialogProps,
 } from '../picker';
-export function useMemory() {
-  const client = useFutrynClient();
-  useDialogRefresh();
-  const router = usePicker();
-  return {
-    ...router,
-    memories: client.memories(),
-    openMemory: (props: DialogProps = {}) => router.open('memory', <MemoryDialog {...props} />),
-  };
-}
 export function MemoryDialog(props: DialogProps) {
   const client = useFutrynClient();
   const {refresh} = useDialogRefresh();
@@ -96,7 +85,7 @@ export function MemoryDialog(props: DialogProps) {
     );
   return (
     <PickerDialog
-      title="Memories"
+      title="Memory"
       {...size}
       message={task.message || (!client.memoryDirectory() ? 'Memories disabled.' : '')}
       items={[

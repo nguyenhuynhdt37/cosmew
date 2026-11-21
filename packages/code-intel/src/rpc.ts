@@ -1,4 +1,4 @@
-import {FutrynError, type ServiceProcess} from '@futryn/contracts';
+import {FutrynError, type ServiceProcess} from '@cosmew/contracts';
 
 /**
  * JSON-RPC 2.0 over LSP base-protocol framing (`Content-Length` headers), ADR 0043. Bounded: a
@@ -151,7 +151,7 @@ export class JsonRpcConnection {
       let error: unknown;
       try {
         if (handler) result = handler(message.params);
-        else error = {code: -32601, message: 'Method not supported by Futryn'};
+        else error = {code: -32601, message: 'Method not supported by Cosmew'};
       } catch {
         error = {code: -32603, message: 'Internal error'};
       }

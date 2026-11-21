@@ -1,0 +1,30 @@
+00|
+01|     Custom agents · .claude/agents/
+02|     └ 23 agents · 4.7k tokens
+03|
+04|     Skills · /skills
+05|     └ 220 skills · 9.9k tokens
+06|
+07|     /context all to expand
+08|
+09|❯ /export
+10|  ⎿  Export cancelled
+11|
+12|❯ /diff
+13|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+14|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+15|  Rewind
+16|
+17|  Restore the code and/or conversation to the point before…
+18|
+19|    /agents
+20|    No code changes
+21|
+22|    /export
+23|    No code changes
+24|
+25|  ❯ (current)
+26|
+27|
+28|
+29|  Enter to continue · Esc to cancel

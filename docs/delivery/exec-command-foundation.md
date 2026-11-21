@@ -33,7 +33,7 @@ On macOS 15.8.1 (24H32), Bun 1.4.4 and installed ripgrep 15.2.0, real `/usr/bin/
 | Environment leakage | Disposable host-only sentinel absent from child environment. |
 | Sandbox initialization failure | Missing wrapper returns spawn-failed/SANDBOX_FAILED; no fallback. |
 | Direct-provider and Codex bridge pairing | Injected deterministic command runtimes traverse dispatcher, approval, events, stored history and resume. Native Codex shell remains disabled. |
-| Real FUTRYN exploratory command | Research-only injection routes approved `rg -n marker source.ts` through the TUI and actual Seatbelt. Returned source marker/exit 0 verified; project contents and directory listing unchanged. This explicitly bypasses only candidate eligibility inside the test harness and does not enable the production tool. |
+| Real COSMEW exploratory command | Research-only injection routes approved `rg -n marker source.ts` through the TUI and actual Seatbelt. Returned source marker/exit 0 verified; project contents and directory listing unchanged. This explicitly bypasses only candidate eligibility inside the test harness and does not enable the production tool. |
 | Production feature exposure | On all platform selections, exec_command is omitted; unsolicited calls do not launch a process. |
 | Existing budgets, permissions, sessions and TUI | Full regression suite, including reviewed golden changes for the permission manager's unavailable-command notice. |
 

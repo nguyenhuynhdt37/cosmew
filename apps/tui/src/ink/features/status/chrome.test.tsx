@@ -11,6 +11,13 @@ import {StartupGate, useStartupGate} from '../startup-gate';
 import {Usage, useUsage, reportRows} from '../usage';
 import {failureMessage, suggestedAlternative} from '../startup-gate/logic';
 afterEach(cleanup);
+test('terminal welcome displays the Cosmew mascot beside the product name', async () => {
+  const fixture = createClientFixture();
+  const view = renderInk(<Welcome status={fixture.client.status()} width={80} />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('Cosmew v');
+  expect(view.lastFrame()).toContain('▄█▀█▀█▀█▄');
+});
 test('compact header, welcome and status render without color and wrap narrow paths', async () => {
   const fixture = createClientFixture();
   function Chrome() {
@@ -22,7 +29,15 @@ test('compact header, welcome and status render without color and wrap narrow pa
       <>
         <Header status={header} version="test" width={24} preview />
         <Welcome status={welcome} width={24} />
-        <StatusLine {...data} status={{...data.status, sandboxMode: 'danger-full-access'}} width={24} />
+        <StatusLine
+          {...data}
+          status={{
+            ...data.status,
+            permissionMode: 'bypassPermissions',
+            sandbox: {...data.status.sandbox, enabled: false},
+          }}
+          width={24}
+        />
         <ContextMeter context={context} width={24} />
       </>
     );
@@ -30,10 +45,13 @@ test('compact header, welcome and status render without color and wrap narrow pa
   const view = renderInk(<Chrome />, {fixture});
   await settle();
   const frame = view.lastFrame()!;
-  expect(frame).toContain('FUTRYN');
+  expect(frame).toContain('COSMEW');
+  expect(frame).toContain('▀█▀');
   expect(frame).toContain('test');
-  expect(frame).toContain('Full Access');
-  expect(frame).toContain('approval');
+  expect(frame).toContain('preview');
+  expect(frame).not.toContain('agents running');
+  expect(frame).not.toContain('cost unreported');
+  expect(frame).toContain('Cosmew v');
   expect(frame).not.toContain('\u001b');
   view.rerender(<Header status={fixture.client.status()} version="resize" width={60} />);
   await settle();
@@ -78,7 +96,7 @@ test('startup defaults Exit and sends no probe before consent', async () => {
   }
   const view = renderInk(<Gate />, {fixture});
   await settle();
-  expect(view.lastFrame()).toContain('› Exit');
+  expect(view.lastFrame()).toContain('❯ No, exit');
   expect(fixture.client.toolsEnabled()).toBe(false);
   view.stdin.write('\r');
   await settle();

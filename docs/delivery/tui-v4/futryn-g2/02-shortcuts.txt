@@ -1,0 +1,30 @@
+00|
+01| ▟▀▀▙    Cosmew v0.2.0
+02| █▀ ▜▌   grok-4.7 · xai
+03| ▀  ▀    /private/tmp/fyn-g2-demo
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|────────────────────────────────────────────────────────────────────────────────────────────────────
+21|❯ Try "explain this codebase"
+22|────────────────────────────────────────────────────────────────────────────────────────────────────
+23|
+24|  ! for shell mode                esc esc to clear input          ctrl+_ to undo
+25|  / for commands                  shift+tab to cycle modes        ctrl+r to search history
+26|  @ for file paths                ctrl+o to see full transcript   ctrl+s to stash prompt
+27|  $ for skills                    ctrl+t to toggle tasks          opt+p to switch model
+28|  # for memory                                                    backslash (\) then enter for
+29|                                                                  newline

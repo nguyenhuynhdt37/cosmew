@@ -1,4 +1,4 @@
-import {FutrynError, type CommandOutcome, type CommandRequest, type CommandRuntime} from '@futryn/contracts';
+import {FutrynError, type CommandOutcome, type CommandRequest, type CommandRuntime} from '@cosmew/contracts';
 import type {ToolOutput} from '../context';
 import {formatOutcome} from '../exec/command';
 

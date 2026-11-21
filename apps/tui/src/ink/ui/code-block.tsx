@@ -10,8 +10,10 @@ export interface CodeBlockProps {
   language?: string;
   lineNumbers?: boolean;
   width?: number;
+  /** Show the language name above the code (default); Markdown answers omit it, as the reference does. */
+  label?: boolean;
 }
-export function CodeBlock({code, language, lineNumbers = false, width}: CodeBlockProps) {
+export function CodeBlock({code, language, lineNumbers = false, width, label = true}: CodeBlockProps) {
   const theme = useTheme();
   const source = safeText(code).slice(0, 262144);
   const lang = safeText(language ?? '').split(/\s/)[0] ?? '';
@@ -34,7 +36,7 @@ export function CodeBlock({code, language, lineNumbers = false, width}: CodeBloc
   const digits = String(lines.length).length;
   return (
     <Box flexDirection="column" width={width} minWidth={0}>
-      {lang ? <Text color={theme.color('foregroundMuted')}>{lang}</Text> : null}
+      {lang && label ? <Text color={theme.color('foregroundMuted')}>{lang}</Text> : null}
       {lines.map((line, index) => (
         <Box key={index} minWidth={0}>
           {lineNumbers ? (

@@ -18,7 +18,18 @@ export {
   secretPathRegexes,
   type SeatbeltOptions,
 } from './exec/runtime';
-export type {CommandOutcome, CommandRequest, CommandRuntime, RuntimeAvailability} from '@futryn/contracts';
-export {DockerCommandRuntime, EXECUTION_IMAGE, COMMAND_LIMITS, likelySandboxDenied} from './exec/container';
-export {GIT_IMAGE_RECIPE, GIT_IMAGE_RECIPE_HASH, GIT_IMAGE_TAG, verifiedDerivedImage} from './exec/image';
+export type {CommandOutcome, CommandRequest, CommandRuntime, RuntimeAvailability} from '@cosmew/contracts';
+export {likelySandboxDenied} from './exec/sandbox-denial';
 export {NativeCommandRuntime, NATIVE_LIMITS, type NativeRuntimeOptions} from './exec/native';
+export {DEFAULT_SANDBOX_CONFIG, type SandboxConfig} from './context';
+export {
+  SandboxProxy,
+  proxyEnvironment,
+  isPrivateAddress,
+  parseConnectTarget,
+  type ProxyEvent,
+  type ProxyTarget,
+  type SandboxProxyOptions,
+} from './exec/proxy';
+
+export {validateImageAttachment} from './builtin/read-media';

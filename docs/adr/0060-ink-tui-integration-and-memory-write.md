@@ -17,7 +17,7 @@ UI/dismiss SDK request, huỷ composer search/shell hoặc turn. Ctrl+C/SIGINT/S
 huỷ và drain tác vụ trước cleanup Ink; CLI vẫn sở hữu backend. Dialog không cấp
 quyền ngoài SDK; denial reason đi qua submitWhileBusy, báo rõ khi bị từ chối.
 
-Transcript settled vào Static; session/reset đổi historyKey. Ctrl+O mở inspection
+Transcript settled vào Static; session/reset đổi historyKey. [ĐÃ ĐỔI 2026-11-19, ADR 0064] TTY toàn màn hình không dùng Static; cửa sổ đuôi nằm trong viewport. Ctrl+O mở inspection
 page độc lập (8 messages), PgUp/PgDn/Home/End paging, ↑↓ focus activity; chỉ vùng
 đang focus được expand. Composer luôn mounted, input nền bị khoá khi overlay mở.
 Router canonical dùng SDK parseSlashCommand/SLASH_COMMANDS; backend chưa hỗ trợ

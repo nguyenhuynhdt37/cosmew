@@ -1,4 +1,4 @@
-import type {ToolResult, WorkspaceDiffFile} from '@futryn/contracts';
+import type {ToolResult, WorkspaceDiffFile} from '@cosmew/sdk';
 export interface ChangeReceipt {
   changes: {path: string; action: string; diff: string}[];
   diagnostics: string[];

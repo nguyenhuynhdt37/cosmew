@@ -2,7 +2,7 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerSchema} from '@futryn/contracts';
+import {providerSchema} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {runExec} from '../../apps/cli/src/exec';
 import {memoryVault, scriptedView, type ScriptedView} from '../fixtures';
@@ -116,7 +116,6 @@ test('headless runner uses real dispatcher, JSONL order and final response outpu
       await runExec(x.app, {
         prompt: 'read',
         workspace: x.root,
-        approval: 'never',
         json: true,
         outputLastMessage: join(x.root, 'last.txt'),
       }),
@@ -130,14 +129,14 @@ test('headless runner uses real dispatcher, JSONL order and final response outpu
     .split('\n')
     .map(line => JSON.parse(line));
   expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i + 1));
-  expect(events.every(e => e.contractVersion === '1.35')).toBe(true);
+  expect(events.every(e => e.contractVersion === '1.40')).toBe(true);
   expect(events.some(e => e.type === 'toolResult' && e.result.content.includes('real file'))).toBe(true);
   expect(events.at(-1).type).toBe('turn.completed');
   expect(readFileSync(join(x.root, 'last.txt'), 'utf8')).toBe('FINAL [REDACTED]\n');
 });
 
-for (const approval of ['never', 'on-request', 'untrusted'] as const) {
-  test(`headless ${approval} refuses network and returns the denial to the model without waiting`, async () => {
+for (const mode of ['default', 'acceptEdits', 'plan'] as const) {
+  test(`headless ${mode} mode refuses network and returns the denial to the model without waiting`, async () => {
     const x = await setup();
     x.set({tool: 'web_fetch'});
     const lines: string[] = [];
@@ -146,7 +145,7 @@ for (const approval of ['never', 'on-request', 'untrusted'] as const) {
       return true;
     });
     try {
-      expect(await runExec(x.app, {prompt: 'fetch', workspace: x.root, approval, json: true})).toBe(0);
+      expect(await runExec(x.app, {prompt: 'fetch', workspace: x.root, permissions: {mode}, json: true})).toBe(0);
     } finally {
       output.mockRestore();
     }
@@ -157,7 +156,7 @@ for (const approval of ['never', 'on-request', 'untrusted'] as const) {
       .split('\n')
       .map(line => JSON.parse(line));
     expect(events.some(e => e.type === 'toolResult' && e.result.status === 'denied')).toBe(true);
-    expect(events.some(e => e.type === 'permission.requested')).toBe(approval !== 'never');
+    expect(events.some(e => e.type === 'permission.requested')).toBe(false);
   });
 }
 
@@ -170,12 +169,10 @@ test('provider errors and cancellation return exit 1 with safe terminal JSONL', 
     return true;
   });
   try {
-    expect(await runExec(x.app, {prompt: 'fail', workspace: x.root, approval: 'never', json: true})).toBe(1);
+    expect(await runExec(x.app, {prompt: 'fail', workspace: x.root, json: true})).toBe(1);
     const controller = new AbortController();
     controller.abort();
-    expect(
-      await runExec(x.app, {prompt: 'cancel', workspace: x.root, approval: 'never', json: true}, controller.signal),
-    ).toBe(1);
+    expect(await runExec(x.app, {prompt: 'cancel', workspace: x.root, json: true}, controller.signal)).toBe(1);
   } finally {
     output.mockRestore();
   }

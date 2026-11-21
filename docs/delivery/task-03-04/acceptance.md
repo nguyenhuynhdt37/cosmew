@@ -1,6 +1,6 @@
 # Task 03 + 04 — Acceptance
 
-Ngày: 2026-11-17. Codex pin: `090be4df0724cdef5758e6a0934ba557af8b6bbe`. Futryn bắt đầu tại `d56e11fabb82f638d6602a6628ee5323e064119b` (dev). Ma trận nguồn đầy đủ: [parity-matrix.md](parity-matrix.md); quyết định: [ADR 0037](../../adr/0037-chat-configuration-command-parity.md).
+Ngày: 2026-11-17. Codex pin: `090be4df0724cdef5758e6a0934ba557af8b6bbe`. Cosmew bắt đầu tại `d56e11fabb82f638d6602a6628ee5323e064119b` (dev). Ma trận nguồn đầy đủ: [parity-matrix.md](parity-matrix.md); quyết định: [ADR 0037](../../adr/0037-chat-configuration-command-parity.md).
 
 Đây là bằng chứng fixture/PTY. Chưa có nghiệm thu trực quan bởi người dùng và chưa có live authenticated generation; không tuyên bố 100% parity với Codex CLI.
 

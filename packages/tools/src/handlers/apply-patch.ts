@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {WriteBoundaryError} from '@futryn/workspace';
+import {WriteBoundaryError} from '@cosmew/workspace';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import {PatchError, parsePatch} from '../patch/parser';
 import {ApplyPatchRuntime, type PatchPlan} from '../runtimes/apply-patch';
@@ -35,7 +35,7 @@ export class ApplyPatchHandler implements ToolHandler {
   /** Content the model just wrote counts as seen; anything else must be read again. */
   private remember(plan: PatchPlan, result: ToolOutput): ToolOutput {
     for (const change of plan.changes) {
-      const path = change.snapshot.path;
+      const path = change.snapshot.identity ?? change.snapshot.path;
       if (result.status === 'ok' && change.after !== null) this.ledger?.record(path, change.after);
       else this.ledger?.forget(path);
     }

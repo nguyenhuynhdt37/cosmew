@@ -15,8 +15,8 @@ import {
   type ThemeMode,
   type ThemeTokenKey,
   type ThemeTokens,
-} from '@futryn/contracts';
-import type {FutrynClient} from '@futryn/sdk';
+} from '@cosmew/contracts';
+import type {FutrynClient} from '@cosmew/sdk';
 import {
   ALL_BUILTIN_THEMES,
   BUILTIN_COLOR_THEMES,
@@ -30,6 +30,7 @@ import {
 } from './presets';
 import {importThemeManifest, validateHexColor, type ThemeImportResult} from './compat';
 import {WALLPAPER_SCENES, WallpaperEngine} from './wallpaper';
+import {isDarkBackground, type Rgb} from './terminal-background';
 
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
@@ -245,21 +246,14 @@ export class ThemeEngine {
         return bgCode < 7 || bgCode === 8;
       }
     }
-    const modeEnv = (this.env.FUTRYN_THEME_MODE ?? '').toLowerCase();
+    const modeEnv = (
+      this.env.COSMEW_THEME_MODE ??
+      this.env.FUTRYN_THEME_MODE ??
+      this.env.HANNES_THEME_MODE ??
+      ''
+    ).toLowerCase();
     if (modeEnv === 'light') return false;
     if (modeEnv === 'dark') return true;
-    if (process.platform === 'darwin') {
-      try {
-        const result = Bun.spawnSync({
-          cmd: ['/usr/bin/defaults', 'read', '-g', 'AppleInterfaceStyle'],
-          stdout: 'pipe',
-          stderr: 'ignore',
-        });
-        return result.exitCode === 0 && new TextDecoder().decode(result.stdout).trim().toLowerCase() === 'dark';
-      } catch {
-        return true;
-      }
-    }
     return true;
   }
 
@@ -299,7 +293,7 @@ export class ThemeEngine {
         this.committedAppearance = appearanceSchema.parse(app);
       } catch {
         this.committedAppearance = defaultAppearance();
-        this.warnings.push('Appearance configuration was invalid; recovered with default FUTRYN appearance.');
+        this.warnings.push('Appearance configuration was invalid; recovered with default COSMEW appearance.');
       }
     }
 
@@ -429,6 +423,12 @@ export class ThemeEngine {
     if (this.fixedSystemPreference) return;
     const next = this.detectSystemDark();
     if (next !== this.systemDarkPreference) this.setSystemDarkPreference(next);
+  }
+
+  /** An answer from the terminal (OSC 11) wins over COLORFGBG and COSMEW_THEME_MODE for `auto`. */
+  public applyTerminalBackground(rgb: Rgb | undefined): void {
+    if (!rgb || this.fixedSystemPreference) return;
+    this.setSystemDarkPreference(isDarkBackground(rgb));
   }
 
   public setSystemDarkPreference(isDark: boolean): void {

@@ -1,15 +1,9 @@
-import type {CommandRequest, CommandRuntime, CommandSandbox} from '@futryn/contracts';
-import {
-  effectiveSandboxMode,
-  networkConfigured,
-  networkGranted,
-  sandboxConfig,
-  type ToolDispatcherOptions,
-  type ToolOutput,
-} from '../context';
+import type {CommandRequest, CommandRuntime, CommandSandbox} from '@cosmew/contracts';
+import {effectiveSandboxMode, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {resolveWorkspacePath} from '../working-roots';
 import {EXEC_LIMITS, clampYield, execDescriptor, execInput, shellOf, type ExecInput} from '../exec/command';
 import {runCommand} from '../runtimes/process';
-import type {ToolHandler} from './types';
+import type {PreparedTool, ToolHandler} from './types';
 
 const refuse = (code: string, content: string): ToolOutput => ({status: 'error', code, content});
 
@@ -17,8 +11,8 @@ const refuse = (code: string, content: string): ToolOutput => ({status: 'error',
 const LEGACY_CAPABILITIES = {network: false, tty: false, unsandboxed: false, shells: ['bash'] as ('bash' | 'sh')[]};
 
 /**
- * Codex `exec_command` preparation (handlers/unified_exec/preparation.rs, pinned 75fc67e8) under
- * Futryn policy: validate the arguments, decide the effective sandbox, and build the request.
+ * `exec_command` preparation (Codex handlers/unified_exec/preparation.rs, pinned 75fc67e8, under the
+ * ADR 0061 settings): validate the arguments, decide the effective sandbox, and build the request.
  * Nothing runs here; the orchestrator authorizes and revalidates before `execute`.
  */
 export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
@@ -36,36 +30,42 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       if (!parsed.success)
         return refuse(
           'INVALID_INPUT',
-          'Invalid arguments for exec_command. Supported: cmd (required), workdir, tty, shell, login, yield_time_ms, max_output_tokens, timeout_ms, sandbox_permissions, additional_permissions, justification.',
+          'Invalid arguments for exec_command. Supported: cmd (required), workdir, tty, shell, login, yield_time_ms, max_output_tokens, timeout_ms, dangerouslyDisableSandbox, justification.',
         );
       const input = parsed.data;
       const runtime = options.commands!;
+      const config = sandboxConfig(options);
 
-      const permissionError = checkPermissionRequest(input);
-      if (permissionError) return permissionError;
-      const escalated = input.sandbox_permissions === 'require_escalated';
+      // With the sandbox disabled in settings every command already runs without it, so the escape
+      // hatch has nothing to escape from and is an ordinary command.
+      const escalated = input.dangerouslyDisableSandbox === true && config.enabled;
+      if (escalated && !input.justification)
+        return refuse(
+          'INVALID_INPUT',
+          'dangerouslyDisableSandbox needs a justification for the user. Nothing was run.',
+        );
 
       const mode = effectiveSandboxMode(options, runtime);
       if (!mode)
         return refuse('SANDBOX_UNAVAILABLE', 'This runtime cannot enforce the configured sandbox. Nothing was run.');
-      // Full Access (ADR 0055, Codex `danger-full-access`): the session has no sandbox and the
-      // network is open, so a request for more changes nothing and needs no approval.
-      const fullAccess = mode === 'danger-full-access';
-      // Network comes from an approved request, an active `request_permissions` grant (Codex
-      // `implicit_granted_permissions`), or the user's `network_access` setting (workspace-write only).
-      const network =
-        fullAccess ||
-        input.sandbox_permissions === 'with_additional_permissions' ||
-        networkConfigured(options) ||
-        (!escalated && networkGranted(options));
-      // `unsandboxed` otherwise means this one command only; the orchestrator asks the user before it can run.
-      const sandbox: CommandSandbox = {mode, network, ...(escalated || fullAccess ? {unsandboxed: true} : {})};
+      // The escape hatch runs unsandboxed exactly once; the orchestrator asks the user before it can run.
+      const unsandboxed = escalated || mode === 'danger-full-access';
+      const sandbox: CommandSandbox = {
+        mode: escalated ? 'danger-full-access' : mode,
+        network: unsandboxed,
+        ...(unsandboxed ? {unsandboxed: true} : {}),
+        ...(!unsandboxed && mode === 'workspace-write' && config.additionalDirectories.length
+          ? {writableRoots: [...config.additionalDirectories]}
+          : {}),
+        ...(!unsandboxed && config.denyRead?.length ? {denyRead: [...config.denyRead]} : {}),
+        ...(!unsandboxed && config.denyWrite?.length ? {denyWrite: [...config.denyWrite]} : {}),
+      };
 
       const shell = shellOf(input.shell);
       const capabilityError = checkCapabilities(runtime, input, shell, sandbox);
       if (capabilityError) return capabilityError;
 
-      const file = options.workspace.resolve(input.workdir ?? '.');
+      const file = resolveWorkspacePath(options, input.workdir ?? '.');
       if (file.kind !== 'directory')
         return {
           status: 'error',
@@ -77,8 +77,12 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       const sessions = !!runtime.writeStdin;
       const label = options.redact(`${file.relative === '.' ? '' : file.relative + ': '}${input.cmd}`).slice(0, 1024);
       const request = buildRequest(input, file.absolute, sandbox, shell!, sessions);
-      // A sandbox failure may be retried unsandboxed only when the user can still be asked (Codex).
-      const canEscalate = !escalated && !fullAccess && sandboxConfig(options).escalation !== 'never';
+      request.taskSessionId = options.sessionId?.();
+      // Seatbelt writable roots stay off an unsandboxed or read-only command. The cwd
+      // allowlist is the same trusted directories and is checked again by the runtime.
+      if (config.additionalDirectories.length) request.cwdRoots = [...config.additionalDirectories];
+      // A sandbox denial may be retried unsandboxed only when the settings allow it and the user can still be asked.
+      const canEscalate = config.enabled && !escalated && config.allowUnsandboxed;
       // The approval scope binds everything that changes authority or lifetime, not just the text.
       const executionKey = JSON.stringify({
         timeoutMs: request.timeoutMs,
@@ -89,7 +93,7 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
         login: request.login,
       });
 
-      return {
+      const prepared: Extract<PreparedTool, {kind: 'command'}> = {
         kind: 'command',
         file,
         command: input.cmd,
@@ -100,56 +104,24 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
         executionKey,
         shell: shell!,
         sandbox,
+        ...(escalated ? {escalation: true} : {}),
         ...(input.justification ? {justification: input.justification} : {}),
-        execute: (signal, onOutput) => runCommand(runtime, {...request, onOutput}, label, signal, canEscalate),
+        execute: async (signal, onOutput) => {
+          // The domain-filtering proxy is the only network a sandboxed command has (ADR 0061). The
+          // orchestrator may have switched this command to unsandboxed (excluded command) by now.
+          if (!sandbox.unsandboxed && config.network && options.proxy) {
+            try {
+              sandbox.proxyUrl = await options.proxy.ensure();
+            } catch {
+              return refuse('SANDBOX_FAILED', 'The sandbox network proxy could not start. Nothing was run.');
+            }
+          }
+          return runCommand(runtime, {...request, onOutput}, label, signal, canEscalate);
+        },
       };
+      return prepared;
     },
   };
-}
-
-/**
- * Escalation is explicit and narrow (ADR 0053, Codex `SandboxPermissions`): `require_escalated`
- * runs this one command without the sandbox after the user approves it; network alone goes through
- * `with_additional_permissions`. Nothing here grants anything; the dispatcher asks.
- */
-function checkPermissionRequest(input: ExecInput): ToolOutput | undefined {
-  if (input.sandbox_permissions === 'require_escalated' && input.additional_permissions) {
-    return refuse(
-      'INVALID_INPUT',
-      'additional_permissions requires sandbox_permissions "with_additional_permissions"; require_escalated takes only a justification. Nothing was run.',
-    );
-  }
-  if (input.prefix_rule) {
-    return refuse(
-      'UNSUPPORTED',
-      'prefix_rule is not supported; the user manages reusable command rules with /permissions. Nothing was run.',
-    );
-  }
-
-  const extra = input.sandbox_permissions === 'with_additional_permissions';
-  if (input.additional_permissions && !extra) {
-    return refuse(
-      'INVALID_INPUT',
-      'additional_permissions requires sandbox_permissions "with_additional_permissions". Nothing was run.',
-    );
-  }
-  if (!extra) return undefined;
-  if (input.additional_permissions?.file_system !== undefined) {
-    return refuse(
-      'UNSUPPORTED',
-      'Additional filesystem access is not supported; commands can only write inside the project in workspace-write mode. Nothing was run.',
-    );
-  }
-  if (input.additional_permissions?.network?.enabled !== true) {
-    return refuse(
-      'INVALID_INPUT',
-      'with_additional_permissions needs additional_permissions {"network":{"enabled":true}}. Nothing was run.',
-    );
-  }
-  if (!input.justification) {
-    return refuse('INVALID_INPUT', 'Additional permissions need a justification for the user. Nothing was run.');
-  }
-  return undefined;
 }
 
 /** A request the runtime cannot enforce is refused, never silently downgraded. */
@@ -170,8 +142,6 @@ function checkCapabilities(
     return refuse('UNSUPPORTED', 'This runtime cannot allocate a PTY; omit tty. Nothing was run.');
   if (sandbox.unsandboxed && !capabilities.unsandboxed)
     return refuse('UNSUPPORTED', 'This runtime cannot run a command without its sandbox. Nothing was run.');
-  if (sandbox.network && !capabilities.network)
-    return refuse('UNSUPPORTED', 'This runtime cannot grant network access. Nothing was run.');
   if (input.tty && !runtime.writeStdin)
     return refuse('UNSUPPORTED', 'This runtime does not support sessions. Nothing was run.');
   return undefined;

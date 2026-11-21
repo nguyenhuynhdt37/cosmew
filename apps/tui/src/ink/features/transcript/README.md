@@ -81,3 +81,67 @@ Evidence từng luồng và giới hạn tại
 [parity](../../../../../../docs/delivery/tui-v3/parity.md),
 `ink/testing/integration.test.tsx`, `tests/end-to-end/tui-ink-pty.test.ts` và
 `tests/contracts/sdk-memory-write.test.ts`. Default/golden legacy không đổi.
+
+## TUI v4 phase B (2026-11-19)
+
+Rows 11–17: muted user rows use the presentation background; assistant Markdown
+uses a foreground dot and two-column indent. `toolDisplay()` is the pure mapping
+for tool titles/status/summary lines. Counts use returned numbered read lines,
+search matches, and applied diff receipts; truncated searches identify partial
+results. Denied/error outcomes never become applied changes. The running dot
+blinks only when animation is enabled. Diff add/remove backgrounds use
+`useUiTheme()` tokens, retaining old/new line gutters and diagnostics.
+
+`Spinner` exports `SPINNER_FRAMES`, `FUTRYN_VERBS`, `spinnerTokens`; it cycles the
+specified glyphs forward/back, shimmers the verb, and displays elapsed time and
+interrupt help. Transcript passes only SDK `usage.outputTokens` (unknown omitted),
+never a word/character estimate. `TodoItems` renders acknowledged Update Todos
+calls and live `Plan` rows with checkboxes, bold running work, dim/struck settled
+work, and no progress bar. `usePlan()` additionally returns `todosVisible` and
+`toggleTodos`; `useTodoVisibility()` is separately exported.
+
+Integration completed in phase E:
+
+- `IntegratedShell` shows `Plan` only while the turn is running and
+  `plan.todosVisible`, immediately under the single live spinner. Composer
+  Ctrl+T calls `plan.toggleTodos`; overlays disable that input.
+- `Transcript` / `TranscriptItem` accept `showSpinner` (default true). The shell
+  passes false and owns the spinner after notices/subagents, immediately before
+  Plan/composer, using the live item's `startedAt` and `usage.outputTokens` with
+  a blank row above it. Standalone transcripts retain their spinner.
+- Golden frames reviewed and recorded at 80/36 columns; host integration tests
+  assert spinner/todo/composer ordering and visibility without durable mutation.
+  Synthetic native PTY covers replay, permission, resize and exit; provider/OS
+  compatibility remains separate. See the TUI v4 delivery document.
+
+Tests cover each mapped tool, receipt-derived summaries, Bash folding, nonzero
+exit/session/denial distinctions, SDK-only usage, acknowledged/denied todos,
+terminal-control sanitization, visibility without durable mutation, and diff
+hunks whose source resembles file headers. Visual PTY parity, shimmer appearance,
+and authenticated provider behavior remain **Needs verification**.
+
+Phase E fix round: Bash collapsed previews show stdout/stderr before dispatcher
+metadata. Nonzero exits get an error heading; expansion preserves the full receipt.
+Per-tool duration rows are removed; model-facing/storage content is unchanged.
+
+## Phase G3 (TUI v4 transcript, spec section 3-4)
+
+Source of truth: `docs/delivery/tui-v4/spec.md` and the captures in `docs/delivery/tui-v4/reference/live-120x36`;
+`reference-frames.test.tsx` compares rendered rows with those captures.
+
+- Normal view: `UserMessage` (`❯ text` on the user-message background, full row, continuation indented 2, `code` spans in
+  the path colour), `⏺ ` + Markdown answers, and consecutive tools of a turn merged by `segmentTools` (`summary.ts`) into one
+  dim line (`Listed 1 directory`, `Read 2 files`, `Ran 1 shell command · 1 failed`, `Made 2 edits +3 -1`). A single
+  successful edit/write, any denied/errored tool with a reason, and non-file tools keep their `⏺ Name(arg)` +
+  `  ⎿  ` entry; Update shows `Added 1 line, removed 1 line` and the numbered diff (`DiffView`), Write shows
+  `Wrote N lines` and ten rows then `… +N lines`.
+- `detailed` (Ctrl+O): every tool one by one with its full result, reasoning open, and a right-aligned `<time> <model>` line
+  before each answer. The shell owns the key: `useDetailedTranscript()` returns `{detailed, toggleDetailed}`.
+- End of turn: `✻ <past verb> for 8s · done 11:00 PM` from `durationMs`/`finishedAt` (`formatTime` is injectable);
+  `interrupted` renders `  ⎿  Interrupted · What should Cosmew do instead?`. Replayed history has no timing, so no line.
+- Spinner: `✻ <Verb>… (7s · ↓ 279 tokens · thinking with medium effort)` + optional `  ⎿  Tip: …`; tokens come only from
+  SDK usage, effort only while `thinking`. `turnVerb(seed)` keeps the spinner verb and the past-tense verb paired.
+- `Plan`, `Subagents` (`⏺ type(description)` / `  ⎿  Running… | Done (N tool uses · tokens · 8s)`) and `Notices`
+  (`  ⎿  note`, `⏺ event`, `backgroundCommandNotice`) share the `ResultLine` connector.
+- Gaps: hook output lines (`3 PostToolUse hooks ran`, `<Name> says:`) and background-command completion have no SDK event;
+  `↓ to manage` has no backend and is not drawn.

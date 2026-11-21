@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto';
-import {FutrynError, isFileChangeTool, type Message} from '@futryn/contracts';
+import {FutrynError, isFileChangeTool, type Message} from '@cosmew/contracts';
 export const contextHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 /** Conservative UTF-8 estimate; provider metadata supplies the actual window and measured usage. */
 /**
@@ -59,6 +59,28 @@ export function normalizeHistory(messages: readonly Message[]): Message[] {
   return out;
 }
 
+/** Actual bounded archive references only; never fabricate a handle from a digest or call id. */
+export function toolOutputReferences(messages: readonly Message[], max = 32): string[] {
+  const references = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== 'tool' && message.role !== 'user') continue;
+    for (const match of message.content.matchAll(
+      /\[tool_output output_id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}; use tool_output to retrieve archived evidence\]/gi,
+    )) {
+      references.delete(match[0]);
+      references.add(match[0]);
+    }
+  }
+  return [...references].slice(-max);
+}
+
+/** UTF-8 byte slice with complete code points at both boundaries. */
+function utf8Slice(bytes: Buffer, start: number, end: number): string {
+  while (start < end && (bytes[start]! & 0xc0) === 0x80) start++;
+  while (end < bytes.length && end > start && (bytes[end]! & 0xc0) === 0x80) end--;
+  return bytes.subarray(start, end).toString('utf8');
+}
+
 /** Shrink only model-visible read output. Durable receipts and the original transcript stay intact. */
 export function truncateToolResults(messages: readonly Message[], maxBytes: number): Message[] {
   const limit = Math.max(256, maxBytes);
@@ -70,12 +92,15 @@ export function truncateToolResults(messages: readonly Message[], maxBytes: numb
     )
       return {...message};
     const content = message.content;
+    const bytes = Buffer.from(content);
+    const references = toolOutputReferences([message], 1);
     return {
       ...message,
       content:
-        content.slice(0, Math.floor(limit / 2)) +
-        `\n[Futryn context truncation: sha256 ${contextHash(content)}; output omitted, not a complete read]\n` +
-        content.slice(-Math.floor(limit / 4)),
+        utf8Slice(bytes, 0, Math.floor(limit / 2)) +
+        `\n[Cosmew context truncation: sha256 ${contextHash(content)}; output omitted, not a complete read]\n` +
+        utf8Slice(bytes, bytes.length - Math.floor(limit / 4), bytes.length) +
+        (references.length ? `\n${references.join('\n')}` : ''),
     };
   });
 }

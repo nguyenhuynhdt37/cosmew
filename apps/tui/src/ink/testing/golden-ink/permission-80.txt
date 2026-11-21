@@ -1,0 +1,16 @@
+  Running 1 shell command…
+
+⏺ Checking the workspace.
+
+────────────────────────────────────────────────────────────────────────────────
+ Bash command
+
+   bun test
+   Run tests
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don’t ask again for this scope during this session
+   3. No
+
+ Esc to cancel · Tab to amend

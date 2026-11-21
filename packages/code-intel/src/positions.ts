@@ -1,5 +1,5 @@
 /**
- * LSP positions are 0-based lines and UTF-16 code-unit columns; Futryn's tool speaks 1-based lines
+ * LSP positions are 0-based lines and UTF-16 code-unit columns; Cosmew's tool speaks 1-based lines
  * and 1-based code-point columns (what a model counts in the text it read). ADR 0043.
  */
 

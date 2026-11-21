@@ -1,6 +1,6 @@
 # Chiến lược kiểm thử
 
-**Not implemented.** Phase 0 chỉ filesystem/content/link inspection; mọi test suite dưới đây được viết/chạy ở phase triển khai được giao. tests và testkit hiện là placeholders rỗng.
+Phase 0 của tài liệu này chỉ là kế hoạch. Suite thật nằm ở `tests/`; `packages/testkit` (placeholder 0 byte) đã xoá 2026-11-18.
 
 | Lớp | Owner/location | Invariants | Bằng chứng exit |
 |---|---|---|---|

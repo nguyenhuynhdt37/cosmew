@@ -1,4 +1,4 @@
-import {FutrynError, providerSchema, type Provider, type SettingsStore} from '@futryn/contracts';
+import {FutrynError, providerSchema, type Provider, type SettingsStore} from '@cosmew/contracts';
 
 export const providerPresets: readonly Provider[] = [
   {
@@ -80,7 +80,7 @@ export const providerPresets: readonly Provider[] = [
     timeoutMs: 120000,
   },
   {
-    // ADR 0047: "Sign in with ChatGPT" token sharing; Futryn runs the agent loop (backend `hannes`).
+    // ADR 0047: "Sign in with ChatGPT" token sharing; Cosmew runs the agent loop (backend `hannes`).
     // Discover the selected account's model slugs from the ChatGPT /models response.
     id: 'chatgpt-api',
     name: 'ChatGPT subscription · API',
@@ -134,17 +134,17 @@ export class ProviderRegistry {
  * provider-scoped registrar, never SettingsStore or CredentialVault. No plugin
  * loading or delegated authentication is enabled by this metadata registry. */
 export class AuthMethodRegistry {
-  methods(provider: Provider): import('@futryn/contracts').AuthMethod[] {
+  methods(provider: Provider): import('@cosmew/contracts').AuthMethod[] {
     if (provider.auth === 'oauth')
       return [
         {
           id: 'oauth-browser',
           name: 'Sign in with ChatGPT',
-          description: 'Browser sign-in; Futryn runs the agent and tools. Tokens stay in the OS keyring.',
+          description: 'Browser sign-in; Cosmew runs the agent and tools. Tokens stay in the OS keyring.',
           autoComplete: true,
         },
       ];
-    const methods: import('@futryn/contracts').AuthMethod[] =
+    const methods: import('@cosmew/contracts').AuthMethod[] =
       provider.auth === 'none'
         ? [{id: 'none', name: 'No authentication', description: 'For explicitly configured local or public endpoints.'}]
         : provider.auth === 'command'
@@ -190,7 +190,7 @@ export class IntegrationRegistry {
     for (const p of this.providers.list()) merged.set(p.id, p);
     return [...merged.values()];
   }
-  get(id: string): import('@futryn/contracts').Integration {
+  get(id: string): import('@cosmew/contracts').Integration {
     const provider = this.sources().find(p => p.id === id);
     if (!provider) throw new FutrynError('NOT_FOUND');
     return {
@@ -201,8 +201,8 @@ export class IntegrationRegistry {
         provider.id === 'anthropic' ? 'Claude subscription sign-in requires Anthropic approval. Use API key.' : '',
     };
   }
-  list(): import('@futryn/contracts').Integration[] {
-    const groups = new Map<string, import('@futryn/contracts').Integration>();
+  list(): import('@cosmew/contracts').Integration[] {
+    const groups = new Map<string, import('@cosmew/contracts').Integration>();
     for (const provider of this.sources()) {
       const source = this.get(provider.id);
       const groupId = provider.family ?? provider.id;

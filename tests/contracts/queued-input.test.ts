@@ -2,8 +2,8 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {openPrivateDatabase, SqliteConversations} from '@futryn/persistence';
-import type {TurnReceipt} from '@futryn/contracts';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
+import type {TurnReceipt} from '@cosmew/contracts';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {

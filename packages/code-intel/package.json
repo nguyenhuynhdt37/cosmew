@@ -1,5 +1,5 @@
 {
-  "name": "@futryn/code-intel",
+  "name": "@cosmew/code-intel",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@futryn/contracts": "workspace:*",
-    "@futryn/workspace": "workspace:*"
+    "@cosmew/contracts": "workspace:*",
+    "@cosmew/workspace": "workspace:*"
   }
 }

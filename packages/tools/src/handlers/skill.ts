@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {SKILL_NAME} from '@futryn/workspace';
+import {SKILL_NAME} from '@cosmew/workspace';
 import {readDecision, type ToolDispatcherOptions} from '../context';
 import type {ToolHandler} from './types';
 const inputSchema = z.strictObject({name: z.string().regex(SKILL_NAME)});

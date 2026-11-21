@@ -33,7 +33,7 @@ import {
   type SubagentTranscriptStep,
   type ToolCall,
   type Usage,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {
   exceedsAgentDepth,
   inheritChildLimits,
@@ -825,7 +825,7 @@ export class SubagentManager implements SubagentExecutionPort {
         availableModelIds: accountId => this.deps.availableModelIds(accountId),
       });
     const result = resolve(profile);
-    // A custom definition's `model:` is a hint (Claude aliases like `sonnet` are not Futryn models): when it does
+    // A custom definition's `model:` is a hint (Claude aliases like `sonnet` are not Cosmew models): when it does
     // not resolve, fall back to the parent's model instead of making the agent unusable.
     if (!result.ok && profile.custom && profile.model && !requestedModel) {
       const {model: _model, ...unpinned} = profile;

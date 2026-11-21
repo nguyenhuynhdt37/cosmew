@@ -1,0 +1,36 @@
+00|                                                                  │                                                   ✕
+01|⏺ Answered Claude's questions:                                    │1 file changed +1 -1               source: Current ▾
+02|  ⎿  · Which color do you prefer, red or blue? → Red              │
+03|                                                                  │a.txt                                          +1 -1
+04|⏺ You chose red.                                                  │
+05|                                                                  │────────────────────────────────────────────────────
+06|✻ Brewed for 4s · done 11:02 PM                                   │a.txt                                        [ ask ]
+07|                                                                  │────────────────────────────────────────────────────
+08|❯ Use TodoWrite to create 3 todos (alpha, beta, gamma) and        │ 1 -hello
+09|  complete them one at a time, updating TodoWrite after each; use │ 1 +HELLO
+10|  no other tools.                                                 │ 2  world
+11|                                                                  │
+12|⏺ I can't do this: there's no TodoWrite tool in this session. It  │
+13|  isn't among my available tools or the extra tools that can be   │
+14|  loaded on demand. You asked me to use no other tools, so I      │
+15|  haven't substituted anything.                                   │
+16|                                                                  │
+17|  I could run the same alpha → beta → gamma sequence another way, │
+18|  for example by updating a checklist file after each step. If    │
+19|  you'd like that, tell me which way to use.                      │
+20|                                                                  │
+21|✻ Cooked for 3s · done 11:02 PM                                   │
+22|                                                                  │
+23|❯ Write a 60-line poem about terminals to poem.txt.               │
+24|                                                                  │
+25|❯ also give it a title                                            │
+26|  ⎿  Queued · ctrl+x ctrl+s to send now                           │
+27|                                                                  │
+28|✽ Forging… (6s · ↓ 278 tokens · thinking with medium effort)      │
+29|  ⎿  Tip: Use /color and /rename to tell your sessions apart      │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯ Press up to edit queued messages
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · esc to interrupt · ← 1 agent

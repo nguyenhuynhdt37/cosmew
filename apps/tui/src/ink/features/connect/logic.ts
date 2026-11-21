@@ -1,5 +1,5 @@
-import {FutrynError, type Account, type Integration} from '@futryn/contracts';
-import type {FutrynClient} from '@futryn/sdk';
+import {FutrynError, type Account, type Integration} from '@cosmew/contracts';
+import type {FutrynClient} from '@cosmew/sdk';
 import type {ConnectProviderState} from './types';
 
 export function filterIntegrations(integrations: Integration[], query: string): Integration[] {
@@ -15,7 +15,7 @@ export function connectionChoices(
   integrations: Integration[],
   accounts: Account[],
   activeAccountId?: string | null,
-): {id: string; label: string; disabled?: boolean}[] {
+): {id: string; label: string; disabled?: boolean; current?: boolean}[] {
   const integration = integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(state.providerId!));
   const nameOf = (id: string) =>
     integrations.find(i => (i.providerIds ?? [i.provider.id]).includes(id))?.provider.name ?? id;
@@ -67,7 +67,8 @@ export function connectionChoices(
         .map(a => ({
           id: a.id,
           disabled: state.switchOnly && a.id === activeAccountId,
-          label: `${state.switchOnly ? accounts.findIndex(item => item.id === a.id) + 1 + '. ' : ''}${a.alias}  ·  ${state.switchOnly || state.logoutOnly ? nameOf(a.providerId) + (a.status === 'logged-out' ? ' · Signed out' : '') : a.providerId + ' · ' + a.status}`,
+          current: a.id === activeAccountId,
+          label: `${a.alias}  ·  ${state.switchOnly || state.logoutOnly ? nameOf(a.providerId) + (a.status === 'logged-out' ? ' · Signed out' : '') : a.providerId + ' · ' + a.status}`,
         }));
     case 'actions':
       return ['switch', 'add', 'rename', 'reconnect', 'logout', 'remove'].map(id => ({
@@ -141,8 +142,6 @@ export function describeProviderError(client: FutrynClient, error: unknown, prov
 export const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,99}$/;
 /** Custom provider IDs. */
 export const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/;
-/** Control characters never belong in a typed draft. */
-export const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/;
 
 /** `Name=Value; Name2=$ENV_VAR` → static and environment-backed headers; a string is an error message. */
 export function parseHeaderDraft(

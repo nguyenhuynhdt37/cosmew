@@ -1,11 +1,14 @@
+import {needsEffortMetadata, sharedModelMetadata} from './model-metadata';
+import {fetchModelsDev} from '@cosmew/security';
+import {BackgroundTasks} from './background-tasks';
 import {runUserShellCommand} from './user-shell';
-import {realpathSync} from 'node:fs';
+import {existsSync, realpathSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {basename, dirname, join, resolve} from 'node:path';
 import {
-  FULL_ACCESS_WARNING,
   FutrynError,
+  isCodingModel,
   type Account,
   type CredentialVault,
   type Message,
@@ -13,6 +16,7 @@ import {
   type ModelPort,
   type ModelRequest,
   type WorkspaceDiffReport,
+  type WorkspaceDiffBase,
   type ProjectContextOptions,
   type ProjectContextPort,
   type SkillsPort,
@@ -30,8 +34,8 @@ import {
   type Provider,
   type SubagentNotice,
   type SubagentWorktreePort,
-} from '@futryn/contracts';
-import {Conversation} from '@futryn/core';
+} from '@cosmew/contracts';
+import {Conversation, SAFETY_LIMITS, summarizeCheckpointSpan} from '@cosmew/core';
 import {
   SubagentManager,
   SubagentScheduler,
@@ -40,10 +44,17 @@ import {
   filterSubagentTools,
   isToolAllowedForProfile,
   type ChildRunContext,
-} from '@futryn/agents';
-import {ToolDispatcher, type CommandRuntime} from '@futryn/tools';
-import {WebSearchClient, type SearchKeys} from '@futryn/mcp';
-import {LspManager} from '@futryn/code-intel';
+} from '@cosmew/agents';
+import {
+  validateImageAttachment,
+  SandboxProxy,
+  ToolDispatcher,
+  type CommandRuntime,
+  type SandboxConfig,
+} from '@cosmew/tools';
+import {WebSearchClient, type SearchKeys} from '@cosmew/mcp';
+import {openUserMcp} from './mcp';
+import {LspManager} from '@cosmew/code-intel';
 import {
   ProjectContextLoader,
   AgentDefinitionCatalog,
@@ -53,11 +64,13 @@ import {
   skillInvocations,
   WorkspaceDenied,
   WorkspaceRoot,
+  captureWorkspaceDiffSnapshot,
+  type WorkspaceDiffSnapshot,
   GitWorktrees,
   WorktreeError,
   type WorktreeInfo,
   nestedLabel,
-} from '@futryn/workspace';
+} from '@cosmew/workspace';
 import {
   AccountManager,
   IntegrationRegistry,
@@ -72,18 +85,20 @@ import {
   type HostProviderEntry,
   loadHostConfig,
   renderProviderToml,
-} from '@futryn/models';
+} from '@cosmew/models';
 import {
   FileCustomThemeStore,
   FileMemories,
   MigrationOutbox,
   removeRuntimeProfiles,
   SqliteConversations,
+  CheckpointStore,
+  SqliteToolOutputArchive,
   SqliteSettings,
   ToolAuditStore,
   openPrivateDatabase,
-} from '@futryn/persistence';
-import {FutrynClient, SLASH_COMMANDS, parseSlashCommand, type TerminalRuntimeReport} from '@futryn/sdk';
+} from '@cosmew/persistence';
+import {FutrynClient, SLASH_COMMANDS, parseSlashCommand} from '@cosmew/sdk';
 import {
   ConfiguredNetworkPolicy,
   OpenRouterPKCE,
@@ -94,17 +109,12 @@ import {
   redactModel,
   terminalText,
   validateEndpoint,
-} from '@futryn/security';
+} from '@cosmew/security';
 import {ChatGPTOAuth, openExternalURL, type ChatGPTOAuthOptions} from '../subscriptions/chatgpt-oauth';
 import {grantLabel, toolPermissionRequest} from './approvals';
 import {HostConfigStore, TokenCommandRunner} from './host-config';
-import {
-  CommandRuntimes,
-  createCommandRuntime,
-  permissionModeFromEnv,
-  sandboxSettingsFromEnv,
-  type LaunchPermissionFlags,
-} from './commands';
+import {CommandRuntimes, createCommandRuntime, type LaunchPermissionFlags} from './commands';
+import {FilePermissionSettings, sandboxConfigFromSettings} from './permission-settings';
 import {defaultStateDirectory} from './paths';
 import {fitUtf8Prefix} from './utf8';
 import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
@@ -112,11 +122,8 @@ import {refreshWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 export {computeWorkspaceGitDiff, scanWorkspaceFiles} from './workspace-info';
 export {
   PERMISSION_CLI_OPTIONS,
-  approvalPolicyFromEnv,
   parsePermissionFlags,
-  permissionModeFromEnv,
   resolvePermissionFlags,
-  sandboxSettingsFromEnv,
   type LaunchPermissionFlags,
 } from './commands';
 
@@ -130,11 +137,11 @@ function committedMessages(record: SessionRecord): Message[] {
     .map(({revision: _revision, state: _state, ...message}) => message);
 }
 
-/** Project context budget: explicit options, else FUTRYN_PROJECT_CONTEXT_MAX_BYTES, else 32 KiB. */
+/** Project context budget: explicit options, else COSMEW_PROJECT_CONTEXT_MAX_BYTES, then legacy names, else 32 KiB. */
 /**
  * Whether a Git-reported workspace path may reach the model without approval. Mirrors the read tool:
  * paths are judged under the canonical root, and an existing file is judged again at its real
- * location so a symlink cannot launder Futryn state or secrets. A deleted file has no current
+ * location so a symlink cannot launder Cosmew state or secrets. A deleted file has no current
  * target, so only its path is judged; any other resolution failure is not allowed.
  */
 function readAllowedWithoutApproval(workspace: WorkspaceRoot, path: string, stateDirectory: string): boolean {
@@ -150,7 +157,10 @@ function readAllowedWithoutApproval(workspace: WorkspaceRoot, path: string, stat
 }
 
 function projectContextOptions(options: ProjectContextOptions): ProjectContextOptions & {maxBytes: number} {
-  const envBudget = process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ?? process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
+  const envBudget =
+    process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES ??
+    process.env.FUTRYN_PROJECT_CONTEXT_MAX_BYTES ??
+    process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
   if (options.maxBytes === undefined && envBudget !== undefined && !/^\d+$/.test(envBudget)) {
     throw new FutrynError('INVALID_INPUT');
   }
@@ -162,8 +172,24 @@ function projectContextOptions(options: ProjectContextOptions): ProjectContextOp
   return resolved;
 }
 
+/** Resolve a user-owned auxiliary root without copying legacy state. */
+function resolveUserStateRoot(home: string): string {
+  let root: string;
+  try {
+    root = realpathSync.native(resolve(home));
+  } catch {
+    root = resolve(home);
+  }
+  for (const name of ['.cosmew', '.futryn', '.hannes']) {
+    const candidate = join(root, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return join(root, '.cosmew');
+}
+
 /** What a conversation is wired to inside a client session. All optional for bare CLI conversations. */
 interface ConversationWiring {
+  historyWorkspace?: string;
   tools?: ToolPort;
   workspaceRoot?: string;
   projectContext?: ProjectContextPort;
@@ -185,21 +211,23 @@ export function startup(
   directory = defaultStateDirectory(),
   services: {
     vault?: CredentialVault;
+    /** Advisory metadata is disabled offline and in tests unless explicitly injected. */
+    offline?: boolean;
+    modelsDevFetch?: typeof fetch;
     fetch?: typeof fetch;
     /** Test seams for the ChatGPT sign-in (issuer, browser opener, clock). */
     chatgpt?: ChatGPTOAuthOptions;
     /** Test seam for user skill discovery; production uses the OS home directory. */
     skillsHome?: string;
-    /** Isolated user home for memory fixtures; production always uses ~/.futryn. */
+    /** Isolated user home for memory fixtures; production uses ~/.cosmew with legacy roots reused. */
     memoriesHome?: string;
     /** Host opener for an explicit /memory open action, never a model tool. */
     openMemoryFolder?: (path: string) => Promise<void>;
     commands?: (workspaceRoot: string, stateDirectory: string) => CommandRuntime;
-    /** Session-only CLI launch permission overrides (ADR 0055). */
+    /** Session-only CLI launch permission overrides (ADR 0061). */
     permissions?: LaunchPermissionFlags;
   } = {},
 ) {
-  let fullAccessWarned = false;
   const commandRuntimes = new CommandRuntimes();
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
@@ -210,11 +238,25 @@ export function startup(
   );
   for (const value of Object.values(webKeys)) if (value) redactor.register(value);
   const webSearch = new WebSearchClient({keys: webKeys, redact: text => redactor.text(text), fetch: services.fetch});
+  // User mcp.json only. Connect is explicit (fyn mcp, TUI, exec, chat), never status or doctor.
+  const mcpHub = openUserMcp(
+    directory,
+    text => redactor.text(text),
+    secret => redactor.register(secret),
+  );
+  const userMcp = {
+    tools: () => mcpHub.tools(),
+    call: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => mcpHub.call(name, args, signal),
+  };
   const languageServerManagers = new Set<LspManager>();
+  /** Sandbox network proxies, one per client; stopped with the command runtimes. */
+  const sandboxProxies = new Set<SandboxProxy>();
   /** Background subagents are cancelled when the session closes (S5b): one hook per client. */
   const subagentShutdowns = new Set<() => Promise<void>>();
   const conversations = new SqliteConversations(db, value => redactor.text(value));
+  const checkpointStore = new CheckpointStore(db, value => redactor.text(value));
   const toolAudit = new ToolAuditStore(db);
+  const outputArchive = new SqliteToolOutputArchive(db);
   const customThemes = new FileCustomThemeStore(directory);
   const vault = services.vault ?? new SecureVault(redactor);
   const oauth = new OpenRouterPKCE(redactor, services.fetch);
@@ -341,7 +383,33 @@ export function startup(
         provider.auth === 'oauth' ? chatgpt.accessToken(account, vault, signal) : tokens.token(provider, signal),
     );
 
-  const catalog = (account: Account) => new ModelCatalog(settings, transport(account));
+  const metadataAbort = new AbortController();
+  const metadataEnabled = !services.offline && (process.env.NODE_ENV !== 'test' || !!services.modelsDevFetch);
+  const loadMetadata = sharedModelMetadata(
+    signal =>
+      metadataEnabled ? fetchModelsDev(signal, services.modelsDevFetch) : Promise.reject(new FutrynError('POLICY')),
+    metadataAbort.signal,
+  );
+  const metadataRefreshes = new Map<string, Promise<void> | null>();
+  const catalog = (account: Account) => new ModelCatalog(settings, transport(account), loadMetadata);
+  const refreshModelMetadata = (account: Account, modelId: string): Promise<void> | undefined => {
+    if (!metadataEnabled) return;
+    const key = account.id + ':' + JSON.stringify(registry.get(account.providerId));
+    if (metadataRefreshes.has(key)) return metadataRefreshes.get(key) ?? undefined;
+    const target = catalog(account)
+      .cached()
+      .find(model => model.id === modelId);
+    if (!target || !needsEffortMetadata(target)) return;
+    const pending = catalog(account)
+      .refreshMetadata(metadataAbort.signal)
+      .then(() => {})
+      .catch(() => {})
+      .finally(() => {
+        metadataRefreshes.set(key, null);
+      });
+    metadataRefreshes.set(key, pending);
+    return pending;
+  };
   /** Re-read on every use, so a model marked 'unsupported' or with new limits takes effect at once. */
   const cachedModel = (account: Account, modelId: string): ModelInfo | undefined =>
     catalog(account)
@@ -354,7 +422,7 @@ export function startup(
     return accounts.get(selected);
   };
 
-  /** Tools the model may see. Futryn runs every one of them; a provider only answers API requests (ADR 0049). */
+  /** Tools the model may see. Cosmew runs every one of them; a provider only answers API requests (ADR 0049). */
   const modelTools = (account: Account, modelId: string, wiring: ConversationWiring): ToolPort | undefined => {
     const {tools} = wiring;
     if (!tools) return undefined;
@@ -368,8 +436,15 @@ export function startup(
   };
 
   /** The model port: always a direct provider API adapter. */
-  const modelPort = (account: Account, selection: Selection, info: ModelInfo) =>
-    new ProviderAdapter(transport(account), selection.modelId, info);
+  const modelPort = (account: Account, selection: Selection, info: ModelInfo): ModelPort => {
+    // Sessions may open before the advisory refresh completes. Resolve again at invocation.
+    const adapter = () =>
+      new ProviderAdapter(transport(account), selection.modelId, cachedModel(account, selection.modelId) ?? info);
+    return {
+      stream: (request, signal) => adapter().stream(request, signal),
+      generate: (request, signal) => adapter().generate(request, signal),
+    };
+  };
 
   const createConversationForSelection = (
     selection: Selection,
@@ -394,7 +469,9 @@ export function startup(
     return new Conversation(
       selection,
       redactModel(guidedModel, redactor),
-      conversations,
+      wiring.historyWorkspace
+        ? new SqliteConversations(db, value => redactor.text(value), wiring.historyWorkspace)
+        : conversations,
       existingSession,
       modelTools(account, selection.modelId, wiring),
       () => catalog(account).markToolsUnsupported(selection.modelId),
@@ -440,11 +517,11 @@ export function startup(
       }
       // An explicit generation probe validates the pinned model without replacing richer cached
       // metadata with a less complete model-list response.
-      const cached = generate ? catalog(account).cached() : [];
+      const cached = generate ? await catalog(account).refreshMetadata(signal) : [];
       const discovered = cached.length ? {models: cached, stale: false} : await discoverModels(account, signal);
       if (discovered.stale) throw new FutrynError('TRANSPORT');
 
-      const modelId = account.defaultModel ?? discovered.models[0]?.id;
+      const modelId = account.defaultModel ?? discovered.models.find(m => isCodingModel(m))?.id;
       if (generates && !modelId) throw new FutrynError('NOT_FOUND');
       if (generates && modelId) await generateProbe(account, modelId, signal);
       if (signal?.aborted) throw new FutrynError('CANCELLED');
@@ -491,45 +568,119 @@ export function startup(
   ): FutrynClient => {
     const contextBudget = projectContextOptions(contextOptions);
     const stateDirectory = realpathSync.native(resolve(directory));
-    // User-level config defaults (ADR 0055); the environment and CLI launch flags override them, never a workspace file.
-    const permissionDefaults = hostLoaded.permissions;
-    const effectiveEnv = {
-      ...process.env,
-      ...(services.permissions?.sandbox ? {FUTRYN_SANDBOX_MODE: services.permissions.sandbox} : {}),
-      ...(services.permissions?.approval ? {FUTRYN_APPROVAL_POLICY: services.permissions.approval} : {}),
-    };
-    const sandboxSettings = sandboxSettingsFromEnv(effectiveEnv, permissionDefaults);
-    if (sandboxSettings.mode === 'danger-full-access' && !fullAccessWarned) {
-      fullAccessWarned = true;
-      process.stderr.write(`${FULL_ACCESS_WARNING}\n`);
-    }
+    // Settings files (ADR 0061): user + project + local, repository files untrusted until approved.
+    const canonicalWorkspace = (() => {
+      try {
+        return realpathSync.native(resolve(workspaceRoot));
+      } catch {
+        return resolve(workspaceRoot);
+      }
+    })();
+    const permissionSettings = new FilePermissionSettings({
+      workspace: canonicalWorkspace,
+      stateDirectory,
+      store: settings,
+      launch: {allow: services.permissions?.allow, deny: services.permissions?.deny},
+    });
+    const sandboxConfigNow = (): SandboxConfig =>
+      sandboxConfigFromSettings(
+        permissionSettings.snapshot(),
+        client?.permissionMode() ?? 'default',
+        canonicalWorkspace,
+        process.env.HOME ?? homedir(),
+      );
+    // Sandboxed commands reach the network only through this proxy; the client decides each host.
+    const sandboxProxy = new SandboxProxy({
+      decide: (target, signal) =>
+        client ? client.authorizeNetwork(target.host, target.port, signal) : Promise.resolve(false),
+      onEvent: event =>
+        toolAudit.append({
+          at: new Date().toISOString(),
+          callId: 'sandbox-proxy',
+          tool: 'sandbox_network',
+          target: `${event.host}:${event.port}`,
+          phase: 'decided',
+          decision: event.allowed ? 'allow' : 'deny',
+          reason: event.reason,
+        }),
+    });
+    sandboxProxies.add(sandboxProxy);
     const grants = new SessionGrants();
     const activeConversations = new Map<string, Conversation>();
     let currentTurnConversation: Conversation | undefined;
+    let activeCheckpoint: string | undefined;
+    let restoringCheckpoint = false;
     let client: FutrynClient | undefined;
     let projectReport: ProjectContextReport | null = null;
     let contextLoader: ProjectContextLoader | undefined;
     let commandRuntime: CommandRuntime | undefined;
     let dispatcher: ToolDispatcher | undefined;
     let workspace: WorkspaceRoot | undefined;
-    let diffReport: WorkspaceDiffReport = {
+    const diffReport: WorkspaceDiffReport = {
       workspace: resolve(workspaceRoot),
       gitAvailable: false,
       state: 'error',
       message: 'Not inspected. Press R to refresh.',
+      capabilities: {
+        session: {available: false, reason: 'Not inspected.'},
+        uncommitted: {available: false, reason: 'Not inspected.'},
+        branch: {available: false, reason: 'Not inspected.'},
+      },
       files: [],
       totalAdditions: 0,
       totalDeletions: 0,
     };
-    let diffRefresh: Promise<WorkspaceDiffReport> | undefined;
-    let terminalReport: TerminalRuntimeReport | undefined;
+    const sessionDiffSnapshots = new Map<string, WorkspaceDiffSnapshot>();
+    const diffReports = new Map<string, WorkspaceDiffReport>();
+    const diffRawPaths = new WeakMap<WorkspaceDiffReport, Map<string, Set<string>>>();
+    const diffRefreshes = new Map<string, Promise<WorkspaceDiffReport>>();
+    const diffSession = () => client?.activeSession()?.id ?? '';
+    const diffKey = (base: WorkspaceDiffBase) => `${diffSession()}:${base}`;
+    const diffAllowed = (path: string) =>
+      readAllowedWithoutApproval(workspaceTree(), path, stateDirectory) &&
+      !['ask', 'deny'].includes(permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: path}) ?? '');
+    const diffMetadataAllowed = (path: string) => {
+      if (
+        path.startsWith('/') ||
+        path
+          .split(/[\\/]/)
+          .some(
+            part => part === '..' || part === '.git' || part === '.cosmew' || part === '.futryn' || part === '.hannes',
+          )
+      )
+        return false;
+      const decision = permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: path});
+      const effect = evaluateRead(path, join(workspaceTree().root, path), {stateDirectory}).effect;
+      return decision !== 'deny' && effect !== 'deny' && (decision === 'ask' || effect === 'ask');
+    };
+    const visibleDiff = (report: WorkspaceDiffReport): WorkspaceDiffReport => {
+      const rawPaths = diffRawPaths.get(report);
+      const allowed = (path: string) => [...(rawPaths?.get(path) ?? [path])].every(diffAllowed);
+      const files = toolsEnabled()
+        ? report.files.filter(
+            file =>
+              (allowed(file.path) && (!file.oldPath || allowed(file.oldPath))) ||
+              (client?.mode() === 'review' &&
+                file.lines.length === 0 &&
+                [...(rawPaths?.get(file.path) ?? [file.path])].every(diffMetadataAllowed)),
+          )
+        : [];
+      return {
+        ...report,
+        files,
+        totalAdditions: files.reduce((n, f) => n + f.additions, 0),
+        totalDeletions: files.reduce((n, f) => n + f.deletions, 0),
+      };
+    };
     const toolsEnabled = () => client?.toolsEnabled() === true;
     const plans = new Map<string, PlanState | null>();
-    const memoriesEnabled = process.env.FUTRYN_MEMORY !== '0' && hostLoaded.memoriesEnabled;
+    const memoriesEnabled =
+      (process.env.COSMEW_MEMORY ?? process.env.FUTRYN_MEMORY ?? process.env.HANNES_MEMORY) !== '0' &&
+      hostLoaded.memoriesEnabled;
     let memoryStore: FileMemories | undefined;
     const memories = () =>
       (memoryStore ??= new FileMemories(
-        join(realpathSync.native(services.memoriesHome ?? homedir()), '.futryn'),
+        resolveUserStateRoot(services.memoriesHome ?? homedir()),
         workspaceTree().root,
         text => terminalText(redactor.text(text)),
         {maxUnusedDays: hostLoaded.memoryMaxUnusedDays},
@@ -546,7 +697,10 @@ export function startup(
         canRead: (relative, absolute) =>
           evaluateRead(relative, absolute, {
             stateDirectory:
-              relative.startsWith('~/.futryn/skills/') && absolute.startsWith(join(stateDirectory, 'skills') + '/')
+              (relative.startsWith('~/.cosmew/skills/') ||
+                relative.startsWith('~/.futryn/skills/') ||
+                relative.startsWith('~/.hannes/skills/')) &&
+              absolute.startsWith(join(stateDirectory, 'skills') + '/')
                 ? undefined
                 : stateDirectory,
           }).effect === 'allow' &&
@@ -564,7 +718,10 @@ export function startup(
         canRead: (relative, absolute) =>
           evaluateRead(relative, absolute, {
             stateDirectory:
-              relative.startsWith('~/.futryn/agents/') && absolute.startsWith(join(stateDirectory, 'agents') + '/')
+              (relative.startsWith('~/.cosmew/agents/') ||
+                relative.startsWith('~/.futryn/agents/') ||
+                relative.startsWith('~/.hannes/agents/')) &&
+              absolute.startsWith(join(stateDirectory, 'agents') + '/')
                 ? undefined
                 : stateDirectory,
           }).effect === 'allow' &&
@@ -574,6 +731,17 @@ export function startup(
       }));
     const subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
 
+    const backgroundTasks = new BackgroundTasks({
+      runtime: () => commands(),
+      currentSession: () => client?.activeSession()?.id ?? resolveRootConversation()?.id,
+      redact: text => terminalText(redactor.text(text)),
+      deliver: (parentSessionId, text) => {
+        const outcome = activeConversations.get(parentSessionId)?.steer(text);
+        if (outcome?.accepted) return 'steered';
+        conversations.enqueueNextTurn(parentSessionId, text);
+        return 'queued';
+      },
+    });
     const commands = () => {
       if (commandRuntimes.closed) throw new FutrynError('CANCELLED');
       if (!commandRuntime) {
@@ -587,6 +755,7 @@ export function startup(
               skills().userDirectories(),
             );
         commandRuntimes.add(commandRuntime);
+        commandRuntime.observeBackgroundTasks?.(event => backgroundTasks.accept(event));
       }
       return commandRuntime;
     };
@@ -701,11 +870,11 @@ export function startup(
     const worktreeInfos = new Map<string, WorktreeInfo>();
     const worktreePort: SubagentWorktreePort = {
       acquire: agentId => {
-        if ((client ? client.sandboxConfig() : sandboxSettings).mode === 'read-only')
+        if (sandboxConfigNow().readOnly || client?.permissionMode() === 'plan')
           return {
             ok: false,
             code: 'MODE_RESTRICTED',
-            message: 'The read-only sandbox does not allow creating worktrees. Nothing was executed.',
+            message: 'Plan mode does not allow creating worktrees. Nothing was executed.',
           };
         try {
           let info = worktreeInfos.get(agentId);
@@ -823,8 +992,17 @@ export function startup(
                   [...skills().userDirectories(), worktree.gitCommonDir],
                 )
             : commands();
+          const stopChildTaskEvents = worktree
+            ? childCommands.observeBackgroundTasks?.(event => backgroundTasks.accept(event))
+            : undefined;
           const childDispatcher = new ToolDispatcher({
             workspace: childWorkspace,
+            outputArchive: {
+              store: outputArchive,
+              scope: () => ({workspace: childWorkspace.root, session: runContext.agentId}),
+              permissionContext: () => JSON.stringify(client?.permissionRules() ?? []),
+              policy: () => permissionRuleDecision(client?.permissionRules(), {tool: 'Tool', target: 'tool_output'}),
+            },
             skills: skills(),
             // Subagents never load or mutate user/project memories (Wave 2 S5a).
             memories: undefined,
@@ -833,14 +1011,16 @@ export function startup(
             stateDirectory,
             readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
             commands: childCommands,
-            sandbox: () =>
-              effectiveSubagentSandbox(client ? client.sandboxConfig() : sandboxSettings, runContext.profile),
+            sandbox: () => effectiveSubagentSandbox(sandboxConfigNow(), runContext.profile),
+            proxy: {ensure: () => sandboxProxy.start()},
+            sessionId: () => runContext.agentId,
             turnId: () => childConv?.activeTurnId() ?? runContext.parentTurnId ?? client?.currentTurnId(),
             codeIntel: worktree ? undefined : languageServers(),
             web: {
               search: (query, count, signal) => webSearch.search(query, count, signal),
               searchEndpoint: webSearch.endpoint,
             },
+            mcp: userMcp,
             agentState: {
               updatePlan: plan => {
                 conversations.savePlan(runContext.agentId, plan);
@@ -935,6 +1115,7 @@ export function startup(
           } finally {
             activeConversations.delete(childConv.id);
             if (worktree) await Promise.resolve(childCommands.shutdown?.()).catch(() => undefined);
+            stopChildTaskEvents?.();
           }
         },
       });
@@ -954,6 +1135,15 @@ export function startup(
     const tools = () =>
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
+        outputArchive: {
+          store: outputArchive,
+          scope: () => ({
+            workspace: workspaceTree().root,
+            session: client?.activeSession()?.id ?? resolveRootConversation()?.id ?? '',
+          }),
+          permissionContext: () => JSON.stringify(client?.permissionRules() ?? []),
+          policy: () => permissionRuleDecision(client?.permissionRules(), {tool: 'Tool', target: 'tool_output'}),
+        },
         skills: skills(),
         memories: memoriesEnabled
           ? {
@@ -967,19 +1157,32 @@ export function startup(
               context: () => memories().context(),
             }
           : undefined,
+        checkpoints: {
+          capture: changes => {
+            if (activeCheckpoint && !restoringCheckpoint) checkpointStore.capture(activeCheckpoint, changes);
+          },
+          restore: id => {
+            const sessionId = client?.activeSession()?.id;
+            if (!restoringCheckpoint || !sessionId) throw new FutrynError('POLICY');
+            return checkpointStore.restoration(id, sessionId, workspaceRoot).changes;
+          },
+        },
         grants,
         analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
         stateDirectory,
         readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
         commands: commands(),
-        // The session's sandbox (Read Only / Auto / Full Access presets) is read for every call.
-        sandbox: () => (client ? client.sandboxConfig() : sandboxSettings),
+        // The sandbox settings and permission mode are read for every call (ADR 0061).
+        sandbox: sandboxConfigNow,
+        proxy: {ensure: () => sandboxProxy.start()},
+        sessionId: () => client?.activeSession()?.id ?? resolveRootConversation()?.id,
         turnId: () => client?.currentTurnId(),
         codeIntel: languageServers(),
         web: {
           search: (query, count, signal) => webSearch.search(query, count, signal),
           searchEndpoint: webSearch.endpoint,
         },
+        mcp: userMcp,
         agentState: {
           // The plan belongs to the active session and survives restart (ADR 0042).
           updatePlan: plan => {
@@ -989,6 +1192,11 @@ export function startup(
             plans.set(id, plan);
             client?.planUpdated();
           },
+          canProposePlan: () => client?.canProposePlan() === true,
+          proposePlan: (plan, signal) =>
+            client
+              ? client.proposePlan(plan, signal)
+              : Promise.resolve({kind: 'unavailable' as const, reason: 'no client'}),
           // Questions go to the attached UI; without one the tool reports itself unavailable.
           askUser: (questions, signal) =>
             client
@@ -1157,6 +1365,7 @@ export function startup(
 
     /** Every session of this client is wired the same way. */
     const wiring: ConversationWiring = {
+      historyWorkspace: canonicalWorkspace,
       tools: toolPort,
       skills: skillPort,
       memories: memoriesEnabled
@@ -1190,6 +1399,17 @@ export function startup(
     };
     const openConversation = (selection: Selection, existing?: {id: string; messages: Message[]}) => {
       const conv = createConversationForSelection(selection, existing, wiring);
+      if (!existing) {
+        conversations.bindWorkspace(conv.id, canonicalWorkspace);
+        if (toolsEnabled())
+          sessionDiffSnapshots.set(
+            conv.id,
+            captureWorkspaceDiffSnapshot(canonicalWorkspace, diffAllowed, text => redactor.text(text)),
+          );
+      } else {
+        const saved = checkpointStore.workspaceDiffSnapshot(conv.id, workspaceRoot);
+        if (saved) sessionDiffSnapshots.set(conv.id, saved);
+      }
       activeConversations.set(conv.id, conv);
       return conv;
     };
@@ -1201,6 +1421,27 @@ export function startup(
     };
 
     client = new FutrynClient({
+      prepareImage: async input => {
+        if (
+          !input ||
+          !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(input.mediaType) ||
+          (typeof input.data === 'string') === (typeof input.path === 'string')
+        )
+          throw new FutrynError('INVALID_INPUT');
+        let data = input.data;
+        if (typeof input.path === 'string') {
+          const result = await toolPort.invoke({id: crypto.randomUUID(), name: 'read', input: {path: input.path}});
+          if (result.status !== 'ok') throw new FutrynError('POLICY');
+          const attachment = result.attachments?.[0];
+          if (!attachment || attachment.mime !== input.mediaType) throw new FutrynError('INVALID_INPUT');
+          data = attachment.data;
+        }
+        try {
+          return validateImageAttachment(input.mediaType, data!, text => redactor.text(text));
+        } catch {
+          throw new FutrynError('INVALID_INPUT');
+        }
+      },
       // Workspace and tools
       memories: () => (toolsEnabled() && memoriesEnabled ? memories().list() : []),
       memoryDirectory: () =>
@@ -1219,13 +1460,15 @@ export function startup(
               .descriptors()
               .map(d => d.name)
           : [],
+      mcpStatus: () => mcpHub.snapshot(),
+      searchMcpStatus: () => webSearch.status(),
       runShellCommand: async (command, signal, onOutput, context) => {
         if (!context) throw new FutrynError('INVALID_INPUT');
         const stored = conversations.get(context.sessionId);
         if (!stored) throw new FutrynError('NOT_FOUND');
         try {
           return await runUserShellCommand({
-            store: conversations,
+            store: new SqliteConversations(db, value => redactor.text(value), canonicalWorkspace),
             sessionId: stored.id,
             selection: stored.selection,
             callId: context.callId,
@@ -1240,9 +1483,10 @@ export function startup(
         }
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
-      permissionMode: permissionModeFromEnv(effectiveEnv, permissionDefaults),
-      sandboxMode: sandboxSettings.mode,
-      sandboxNetwork: sandboxSettings.network,
+      ...(services.permissions?.mode ? {permissionMode: services.permissions.mode} : {}),
+      permissionSettings,
+      savePlanProposal: (id, proposal) => conversations.savePlanProposal(id, proposal),
+      getPlanProposal: id => conversations.loadPlanProposal(id),
       getPlan: id => {
         if (!plans.has(id)) plans.set(id, conversations.loadPlan(id));
         return plans.get(id) ?? null;
@@ -1255,84 +1499,90 @@ export function startup(
         subagentNoticeListeners.add(listener);
         return () => subagentNoticeListeners.delete(listener);
       },
+      backgroundTasks: sessionId => backgroundTasks.list(sessionId),
+      stopBackgroundTask: (id, sessionId) => backgroundTasks.stop(id, sessionId),
+      backgroundCurrentTask: sessionId => backgroundTasks.background(sessionId),
+      observeBackgroundTasks: listener => backgroundTasks.observe(listener),
       toolGrants: {
         list: () => grants.list().map(grant => grantLabel(grant, workspaceTree())),
         clear: () => grants.clear(),
       },
       workspace: resolve(workspaceRoot),
       terminalRuntime: () => {
-        if (!terminalReport) {
-          const runtime = commands();
-          const availability = runtime.availability();
-          terminalReport = {
-            label: runtime.label,
-            available: availability.ok,
-            ...(!availability.ok ? {reason: availability.reason} : {}),
-            sandbox: sandboxSettings.mode,
-            escalation: sandboxSettings.escalation,
-            limitations: runtime.id.startsWith('native-macos')
+        const runtime = commands();
+        const availability = runtime.availability();
+        const config = sandboxConfigNow();
+        return {
+          label: runtime.label,
+          available: availability.ok,
+          ...(!availability.ok ? {reason: availability.reason} : {}),
+          sandbox: !availability.ok ? 'unavailable' : config.enabled ? 'enabled' : 'disabled',
+          unsandboxedAllowed: config.allowUnsandboxed,
+          limitations: [
+            ...(!config.enabled
+              ? ['sandbox.enabled is false: commands run WITHOUT the OS sandbox and with network.']
+              : []),
+            ...(runtime.id.startsWith('native-macos')
               ? [
                   'Detached setsid descendants may survive; termination can be unconfirmed.',
-                  'Secret files are readable unless FUTRYN_SANDBOX_HIDE_SECRETS=1.',
+                  'Secret files inside the project are readable unless COSMEW_SANDBOX_HIDE_SECRETS=1.',
                 ]
               : runtime.id.startsWith('native-linux')
-                ? ['Linux bubblewrap has not received live platform acceptance.']
-                : [],
-          };
-        }
-        // The sandbox and escalation are the session's current preset (ADR 0055), not a startup snapshot.
-        const config = client?.sandboxConfig() ?? sandboxSettings;
-        return {
-          ...terminalReport,
-          sandbox: terminalReport.available ? config.mode : 'unavailable',
-          escalation: config.escalation,
-          limitations:
-            config.mode === 'danger-full-access'
-              ? ['Full Access: commands run WITHOUT the OS sandbox and with network.', ...terminalReport.limitations]
-              : terminalReport.limitations,
+                ? [
+                    'Linux bubblewrap has not received live platform acceptance.',
+                    'On Linux sandboxed commands have no network (no bridge to the proxy yet).',
+                  ]
+                : []),
+          ],
         };
       },
       settings,
       listWorkspaceFiles: query => scanWorkspaceFiles(workspaceRoot, query),
-      readAllowedWithoutApproval: path => readAllowedWithoutApproval(workspaceTree(), path, stateDirectory),
-      getWorkspaceDiff: () => diffReport,
-      refreshWorkspaceDiff: () => {
-        if (!toolsEnabled())
-          return Promise.resolve({
-            ...diffReport,
-            gitAvailable: false,
-            state: 'denied' as const,
-            files: [],
-            totalAdditions: 0,
-            totalDeletions: 0,
-          });
-        diffRefresh ??= refreshWorkspaceGitDiff(workspaceRoot)
-          .then(rawReport => {
-            const report = {
-              ...rawReport,
-              files: rawReport.files.map(file => ({
-                ...file,
-                path: terminalText(redactor.text(file.path)),
-                ...(file.oldPath ? {oldPath: terminalText(redactor.text(file.oldPath))} : {}),
-                lines: file.lines.map(line => ({...line, content: terminalText(redactor.text(line.content))})),
-              })),
-            };
-            if (toolsEnabled()) diffReport = report;
-            return toolsEnabled()
-              ? report
-              : {
-                  ...report,
-                  gitAvailable: false,
-                  state: 'denied' as const,
-                  files: [],
-                  totalAdditions: 0,
-                  totalDeletions: 0,
-                };
+      readAllowedWithoutApproval: diffAllowed,
+      getWorkspaceDiff: (options = {}) => {
+        const base = options.base ?? 'session';
+        return visibleDiff(diffReports.get(diffKey(base)) ?? {...diffReport, base});
+      },
+      refreshWorkspaceDiff: (options = {}) => {
+        const base = options.base ?? 'session';
+        if (!toolsEnabled()) return Promise.resolve({...diffReport, base, state: 'denied' as const, files: []});
+        const key = diffKey(base),
+          sessionId = diffSession();
+        const pending = diffRefreshes.get(key);
+        if (pending) return pending;
+        const snapshot =
+          sessionDiffSnapshots.get(sessionId) ?? checkpointStore.workspaceDiffSnapshot(sessionId, workspaceRoot);
+        const baseline = snapshot ?? checkpointStore.sessionDiffBaseline(sessionId, workspaceRoot);
+        const rawPaths = new Map<string, Set<string>>();
+        const refresh = refreshWorkspaceGitDiff(workspaceRoot, {
+          base,
+          canRead: path => {
+            const displayed = terminalText(
+              redactor.text(path.replace(/[\n\r\t]/g, char => JSON.stringify(char).slice(1, -1))),
+            );
+            const paths = rawPaths.get(displayed) ?? new Set<string>();
+            paths.add(path);
+            rawPaths.set(displayed, paths);
+            return diffAllowed(path);
+          },
+          redact: text => terminalText(redactor.text(text)),
+          sessionFiles: baseline.files,
+          sessionWholeWorkspace: !!snapshot,
+          metadataOnly: diffMetadataAllowed,
+          sessionUnavailableReason: baseline.reason,
+        })
+          .then(report => {
+            diffRawPaths.set(report, rawPaths);
+            if (toolsEnabled() && diffSession() === sessionId) diffReports.set(key, report);
+            return diffSession() === sessionId
+              ? visibleDiff(report)
+              : {...report, state: 'denied' as const, files: [], totalAdditions: 0, totalDeletions: 0};
           })
           .finally(() => {
-            diffRefresh = undefined;
+            diffRefreshes.delete(key);
           });
-        return diffRefresh;
+        diffRefreshes.set(key, refresh);
+        return refresh;
       },
       sanitizeText: text => terminalText(redactor.text(text)),
 
@@ -1397,6 +1647,7 @@ export function startup(
           });
       },
       discoverModels,
+      refreshModelMetadata,
       cachedModels: account => catalog(account).cached(),
       addManualModel: (account, modelId) => catalog(account).manual(modelId),
       selectModel: (account, model, project) => router.select(account, model, project),
@@ -1410,6 +1661,7 @@ export function startup(
 
       // Sessions
       listSessions: () => conversations.list(),
+      promptHistory: input => conversations.promptHistory({...input, workspace: canonicalWorkspace}),
       getSession: id => conversations.get(id),
       deleteSession: id => {
         activeConversations.delete(id);
@@ -1419,13 +1671,15 @@ export function startup(
         // Validate the target account/model before creating any durable copy.
         createConversationForSelection(selection, {id, messages: []});
         const record = conversations.fork(id, selection);
+        conversations.bindWorkspace(record.id, canonicalWorkspace);
         const messages = committedMessages(record);
         const conv = openConversation(selection, {id: record.id, messages});
         return {id: conv.id, selection, messages};
       },
-      startSession: project => {
-        const conv = openConversation(router.resolve(project));
-        return {id: conv.id, selection: router.resolve(project), messages: []};
+      startSession: (project, selection) => {
+        const chosen = selection ?? router.resolve(project);
+        const conv = openConversation(chosen);
+        return {id: conv.id, selection: chosen, messages: []};
       },
       resumeSession: id => {
         const {conv, record, messages} = openStoredConversation(id);
@@ -1439,15 +1693,123 @@ export function startup(
         maxEstimatedCostUSD,
         reasoningEffort,
         queuedInputId,
+        attachments,
       ) {
         const conv = activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv;
         const previousTurnConversation = currentTurnConversation;
+        if (toolsEnabled() && !sessionDiffSnapshots.has(sessionId) && !conversations.get(sessionId)?.messages.length)
+          sessionDiffSnapshots.set(
+            sessionId,
+            captureWorkspaceDiffSnapshot(canonicalWorkspace, diffAllowed, text => redactor.text(text)),
+          );
+        activeCheckpoint = checkpointStore.begin(
+          sessionId,
+          workspaceRoot,
+          content,
+          conversations.get(sessionId)?.recovery?.messages ?? conversations.get(sessionId)?.messages ?? [],
+        );
+        const snapshot = sessionDiffSnapshots.get(sessionId);
+        if (snapshot && !checkpointStore.workspaceDiffSnapshot(sessionId, workspaceRoot))
+          checkpointStore.saveWorkspaceDiffSnapshot(activeCheckpoint, snapshot);
         currentTurnConversation = conv;
         try {
-          yield* conv.send(content, signal, maxOutputTokens, maxEstimatedCostUSD, reasoningEffort, queuedInputId);
+          yield* conv.send(
+            content,
+            signal,
+            maxOutputTokens,
+            maxEstimatedCostUSD,
+            reasoningEffort,
+            queuedInputId,
+            attachments,
+          );
         } finally {
+          activeCheckpoint = undefined;
           currentTurnConversation = previousTurnConversation;
         }
+      },
+      checkpoints: sessionId => checkpointStore.list(sessionId, workspaceRoot),
+      rewindCheckpoint: async (sessionId, id, scope, signal, instructions) => {
+        if (
+          currentTurnConversation ||
+          backgroundTasks.list(sessionId).some(t => t.status === 'running') ||
+          rootSubagents.listSubagents(sessionId).some(a => a.status === 'running')
+        )
+          throw new FutrynError('POLICY');
+        const target = checkpointStore.get(id);
+        if (!target || target.sessionId !== sessionId || target.workspace !== workspaceRoot)
+          throw new FutrynError('NOT_FOUND');
+        signal?.throwIfAborted();
+        if (scope === 'summarize') {
+          const previous = conversations.get(sessionId);
+          if (!previous) throw new FutrynError('NOT_FOUND');
+          const messages = committedMessages(previous);
+          if (target.conversationIndex < 0 || target.conversationIndex >= messages.length)
+            return {checkpointId: id, scope, restored: false, code: 'CHECKPOINT_UNAVAILABLE'};
+          const account = accounts.get(previous.selection.accountId);
+          const info = cachedModel(account, previous.selection.modelId);
+          if (!info) throw new FutrynError('NOT_FOUND');
+          if (account.status === 'logged-out') throw new FutrynError('AUTH');
+          const summary = await summarizeCheckpointSpan({
+            model: redactModel(modelPort(account, previous.selection, info), redactor),
+            selection: previous.selection,
+            messages: messages.slice(target.conversationIndex),
+            instructions,
+            window: info.contextLimit ?? SAFETY_LIMITS.unknownContextTokens,
+            plan: conversations.loadPlan(sessionId),
+            signal,
+          });
+          // No durable writes precede this final cancellation check; the source journal stays intact.
+          signal?.throwIfAborted();
+          return db
+            .transaction(() => {
+              signal?.throwIfAborted();
+              const next = conversations.create(previous.selection);
+              conversations.bindWorkspace(next, canonicalWorkspace);
+              for (const message of messages.slice(0, target.conversationIndex))
+                conversations.appendContext(next, message);
+              conversations.appendContext(next, summary.message);
+              if (summary.usage) conversations.addUsage(sessionId, summary.usage);
+              checkpointStore.recordRewind(id, sessionId, next, scope);
+              return {
+                checkpointId: id,
+                scope,
+                restored: true,
+                sessionId: next,
+                strategy: summary.strategy,
+                fallback: summary.fallback,
+              };
+            })
+            .immediate();
+        }
+        if (!target.restorable) return {checkpointId: id, scope, restored: false, code: 'CHECKPOINT_UNAVAILABLE'};
+        if (scope !== 'conversation') {
+          restoringCheckpoint = true;
+          try {
+            const result = await toolPort.invoke(
+              {id: crypto.randomUUID(), name: 'restore_checkpoint', input: {id}},
+              signal,
+            );
+            if (result.status !== 'ok')
+              return {checkpointId: id, scope, restored: false, code: result.code ?? 'RESTORE_FAILED'};
+          } finally {
+            restoringCheckpoint = false;
+          }
+        }
+        if (scope !== 'code') {
+          const previous = conversations.get(sessionId);
+          if (!previous) throw new FutrynError('NOT_FOUND');
+          const next = conversations.create(previous.selection);
+          conversations.bindWorkspace(next, canonicalWorkspace);
+          for (const message of target.messages) conversations.appendContext(next, message);
+          conversations.appendContext(next, {
+            role: 'user',
+            content: `[Rewound conversation to checkpoint ${id}. Original execution evidence remains in session ${sessionId}. Scope: ${scope}. Inspect current files before making further changes.]`,
+          });
+          checkpointStore.recordRewind(id, sessionId, next, scope);
+          return {checkpointId: id, scope, restored: true, sessionId: next};
+        }
+        checkpointStore.recordRewind(id, sessionId, sessionId, scope);
+        return {checkpointId: id, scope, restored: true, sessionId};
       },
       compactSession: (sessionId, instructions, signal) =>
         (activeConversations.get(sessionId) ?? openStoredConversation(sessionId).conv).compact(instructions, signal),
@@ -1457,6 +1819,24 @@ export function startup(
           accepted: false,
           reason: 'no_active_turn',
         },
+      queueSteeringForNextTurn: sessionId => {
+        const conversation = activeConversations.get(sessionId);
+        if (conversation) conversation.queueSteeringForNextTurn();
+        else conversations.moveQueuedInputToInbox(sessionId, []);
+      },
+      retractQueuedInput: sessionId =>
+        activeConversations.get(sessionId)?.retractQueuedInput() ??
+        conversations
+          .retractQueuedInput(sessionId)
+          .map(p => p.content)
+          .join('\n'),
+      retractQueuedEntries: (sessionId, options) =>
+        activeConversations.get(sessionId)?.retractQueuedEntries(options) ??
+        conversations.retractQueuedInput(sessionId, [], options).map(p => ({
+          id: p.steerId,
+          type: p.content.startsWith('!') ? ('shell' as const) : ('text' as const),
+          content: p.content,
+        })),
       enqueueNextTurn: (sessionId, content) => conversations.enqueueNextTurn(sessionId, content),
       listNextTurn: sessionId => conversations.listNextTurn(sessionId),
       queuedInput: sessionId =>
@@ -1500,13 +1880,20 @@ export function startup(
     /** Resolves when credentials of migrated-away accounts are deleted. */
     migrationCleanup,
     takeStartupNotices: () => outbox.takeNotices(),
+    /** Idempotent. Spawns user MCP servers. Callers other than status/doctor await this before a turn. */
+    connectMcp: (signal?: AbortSignal) => mcpHub.connect(signal),
     shutdownCommands: async () => {
+      metadataAbort.abort();
+      await Promise.allSettled([...metadataRefreshes.values()].filter(Boolean));
       // Background subagents never outlive the session: abort and await them before tearing down runtimes.
       await Promise.allSettled([...subagentShutdowns].map(shutdown => shutdown()));
       subagentShutdowns.clear();
       await Promise.allSettled([...languageServerManagers].map(manager => manager.shutdown()));
       languageServerManagers.clear();
       await webSearch.close();
+      await mcpHub.close();
+      await Promise.allSettled([...sandboxProxies].map(proxy => proxy.stop()));
+      sandboxProxies.clear();
       await commandRuntimes.shutdown();
     },
   };

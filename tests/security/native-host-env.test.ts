@@ -3,7 +3,7 @@ import {test, expect, afterEach} from 'bun:test';
 import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {homedir, tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {NativeCommandRuntime} from '@futryn/tools';
+import {NativeCommandRuntime} from '@cosmew/tools';
 
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
 const clean: (() => void | Promise<void>)[] = [];

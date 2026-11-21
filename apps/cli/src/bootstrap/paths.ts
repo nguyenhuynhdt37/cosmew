@@ -7,9 +7,13 @@ export function defaultStateDirectory(
   environment: Record<string, string | undefined> = process.env,
   home = homedir(),
 ): string {
-  const configured = environment.FUTRYN_HOME ?? environment.HANNES_HOME;
+  const configured = environment.COSMEW_HOME ?? environment.FUTRYN_HOME ?? environment.HANNES_HOME;
   if (configured !== undefined) return configured;
-  const current = join(home, '.futryn'),
+  const current = join(home, '.cosmew'),
+    futryn = join(home, '.futryn'),
     legacy = join(home, '.hannes');
-  return existsSync(current) || !existsSync(legacy) ? current : legacy;
+  if (existsSync(current)) return current;
+  if (existsSync(futryn)) return futryn;
+  if (existsSync(legacy)) return legacy;
+  return current;
 }

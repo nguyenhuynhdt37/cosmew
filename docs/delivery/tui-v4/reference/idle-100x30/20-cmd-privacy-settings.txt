@@ -1,0 +1,30 @@
+00|     Custom agents · .claude/agents/
+01|     └ 23 agents · 4.7k tokens
+02|
+03|     Skills · /skills
+04|     └ 220 skills · 9.9k tokens
+05|
+06|     /context all to expand
+07|
+08|❯ /export
+09|  ⎿  Export cancelled
+10|
+11|❯ /diff
+12|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+13|
+14|❯ /effort
+15|  ⎿  Cancelled
+16|
+17|❯ /keybindings
+18|
+19|✻ Imagining…
+20|  ⎿  Tip: Run /web-setup to use cloud sessions with the GitHub account gh is signed in to
+21|
+22|────────────────────────────────────────────────────────────────────────────────────────────────────
+23|❯ /statusline
+24|/tasks──────────────────────────────────────────────────────────────────────────────────────────────
+25|/ide
+26|/vim anual mode on · esc to interrupt · ← 1 agent
+27|/terminal-setup
+28|/privacy-settings
+29|

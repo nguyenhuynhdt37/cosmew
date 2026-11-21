@@ -1,0 +1,36 @@
+00|
+01| ▐▛███▛█   Claude Code v2.1.330
+02|▝▜██████▀  Sonnet 5.5 · API Usage Billing
+03| ▝▝   ▝▝   <path>
+04|
+05|
+06|
+07|
+08|
+09|
+10|
+11|
+12|
+13|
+14|
+15|
+16|
+17|
+18|
+19|
+20|
+21|
+22|
+23|
+24|
+25|
+26|
+27|
+28|
+29|
+30|
+31|────────────────────────────────────────────────────────────────────────────────────────────────────
+32|  q/ctrl+o to exit                space/b to move a page         n/N to cycle matches
+33|  ? to close                      g/G to go to top/bottom        [ to print to scrollback
+34|  ↑/↓/j/k to scroll               {/} to jump between prompts    v to open in code
+35|  ctrl+u/d to move half a page    / to search

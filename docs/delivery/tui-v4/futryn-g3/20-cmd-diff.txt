@@ -1,0 +1,30 @@
+00|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+01|
+02|     Auto-compact window:  Not reported
+03|
+04|     MCP tools · /mcp
+05|     └ Not implemented
+06|
+07|     Custom agents · .cosmew/agents/
+08|     └ 0 agents
+09|
+10|     Skills · /skills
+11|     └ 111 skills
+12|
+13|     System prompt and tool schemas are not measured.
+14|
+15|❯ /rewind
+16|  ⎿  Rewind cancelled
+17|
+18|❯ /mcp
+19|  ⎿  Closed mcp
+20|
+21|❯ /hooks
+22|  ⎿  Closed hooks
+23|
+24|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+25|  Workspace diff
+26|  /diff · all · 0 files +0 -0
+27|  Workspace is not a readable Git working tree.
+28|  ←/→ File · ↑/↓ Scroll · A All · S Staged · U Unstaged · N New · R Refresh · C Copy · Ctrl+O
+29|  Expand

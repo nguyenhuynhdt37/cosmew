@@ -1,5 +1,5 @@
-import {FutrynError, modelIdSchema, providerSchema, type Account, type Provider} from '@futryn/contracts';
-import {terminalText, validateEndpoint} from '@futryn/security';
+import {FutrynError, modelIdSchema, providerSchema, type Account, type Provider} from '@cosmew/contracts';
+import {terminalText, validateEndpoint} from '@cosmew/security';
 import {loginOAuth} from './subscriptions/login';
 import type {Application} from './bootstrap/startup';
 import type {ChatInput} from './input';
@@ -107,9 +107,14 @@ export async function loginWizard(
   const reuse = !!existing && existing.status !== 'logged-out';
   if (reuse) account = existing;
   else {
-    const methods = app.integrations
-      .list()
-      .find(i => (i.providerIds ?? [i.provider.id]).includes(provider.id))!.methods;
+    const integration = app.integrations.list().find(i => (i.providerIds ?? [i.provider.id]).includes(provider.id));
+    // User-configured gateways are not integration catalog entries. They still have the ordinary
+    // API-key/none choices and must not crash the wizard while looking up vendor methods.
+    const methods: {id: string; name: string; providerId?: string}[] =
+      integration?.methods ??
+      (provider.auth === 'api-key'
+        ? [{id: 'api-key', name: 'API key'}]
+        : [{id: 'none', name: 'Không cần key (local/public)'}]);
     const method =
       provider.auth !== 'api-key'
         ? 'none'
@@ -184,45 +189,48 @@ export async function loginWizard(
       }
     }
   }
-  if (manualModel) app.catalog(account).manual(manualModel);
-  // Validation must use the selected manual model rather than an old account default.
-  if (manualModel)
-    app.router.select(
-      account,
-      app
-        .catalog(account)
-        .cached()
-        .find(m => m.id === manualModel)!,
-      project,
-    );
+  // Everything after connectAccount can still fail (for example, an empty catalog or a
+  // selection write). A newly created account must not be left behind when that happens.
+  // Reauthentication keeps the fenced identity so the user can retry it explicitly.
   try {
+    if (manualModel) app.catalog(account).manual(manualModel);
+    // Validation must use the selected manual model rather than an old account default.
+    if (manualModel)
+      app.router.select(
+        account,
+        app
+          .catalog(account)
+          .cached()
+          .find(m => m.id === manualModel)!,
+        project,
+      );
     if (reuse) {
       print('Đang kiểm tra kết nối…');
       await validate(app.accounts.get(account.id));
     }
     signal.throwIfAborted();
+    account = app.accounts.get(account.id);
+    const models = app.catalog(account).cached();
+    if (!models.length) throw new FutrynError('NOT_FOUND');
+    const defaultModel = models.find(m => m.id === account.defaultModel)?.id ?? models[0]!.id;
+    const selected =
+      manualModel ??
+      (await choose(
+        input,
+        print,
+        'Model',
+        models.map(m => ({id: m.id, name: `${m.name} · ${m.id}`})),
+        defaultModel,
+      ));
+    app.router.select(
+      account,
+      models.find(m => m.id === selected)!,
+      project,
+    );
+    print(`Đã đăng nhập ${account.alias} · ${provider.name} · ${selected}. Bạn có thể chat ngay.`);
+    return account;
   } catch (error) {
     if (!reuse) await app.accounts.logout(account.id, !existing);
     throw error;
   }
-  account = app.accounts.get(account.id);
-  const models = app.catalog(account).cached();
-  if (!models.length) throw new FutrynError('NOT_FOUND');
-  const defaultModel = models.find(m => m.id === account.defaultModel)?.id ?? models[0]!.id;
-  const selected =
-    manualModel ??
-    (await choose(
-      input,
-      print,
-      'Model',
-      models.map(m => ({id: m.id, name: `${m.name} · ${m.id}`})),
-      defaultModel,
-    ));
-  app.router.select(
-    account,
-    models.find(m => m.id === selected)!,
-    project,
-  );
-  print(`Đã đăng nhập ${account.alias} · ${provider.name} · ${selected}. Bạn có thể chat ngay.`);
-  return account;
 }

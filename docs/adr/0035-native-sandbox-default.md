@@ -1,5 +1,7 @@
 # ADR 0035 — Native OS sandbox by default (Codex model); Docker optional
 
+> Superseded in part by [ADR 0062](0062-remove-docker-command-backend.md): the Docker option is gone. The native Seatbelt/bubblewrap default stands.
+
 Accepted 2026-11-16 on the user's explicit decision ("làm native support all hệ điều hành", confirmed after the trade-off below was stated). Amends [ADR 0034](0034-unified-exec-terminal-parity.md) and reverses the closed macOS gate of [ADR 0022](0022-sandboxed-exec-command-foundation.md)/[0032](0032-contained-command-sessions.md). Codex reference pinned at `75fc67e8f4284a669eebd90ab6bc9ef7697e876e` (`sandboxing/src/seatbelt.rs`, `bwrap.rs`).
 
 ## Decision

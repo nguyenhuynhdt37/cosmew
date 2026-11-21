@@ -1,4 +1,5 @@
-import type {AccountLimits, FutrynClient, LimitItem} from '@futryn/sdk';
+import {PERMISSION_MODE_LABELS} from '@cosmew/contracts';
+import type {AccountLimits, FutrynClient, LimitItem} from '@cosmew/sdk';
 import type {ReportKind} from './types';
 
 export const count = (value: number | null | undefined) =>
@@ -175,7 +176,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       field('Mode', status.mode),
       field(
         'Permissions',
-        `${status.permissionPreset} (${status.sandboxMode}, ${status.approvalPolicy}) · ${status.pendingPermissions} pending`,
+        `${PERMISSION_MODE_LABELS[status.permissionMode]} (sandbox ${status.sandbox.enabled ? 'on' : 'off'}) · ${status.pendingPermissions} pending`,
       ),
       field('Backend', status.executionBackend?.label ?? 'No model selected'),
       field(
@@ -184,7 +185,10 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
           ? status.terminalRuntime.label
           : (status.terminalRuntime.reason ?? 'Unavailable'),
       ),
-      field('Sandbox', `${status.terminalRuntime.sandbox} · network ${status.terminalRuntime.escalation}`),
+      field(
+        'Sandbox',
+        `${status.terminalRuntime.sandbox} · unsandboxed escape ${status.terminalRuntime.unsandboxedAllowed ? 'asks' : 'refused'}`,
+      ),
       field('Request', `${phase} · effort ${status.reasoningEffort ?? 'provider default'}`),
       field('Context', `~${short(display.used)} / ${short(display.total)} local`),
       field(
@@ -237,7 +241,7 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
   const contextRows = [
     'CONTEXT WINDOW',
     `Model: ${status.selection?.modelId ?? 'None'}`,
-    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Futryn permissions' : status.workspaceReadStatus}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Cosmew permissions' : status.workspaceReadStatus}`,
     `Window: ${count(context.limitTokens)} · Output reserve: ${count(context.outputReserve)}`,
     `Model output ceiling: ${count(context.outputLimit)}`,
     `Current local history + draft: ~${count(context.estimateTokens)} tokens (${context.messages} messages)`,
@@ -277,15 +281,15 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     'CONNECTION & SESSION',
     `Workspace: ${status.workspace}`,
     `Git: ${git?.state === 'ready' ? `${git.branch ?? 'branch unknown'} · ${git.files.length} change entries +${git.totalAdditions} -${git.totalDeletions}${git.truncated ? ' (bounded)' : ''}` : (git?.message ?? 'Not inspected; folder consent is required.')}`,
-    `Mode: ${status.mode} · Permissions: ${status.permissionPreset} (sandbox ${status.sandboxMode}, approval ${status.approvalPolicy}, mode ${status.permissionMode}) · Pending approvals: ${status.pendingPermissions}`,
-    `Sandboxed commands network: ${status.sandboxNetwork ? 'on (network_access / FUTRYN_SANDBOX_NETWORK)' : 'off unless approved'}`,
+    `Mode: ${status.mode} · Permission mode: ${PERMISSION_MODE_LABELS[status.permissionMode]} · Pending approvals: ${status.pendingPermissions}`,
+    `Sandbox: ${status.sandbox.enabled ? 'on' : 'OFF'} · auto-allow sandboxed commands: ${status.sandbox.autoAllowBashIfSandboxed ? 'on' : 'off'} · network: through the proxy, ${status.sandbox.allowedDomains} allowed domain(s) · excluded commands: ${status.sandbox.excludedCommands}`,
     `Terminal runtime: ${status.terminalRuntime.label} · ${status.terminalRuntime.available ? 'available' : (status.terminalRuntime.reason ?? 'unavailable')}`,
-    `Sandbox: ${status.terminalRuntime.sandbox} · Network escalation: ${status.terminalRuntime.escalation}`,
+    `Terminal sandbox: ${status.terminalRuntime.sandbox} · dangerouslyDisableSandbox: ${status.terminalRuntime.unsandboxedAllowed ? 'asks' : 'refused'}`,
     ...status.terminalRuntime.limitations,
     `Provider: ${status.activeProvider?.name ?? 'None'} · Account: ${status.activeAccount?.alias ?? 'None'}`,
     `Authentication: ${status.activeProvider?.auth === 'oauth' ? 'oauth' : (status.activeAccount?.credential.kind ?? 'None')}`,
     `Model: ${status.selection?.modelId ?? 'None'}`,
-    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Futryn permissions' : status.workspaceReadStatus}`,
+    `Workspace reading: ${status.workspaceReadStatus === 'read-only' ? 'read/glob/grep through Cosmew permissions' : status.workspaceReadStatus}`,
     `Session: ${status.activeSessionId ?? 'None'} · Messages: ${status.messageCount}`,
     `Account state: ${status.activeAccount?.status ?? 'None'}`,
     `Connectivity: historical validation at ${status.activeAccount?.validatedAt ?? 'never'}`,
@@ -306,5 +310,124 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     '',
     'BACKEND CAPABILITIES',
     ...Object.entries(status.capabilities).map(([name, value]) => `${name}: ${value}`),
+  ];
+}
+
+/** Glyph kinds of the `/context` grid: used category, free space, autocompact buffer. */
+export type ContextCellKind = 'messages' | 'instructions' | 'free' | 'buffer';
+export interface ContextCategory {
+  kind: ContextCellKind;
+  label: string;
+  tokens: number;
+  percent: number;
+  cells: number;
+}
+export interface ContextBlock {
+  rows: ContextCellKind[][];
+  categories: ContextCategory[];
+  limitTokens: number | null;
+  skills: number;
+  agents: number;
+  /** One line under "MCP tools · /mcp". Empty config stays "User mcp.json". */
+  mcpNote: string;
+  note: string;
+}
+export const CONTEXT_COLUMNS = 20;
+export const CONTEXT_ROWS = 7;
+/** Tokens as `3.1k` / `931.3k` / `33k` / `669` (spec 7, `/context`). */
+export function contextTokens(value: number): string {
+  if (value >= 1_000_000) return `${+(value / 1_000_000).toFixed(1)}m`;
+  if (value >= 1000) return `${+(value / 1000).toFixed(1)}k`;
+  return String(Math.round(value));
+}
+/** `/context` numbers from the SDK's real context estimate; categories the SDK cannot measure are not drawn. */
+export function contextBlock(client: FutrynClient, draft = ''): ContextBlock {
+  const context = client.context(draft);
+  const limit = context.limitTokens;
+  const cellsTotal = CONTEXT_COLUMNS * CONTEXT_ROWS;
+  const instructions = Math.ceil(context.projectInstructionBytes / 4);
+  const messages = Math.max(0, context.estimateTokens - instructions);
+  // Compaction starts at 90% of the usable window (ADR 0054): the last tenth is the autocompact buffer.
+  const buffer = limit ? Math.round(limit * 0.1) : 0;
+  const used = [
+    {kind: 'instructions' as const, label: 'Instructions', tokens: instructions},
+    {kind: 'messages' as const, label: 'Messages', tokens: messages},
+  ];
+  const free = limit ? Math.max(0, limit - buffer - instructions - messages) : 0;
+  const percent = (tokens: number) => (limit ? Math.round((tokens / limit) * 1000) / 10 : 0);
+  const cellsFor = (tokens: number) =>
+    limit && tokens > 0 ? Math.max(1, Math.round((tokens / limit) * cellsTotal)) : 0;
+  const categories: ContextCategory[] = [
+    ...used.map(item => ({...item, percent: percent(item.tokens), cells: cellsFor(item.tokens)})),
+    {kind: 'free' as const, label: 'Free space', tokens: free, percent: percent(free), cells: 0},
+    {
+      kind: 'buffer' as const,
+      label: 'Autocompact buffer',
+      tokens: buffer,
+      percent: percent(buffer),
+      cells: cellsFor(buffer),
+    },
+  ];
+  const fixed = categories.filter(c => c.kind !== 'free').reduce((sum, c) => sum + c.cells, 0);
+  categories.find(c => c.kind === 'free')!.cells = Math.max(0, cellsTotal - fixed);
+  const flat: ContextCellKind[] = [];
+  for (const kind of ['instructions', 'messages', 'free', 'buffer'] as const) {
+    const category = categories.find(c => c.kind === kind)!;
+    for (let i = 0; i < category.cells && flat.length < cellsTotal; i++) flat.push(kind);
+  }
+  while (flat.length < cellsTotal) flat.push('free');
+  return {
+    rows: Array.from({length: CONTEXT_ROWS}, (_, row) =>
+      flat.slice(row * CONTEXT_COLUMNS, (row + 1) * CONTEXT_COLUMNS),
+    ),
+    categories,
+    limitTokens: limit,
+    skills: client.skills().skills.length,
+    agents: client.agentTypes().types.filter(type => type.source !== 'builtin').length,
+    mcpNote: mcpContextNote(client),
+    note: 'System prompt and tool schemas are not measured.',
+  };
+}
+function mcpContextNote(client: FutrynClient): string {
+  const report = client.mcpStatus();
+  if (report.servers.length === 0) return '└ User mcp.json';
+  const tools = report.servers.reduce((sum, server) => sum + server.tools, 0);
+  const servers = `${report.servers.length} ${report.servers.length === 1 ? 'server' : 'servers'}`;
+  return `└ ${servers} · ${tools} ${tools === 1 ? 'tool' : 'tools'}`;
+}
+export const CONTEXT_GLYPH: Record<ContextCellKind, string> = {
+  messages: '⛁',
+  instructions: '⛁',
+  free: '⛶',
+  buffer: '⛝',
+};
+/** Plain lines of the block (transcript output, tests): grid left, legend right. */
+export function contextText(block: ContextBlock): string[] {
+  const legend = [
+    'Estimated usage by category',
+    ...block.categories.map(
+      c => `${CONTEXT_GLYPH[c.kind]} ${c.label}: ${contextTokens(c.tokens)} tokens (${c.percent}%)`,
+    ),
+  ];
+  const lines = block.rows.map((row, at) => {
+    const grid = row.map(kind => CONTEXT_GLYPH[kind]).join(' ');
+    const side = legend[at - 1];
+    return side ? `${grid}   ${side}` : grid;
+  });
+  return [
+    ...lines,
+    '',
+    `Auto-compact window:  ${block.limitTokens ? `${contextTokens(block.limitTokens)} tokens` : 'Not reported'}`,
+    '',
+    'MCP tools · /mcp',
+    block.mcpNote,
+    '',
+    'Custom agents · .cosmew/agents/',
+    `└ ${block.agents} agents`,
+    '',
+    'Skills · /skills',
+    `└ ${block.skills} skills`,
+    '',
+    block.note,
   ];
 }

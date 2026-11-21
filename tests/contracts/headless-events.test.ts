@@ -58,10 +58,10 @@ test('permission subscribers can resolve immediately, receive isolated sanitized
   expect(observed).toHaveLength(1);
 });
 
-test('never reports its policy and denies escalation without emitting a prompt', async () => {
+test('plan mode reports itself and denies network without emitting a prompt', async () => {
   const c = client();
-  c.setPermissionMode('bypassPermissions');
-  expect(c.status().approvalPolicy).toBe('never');
+  c.setPermissionMode('plan');
+  expect(c.status().permissionMode).toBe('plan');
   let events = 0;
   c.onInteractionEvent(() => events++);
   expect(
@@ -70,7 +70,7 @@ test('never reports its policy and denies escalation without emitting a prompt',
       action: 'connect',
       target: 'example.com',
       reason: 'network',
-      kind: 'escalation',
+      kind: 'network',
     }),
   ).toBe('deny');
   expect(events).toBe(0);

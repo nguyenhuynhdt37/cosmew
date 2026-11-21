@@ -4,16 +4,16 @@ Ngày lập: 2026-11-17. Trạng thái: **đã duyệt 2026-11-17** (user chấp
 
 ## 0. Mục tiêu và tiêu chí "tốt nhất"
 
-Mục tiêu: Futryn đọc–hiểu–sửa dự án ngang hoặc hơn Codex/OpenCode/Claude Code, dùng không giới hạn (không phí cố định ngoài token model).
+Mục tiêu: Cosmew đọc–hiểu–sửa dự án ngang hoặc hơn Codex/OpenCode/Claude Code, dùng không giới hạn (không phí cố định ngoài token model).
 
 Khi hai bên khác nhau, chọn theo thứ tự: (1) an toàn không kém Codex; (2) ít lượt gọi/token hơn cho model; (3) chạy local, miễn phí; (4) đơn giản để bảo trì; (5) tên/schema quen với model (Codex cho GPT, Claude Code cho Claude) — khi cần, giữ tên gần bên được train nhiều nhất.
 
 "Xong" một workstream = code + test có ý nghĩa + docs/ADR + `typecheck`/`lint`/test liên quan xanh + commit. Không có tính năng "hiện ra mà không chạy".
 
-## 1. Hiện trạng Futryn (baseline 2026-11-17, HEAD `93f26db`)
+## 1. Hiện trạng Cosmew (baseline 2026-11-17, HEAD `93f26db`)
 
 - Tools: `read` (chỉ text), `glob` (mtime), `grep` (ripgrep + fallback Worker), `edit`, `write`, `apply_patch` (cùng patch plan, ReadLedger), `exec_command`, `write_stdin` (sandbox native).
-- Quyền: chế độ kiểu Claude Code `default | acceptEdits | auto | plan | bypassPermissions` (`packages/contracts/src/permissions.ts` `permissionModeDecision`) + project rules `Bash(...)`/`Read(...)` (deny > ask > allow) + sandbox `FUTRYN_SANDBOX_MODE`, `FUTRYN_SANDBOX_ESCALATION` (`apps/cli/src/bootstrap/commands.ts`). Mặc định hỏi mọi lệnh và mọi lần ghi.
+- Quyền: chế độ kiểu Claude Code `default | acceptEdits | auto | plan | bypassPermissions` (`packages/contracts/src/permissions.ts` `permissionModeDecision`) + project rules `Bash(...)`/`Read(...)` (deny > ask > allow) + sandbox `COSMEW_SANDBOX_MODE`, `COSMEW_SANDBOX_ESCALATION` (`apps/cli/src/bootstrap/commands.ts`). Mặc định hỏi mọi lệnh và mọi lần ghi.
 - Context: `ProjectContextLoader` nạp `AGENTS.override.md`/`AGENTS.md` từ root tới cwd lúc bắt đầu; compaction trích đoạn (`packages/core/src/context/compaction.ts`, 91 dòng); `markUnchanged` cho lần đọc lặp.
 - Contract: `CONTRACT_VERSION = '1.18'`; `Message.content` chỉ là chuỗi; `ToolResult.content` ≤ 64 KiB chuỗi; `ModelInfo.capabilities.vision` đã có (mặc định `unknown`).
 - Persistence: SQLite `PRAGMA user_version = 5`.
@@ -78,10 +78,10 @@ Chưa xác minh (ghi "Needs verification" khi dùng): hạn mức Exa không key
 
 - **Capability mới** trong `packages/contracts/src/tools.ts`: `agent.state` (plan, memory), `user.input` (hỏi), `code.intel` (lsp đọc), `network.fetch`, `network.search`, `mcp.call`, `agent.spawn`, `code.exec` (CodeMode). Plan/Review mode cho phép: `fs.read`, `code.intel`, `agent.state`, `user.input`, `network.search`, `network.fetch` (đọc ngoài không đổi workspace). Sửa bộ lọc `analysisOnly` ở `packages/core/src/agent/turn.ts`.
 - **Mọi tool mới** đăng ký qua `ToolRegistry` và đi qua `ToolOrchestrator` (validate → policy → duyệt → revalidate → audit → chạy → redact). Không có đường gọi vòng (kể cả MCP, subagent, CodeMode).
-- **Chính sách quyền** gom về một hàm `decideApproval(policy, request)` trong `@futryn/security` (W1), mọi tool dùng chung.
+- **Chính sách quyền** gom về một hàm `decideApproval(policy, request)` trong `@cosmew/security` (W1), mọi tool dùng chung.
 - **Sự kiện SDK mới**: `plan.updated`, `question.asked/answered`, `diagnostics.reported`, `mcp.server.status`, `subagent.started/finished`, `memory.updated`, `compaction.completed`.
 - **Persistence schema 6** (một migration cho đợt 1, thêm cột/bảng cho đợt 2 ở schema 7): bảng `session_plan`, `session_instructions` (AGENTS lồng nhau đã nạp), `mcp_servers`, `memories` (chỉ mục; nội dung là file).
-- **TUI**: mỗi tính năng một folder `features/<name>/` (types/logic/view/controller/index), đăng ký trong `FutrynTuiApp.registerFeatures`; transcript hiển thị kiểu Claude Code: `Plan`, `Ask`, `LSP(op)`, `Search(q)`, `Fetch(url)`, `Agent(desc)`, `Skill(name)`, `MCP(server.tool)`.
+- **TUI**: mỗi tính năng một folder `features/<name>/` (types/logic/view/controller/index), đăng ký trong `CosmewTuiApp.registerFeatures`; transcript hiển thị kiểu Claude Code: `Plan`, `Ask`, `LSP(op)`, `Search(q)`, `Fetch(url)`, `Agent(desc)`, `Skill(name)`, `MCP(server.tool)`.
 
 ## 5. Workstreams chi tiết
 
@@ -93,7 +93,7 @@ Kích thước: S ≈ nửa ngày, M ≈ 1–2 ngày, L ≈ 3–5 ngày công ag
 
 ### W1 — Quyền chuẩn Codex (M)
 - **Lấy**: quyết định lệnh theo `exec_policy.rs` (Codex) + bộ quyền theo agent (OpenCode) + project rules hiện có (Claude Code).
-- **Thiết kế**: `ApprovalPolicy = 'untrusted' | 'on-request' | 'never'` (env `FUTRYN_APPROVAL_POLICY`, `FUTRYN_SANDBOX_ESCALATION=never` cũ → `never`); `decideApproval` trả `allow | ask | deny`:
+- **Thiết kế**: `ApprovalPolicy = 'untrusted' | 'on-request' | 'never'` (env `COSMEW_APPROVAL_POLICY`, `COSMEW_SANDBOX_ESCALATION=never` cũ → `never`); `decideApproval` trả `allow | ask | deny`:
   - lệnh: nguy hiểm → ask (`never` → deny); xin vượt sandbox (mạng) → ask (`never` → deny); còn lại `on-request`/`never` → allow, `untrusted` → ask trừ luật allow;
   - ghi file: trong vùng ghi được → allow (trừ `untrusted`), ngoài → deny như hiện tại;
   - stdin vào phiên đang chạy: allow trong cùng sandbox (Codex);
@@ -107,7 +107,7 @@ Kích thước: S ≈ nửa ngày, M ≈ 1–2 ngày, L ≈ 3–5 ngày công ag
 - **Rủi ro**: ít hỏi hơn trước → sandbox phải đúng; chạy lại toàn bộ test sandbox (`tests/security/*exec*`, seatbelt).
 
 ### W1.5 — Đọc file đầy đủ (M)
-- **Lấy**: `read` của OpenCode main + `.ipynb` của Claude Code + giữ phần tốt của Futryn (ReadLedger, `markUnchanged`, chặn secret).
+- **Lấy**: `read` của OpenCode main + `.ipynb` của Claude Code + giữ phần tốt của Cosmew (ReadLedger, `markUnchanged`, chặn secret).
 - **Thiết kế**:
   - AGENTS.md lồng nhau: sau khi `read` thành công một file ở thư mục con, tìm `AGENTS.override.md`/`AGENTS.md` từ thư mục đó lên root (bỏ các file đã nạp), đọc qua reader có kiểm quyền hiện có, lưu vào `session_instructions` (durable), đưa vào `ModelRequest.instructions` ở lượt sau; giới hạn byte theo `ProjectContextLoader`.
   - Gợi ý khi không thấy: cùng tên khác hoa/thường trong thư mục cha; đường dẫn tuyệt đối sai gốc → thử ghép phần đuôi vào root; chỉ gợi ý đúng 1 path đã kiểm `evaluateRead`.
@@ -131,11 +131,11 @@ Kích thước: S ≈ nửa ngày, M ≈ 1–2 ngày, L ≈ 3–5 ngày công ag
 - **Test**: trả lời/multiple/tự gõ/dismiss/hủy turn/non-interactive/recovery.
 
 ### W4 — LSP (L)
-- **Lấy**: OpenCode v1 (diagnostics sau sửa, 9 thao tác) + rename (Claude Code/LSP) + cải tiến của Futryn (chỉ lỗi mới, sandbox, lọc path).
+- **Lấy**: OpenCode v1 (diagnostics sau sửa, 9 thao tác) + rename (Claude Code/LSP) + cải tiến của Cosmew (chỉ lỗi mới, sandbox, lọc path).
 - **Thiết kế**:
   - `packages/code-intel`: `JsonRpcConnection` (khung `Content-Length`), `LspClient` (initialize, capabilities, didOpen/didChange/didClose, publishDiagnostics, cancel, shutdown), `LspManager` (root theo lockfile/`tsconfig`/`pyproject.toml`/`go.mod`/`Cargo.toml`, khởi động lười theo đuôi file, 1 server/ngôn ngữ/root, restart có backoff tối đa 3 lần, timeout 10 s/request).
   - Server: TS/JS (`typescript-language-server --stdio` từ `node_modules/.bin` của project hoặc PATH, với `tsserver` của project; TS ≥ 7 → `tsc --lsp --stdio` nếu có), Python (`basedpyright-langserver`/`pyright-langserver --stdio`), Go (`gopls`), Rust (`rust-analyzer`). Không có → tool báo rõ cách cài; không tự tải.
-  - Chạy qua runtime sandbox native: read-only workspace, không mạng, ghi được thư mục cache riêng trong state Futryn; Windows → không khả dụng.
+  - Chạy qua runtime sandbox native: read-only workspace, không mạng, ghi được thư mục cache riêng trong state Cosmew; Windows → không khả dụng.
   - Diagnostics sau `edit/write/apply_patch`: lấy diagnostics trước (nếu file đã mở) và sau (chờ push mới, debounce 150 ms, tối đa 3 s); báo **lỗi mới** (so theo message+range dịch chuyển), ERROR, ≤ 20/file, thêm vào kết quả tool; không có server → im lặng.
   - Tool `lsp` (capability `code.intel`, `parallel: true`): `goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls`; vào/ra 1-based; chuyển UTF-16 ↔ code point; kết quả có trích dòng code; path lọc `evaluateRead`, ngoài workspace (vd. `node_modules` types) chỉ hiện path + dòng, không nội dung nếu bị deny.
   - Tool `rename` (hoặc thao tác `rename` của `lsp` với capability `fs.write`): `WorkspaceEdit` → patch plan nhiều file (`ApplyPatchRuntime`) → duyệt theo W1.
@@ -148,10 +148,10 @@ Kích thước: S ≈ nửa ngày, M ≈ 1–2 ngày, L ≈ 3–5 ngày công ag
 - **Lấy**: OpenCode (websearch đa nguồn qua MCP) + quyền MCP của Codex.
 - **Thiết kế**: `packages/mcp`: `McpClient` trên `@modelcontextprotocol/sdk` (Streamable HTTP), `initialize` một lần/endpoint, `tools/call` với timeout 30 s, kết quả ≤ 64 KiB, redact, dữ liệu không tin cậy. `web_search` (capability `network.search`, không hỏi, audit): `{query, numResults? (≤ 10)}`; chọn nguồn: có key (`EXA_API_KEY`/`TAVILY_API_KEY`/`FIRECRAWL_API_KEY`/`PARALLEL_API_KEY`) → nguồn đó; không → Exa không key; parse như OpenCode; lỗi/hạn mức → báo rõ, gợi ý đặt key.
 - **UI**: `Search("query")` + danh sách tiêu đề/URL.
-- **Test**: MCP server giả HTTP local; live sau `FUTRYN_LIVE_WEB=1`.
+- **Test**: MCP server giả HTTP local; live sau `COSMEW_LIVE_WEB=1`.
 
 ### W6 — `web_fetch` (S–M)
-- **Lấy**: OpenCode webfetch + chặn IP nội bộ (Futryn).
+- **Lấy**: OpenCode webfetch + chặn IP nội bộ (Cosmew).
 - **Thiết kế**: capability `network.fetch`; `{url, format: markdown|text|html, timeout ≤ 120}`; chỉ http(s); resolve DNS → chặn loopback/private/link-local/metadata/IPv6 ULA (dùng `validateEndpoint` + kiểm IP), kiểm lại sau mỗi redirect (≤ 5); ≤ 5 MiB; HTML → Markdown bằng `turndown` (bỏ script/style); quyền theo W1 (mạng = vượt sandbox → `on-request` hỏi lần đầu mỗi domain, grant theo phiên; luật `WebFetch(domain:x)` đã có trong rule parser).
 - **Test**: server local: redirect, 5 MiB, timeout, chặn 127.0.0.1/169.254.169.254/[::1]/DNS trỏ nội bộ, redirect sang nội bộ.
 
@@ -173,17 +173,17 @@ Kích thước: S ≈ nửa ngày, M ≈ 1–2 ngày, L ≈ 3–5 ngày công ag
 
 ### W10 — Memories (M) — đợt 2
 - **Lấy**: Claude Code (agent tự ghi file, chỉ mục) làm mặc định; pha nền Codex tuỳ chọn tắt.
-- **Thiết kế**: thư mục `~/.futryn/projects/<id>/memory/`; mỗi ký ức một file Markdown có frontmatter (name, description, type: user/feedback/project/reference); `MEMORY.md` chỉ mục được nạp vào instructions mỗi session (giới hạn byte); tool `memory` `{action: list|read|write|delete, name, content?}` (capability `agent.state`, không hỏi, chặn nội dung giống secret bằng redactor); `/memory` xem/sửa.
+- **Thiết kế**: thư mục `~/.cosmew/projects/<id>/memory/`; mỗi ký ức một file Markdown có frontmatter (name, description, type: user/feedback/project/reference); `MEMORY.md` chỉ mục được nạp vào instructions mỗi session (giới hạn byte); tool `memory` `{action: list|read|write|delete, name, content?}` (capability `agent.state`, không hỏi, chặn nội dung giống secret bằng redactor); `/memory` xem/sửa.
 - **Test**: ghi/đọc/xoá, chỉ mục, secret bị chặn, nạp ở session mới.
 
 ### W11 — Skills (S) — đợt 2
 - **Lấy**: định dạng `SKILL.md` của Codex (name ≤ 64, description) + tool `skill` của OpenCode.
-- **Thiết kế**: quét `.futryn/skills`, `~/.futryn/skills`, và tương thích `.codex/skills`, `.claude/skills`; chỉ đưa danh sách tên + mô tả vào instructions; tool `skill` `{name}` nạp nội dung (đọc qua reader có kiểm quyền); `/skills` liệt kê.
+- **Thiết kế**: quét `.cosmew/skills`, `~/.cosmew/skills`, và tương thích `.codex/skills`, `.claude/skills`; chỉ đưa danh sách tên + mô tả vào instructions; tool `skill` `{name}` nạp nội dung (đọc qua reader có kiểm quyền); `/skills` liệt kê.
 - **Test**: parse frontmatter lỗi/thiếu, ưu tiên project > user, giới hạn kích thước.
 
 ### W12 — MCP đầy đủ + tự cài (L) — đợt 2
 - **Lấy**: Codex (quyền theo annotation và theo server, tên `mcp__server__tool`) + OpenCode (`mcp-resource`) + Claude Code (`tool_search` khi nhiều tool).
-- **Thiết kế**: stdio transport; cấu hình `.futryn/mcp.json` (project) + `~/.futryn/mcp.json` (user); server stdio chạy như process thường (như Codex), hiển thị rõ; duyệt theo chế độ server `auto|prompt|writes|approve`; `mcp_resource` đọc resource; khi tổng mô tả tool > ngưỡng → chỉ gửi tên, `tool_search` nạp schema khi cần; `/mcp` quản lý; tự cài: `mcp_search` (MCP Registry) + `mcp_install` (một lần xác nhận, ghim phiên bản, ưu tiên HTTP, token vào keyring, xác minh bằng `tools/list`).
+- **Thiết kế**: stdio transport; cấu hình `.cosmew/mcp.json` (project) + `~/.cosmew/mcp.json` (user); server stdio chạy như process thường (như Codex), hiển thị rõ; duyệt theo chế độ server `auto|prompt|writes|approve`; `mcp_resource` đọc resource; khi tổng mô tả tool > ngưỡng → chỉ gửi tên, `tool_search` nạp schema khi cần; `/mcp` quản lý; tự cài: `mcp_search` (MCP Registry) + `mcp_install` (một lần xác nhận, ghim phiên bản, ưu tiên HTTP, token vào keyring, xác minh bằng `tools/list`).
 - **Test**: server stdio giả, OAuth giả, annotation → quyết định duyệt, tool_search, cài/gỡ.
 
 ### W13 — CodeMode (L) — đợt 3

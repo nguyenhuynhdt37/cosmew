@@ -37,22 +37,30 @@ const safeMessages: Record<ErrorCode, string> = {
   BUDGET:
     'Estimated cost guard denied the request: pricing is unknown or the estimate exceeds your limit. Refresh metadata or explicitly change the limit; this is not a billing guarantee.',
 };
-export class FutrynError extends Error {
+/** Fixed diagnostics only: never display arbitrary provider exception text. */
+const reasoningMessages = {
+  levels:
+    'No effort levels known for this model. Declare them in ~/.cosmew/config.toml (model_providers.<id>.reasoning).',
+  anthropic: 'Reasoning effort is unsupported for the anthropic protocol: no wire mapping is implemented.',
+  gemini: 'Reasoning effort is unsupported for the gemini protocol: no wire mapping is implemented.',
+} as const;
+export class CosmewError extends Error {
   constructor(
     public readonly code: ErrorCode,
     public readonly retryable = false,
     public readonly retryAfterMs: number | null = null,
+    reasoningDetail?: keyof typeof reasoningMessages,
   ) {
-    super(safeMessages[code]);
-    this.name = 'FutrynError';
+    super(code === 'UNSUPPORTED' && reasoningDetail ? reasoningMessages[reasoningDetail] : safeMessages[code]);
+    this.name = 'CosmewError';
   }
   toJSON() {
     return {code: this.code, message: this.message, retryable: this.retryable, retryAfterMs: this.retryAfterMs};
   }
 }
 
-/** Compatibility alias for consumers before the Futryn rename. */
-export {FutrynError as HannesError};
+/** Compatibility aliases for consumers before the Cosmew rename. */
+export {CosmewError as FutrynError, CosmewError as HannesError};
 
 /** Observer notifications, not durable execution envelopes or permission grants. */
 export type InteractionEvent =

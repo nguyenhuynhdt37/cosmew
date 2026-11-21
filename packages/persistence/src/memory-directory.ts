@@ -10,7 +10,7 @@ import {
   writeFileSync,
   fsyncSync,
 } from 'node:fs';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 // Same trusted-libc traversal primitives as workspace SecureFiles, kept private to durable storage.
 /** Trusted system libc only. No shell, user-selected library or native helper. */

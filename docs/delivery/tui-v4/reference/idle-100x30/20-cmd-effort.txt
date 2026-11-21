@@ -1,0 +1,30 @@
+00|                                               ⛝ Autocompact buffer: 33k tokens (3%)
+01|
+02|     Auto-compact window:  1m tokens
+03|
+04|     MCP tools · /mcp (loaded on-demand)
+05|     └ 155 tools · 669 tokens
+06|
+07|     Custom agents · .claude/agents/
+08|     └ 23 agents · 4.7k tokens
+09|
+10|     Skills · /skills
+11|     └ 220 skills · 9.9k tokens
+12|
+13|     /context all to expand
+14|
+15|❯ /export
+16|  ⎿  Export cancelled
+17|
+18|❯ /diff
+19|  ⎿  Resize your terminal to at least 110 columns to show the diff panel
+20|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ctrl+y to paste deleted text ▔
+21|  Effort
+22|
+23|                             Faster                             Smarter
+24|                             ──────────▲───────────────────────────────
+25|                             low     medium     high     xhigh      max
+26|                                  The default effort for this model
+27|
+28|
+29|  ←/→ to adjust · s to use this session only · Enter to save · Esc to cancel

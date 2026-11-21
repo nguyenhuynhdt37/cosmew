@@ -1,0 +1,30 @@
+00|
+01|     /context all to expand
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ctrl+y to paste deleted text ▔
+03|  MCP servers
+04|  25 servers
+05|
+06|    claude.ai
+07|  ❯ ✔ claude.ai Claude Docs                        8 tools
+08|
+09|    Built-in MCPs (always available)
+10|    ◯ computer-use
+11|    ✔ easel                                        1 tool
+12|    ✔ plugin:chrome-devtools-mcp:chrome-devtools   32 tools
+13|    ⚠ plugin:coderabbit:coderabbit                 needs sign-in
+14|    ⚠ plugin:context7:context7                     needs sign-in
+15|    ⚠ plugin:figma:figma                           needs sign-in
+16|    ✘ plugin:github:github
+17|    ⚠ plugin:gitlab:gitlab                         needs sign-in
+18|    ✔ plugin:greptile:greptile                     21 tools
+19|    ⚠ plugin:linear:linear                         needs sign-in
+20|    ✔ plugin:mongodb:mongodb                       27 tools
+21|    ⚠ plugin:Notion:notion                         needs sign-in
+22|    ✔ plugin:playwright:playwright                 25 tools
+23|    ⚠ plugin:postman:postman                       needs sign-in
+24|    ✔ plugin:prisma:Prisma-Local                   3 tools
+25|    ⚠ plugin:prisma:Prisma-Remote                  needs sign-in
+26|    ↓ 8 more
+27|  Learn more: https://code.claude.com/docs/en/mcp
+28|
+29|  ↑/↓ to navigate · Enter to view · Esc to close

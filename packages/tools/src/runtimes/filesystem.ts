@@ -1,5 +1,5 @@
-import {FutrynError} from '@futryn/contracts';
-import type {ResolvedPath} from '@futryn/workspace';
+import {FutrynError} from '@cosmew/contracts';
+import type {ResolvedPath} from '@cosmew/workspace';
 import type {z} from 'zod';
 import {runRead, readInput} from '../builtin/read';
 import {candidateFiles, compilePattern, formatGrep, grepQuery, runGlob, globInput, grepInput} from '../builtin/search';
@@ -129,6 +129,7 @@ export class FileSystemRuntime {
               this.options.stateDirectory,
               undefined,
               this.options.readPolicy,
+              base.root === this.options.workspace.root ? [] : [base.root],
             ).files,
             input,
             base.relative,
@@ -152,9 +153,13 @@ export class FileSystemRuntime {
       try {
         const request: GrepWorkerRequest = {
           root: this.options.workspace.root,
+          roots: base.root === this.options.workspace.root ? [] : [base.root],
           files: files.filter(path => {
             try {
-              const file = this.options.workspace.resolve(path);
+              const file = this.options.workspace.resolve(
+                path,
+                base.root === this.options.workspace.root ? [] : [base.root],
+              );
               const decision = readDecision(this.options, file.relative, file.absolute);
               if (decision.effect === 'ask' && decision.reason === 'secret-file') skippedSecret++;
               return decision.effect === 'allow';

@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import {homedir, tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {NativeCommandRuntime} from '@futryn/tools';
+import {NativeCommandRuntime} from '@cosmew/tools';
 const clean: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of clean.splice(0).reverse()) await fn();
@@ -100,7 +100,7 @@ const rustupReady =
   existsSync(join(homedir(), '.rustup'));
 
 test.skipIf(!rustupReady)(
-  'rustup toolchain shims run inside Seatbelt read-only while the rest of home remains denied',
+  'rustup toolchain shims run inside Seatbelt read-only while credential directories stay denied',
   async () => {
     const s = paths();
     const runtime = new NativeCommandRuntime({
@@ -118,14 +118,15 @@ test.skipIf(!rustupReady)(
     });
     expect(rustc.exitCode).toBe(0);
     expect(rustc.output).toContain('rustc ');
-    const privateHome = await runtime.run({
-      command: `ls -la ${JSON.stringify(homedir())}`,
+    // Cargo credentials never reach the command, whatever else the toolchain directory exposes.
+    const credentials = await runtime.run({
+      command: `cat ${JSON.stringify(join(homedir(), '.cargo', 'credentials.toml'))} ${JSON.stringify(join(homedir(), '.cargo', 'credentials'))}`,
       cwd: '.',
       timeoutMs: 3000,
       maxOutputBytes: 2000,
       sandbox: {mode: 'read-only', network: false},
     });
-    expect(privateHome.exitCode).not.toBe(0);
+    expect(credentials.exitCode).not.toBe(0);
   },
 );
 
@@ -193,9 +194,10 @@ native(
         expect(viaHome.exitCode).not.toBe(0);
         expect(viaHome.output).not.toContain('CARGO_SECRET');
       }
-      // Other private home contents stay hidden.
-      for (const hidden of ['.ssh/id', '.gitconfig', '.rustup/nothing', '.cargo/.crates.toml'])
-        expect((await sh(runtime, `cat ${home}/${hidden}`)).exitCode).not.toBe(0);
+      // Credential directories stay hidden; the rest of home is readable (ADR 0061).
+      expect((await sh(runtime, `cat ${home}/.ssh/id`)).exitCode).not.toBe(0);
+      expect((await sh(runtime, `cat ${home}/.ssh/id`)).output).not.toContain('SSH_SECRET');
+      expect((await sh(runtime, `cat ${home}/.gitconfig`)).output).toContain('GITCONFIG_SECRET');
       expect((await sh(runtime, `ls ${home}/.ssh`)).exitCode).not.toBe(0);
       const ids = (await sh(runtime, 'echo $CARGO_HOME $RUSTUP_HOME')).output;
       expect(ids).toContain(home + '/.rustup');

@@ -1,5 +1,5 @@
 import {pathToFileURL} from 'node:url';
-import type {ServiceProcess} from '@futryn/contracts';
+import type {ServiceProcess} from '@cosmew/contracts';
 import {JsonRpcConnection, LSP_REQUEST_TIMEOUT_MS} from './rpc';
 
 export interface LspDiagnostic {
@@ -22,7 +22,7 @@ export const DIAGNOSTIC_WAIT_MS = 3_000;
 /**
  * One language-server session (ADR 0043): initialize, full-text document sync, pushed diagnostics,
  * requests and an orderly shutdown. Server requests are answered minimally and never execute
- * anything (`workspace/applyEdit` is refused: edits only ever go through Futryn's patch pipeline).
+ * anything (`workspace/applyEdit` is refused: edits only ever go through Cosmew's patch pipeline).
  */
 export class LspClient {
   readonly connection: JsonRpcConnection;
@@ -70,7 +70,7 @@ export class LspClient {
     ]);
     this.connection.onRequest('workspace/applyEdit', () => ({
       applied: false,
-      failureReason: 'Edits go through Futryn.',
+      failureReason: 'Edits go through Cosmew.',
     }));
   }
 
@@ -83,7 +83,7 @@ export class LspClient {
         rootUri: root,
         rootPath: this.rootAbsolute,
         workspaceFolders: [{uri: root, name: 'workspace'}],
-        clientInfo: {name: 'futryn'},
+        clientInfo: {name: 'cosmew'},
         capabilities: {
           textDocument: {
             synchronization: {didSave: false, dynamicRegistration: false},

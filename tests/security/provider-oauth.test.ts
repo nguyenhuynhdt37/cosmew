@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
-import {OpenRouterPKCE, Redactor} from '@futryn/security';
-import {FutrynError} from '@futryn/contracts';
+import {OpenRouterPKCE, Redactor} from '@cosmew/security';
+import {FutrynError} from '@cosmew/contracts';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const fn of cleanup.splice(0)) fn();

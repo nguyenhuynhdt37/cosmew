@@ -9,7 +9,7 @@ import {
   type CompatibilityReport,
   type ThemeManifest,
   type ThemeTokens,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {ALL_BUILTIN_THEMES, deriveTokensFromTriplet, mixHex, relativeLuminance} from './presets';
 
 export interface ThemeImportResult {
@@ -38,7 +38,7 @@ function sanitizeId(raw: unknown, fallback = 'imported-theme'): string {
 
 /**
  * Convert an OpenCode theme JSON (`{ defs?: Record<string, string>, theme: Record<string, string | { dark: string, light: string }> }`)
- * into a native FUTRYN `ThemeManifest` with a detailed `CompatibilityReport`.
+ * into a native COSMEW `ThemeManifest` with a detailed `CompatibilityReport`.
  */
 function convertOpenCodeTheme(raw: Record<string, unknown>, suggestedId?: string): ThemeImportResult {
   const defs = (raw.defs && typeof raw.defs === 'object' ? raw.defs : {}) as Record<string, unknown>;
@@ -148,7 +148,7 @@ function convertOpenCodeTheme(raw: Record<string, unknown>, suggestedId?: string
 
 /**
  * Convert a Claude Desktop Themes JSON (`{ id, name, tagline, bg, text, accent, font?, vars?, deco?, wallpaper?, css? }`)
- * into a native FUTRYN `ThemeManifest` with explicit compatibility reporting.
+ * into a native COSMEW `ThemeManifest` with explicit compatibility reporting.
  */
 function convertClaudeDesktopTheme(
   raw: Record<string, unknown>,
@@ -263,9 +263,9 @@ function convertClaudeDesktopTheme(
 
   if (hasExternalSceneJs || typeof raw.scene === 'string') {
     refusedExecutableContent = true;
-    unsupported.push('scene.js (arbitrary JavaScript wallpaper execution is forbidden in FUTRYN)');
+    unsupported.push('scene.js (arbitrary JavaScript wallpaper execution is forbidden in COSMEW)');
     warnings.push(
-      'Refused arbitrary JavaScript scene file: FUTRYN only executes declarative built-in terminal scenes.',
+      'Refused arbitrary JavaScript scene file: COSMEW only executes declarative built-in terminal scenes.',
     );
   }
 
@@ -328,7 +328,7 @@ function convertClaudeDesktopTheme(
 /**
  * Inspect and import a theme from JSON string or parsed object.
  * Supports:
- * 1. Native FUTRYN ThemeManifest JSON (`schemaVersion: 1`, `dark`, `light`)
+ * 1. Native COSMEW ThemeManifest JSON (`schemaVersion: 1`, `dark`, `light`)
  * 2. OpenCode Theme JSON (`defs` + `theme`)
  * 3. Claude Desktop Themes JSON (`id`, `name`, `bg`, `text`, `accent`, `vars`, etc.)
  */
@@ -406,7 +406,7 @@ export function importThemeManifest(
     };
   }
 
-  // Case 1: Native FUTRYN Theme Manifest (`dark` and `light` token objects)
+  // Case 1: Native COSMEW Theme Manifest (`dark` and `light` token objects)
   if (obj.dark && typeof obj.dark === 'object' && obj.light && typeof obj.light === 'object') {
     if (obj.schemaVersion !== undefined && obj.schemaVersion !== 1) {
       return {
@@ -417,7 +417,7 @@ export function importThemeManifest(
           convertedProperties: [],
           unsupportedProperties: [`schemaVersion=${String(obj.schemaVersion)}`],
           warnings: [
-            `Unsupported FUTRYN theme schemaVersion "${String(obj.schemaVersion)}"; only version 1 is supported.`,
+            `Unsupported COSMEW theme schemaVersion "${String(obj.schemaVersion)}"; only version 1 is supported.`,
           ],
           refusedExecutableContent: false,
         }),
@@ -451,7 +451,7 @@ export function importThemeManifest(
           compatible: false,
           convertedProperties: [],
           unsupportedProperties: candidate.error.issues.map(i => `${i.path.join('.')}: ${i.message}`),
-          warnings: ['Native FUTRYN theme failed strict schema validation.'],
+          warnings: ['Native COSMEW theme failed strict schema validation.'],
           refusedExecutableContent: false,
         }),
       };
@@ -466,7 +466,7 @@ export function importThemeManifest(
         unsupportedProperties: [],
         warnings: [],
         refusedExecutableContent: false,
-        attribution: candidate.data.attribution ?? 'Native FUTRYN Theme v1',
+        attribution: candidate.data.attribution ?? 'Native COSMEW Theme v1',
       }),
     };
   }
@@ -488,7 +488,7 @@ export function importThemeManifest(
       compatible: false,
       convertedProperties: [],
       unsupportedProperties: Object.keys(obj).slice(0, 30),
-      warnings: ['Unrecognized theme format. Expected FUTRYN v1, OpenCode JSON, or Claude Desktop Themes JSON.'],
+      warnings: ['Unrecognized theme format. Expected COSMEW v1, OpenCode JSON, or Claude Desktop Themes JSON.'],
       refusedExecutableContent: false,
     }),
   };

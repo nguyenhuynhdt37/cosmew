@@ -1,6 +1,6 @@
 # ADR 0040 — Codex approval policy, Tree-sitter command analysis, request_permissions
 
-Date: 2026-11-17. Status: accepted (wave 1 plan W1, user decisions D1–D3 of 2026-11-17). **Partly superseded by [ADR 0053](0053-codex-sandbox-and-approval-alignment.md)** (2026-11-17): the stdin deviation and the `unverified-command`/`shell-parser-unavailable` fail-closed kind below no longer apply; sandbox and approvals follow Codex exactly.
+Date: 2026-11-17. Status: accepted (wave 1 plan W1, user decisions D1–D3 of 2026-11-17). **Partly superseded by [ADR 0053](0053-codex-sandbox-and-approval-alignment.md)** (2026-11-17): the stdin deviation and the `unverified-command`/`shell-parser-unavailable` fail-closed kind below no longer apply; sandbox and approvals follow Codex exactly. **The approval policy, presets, `request_permissions` and `require_escalated` are superseded by [ADR 0061](0061-claude-code-permissions-and-sandbox.md)** (Claude Code permission modes); the Tree-sitter classification stays.
 
 ## Context
 

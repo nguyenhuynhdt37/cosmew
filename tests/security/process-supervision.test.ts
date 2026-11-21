@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {existsSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
-import {SeatbeltRuntime} from '@futryn/tools';
+import {SeatbeltRuntime} from '@cosmew/tools';
 import {toolState} from '../../apps/tui/src/ink/features/transcript/logic';
 import {ProcessSupervisor, runProcess} from '../../packages/tools/src/exec/process';
 import {formatOutcome} from '../../packages/tools/src/exec/command';

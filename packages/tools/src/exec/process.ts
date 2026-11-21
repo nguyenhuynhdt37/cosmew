@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import type {CommandLifecycle} from '@futryn/contracts';
+import type {CommandLifecycle} from '@cosmew/contracts';
 import {HeadTailBuffer} from './output';
 
 /** Observations about one owned leader, never a certificate that every descendant is dead. */

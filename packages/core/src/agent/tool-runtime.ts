@@ -1,11 +1,11 @@
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 /**
  * Port of Codex `tools/parallel.rs` `ToolCallRuntime::parallel_execution` (an `RwLock<()>`, pinned
  * reference openai/codex@710bee73a89385aaf2afb41d885edf82473d941f): a tool whose registration declares
  * `supports_parallel_tool_calls` takes the lock shared, every other tool takes it exclusively. Tokio's
  * RwLock is fair (FIFO), so a parallel call requested after a waiting exclusive call waits behind it;
- * this gate keeps that order. `maxShared` is Futryn's resource bound on concurrent shared holders.
+ * this gate keeps that order. `maxShared` is Cosmew's resource bound on concurrent shared holders.
  *
  * The gate only orders execution. Policy, approval and path checks stay in the injected ToolPort, so a
  * call that holds the gate still passes the whole permission pipeline.

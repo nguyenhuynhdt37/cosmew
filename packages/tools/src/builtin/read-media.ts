@@ -1,4 +1,4 @@
-import {MAX_ATTACHMENT_BYTES, type Attachment} from '@futryn/contracts';
+import {MAX_ATTACHMENT_BYTES, type Attachment} from '@cosmew/contracts';
 
 /**
  * Media detection for `read` (ADR 0041), after OpenCode `read-filesystem.ts` (sst/opencode
@@ -81,4 +81,22 @@ export function containsRegisteredSecret(bytes: Uint8Array, redact: (text: strin
   const text = Buffer.from(bytes).toString('latin1');
   const utf8 = Buffer.from(bytes).toString('utf8');
   return redact(text) !== text || redact(utf8) !== utf8;
+}
+
+/** Validate explicit user-supplied image bytes using the read tool's media boundary. */
+export function validateImageAttachment(mediaType: string, data: string, redact: (text: string) => string): Attachment {
+  if (
+    !['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(mediaType) ||
+    typeof data !== 'string' ||
+    !data.length ||
+    data.length > Math.ceil(MAX_ATTACHMENT_BYTES / 3) * 4 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)
+  )
+    throw new Error('INVALID_IMAGE');
+  const bytes = Buffer.from(data, 'base64');
+  const mime = sniffMedia(bytes);
+  if (bytes.length > MAX_ATTACHMENT_BYTES || mime !== mediaType || !mime || !validMedia(bytes, mime))
+    throw new Error('INVALID_IMAGE');
+  if (containsRegisteredSecret(bytes, redact)) throw new Error('SECRET_IN_MEDIA');
+  return {mime, data, name: 'image'};
 }

@@ -90,7 +90,7 @@ Các kết quả dưới đây là run tại thời điểm đó, không thay th
   ~3.66 giây. Negative malformed-row đã thấy RED rồi sửa parser; final run ghi riêng.
 - Parent grep/read-policy focused gate: 15 pass / 0 fail, exit 0; giữ count/note
   secret bị worker prefilter bỏ qua mà không đọc file bị chặn.
-- **TS thật:** opt-in `FUTRYN_TEST_REAL_LSP=1` local installed TypeScript 7,
+- **TS thật:** opt-in `COSMEW_TEST_REAL_LSP=1` local installed TypeScript 7,
   native Seatbelt, initialize + definition + rename: pass ~4.3 giây, 6 assertions.
   Python/Go/Rust/Linux/Windows và live provider search chưa có bằng chứng thật.
 - Hook security review tự động của commit W5 không hoàn tất vì HTTP 403;

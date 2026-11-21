@@ -1,5 +1,4 @@
 /** @jsxImportSource react */
-import {useState} from 'react';
 import {TextLine, safeText} from '../../ui';
 
 export interface PasteEntry {
@@ -62,15 +61,6 @@ export function insertPaste(state: PasteState, input: string): PasteState {
     pastes: [...next.pastes, {id, start: next.cursor - marker.length, end: next.cursor, content}].sort(
       (a, b) => a.start - b.start,
     ),
-  };
-}
-export function usePasteState(initialValue = '') {
-  const [state, setState] = useState(() => createPasteState(initialValue));
-  return {
-    state,
-    setState,
-    insert: (text: string) => setState(previous => insertPaste(previous, text)),
-    content: expandPastes(state),
   };
 }
 export interface PasteProps {

@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {openPrivateDatabase} from '@futryn/persistence';
+import {openPrivateDatabase} from '@cosmew/persistence';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault} from '../fixtures';
 
@@ -113,7 +113,7 @@ test('migrations v7 + v8 delete every runtime account and credential (Codex incl
     expect(state.reasoningPreferences).toEqual({[`${ID.openai}:gpt-5`]: 'low'});
     // User data beyond the removed providers is untouched.
     expect(app.db.query("SELECT id FROM conversations WHERE id='keep-me'").get()).toBeTruthy();
-    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(8);
+    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(10);
     // One-time notices (v7 and v8), delivered exactly once.
     const notices = app.takeStartupNotices();
     expect(notices).toHaveLength(2);

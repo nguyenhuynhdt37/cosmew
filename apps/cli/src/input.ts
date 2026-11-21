@@ -1,6 +1,6 @@
 import {createInterface} from 'node:readline/promises';
 import {Writable} from 'node:stream';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 
 /** One reader owns chat and wizard input; secret answers never enter terminal history. */
 export class ChatInput {

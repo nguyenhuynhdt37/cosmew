@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {planItemSchema, type PlanState, type ToolDescriptor} from '@futryn/contracts';
+import {planItemSchema, type PlanState, type ToolDescriptor} from '@cosmew/contracts';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
 import type {ToolHandler} from './types';
 

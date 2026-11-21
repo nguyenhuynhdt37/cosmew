@@ -2,8 +2,8 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {Conversation} from '@futryn/core';
-import {FutrynError, type ModelPort, type ModelRequest, type ToolPort, type Message} from '@futryn/contracts';
+import {Conversation} from '@cosmew/core';
+import {FutrynError, type ModelPort, type ModelRequest, type ToolPort, type Message} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault} from '../fixtures';
 const cleanup: (() => void)[] = [];
@@ -34,7 +34,7 @@ async function send(c: Conversation, text: string) {
   for await (const _ of c.send(text)) {
   }
 }
-function model(step: (request: ModelRequest) => AsyncIterable<import('@futryn/contracts').ModelEvent>): ModelPort {
+function model(step: (request: ModelRequest) => AsyncIterable<import('@cosmew/contracts').ModelEvent>): ModelPort {
   return {
     stream: step,
     generate: async () => {

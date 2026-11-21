@@ -1,0 +1,30 @@
+00|  ⎿  Resume cancelled
+01|
+02|❯ /context
+03|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+04|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   Estimated usage by category
+05|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Instructions: 0 tokens (0%)
+06|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛁ Messages: 0 tokens (0%)
+07|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛶ Free space: 0 tokens (0%)
+08|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶   ⛝ Autocompact buffer: 0 tokens (0%)
+09|     ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶ ⛶
+10|
+11|     Auto-compact window:  Not reported
+12|
+13|     MCP tools · /mcp
+14|     └ Not implemented
+15|
+16|     Custom agents · .cosmew/agents/
+17|     └ 0 agents
+18|
+19|     Skills · /skills
+20|     └ 111 skills
+21|
+22|     System prompt and tool schemas are not measured.
+23|
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯ Try "write a test for <filepath>"
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏵⏵ accept edits on (shift+tab to cycle)

@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.40** (Cosmew rename and optional user-declared provider reasoning metadata; [ADR 0076](../adr/0076-cosmew-project-rename.md), [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md)). Previous shared contract: **1.39** (P3: diff bases, editable plan approval, summarize rewind, selective retract and session/history scopes; [ADR 0074](../adr/0074-p3-review-and-session-controls.md); SQLite 10). Previous contract: **1.38** (P1: background tasks, queued input, plan approval, images, checkpoints and hook/MCP status; [delivery](../delivery/tui-v4/p1-backend.md); SQLite 9). Historical versions: **1.37** (1.37: bounded session-scoped tool-output archive and mediated retrieval; [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md)). **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -77,7 +77,7 @@ use ToolDispatcher. No new execution authority, persistence schema, dependency o
 [ADR 0054](../adr/0054-model-compaction.md). Additive for older consumers:
 
 - Model event `context.compacted` `{trigger: 'auto' | 'manual', strategy: 'model' | 'excerpt', tokensBefore, tokensAfter, fallback?}`: older model-visible history was replaced by a handoff summary (`model`) or, when the model call failed, by the extractive checkpoint (`fallback: true`). Token counts are conservative estimates. It is emitted before the request that uses the compacted context and is not journaled; the durable record is the `ContextSnapshot` (`strategy: 'model'` carries `retainedUserRequests` = recent user messages up to 20,000 tokens, and `summary` = handoff text). Recovery after restart renders it; source history is never changed. `fyn exec --json` forwards it like other model events.
-- Auto compaction starts at 90% of the usable window (Codex `auto_compact_token_limit`); `/compact [instructions]` / `FutrynClient.compact(instructions?, {signal})` → `CompactionOutcome {compacted, strategy?, tokensBefore, tokensAfter, usage, fallback?, reason?}` runs it while idle and throws `POLICY` during a turn. Usage of the summary call is counted in the turn (auto) or added to the latest agent turn receipt (`ConversationStore.addUsage`, manual).
+- Auto compaction starts at 85% of the usable window, before tool withdrawal (ADR 0063 supersedes the earlier 90% trigger); `/compact [instructions]` / `CosmewClient.compact(instructions?, {signal})` → `CompactionOutcome {compacted, strategy?, tokensBefore, tokensAfter, usage, fallback?, reason?}` runs it while idle and throws `POLICY` during a turn. Usage of the summary call is counted in the turn (auto) or added to the latest agent turn receipt (`ConversationStore.addUsage`, manual).
 
 ## Implemented execution evidence (contract 1.12)
 
@@ -94,7 +94,7 @@ ADR0032 adds core-owned toolOutputDelta(callId, name, stream, text) for bounded 
 - `ToolDescriptor.parallel?: boolean` — Codex `supports_parallel_tool_calls`. Only declared tools share execution; absent means exclusive. It is ordering metadata, never permission.
 - Journal event `user.steered(steerId, message)` — user input accepted into the active turn, durable before acceptance is reported. Recovery shows it before the next non-first `model.requested` of that turn, or after everything else when the turn ended first. Legacy rows without it remain valid.
 - Model event `steered(steerId, content)` — the steering message became model-visible before the next request.
-- `SteerOutcome` (`accepted` + `turnId`/`steerId`, or `no_active_turn` / `turn_mismatch` / `not_steerable` / `empty_input`), returned by `Conversation.steer`, the optional `FutrynBackendPorts.steerTurn` and `FutrynClient.steerMessage`.
+- `SteerOutcome` (`accepted` + `turnId`/`steerId`, or `no_active_turn` / `turn_mismatch` / `not_steerable` / `empty_input`), returned by `Conversation.steer`, the optional `CosmewBackendPorts.steerTurn` and `CosmewClient.steerMessage`.
 
 `toolCallComplete` is now dispatched as soon as it arrives; results are still emitted and recorded in model-output order after the response. Adapters must emit it only for calls whose arguments are complete.
 
@@ -195,7 +195,7 @@ persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũn
 `memory {action: list|read|write|delete, name?, description?, type?, content?}` dùng `agent.state` cho list/read, `agent.state.write` cho write/delete (contract 1.31),
 không approval filesystem, vẫn qua dispatcher/audit/redact. Read/delete cần slug; write cần đủ field.
 File ≤16 KiB gồm frontmatter, directory ≤1 MiB/256 entries; secret-like input bị từ chối.
-SDK contract 1.35 ([ADR 0060](../adr/0060-ink-tui-integration-and-memory-write.md)) thêm
+SDK contract 1.36 adds the permission model of [ADR 0061](../adr/0061-claude-code-permissions-and-sandbox.md) (see tools-and-permissions.md); SDK contract 1.35 ([ADR 0060](../adr/0060-ink-tui-integration-and-memory-write.md)) thêm
 `client.writeMemory(entry: MemoryWrite): Promise<ToolResult>`: consent + idle chat, schema validation,
 port `memoryAction(write, name, entry)` gọi memory tool qua dispatcher/audit/redact; plan/review,
 read-only và deny rule vẫn chặn ghi. Consumers read/delete giữ nguyên.
@@ -204,9 +204,9 @@ SDK `client.memories()` trả metadata clone; `client.readMemory(name)`/`deleteM
 `memoryDirectory()` và `openMemoryDirectory()` là đường UI/host cho folder cố định, không model tool.
 `/memory` mở Modal; args `list`, `read <name>`, `delete <name>`, `open`.
 
-`~/.futryn/projects/<sha256(canonical workspace)>/memory/MEMORY.md` được nạp tối đa 200 dòng/25.000 byte
+`~/.cosmew/projects/<sha256(canonical workspace)>/memory/MEMORY.md` được nạp tối đa 200 dòng/25.000 byte
 vào user/project-context có nhãn untrusted và nhắc kiểm chứng, không vào `ModelRequest.instructions`.
-Không có ký ức thì không thêm context; `fyn exec` dùng cùng cơ chế S3. `FUTRYN_MEMORY=0` hoặc
+Không có ký ức thì không thêm context; `fyn exec` dùng cùng cơ chế S3. `COSMEW_MEMORY=0` hoặc
 `[memories] enabled = false` ở host config user tắt loading/tool; không đọc config repo.
 Port context optional của core phải được bỏ khi S5 tạo subagent. Không thêm event hay migration SQLite;
 headless envelopes/consumers dùng 1.29.
@@ -241,7 +241,7 @@ a project rule restricts them. No new events or SQLite migration.
 Tool `agent` (`agent.spawn`, parallel) và ba sự kiện: `subagent.started {callId, agentId, agentType, description, modelId, reasoningEffort?, forkContext?, background?}`,
 `subagent.progress {…, currentTool?, toolCount, usage, steps?}` (gộp theo `callId`, có thể bị bỏ khi hàng đợi đầy) và
 `subagent.finished {…, status: completed|failed|cancelled, toolCount, usage, durationMs, summary?, errorCode?, steps?}`.
-Thứ tự: started → progress* → finished, trước tool result của cha. Chỉ Futryn phát; provider stream phát `subagent.*` là lỗi `PROTOCOL`.
+Thứ tự: started → progress* → finished, trước tool result của cha. Chỉ Cosmew phát; provider stream phát `subagent.*` là lỗi `PROTOCOL`.
 `steps` đã redact và bounded. `fyn exec --json` phát cùng envelope (`contractVersion` 1.32). SDK: `client.subagents(sessionId?)`,
 `client.inspectSubagent(agentId)`, `ReactiveAgentEventKind` thêm ba kind. Prompt quyền có `subagent {agentId, agentType, description}`.
 Persistence: bảng `subagent_sessions` (SQLite vẫn 8). Con ẩn khỏi `listSessions()`.
@@ -253,4 +253,46 @@ Tool mới (chỉ offer khi phiên đã có con; `agent.spawn`, parallel): `agen
 
 ### Subagents S5c (contract 1.34, ADR 0058)
 
-`agent` nhận `isolation: "worktree"`: con chạy trong Git worktree riêng (xem ADR). Kết quả tool/thông báo nền thêm dòng `Worktree kept with changes: <path> (branch <branch>)` hoặc `The isolated worktree had no changes and was removed.`. Mã lỗi mới: `AGENT_BUDGET_EXHAUSTED` (cap/ngân sách lượt cha đã hết, từ `agent`/`agent_message`). `[agents] max_child_tokens|max_child_duration_ms|max_child_cost_usd` trong `~/.futryn/config.toml`. `SubagentSessionRecord.isolation?: 'worktree'` (cột SQLite `isolation`, SQLite vẫn 8). `fyn exec` chờ con nền và chạy các lượt thông báo.
+`agent` nhận `isolation: "worktree"`: con chạy trong Git worktree riêng (xem ADR). Kết quả tool/thông báo nền thêm dòng `Worktree kept with changes: <path> (branch <branch>)` hoặc `The isolated worktree had no changes and was removed.`. Mã lỗi mới: `AGENT_BUDGET_EXHAUSTED` (cap/ngân sách lượt cha đã hết, từ `agent`/`agent_message`). `[agents] max_child_tokens|max_child_duration_ms|max_child_cost_usd` trong `~/.cosmew/config.toml`. `SubagentSessionRecord.isolation?: 'worktree'` (cột SQLite `isolation`, SQLite vẫn 8). `fyn exec` chờ con nền và chạy các lượt thông báo.
+
+## P1 SDK (contract 1.38)
+
+ADR 0069–0073 bổ sung snapshot/notifications cho background tasks, queue retraction,
+plan approval và image attachments. `task.started|updated|finished` mang metadata task
+đã redact; completion shell gửi durable `<task-notification>` qua cùng parent inbox.
+`hook.ran` có `{event,name,summary}` nhưng không có hook runner trong P1;
+`hooks().supported` luôn false. SDK export các type renderer cần dùng, TUI không
+import core/tools/persistence. MCP status phản ánh hub và HTTP search adapter đang
+được inject; management/OAuth flags false. Adapter search chưa khởi tạo được báo
+`disabled` (lazy, chưa có connection evidence), không giả connected.
+
+SQLite v9 thêm input retraction receipts và state P1; migration additive, journal
+không sửa tại chỗ. Consumers nâng lên 1.38 trước khi bật các event mới. SDK host
+thiếu optional port phải trả UNSUPPORTED/empty snapshot có cờ hỗ trợ, không tự tạo
+đường execution thay thế. Chi tiết migration và giới hạn bằng chứng ở ADR tương ứng.
+
+### Background tasks (contract 1.38, ADR 0070)
+
+`BackgroundTask` là snapshot shell unified-exec hoặc projection background child:
+`{id, kind: shell|agent, description, status: running|done|failed|stopped, startedAt, exitCode?, outputTail}`.
+SDK `backgroundTasks(sessionId?)`, `stopBackgroundTask(id): Promise<boolean>` và
+`backgroundCurrentTask(): BackgroundTask|undefined` không tạo executor. Chuyển foreground chỉ
+release wait/abort linkage, giữ ID/process/sandbox/lease. Stop unknown/finished trả false.
+`onBackgroundTaskEvent` phát `{type: task.started|task.updated|task.finished, task, parentSessionId?, delivery?: steered|queued}`;
+reactive notifications cùng kind không thay active activity. Đây là observer notifications, không
+phải provider event hay durable envelope mới. Text redact và tail bounded 8.192 ký tự; subscriber
+không được cấp quyền. Completion shell `<task-notification>` vào cùng durable steering/inbox
+đường với background subagent trước khi event có delivery xuất hiện. Task execution là live-only;
+inbox đã lưu tồn tại qua restart. Không thêm SQLite migration.
+
+
+## P3 SDK (contract 1.39, ADR 0074)
+
+`WorkspaceDiffReport` thêm effective `base` và `capabilities` theo nguồn; SDK nhận optional base.
+`PlanProposal` thêm optional path/revision (row cũ vẫn đọc); approved/feedback outcome có edited plan khi revision > 1,
+feedback đi cùng mode trong một resolution. `editPlanProposal` không grant. `RewindScope` thêm summarize,
+focus instructions giới hạn/redact, outcome cho biết model/excerpt và fallback. `retractQueuedEntries` selective
+trả id/type/content; no-argument `retractQueuedInput` cũ vẫn giữ. `PromptHistoryEntry` có id/sessionId/content/timestamp,
+scopes session/project/everywhere; model/effort session scope không persist user preference.
+Không có producer event mới; observer state update và JSONL dùng version 1.39. SQLite 10 thêm nullable canonical
+workspace và timestamp metadata cùng bounded prompt_history projection của actual submissions/steering. Migration từ 9 giữ unknown là NULL; copied context/handoff không tạo prompt mới; binary cũ từ chối schema mới.

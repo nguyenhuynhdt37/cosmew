@@ -2,9 +2,9 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
-import {WorkspaceRoot} from '@futryn/workspace';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher} from '@cosmew/tools';
+import {WorkspaceRoot} from '@cosmew/workspace';
 const roots: string[] = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, {recursive: true, force: true});

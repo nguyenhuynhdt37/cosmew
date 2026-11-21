@@ -3,10 +3,10 @@ import {mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, chmodSync, s
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {ProjectContextLoader, WorkspaceRoot} from '@futryn/workspace';
-import {ToolDispatcher} from '@futryn/tools';
-import {SessionGrants, Redactor, evaluateRead} from '@futryn/security';
-import {FutrynError, type ProjectContextOptions} from '@futryn/contracts';
+import {ProjectContextLoader, WorkspaceRoot} from '@cosmew/workspace';
+import {ToolDispatcher} from '@cosmew/tools';
+import {SessionGrants, Redactor, evaluateRead} from '@cosmew/security';
+import {FutrynError, type ProjectContextOptions} from '@cosmew/contracts';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const f of cleanup.splice(0).reverse()) f();

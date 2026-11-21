@@ -1,0 +1,36 @@
+00|  3. .git                                                         │                                                   ✕
+01|  4. a.txt                                                        │1 file changed +1 -1               source: Current ▾
+02|  5. index.ts                                                     │
+03|                                                                  │a.txt                                          +1 -1
+04|  Leaving out . and .., the directory holds 3 items: .git, a.txt  │
+05|  and index.ts.                                                   │────────────────────────────────────────────────────
+06|                                                                  │a.txt                                        [ ask ]
+07|  The output also had no total line and used a different format   │────────────────────────────────────────────────────
+08|  from standard ls. Your ls is probably aliased to another tool,  │ 1 -hello
+09|  such as eza. That doesn't change the count.                     │ 1 +HELLO
+10|                                                                  │ 2  world
+11|✻ Crunched for 8s · done 11:00 PM                                 │
+12|                                                                  │
+13|❯ In a.txt replace the word hello with HELLO.                     │
+14|                                                                  │
+15|  Read 1 file                                                     │
+16|                                                                  │
+17|⏺ Update(a.txt)                                                   │
+18|  ⎿  Added 1 line, removed 1 line                                 │
+19|      1 -hello                                                    │
+20|      1 +HELLO                                                    │
+21|      2  world                                                    │
+22|                                                                  │
+23|⏺ I changed hello to HELLO in a.txt. It was the only "hello" in   │
+24|  the file, so the file now reads:                                │
+25|                                                                  │
+26|  HELLO                                                           │
+27|  world                                                           │
+28|                                                                  │
+29|✽ Simmering… (running Stop hooks… 5/6 · 8s · ↓ 319 tokens)        │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯ Use the AskUserQuestion tool to ask me which color I prefer, red or blue, then reply with my choice.
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on

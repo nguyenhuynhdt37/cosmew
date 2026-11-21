@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerPresets} from '@futryn/models';
+import {providerPresets} from '@cosmew/models';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault} from '../fixtures';
 
@@ -48,4 +48,28 @@ test('a model that cannot call tools gets no tool list and toolsEnabled false, e
   client.setToolsEnabled(true);
   expect(client.status()).toMatchObject({toolsEnabled: false, workspaceReadStatus: 'unavailable'});
   expect(client.availableTools()).toEqual([]);
+});
+
+test('P1 hooks truthfully report unsupported and MCP exposes management capability flags', async () => {
+  const {client} = await direct('supported');
+  expect(client.hooks()).toEqual({supported: false, hooks: []});
+  const report = client.mcpServers();
+  expect(report.supported).toEqual({stdioManagement: false, oauthManagement: false});
+  expect(report.servers.every(server => typeof server.toolCount === 'number')).toBe(true);
+  expect(client.sendQueuedNow()).toBe('idle');
+  expect(client.retractQueuedInput()).toBe('');
+});
+
+test('SDK queued snapshot includes durable inbox and retract returns text once', async () => {
+  const {app, client} = await direct('supported');
+  const session = client.createSession();
+  app.conversations.enqueueNextTurn(session.id, 'first');
+  app.conversations.enqueueNextTurn(session.id, 'second');
+  expect(client.queuedInput().map(p => p.content)).toEqual(['first', 'second']);
+  const copy = client.queuedInput() as {steerId: string; content: string}[];
+  copy[0]!.content = 'changed by caller';
+  expect(client.queuedInput()[0]!.content).toBe('first');
+  expect(client.retractQueuedInput()).toBe('first\nsecond');
+  expect(client.queuedInput()).toEqual([]);
+  expect(client.retractQueuedInput()).toBe('');
 });

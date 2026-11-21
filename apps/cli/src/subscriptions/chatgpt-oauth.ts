@@ -6,19 +6,19 @@ import {
   type CredentialVault,
   type ProviderAuthChallenge,
   type ProviderAuthProgress,
-} from '@futryn/contracts';
-import type {Redactor} from '@futryn/security';
+} from '@cosmew/contracts';
+import type {Redactor} from '@cosmew/security';
 
 /**
  * "Sign in with ChatGPT" for the direct API (ADR 0047): OAuth authorization code + PKCE against
- * auth.openai.com with a dynamically registered, Futryn-owned client. The authorization request names
- * the registration client `dynamic_agent_client` with `agent_name_hint=Futryn`; the callback returns the
+ * auth.openai.com with a dynamically registered, Cosmew-owned client. The authorization request names
+ * the registration client `dynamic_agent_client` with `agent_name_hint=Cosmew`; the callback returns the
  * client id OpenAI issued. Mechanism and endpoints follow OpenCode 0ac0d7e
  * (packages/core/src/plugin/provider/chatgpt.ts); live behavior is Needs verification (ADR 0047).
  * Tokens live only in the OS keyring (as the account's secret) and are refreshed here.
  */
 const REGISTRATION_CLIENT_ID = 'dynamic_agent_client';
-const AGENT_NAME = 'Futryn';
+const AGENT_NAME = 'Cosmew';
 export const TOKEN_SHARING_SCOPE = 'chatgpt.tokens.use.direct';
 const DEFAULT_ISSUER = 'https://auth.openai.com';
 const RESOURCE = 'https://api.openai.com/v1';
@@ -128,7 +128,7 @@ export class ChatGPTOAuth {
     void received.catch(() => {});
     let settled = false;
     const page = (message: string, status = 200) =>
-      new Response(`<!doctype html><meta charset="utf-8"><title>Futryn</title><p>${message}</p>`, {
+      new Response(`<!doctype html><meta charset="utf-8"><title>Cosmew</title><p>${message}</p>`, {
         status,
         headers: {'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store'},
       });
@@ -151,7 +151,7 @@ export class ChatGPTOAuth {
         if (error || !code) {
           reject(new FutrynError('AUTH'));
           setTimeout(() => server.stop(), 0);
-          return page('Sign-in failed. Return to Futryn and try again.', 400);
+          return page('Sign-in failed. Return to Cosmew and try again.', 400);
         }
         // Keep the browser response pending until the code exchange and identity verification finish.
         // Receiving an authorization code alone does not mean the sign-in succeeded.
@@ -222,7 +222,7 @@ export class ChatGPTOAuth {
     clearTimeout(login.timer);
     login.progress.state = 'failed';
     login.reject(new FutrynError('CANCELLED'));
-    login.respond?.('Sign-in cancelled. Return to Futryn to start again.', 400);
+    login.respond?.('Sign-in cancelled. Return to Cosmew to start again.', 400);
     login.server.stop();
   }
 
@@ -233,7 +233,7 @@ export class ChatGPTOAuth {
     signal = AbortSignal.any([login.abort.signal, ...(signal ? [signal] : [])]);
     const abort = () => this.cancel(id);
     signal?.addEventListener('abort', abort, {once: true});
-    let failure = 'ChatGPT returned a missing or mismatched client ID. Return to Futryn and try signing in again.';
+    let failure = 'ChatGPT returned a missing or mismatched client ID. Return to Cosmew and try signing in again.';
     try {
       if (signal?.aborted) throw new FutrynError('CANCELLED');
       const result = await login.received;
@@ -243,7 +243,7 @@ export class ChatGPTOAuth {
       if (!clientID) throw new FutrynError('PROTOCOL');
       login.clientID = clientID;
       this.redactor.register(result.code);
-      failure = 'ChatGPT token exchange failed. Return to Futryn to check the connection or sign in again.';
+      failure = 'ChatGPT token exchange failed. Return to Cosmew to check the connection or sign in again.';
       const tokens = await this.tokenRequest(
         {
           grant_type: 'authorization_code',
@@ -257,10 +257,10 @@ export class ChatGPTOAuth {
       );
       failure = 'ChatGPT did not grant token sharing. Sign in again and allow token sharing, or use an OpenAI API key.';
       if (!tokens.scope?.split(' ').includes(TOKEN_SHARING_SCOPE)) throw new FutrynError('FORBIDDEN');
-      failure = 'ChatGPT returned a missing or invalid ID token. Return to Futryn and try signing in again.';
+      failure = 'ChatGPT returned a missing or invalid ID token. Return to Cosmew and try signing in again.';
       if (!tokens.id_token) throw new FutrynError('PROTOCOL');
       await this.verifyIDToken(tokens.id_token, clientID, login.nonce, signal);
-      login.respond?.('ChatGPT identity verified. Return to Futryn to finish checking API access.', 200);
+      login.respond?.('ChatGPT identity verified. Return to Cosmew to finish checking API access.', 200);
       login.respond = undefined;
       return JSON.stringify(this.record(tokens, clientID));
     } catch (error) {
@@ -292,8 +292,8 @@ export class ChatGPTOAuth {
       if (error instanceof FutrynError && ['TRANSPORT', 'TIMEOUT', 'RATE_LIMIT'].includes(error.code))
         failure = 'ChatGPT verification service is unavailable or rate limited. Check the connection and retry later.';
       if (error instanceof OAuthGrantError)
-        failure = `OpenAI rejected the token exchange (HTTP ${error.status}${error.reason ? `, ${error.reason}` : ''}). Return to Futryn. No credentials were stored.`;
-      login.respond?.(signal?.aborted ? 'Sign-in cancelled. Return to Futryn to start again.' : failure, 400);
+        failure = `OpenAI rejected the token exchange (HTTP ${error.status}${error.reason ? `, ${error.reason}` : ''}). Return to Cosmew. No credentials were stored.`;
+      login.respond?.(signal?.aborted ? 'Sign-in cancelled. Return to Cosmew to start again.' : failure, 400);
       login.respond = undefined;
       if (signal?.aborted) throw new FutrynError('CANCELLED');
       throw error instanceof FutrynError ? error : new FutrynError('AUTH');
@@ -321,14 +321,17 @@ export class ChatGPTOAuth {
     try {
       response = await this.fetchImpl(this.tokenURL, {
         method: 'POST',
-        headers: {'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'Futryn'},
+        headers: {'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'Cosmew'},
         body: new URLSearchParams(form).toString(),
         redirect: 'error',
         credentials: 'omit',
         signal: combined,
       });
     } catch {
-      throw new FutrynError(signal?.aborted ? 'CANCELLED' : 'TRANSPORT', !signal?.aborted);
+      if (signal?.aborted) throw new FutrynError('CANCELLED');
+      // AbortSignal.timeout() is part of the bounded exchange deadline. Preserve that
+      // distinction so callers can offer retry guidance instead of blaming credentials.
+      throw new FutrynError(combined.aborted ? 'TIMEOUT' : 'TRANSPORT', true);
     }
     if (!response.ok) {
       // Read only a bounded error body and expose an allowlisted error name, never its description.

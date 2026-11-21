@@ -1,0 +1,30 @@
+00|
+01| ▐▛███▛█   Claude Code v2.1.328
+02|▝▜██████▀  Opus 5.5 with medium effort · Claude Pro
+03| ▝▝   ▝▝   /…/<scratch>/demo2
+04|
+05|  ⎿  SessionStart:startup says: SonarQube plugin initialised.
+06|       sonarqube-cli: ✗ not found — run /sonarqube:sonar-integrate
+07|       SonarQube hooks: ✗ no hooks installed — run /sonarqube:sonar-integrate
+08|  ⎿  SessionStart:startup says: ○○○ Semgrep Guardian (<org>): this session is
+09|     protected, files are scanned as they are written
+10|
+11|❯ /resume
+12|  ⎿  Resume cancelled
+13|
+14|❯ /agents
+15|  ⎿  The /agents wizard has been removed.
+16|
+17|     Ask Claude to create or update subagents for you (e.g. "create a code-reviewer subagent that
+18|     ..."),
+19|     or edit the files directly:
+20|       • .claude/agents/       (this project)
+21|       • ~/.claude/agents/     (all projects)
+22|
+23|     Docs: https://code.claude.com/docs/en/sub-agents
+24|
+25|────────────────────────────────────────────────────────────────────────────────────────────────────
+26|❯
+27|────────────────────────────────────────────────────────────────────────────────────────────────────
+28|
+29|  ⏸ manual mode on · ← 1 agent

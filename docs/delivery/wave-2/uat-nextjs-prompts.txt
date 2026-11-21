@@ -1,6 +1,6 @@
 Tạo một project Next.js mới (App Router, TypeScript, Tailwind) trong thư mục con `next-shop` của dự án này. Không đụng vào các file đang có ở thư mục gốc. Cài dependencies, chạy build cho chắc chắn không lỗi, rồi báo lại cấu trúc thư mục chính và lệnh đã chạy.
 ---
-Làm trang chủ của `next-shop` thành trang bán hoa đơn giản: header có tên cửa hàng "Hoa Futryn", lưới 6 sản phẩm (tên, giá VND, ảnh placeholder), nút "Thêm vào giỏ" cập nhật số lượng giỏ hàng ở header (state phía client). Tách component hợp lý. Chạy build lại sau khi sửa.
+Làm trang chủ của `next-shop` thành trang bán hoa đơn giản: header có tên cửa hàng "Hoa Cosmew", lưới 6 sản phẩm (tên, giá VND, ảnh placeholder), nút "Thêm vào giỏ" cập nhật số lượng giỏ hàng ở header (state phía client). Tách component hợp lý. Chạy build lại sau khi sửa.
 ---
 Thêm route `/api/products` trả JSON danh sách sản phẩm, và cho trang chủ lấy dữ liệu từ đó thay vì hard-code. Viết một test cho hàm định dạng giá VND và chạy test.
 ---

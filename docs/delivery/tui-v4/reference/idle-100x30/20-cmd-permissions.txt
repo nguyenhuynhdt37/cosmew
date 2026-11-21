@@ -1,0 +1,30 @@
+00|     Ask Claude to create or update subagents for you (e.g. "create a code-reviewer subagent that
+01|     ..."),
+02|     or edit the files directly:
+03|       • .claude/agents/       (this project)
+04|       • ~/.claude/agents/     (all projects)
+05|
+06|     Docs: https://code.claude.com/docs/en/sub-agents
+07|
+08|❯ /memory
+09|  ⎿  Closed memory
+10|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+11|  Permissions  Recently blocked   Allow   Ask   Deny   Auto mode   Workspace
+12|
+13|  Claude Code won't ask before using allowed tools.
+14|
+15|  ╭──────────────────────────────────────────────────────────────────────────────────────────────╮
+16|  │ ⌕ Search…                                                                                    │
+17|  ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+18|  ❯ Add a new rule…
+19|    mcp__computer-use__computer_batch
+20|    mcp__computer-use__cursor_position
+21|    mcp__computer-use__double_click
+22|    mcp__computer-use__hold_key
+23|    mcp__computer-use__key
+24|    mcp__computer-use__left_click
+25|    mcp__computer-use__left_click_drag
+26|    mcp__computer-use__left_mouse_down
+27|    ↓ 16 more
+28|
+29|  ↓ to navigate · ←/→ to switch · / to search · Esc to close

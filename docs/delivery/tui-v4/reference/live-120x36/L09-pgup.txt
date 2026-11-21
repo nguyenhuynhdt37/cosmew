@@ -1,0 +1,36 @@
+00|❯ Write a 60-line poem about terminals to poem.txt.               │                                                   ✕
+01|       5 The prompt is small, a dollar sign,                      │2 files changed +1 -1              source: Current ▾
+02|       6 a humble gate, a narrow door,                            │
+03|       7 yet through it pour the oldest spells                    │a.txt                                          +1 -1
+04|       8 that ran on glass and tape before.                       │poem.txt
+05|       9 I type a word, the shell replies,                        │
+06|      10 a pipe connects one thought to two,                      │────────────────────────────────────────────────────
+07|     … +50 lines                                                  │a.txt                                        [ ask ]
+08|                                                                  │────────────────────────────────────────────────────
+09|❯ also give it a title                                            │ 1 -hello
+10|                                                                  │ 1 +HELLO
+11|⏺ Update(poem.txt)                                                │ 2  world
+12|  ⎿  Added 2 lines                                                │
+13|      1 +Exit Zero                                                │────────────────────────────────────────────────────
+14|      2 +                                                         │poem.txt (untracked)
+15|      3  A cursor blinks against the black,                       │────────────────────────────────────────────────────
+16|      4  a heartbeat on an empty line;                            │New file not yet staged.
+17|      5  it never hurries, never asks,                            │Run `git add :/poem.txt` to see line counts.
+18|                                                                  │
+19|⏺ I wrote a 60-line poem about terminals to poem.txt and gave it  │
+20|  the title "Exit Zero", which comes from its last line.          │
+21|                                                                  │
+22|  The poem has 15 four-line stanzas. They cover the blinking      │
+23|  cursor, pipes, standard in, out and error, man pages, command   │
+24|  history, Ctrl-C and Ctrl-D, and tmux panes. The title and a     │
+25|  blank line sit above the poem, so the file is 62 lines long.    │
+26|                                                                  │
+27|✻ Baked for 29s · done 11:05 PM                                   │
+28|                                                                  │
+29|❯ Run sleep 40 as Jump to bottom · fn+↓ to scroll in_background)  │
+30|                                                                  │
+31|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+32|❯
+33|────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+34|
+35|  ⏸ manual mode on · ← 1 agent

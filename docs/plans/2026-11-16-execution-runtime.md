@@ -1,4 +1,4 @@
-# Futryn execution milestone
+# Cosmew execution milestone
 
 Baseline dev: babdd502230166a4420803e24481ac6e003d24fc. User authorized implementation on 2026-11-16. Preserve untracked hello.html. Upstream Codex pinned ca0bbbdf0c83cb64f2fb48cf0d5ffbc3d4409ab9.
 
@@ -7,4 +7,4 @@ Baseline dev: babdd502230166a4420803e24481ac6e003d24fc. User authorized implemen
 3. Reuse registry/router/handler/orchestrator/runtime for exec_command and pipe-mode write_stdin; own opaque bounded sessions, lease expiry and shutdown, current approval/revalidation for launch and input, no restoration on resume. Add redacted stdout/stderr streaming through domain events and existing TUI, and bounded durable final results. No PTY advertisement until separately verified.
 4. Test actual container isolation, setsid/double-fork cleanup, supervisor crash deadline, cancellation/timeout, signal/pipe input, stale sessions/approvals, network/filesystem denial, unrelated processes, model continuation and test/build/lint outcomes. Run full suite/typecheck/lint. Document platform gate, exact image/upstream revisions and remaining limitations. Production readiness requires the actual production containment path to pass, not injected runtime success.
 
-Design choice: a local container is needed on this macOS host because group cleanup and Seatbelt alone cannot enforce descendant lifetime. Docker/VM/kernel/image are trusted dependencies; no arbitrary image, remote Docker endpoint or unconfined retry. Build outputs are confined to ephemeral /tmp; verified host changes still use apply_patch. Long-lived commands have a finite nonrenewable lease, including after the Futryn process dies.
+Design choice: a local container is needed on this macOS host because group cleanup and Seatbelt alone cannot enforce descendant lifetime. Docker/VM/kernel/image are trusted dependencies; no arbitrary image, remote Docker endpoint or unconfined retry. Build outputs are confined to ephemeral /tmp; verified host changes still use apply_patch. Long-lived commands have a finite nonrenewable lease, including after the Cosmew process dies.

@@ -2,8 +2,8 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerSchema} from '@futryn/contracts';
-import {FileMemories} from '@futryn/persistence';
+import {providerSchema} from '@cosmew/contracts';
+import {FileMemories} from '@cosmew/persistence';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -71,7 +71,7 @@ async function setup(config = '') {
   }) as typeof globalThis.fetch;
   const opened: string[] = [];
   const app = startup(state, {
-    permissions: {sandbox: 'workspace-write', approval: 'on-request'},
+    permissions: {mode: 'acceptEdits'},
     openMemoryFolder: async path => {
       opened.push(path);
     },
@@ -216,7 +216,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('fyn exec uses the same memory context and contract 1.35', async () => {
+test('fyn exec uses the same memory context and contract 1.40', async () => {
   const h = await setup();
   h.put();
   let stdout = '';
@@ -232,7 +232,7 @@ test('fyn exec uses the same memory context and contract 1.35', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.35"');
+  expect(stdout).toContain('"contractVersion":"1.40"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {
@@ -278,7 +278,10 @@ test('user max_unused_days marks stale memories with a deletion suggestion; auto
   const frame = tui.computeFrameSnapshot().plainText;
   expect(frame).toContain('lâu không dùng');
   expect(frame).toContain('cân nhắc xoá');
-  expect(frame).toContain('1 lần dùng');
+  // The usage count is on the entry's detail line (the list row is truncated at the terminal width).
+  await tui.handleKey('Down');
+  await tui.handleKey('Enter');
+  expect(tui.computeFrameSnapshot().plainText).toContain('1 lần dùng');
   expect(h.requests).toHaveLength(0); // Discovery GETs are not generation requests.
   expect(
     h.app

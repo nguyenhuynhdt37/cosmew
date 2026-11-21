@@ -68,7 +68,7 @@ export const turnReceiptSchema = z.strictObject({
   stopReason: turnStopReasonSchema.optional(),
 });
 /**
- * Optional user-configured work budget for one turn (ADR 0030). Absent fields mean no limit: Futryn
+ * Optional user-configured work budget for one turn (ADR 0030). Absent fields mean no limit: Cosmew
  * has no hidden per-turn round or call ceiling. Internal safety bounds are separate and named.
  */
 export const turnBudgetSchema = z.strictObject({

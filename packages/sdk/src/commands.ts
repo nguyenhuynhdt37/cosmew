@@ -30,6 +30,7 @@ export type CommandHandler =
   | 'skills'
   | 'memory'
   | 'exit'
+  | 'keybindings'
   | 'mode'
   | 'unavailable';
 
@@ -53,6 +54,118 @@ export interface SlashCommandDef {
   unavailable?: string;
 }
 
+/**
+ * Claude Code keeps environment-dependent commands out of the command menu when
+ * a capability is unavailable, but still recognizes the full command name so it
+ * can explain why it cannot run. Keep the same distinction in the shared registry.
+ */
+function unavailableClaudeCommand(
+  command: string,
+  aliases: string[] = [],
+  argumentsMode?: 'optional' | 'required',
+): SlashCommandDef {
+  const label = command.slice(1).replace(/-/g, ' ');
+  return {
+    command,
+    handler: 'unavailable',
+    aliases,
+    title: label[0]!.toUpperCase() + label.slice(1),
+    description: `Claude Code command ${command} is not available in Cosmew yet`,
+    category: 'Workspace & Security',
+    autocomplete: false,
+    help: false,
+    ...(argumentsMode ? {arguments: argumentsMode} : {}),
+    unavailable: `${command} is not implemented in Cosmew yet.`,
+  };
+}
+
+const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
+  unavailableClaudeCommand('/advisor', [], 'optional'),
+  unavailableClaudeCommand('/add-dir', [], 'required'),
+  unavailableClaudeCommand('/artifact-capabilities'),
+  unavailableClaudeCommand('/artifact-diagramming'),
+  unavailableClaudeCommand('/artifacts'),
+  unavailableClaudeCommand('/auto-mode-setup'),
+  unavailableClaudeCommand('/autocompact', [], 'optional'),
+  unavailableClaudeCommand('/autofix-pr', [], 'optional'),
+  unavailableClaudeCommand('/background', ['/bg'], 'optional'),
+  unavailableClaudeCommand('/batch', [], 'required'),
+  unavailableClaudeCommand('/branch', [], 'optional'),
+  unavailableClaudeCommand('/btw', [], 'optional'),
+  unavailableClaudeCommand('/bug', ['/share'], 'optional'),
+  unavailableClaudeCommand('/cd', [], 'required'),
+  unavailableClaudeCommand('/chrome'),
+  unavailableClaudeCommand('/claude-api', [], 'optional'),
+  unavailableClaudeCommand('/claude-in-chrome', [], 'optional'),
+  unavailableClaudeCommand('/color', [], 'optional'),
+  unavailableClaudeCommand('/copy', [], 'optional'),
+  unavailableClaudeCommand('/debug', [], 'optional'),
+  unavailableClaudeCommand('/deep-research', [], 'required'),
+  unavailableClaudeCommand('/design', [], 'optional'),
+  unavailableClaudeCommand('/design-login'),
+  unavailableClaudeCommand('/design-sync', [], 'optional'),
+  unavailableClaudeCommand('/desktop', ['/app']),
+  unavailableClaudeCommand('/dataviz', [], 'optional'),
+  unavailableClaudeCommand('/export', [], 'optional'),
+  unavailableClaudeCommand('/fast', [], 'optional'),
+  unavailableClaudeCommand('/feedback', [], 'optional'),
+  unavailableClaudeCommand('/fewer-permission-prompts'),
+  unavailableClaudeCommand('/focus', [], 'optional'),
+  unavailableClaudeCommand('/goal', [], 'optional'),
+  unavailableClaudeCommand('/heapdump'),
+  unavailableClaudeCommand('/import', [], 'optional'),
+  unavailableClaudeCommand('/init', [], 'optional'),
+  unavailableClaudeCommand('/ide'),
+  unavailableClaudeCommand('/insights'),
+  unavailableClaudeCommand('/install-github-app'),
+  unavailableClaudeCommand('/install-slack-app'),
+  unavailableClaudeCommand('/list-agents', ['/peers']),
+  unavailableClaudeCommand('/loop', ['/proactive'], 'optional'),
+  unavailableClaudeCommand('/mobile', ['/ios', '/android']),
+  unavailableClaudeCommand('/output-style', [], 'optional'),
+  unavailableClaudeCommand('/passes'),
+  unavailableClaudeCommand('/plugin-authoring'),
+  unavailableClaudeCommand('/powerup'),
+  unavailableClaudeCommand('/privacy-settings'),
+  unavailableClaudeCommand('/radio'),
+  unavailableClaudeCommand('/rate-limit-options'),
+  unavailableClaudeCommand('/recap'),
+  unavailableClaudeCommand('/reload-plugins', [], 'optional'),
+  unavailableClaudeCommand('/reload-skills'),
+  unavailableClaudeCommand('/remote-control', ['/rc']),
+  unavailableClaudeCommand('/remote-env'),
+  unavailableClaudeCommand('/rename', [], 'optional'),
+  unavailableClaudeCommand('/release-notes'),
+  unavailableClaudeCommand('/restart', ['/update']),
+  unavailableClaudeCommand('/run', [], 'optional'),
+  unavailableClaudeCommand('/schedule', ['/routines'], 'optional'),
+  unavailableClaudeCommand('/scroll-speed'),
+  unavailableClaudeCommand('/security-review'),
+  unavailableClaudeCommand('/simplify', [], 'optional'),
+  unavailableClaudeCommand('/skill-doctor'),
+  unavailableClaudeCommand('/slides', [], 'optional'),
+  unavailableClaudeCommand('/setup-bedrock'),
+  unavailableClaudeCommand('/setup-vertex'),
+  unavailableClaudeCommand('/statusline', [], 'optional'),
+  unavailableClaudeCommand('/stickers'),
+  unavailableClaudeCommand('/stop'),
+  unavailableClaudeCommand('/subtask', [], 'required'),
+  unavailableClaudeCommand('/team-onboarding'),
+  unavailableClaudeCommand('/tasks', ['/bashes']),
+  unavailableClaudeCommand('/teleport', ['/tp']),
+  unavailableClaudeCommand('/terminal-setup'),
+  unavailableClaudeCommand('/tui', [], 'optional'),
+  unavailableClaudeCommand('/ultrareview', [], 'optional'),
+  unavailableClaudeCommand('/update-config', [], 'optional'),
+  unavailableClaudeCommand('/upgrade'),
+  unavailableClaudeCommand('/usage-credits'),
+  unavailableClaudeCommand('/verify', [], 'optional'),
+  unavailableClaudeCommand('/voice', [], 'optional'),
+  unavailableClaudeCommand('/web-setup'),
+  unavailableClaudeCommand('/workflow-authoring'),
+  unavailableClaudeCommand('/workflows'),
+];
+
 export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/usage',
@@ -69,6 +182,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     handler: 'overlay',
     overlay: 'context',
     aliases: [],
+    arguments: 'optional',
     title: 'Context Window',
     description: 'Model limits, output reserve, measured or estimated context',
     category: 'Navigation',
@@ -77,7 +191,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/effort',
     handler: 'effort',
-    aliases: ['/model effort'],
+    aliases: [],
     title: 'Reasoning Effort',
     description: 'Set an effort advertised by the active provider/model',
     category: 'Providers & Models',
@@ -92,7 +206,6 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Theme Picker',
     description: 'Choose Auto, Dark, or Light',
     category: 'Appearance',
-    shortcut: 'Ctrl+T',
   },
   {
     command: '/model',
@@ -103,7 +216,6 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Select Model',
     description: 'Search and select active model from discovered or cached provider catalog',
     category: 'Providers & Models',
-    shortcut: 'Ctrl+L',
   },
   {
     command: '/login',
@@ -135,7 +247,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/doctor',
     handler: 'doctor',
-    aliases: [],
+    aliases: ['/checkup'],
     title: 'Diagnose Connection',
     description: 'Validate active provider connectivity and runtime configuration',
     category: 'Providers & Models',
@@ -143,17 +255,35 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/mcp',
     handler: 'unavailable',
-    autocomplete: false,
-    unavailable: 'Not implemented: MCP integration. MCP authentication remains separate from provider authentication.',
     aliases: [],
-    title: 'MCP Management',
-    description: 'Not implemented in PA1/TUI1; MCP authentication is separate',
+    arguments: 'optional',
+    title: 'MCP Servers',
+    description: 'List user MCP servers from mcp.json (stdio and HTTP). Project files are not started.',
     category: 'Workspace & Security',
+    unavailable: 'MCP reconnect/enable/disable subcommands are not implemented in Cosmew yet.',
+  },
+  {
+    command: '/hooks',
+    handler: 'unavailable',
+    aliases: [],
+    title: 'Hooks',
+    description: 'Inspect hook support (execution is not implemented)',
+    category: 'Workspace & Security',
+    duringRequest: true,
+  },
+  {
+    command: '/rewind',
+    handler: 'unavailable',
+    aliases: ['/checkpoint', '/undo'],
+    title: 'Rewind',
+    description: 'Restore conversation and/or tracked text edits from a checkpoint',
+    category: 'Sessions',
   },
   {
     command: '/plugin',
     handler: 'unavailable',
     autocomplete: false,
+    help: false,
     unavailable: 'Not implemented: plugin host.',
     aliases: ['/plugins'],
     title: 'Plugin Management',
@@ -208,7 +338,6 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Session Picker',
     description: 'Browse, search, resume, or delete saved conversation sessions',
     category: 'Sessions',
-    shortcut: 'Ctrl+S',
   },
   {
     command: '/fork',
@@ -225,10 +354,10 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     handler: 'permissions',
     overlay: 'permissions',
     arguments: 'optional',
-    aliases: ['/perm'],
+    aliases: ['/perm', '/allowed-tools'],
     title: 'Permissions',
     description:
-      'Pending prompts; /permissions read-only|auto|full-access (or mode) sets permissions; Shift+Tab cycles presets',
+      'Manage allow, ask and deny rules; /permissions [default|acceptEdits|plan|bypassPermissions] changes the session mode',
     category: 'Workspace & Security',
   },
   {
@@ -251,13 +380,13 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     title: 'Workspace Diff Viewer',
     description: 'Inspect git working tree changes with syntax-colored unified diff hunks',
     category: 'Workspace & Security',
-    shortcut: 'Ctrl+D',
   },
   {
     command: '/config',
     handler: 'overlay',
     overlay: 'settings',
     aliases: ['/settings'],
+    arguments: 'optional',
     title: 'Configuration',
     description: 'Inspect effective coding-agent configuration and edit supported settings',
     category: 'Appearance',
@@ -283,13 +412,13 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     category: 'Workspace & Security',
   },
   {
-    command: '/review',
+    command: '/code-review',
     handler: 'mode',
     requires: 'independent',
-    aliases: [],
+    aliases: ['/review'],
     arguments: 'optional',
-    title: 'Review Changes',
-    description: 'Review actual workspace changes without modifying files',
+    title: 'Code Review',
+    description: 'Review the current diff for correctness, security and regressions',
     category: 'Workspace & Security',
   },
   {
@@ -303,7 +432,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/clear',
     handler: 'clear',
-    shortcut: 'Ctrl+N',
+    arguments: 'optional',
     aliases: ['/new', '/reset'],
     title: 'Clear Conversation',
     description: 'Start a fresh conversation; previous sessions remain available via /resume',
@@ -316,21 +445,30 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     duringRequest: true,
     aliases: ['/?'],
     title: 'Keyboard & Command Help',
-    description: 'Show all FUTRYN keyboard shortcuts, slash commands, and navigation rules',
+    description: 'Show all COSMEW keyboard shortcuts, slash commands, and navigation rules',
     category: 'Navigation',
+  },
+  {
+    command: '/keybindings',
+    handler: 'keybindings',
+    aliases: [],
+    title: 'Keyboard Shortcuts File',
+    description: 'Create or edit ~/.cosmew/keybindings.json in $VISUAL/$EDITOR; changes reload automatically',
+    category: 'Navigation',
+    duringRequest: true,
   },
   {
     command: '/exit',
     handler: 'exit',
     aliases: ['/quit'],
-    title: 'Exit FUTRYN',
+    title: 'Exit COSMEW',
     description: 'Restore terminal state cleanly and exit the TUI',
     category: 'Navigation',
-    shortcut: 'Ctrl+C',
   },
+  ...CLAUDE_UNAVAILABLE_COMMANDS,
 ];
 
-// Legacy FUTRYN-only commands remain parseable for existing users. They are
+// Legacy COSMEW-only commands remain parseable for existing users. They are
 // intentionally absent from the public discovery, autocomplete, and help list.
 const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
   {
@@ -396,13 +534,22 @@ export function parseSlashCommand(raw: string): ParsedSlashCommand {
   return {definition: entry.definition, args, input: entry.definition.command + (args ? ' ' + args : '')};
 }
 
+/** Match command-menu separators the same way Claude Code does. */
+export function normalizeSlashCommandName(value: string): string {
+  return value.toLowerCase().replace(/^\//, '').replace(/[-_:]/g, '');
+}
+
 /** Enter accepts a literal command prefix; explicit arguments and unknown
  * subcommands are parsed as typed rather than being replaced by fuzzy matches. */
 export function acceptSlashSelection(input: string, chosen?: SlashCommandDef): string {
   const raw = input.trim();
   if (!chosen) return raw;
-  const prefix = [chosen.command, ...chosen.aliases].some(name => name.toLowerCase().startsWith(raw.toLowerCase()));
-  return prefix || (!/\s/.test(raw) && !parseSlashCommand(raw).definition) ? chosen.command : raw;
+  const query = normalizeSlashCommandName(raw);
+  const prefix = [chosen.command, ...chosen.aliases].some(name => {
+    const normalized = normalizeSlashCommandName(name);
+    return normalized.startsWith(query);
+  });
+  return prefix ? chosen.command : raw;
 }
 
 /** Canonical shortcut lookup used by the application, with no second command table. */

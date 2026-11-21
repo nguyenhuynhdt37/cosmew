@@ -1,7 +1,7 @@
 import {Database} from 'bun:sqlite';
 import {chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, openSync} from 'node:fs';
 import {join, resolve} from 'node:path';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 import {migrateRemovedCodexRuntime, migrateRemovedRuntimes} from './runtime-removal';
 
 export function openPrivateDatabase(directory: string): Database {
@@ -23,7 +23,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 8) {
+    if (version > 10) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -65,6 +65,8 @@ export function openPrivateDatabase(directory: string): Database {
         CREATE TABLE IF NOT EXISTS session_instructions (
         conversation TEXT NOT NULL REFERENCES conversations(id), directory TEXT NOT NULL,
         PRIMARY KEY(conversation, directory));
+        CREATE TABLE IF NOT EXISTS session_plan_approval (
+          conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS session_plan (
         conversation TEXT PRIMARY KEY REFERENCES conversations(id), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS subagent_sessions (
@@ -91,7 +93,44 @@ export function openPrivateDatabase(directory: string): Database {
       if (version < 7) migrateRemovedRuntimes(db);
       // v8 (ADR 0049): the Codex app-server runtime is removed; its accounts and leases are deleted.
       if (version < 8) migrateRemovedCodexRuntime(db);
-      db.exec('PRAGMA user_version=8;');
+      // v9 (ADR 0069): append-only input retraction receipts; never rewrite execution evidence.
+      db.exec(`CREATE TABLE IF NOT EXISTS input_retractions (
+        conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL,
+        at TEXT NOT NULL, PRIMARY KEY(conversation,id));`);
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS turn_checkpoints (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES conversations(id), workspace TEXT NOT NULL, data TEXT NOT NULL);`,
+      );
+      db.exec(
+        `CREATE TABLE IF NOT EXISTS rewind_events (position INTEGER PRIMARY KEY AUTOINCREMENT, checkpoint_id TEXT NOT NULL, session_id TEXT NOT NULL, target_session_id TEXT NOT NULL, scope TEXT NOT NULL, at TEXT NOT NULL);`,
+      );
+      // v10 (ADR 0074): explicit workspace identity and prompt time; unknown legacy data stays NULL.
+      const conversationColumns = db.query('PRAGMA table_info(conversations)').all() as {name: string}[];
+      if (!conversationColumns.some(c => c.name === 'workspace'))
+        db.exec('ALTER TABLE conversations ADD COLUMN workspace TEXT');
+      if (!columns.some(c => c.name === 'created_at')) db.exec('ALTER TABLE messages ADD COLUMN created_at TEXT');
+      if (version < 10) {
+        db.exec(`UPDATE conversations SET workspace=(SELECT workspace FROM turn_checkpoints WHERE session_id=conversations.id LIMIT 1) WHERE workspace IS NULL;
+          UPDATE messages SET created_at=(SELECT json_extract(data,'$.startedAt') FROM turn_receipts r WHERE r.conversation=messages.conversation AND r.revision=messages.revision) WHERE role='user' AND created_at IS NULL;`);
+      }
+      db.exec(`CREATE TABLE IF NOT EXISTS prompt_history (
+        conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL,
+        workspace TEXT, at TEXT NOT NULL, content TEXT NOT NULL,
+        PRIMARY KEY(conversation,id));
+        CREATE INDEX IF NOT EXISTS prompt_history_recent ON prompt_history(at DESC);`);
+      if (version < 10) {
+        db.exec(`INSERT OR IGNORE INTO prompt_history(conversation,id,workspace,at,content)
+          SELECT m.conversation, 'message:' || m.revision, c.workspace, m.created_at, substr(m.content,1,16000)
+          FROM messages m JOIN conversations c ON c.id=m.conversation
+          WHERE m.role='user' AND m.created_at IS NOT NULL;
+          INSERT OR IGNORE INTO prompt_history(conversation,id,workspace,at,content)
+          SELECT e.conversation,json_extract(e.data,'$.steerId'),c.workspace,e.at,substr(json_extract(e.data,'$.message.content'),1,16000)
+          FROM conversation_events e JOIN conversations c ON c.id=e.conversation
+          WHERE json_extract(e.data,'$.type')='user.steered';`);
+      }
+      db.exec(
+        'DELETE FROM prompt_history WHERE rowid IN (SELECT rowid FROM prompt_history ORDER BY at DESC,rowid DESC LIMIT -1 OFFSET 5000)',
+      );
+      db.exec('PRAGMA user_version=10;');
     })();
     return db;
   } catch {

@@ -1,29 +1,38 @@
 import type {
   ToolResult,
+  ToolOutputArchive,
+  OutputArchiveScope,
   MemoriesPort,
   CommandRuntime,
   CommandSandbox,
+  PermissionMode,
   PlanState,
   UserInputOutcome,
   UserQuestion,
   PermissionDecision,
   SubagentExecutionPort,
-} from '@futryn/contracts';
-import {evaluateRead, type SessionGrants, type SandboxEscalation} from '@futryn/security';
-import type {LspManager} from '@futryn/code-intel';
-import type {SkillCatalog, WorkspaceRoot} from '@futryn/workspace';
+} from '@cosmew/contracts';
+import {evaluateRead, type SessionGrants} from '@cosmew/security';
+import type {LspManager} from '@cosmew/code-intel';
+import type {SkillCatalog, WorkspaceRoot} from '@cosmew/workspace';
 
 /**
- * The answer to an approval prompt (ADR 0055, Codex `ReviewDecision`): `session` is
- * ApprovedForSession; `always` is the persistent project Allow rule, which the approval adapter has
- * already saved - for the dispatcher it authorizes exactly this call, like `once`.
+ * The answer to an approval prompt (ADR 0055, 0061): `session` lasts for the session; `always` is a
+ * saved Allow rule, which the approval adapter has already stored - for the dispatcher it authorizes
+ * exactly this call, like `once`.
  */
 export type ApprovalDecision = 'once' | 'session' | 'always' | 'deny';
 
 export interface ApprovalRequest {
   tool: string;
-  /** `network.connect` is a `request_permissions` grant (ADR 0040). */
-  capability: 'agent.state.write' | 'fs.read' | 'fs.write' | 'process.execute' | 'network.connect' | 'network.search';
+  capability:
+    | 'agent.state.write'
+    | 'fs.read'
+    | 'fs.write'
+    | 'process.execute'
+    | 'network.connect'
+    | 'network.search'
+    | 'mcp.call';
   /** Workspace-relative target, or the exact command for `process.execute`. */
   target: string;
   reason: string;
@@ -32,11 +41,11 @@ export interface ApprovalRequest {
   sandbox?: string;
   scopeKey?: string;
   diffPreview?: string;
-  /** The command asks for network access beyond the default sandbox (ADR 0034). */
-  network?: boolean;
-  /** The command asks to run once WITHOUT the sandbox (`require_escalated`, ADR 0053). */
+  /** The command asks to run once WITHOUT the sandbox (`dangerouslyDisableSandbox`, ADR 0061). */
   unsandboxed?: boolean;
-  /** True when the command matched the dangerous-command heuristic (`forced-rm`), even if combined with network/escalation. */
+  /** The command runs outside the sandbox because settings exclude it or the sandbox is disabled. */
+  excluded?: boolean;
+  /** True when the command matched the dangerous-command heuristic (`forced-rm`), for display. */
   dangerous?: boolean;
   /** Commands: parsed sub-commands for project rules, null when the script is unparsed (ADR 0040). */
   commands?: string[] | null;
@@ -59,7 +68,26 @@ export interface ToolAuditRecord {
 }
 
 export interface ToolDispatcherOptions {
+  /** Owning conversation captured at command launch, including subagents. */
+  sessionId?: () => string | undefined;
+  checkpoints?: {
+    capture(changes: import('@cosmew/contracts').CheckpointFile[]): void;
+    restore(id: string): import('@cosmew/contracts').CheckpointFile[];
+  };
   workspace: WorkspaceRoot;
+  outputArchive?: {
+    store: ToolOutputArchive;
+    scope(): OutputArchiveScope;
+    /**
+     * MUST fingerprint all effective source/tool policy configuration, including mutable policy
+     * captured by any custom readPolicy closure. Search captures do not enumerate every source
+     * file, so every changing rule must change this fingerprint. The dispatcher additionally
+     * hashes grant scope/revocations, sandbox and mode; direct source-read revalidation supplements
+     * this fingerprint and does not replace it.
+     */
+    permissionContext(): string;
+    policy?(): 'allow' | 'ask' | 'deny' | undefined;
+  };
   /** Discovered exact skill files; no arbitrary outside-workspace reads. */
   skills?: SkillCatalog;
   memories?: MemoriesPort;
@@ -88,21 +116,30 @@ export interface ToolDispatcherOptions {
    * change before launch invalidates the pending request. Defaults to read-only, on-request.
    */
   sandbox?: () => SandboxConfig;
-  /**
-   * Identity of the running turn. `request_permissions` answered "once" grants for this turn only
-   * (Codex); without it such grants cover only the request itself.
-   */
+  /** The sandbox network gate (ADR 0061); without it sandboxed commands have loopback only. */
+  proxy?: {ensure(): Promise<string>};
+  /** Identity of the running turn, when the composition root tracks it. */
   turnId?: () => string | undefined;
   /** Language servers (ADR 0043); `lsp`/`lsp_rename` are offered only while they are available. */
   codeIntel?: LspManager;
   /** Public web operations, wired only by the composition root. */
   web?: {search?(query: string, numResults: number, signal?: AbortSignal): Promise<string>; searchEndpoint?: string};
   /**
+   * User-configured MCP tools (ADR 0068), wired only by the composition root. Names are
+   * `mcp__server__tool`. The dispatcher authorizes each call before `call`.
+   */
+  mcp?: {
+    tools(): readonly {name: string; description: string; inputSchema: Record<string, unknown>}[];
+    call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  };
+  /**
    * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it
    * are offered only when it is wired.
    */
   agentState?: {
     updatePlan?(plan: PlanState): void;
+    canProposePlan?(): boolean;
+    proposePlan?(plan: string, signal?: AbortSignal): Promise<import('@cosmew/contracts').PlanApprovalOutcome>;
     /** Ask the user (ADR 0042); resolves `unavailable` without a UI, and on abort the call is cancelled. */
     askUser?(questions: UserQuestion[], signal?: AbortSignal): Promise<UserInputOutcome>;
     /** Whether a user can answer now; the tool is offered only then (never in non-interactive runs). */
@@ -112,64 +149,40 @@ export interface ToolDispatcherOptions {
   subagents?: SubagentExecutionPort;
 }
 
-/** Grant keys for `request_permissions` (ADR 0040), stored in the session grants. */
-export const PERMISSION_GRANT = {
-  capability: 'sandbox.grant',
-  network: (scope: string) => JSON.stringify({grant: 'network', scope}),
-  write: (scope: string, path: string) => JSON.stringify({grant: 'write', scope, path}),
-} as const;
-
-/** Scopes a `request_permissions` grant may live in right now: the session, and the running turn. */
-export function grantScopes(options: ToolDispatcherOptions): string[] {
-  const turn = options.turnId?.();
-  return turn ? ['session', `turn:${turn}`] : ['session'];
-}
-
-export function networkGranted(options: ToolDispatcherOptions): boolean {
-  return grantScopes(options).some(scope =>
-    options.grants.has(PERMISSION_GRANT.capability, PERMISSION_GRANT.network(scope)),
-  );
-}
-
-/** A workspace-relative path lies in a writable root granted by `request_permissions`. */
-export function writeGranted(options: ToolDispatcherOptions, path: string): boolean {
-  const grants = options.grants.list().filter(g => g.capability === PERMISSION_GRANT.capability);
-  const scopes = new Set(grantScopes(options));
-  return grants.some(g => {
-    try {
-      const parsed = JSON.parse(g.target) as {grant: string; scope: string; path?: string};
-      return (
-        parsed.grant === 'write' &&
-        scopes.has(parsed.scope) &&
-        !!parsed.path &&
-        (path === parsed.path || path.startsWith(parsed.path + '/'))
-      );
-    } catch {
-      return false;
-    }
-  });
-}
-
 /**
- * The session's configured sandbox, read per call: the mode (Read Only / Auto / Full Access presets,
- * ADR 0055), whether the approval policy still allows escalating (`never`: no), and whether the
- * user's config gives sandboxed commands network (`network_access`, `FUTRYN_SANDBOX_NETWORK`;
- * applies to `workspace-write` only, like Codex).
+ * The session's sandbox settings, read per call (ADR 0061): `sandbox.enabled`,
+ * `autoAllowBashIfSandboxed`, `excludedCommands`, `allowUnsandboxedCommands`, the writable
+ * `additionalDirectories`, the permission mode and the path globs of `Read`/`Edit` deny rules.
+ * `readOnly` narrows a subagent profile to an OS sandbox that cannot write the workspace.
  */
 export interface SandboxConfig {
-  mode: CommandSandbox['mode'];
-  escalation: SandboxEscalation;
-  network?: boolean;
+  enabled: boolean;
+  readOnly?: boolean;
+  autoAllowBash: boolean;
+  excludedCommands: string[];
+  allowUnsandboxed: boolean;
+  additionalDirectories: string[];
+  /** Commands may use the network through the domain-filtering proxy. */
+  network: boolean;
+  permissionMode: PermissionMode;
+  denyRead?: string[];
+  denyWrite?: string[];
 }
 
-export const sandboxConfig = (options: ToolDispatcherOptions): SandboxConfig =>
-  options.sandbox?.() ?? {mode: 'read-only' as const, escalation: 'on-request' as const};
-
-/** Configured network for sandboxed commands: only the workspace-write sandbox has the setting. */
-export const networkConfigured = (options: ToolDispatcherOptions): boolean => {
-  const config = sandboxConfig(options);
-  return config.network === true && config.mode === 'workspace-write';
+/** Without a configured sandbox a dispatcher is read-only: nothing can write and nothing escapes. */
+export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
+  enabled: true,
+  readOnly: true,
+  autoAllowBash: true,
+  excludedCommands: [],
+  allowUnsandboxed: false,
+  additionalDirectories: [],
+  network: false,
+  permissionMode: 'default',
 };
+
+export const sandboxConfig = (options: ToolDispatcherOptions): SandboxConfig =>
+  options.sandbox?.() ?? DEFAULT_SANDBOX_CONFIG;
 
 /** Session grant target for one command: bound to the text, the canonical directory and the sandbox policy. */
 export function commandGrantTarget(
@@ -190,17 +203,19 @@ export type ToolOutput = Omit<ToolResult, 'callId' | 'name'>;
 export type Audit = (record: Omit<ToolAuditRecord, 'at' | 'callId' | 'tool'>) => void;
 
 /**
- * The sandbox a command actually gets: the configured mode when the runtime can enforce it, otherwise
- * read-only when that is enforceable (stricter, never looser). Undefined means nothing can run.
+ * The sandbox a command actually gets: the OS sandbox of the configured kind when the runtime can
+ * enforce it, `danger-full-access` (no sandbox) when settings disable it and the runtime can run
+ * that. A runtime that cannot enforce a workspace-write sandbox is stepped down to read-only, never
+ * up. Undefined means nothing can run: there is never a silent fallback to no sandbox.
  */
 export function effectiveSandboxMode(
   options: ToolDispatcherOptions,
   runtime: CommandRuntime,
 ): CommandSandbox['mode'] | undefined {
   const modes = runtime.capabilities?.().modes ?? ['read-only'];
-  const configured = sandboxConfig(options).mode;
-  // Full Access is never downgraded silently: a runtime that cannot run unsandboxed refuses (ADR 0055).
-  if (configured === 'danger-full-access') return modes.includes(configured) ? configured : undefined;
+  const config = sandboxConfig(options);
+  if (!config.enabled) return modes.includes('danger-full-access') ? 'danger-full-access' : undefined;
+  const configured = config.readOnly ? 'read-only' : 'workspace-write';
   return modes.includes(configured) ? configured : modes.includes('read-only') ? 'read-only' : undefined;
 }
 

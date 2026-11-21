@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {ToolDescriptor} from '@futryn/contracts';
+import type {ToolDescriptor} from '@cosmew/contracts';
 import {
   AGENT_CATALOG_CHAR_BUDGET,
   SubagentManager,
@@ -14,9 +14,9 @@ import {
   profileFromDefinition,
   renderAgentCatalog,
   resolveAgentProfile,
-} from '@futryn/agents';
-import {SqliteConversations, openPrivateDatabase} from '@futryn/persistence';
-import {AgentDefinitionCatalog, WorkspaceRoot, parseAgentDocument} from '@futryn/workspace';
+} from '@cosmew/agents';
+import {SqliteConversations, openPrivateDatabase} from '@cosmew/persistence';
+import {AgentDefinitionCatalog, WorkspaceRoot, parseAgentDocument} from '@cosmew/workspace';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -110,6 +110,15 @@ test('custom agent discovery: nearer scope wins, .futryn before .claude before .
   writeFileSync(join(root, 'pkg/.futryn/agents/dup.md'), 'now broken');
   expect(() => catalog.load('dup')).toThrow();
   expect(catalog.load('missing')).toBeUndefined();
+});
+
+test('canonical Cosmew agent roots take precedence over legacy project roots', () => {
+  const {root, home, put} = repo();
+  put('.futryn/agents/demo.md', 'demo', 'legacy');
+  put('.cosmew/agents/demo.md', 'demo', 'cosmew');
+  const report = new AgentDefinitionCatalog({workspace: new WorkspaceRoot(root), home}).report();
+  expect(report.definitions.find(d => d.name === 'demo')?.shortPath).toBe('.cosmew/agents/demo.md');
+  expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(1);
 });
 
 test('Read deny rules hide an agent file from discovery', () => {

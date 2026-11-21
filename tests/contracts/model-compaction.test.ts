@@ -1,5 +1,5 @@
 /**
- * ADR 0054: model-written compaction (auto at 90% of the window, `/compact`), fallback, cancellation,
+ * ADR 0054: model-written compaction (auto at 85% of the window, `/compact`), fallback, cancellation,
  * durability, usage. Deterministic in-process model; fixture evidence only.
  */
 import {afterEach, expect, test} from 'bun:test';
@@ -14,15 +14,15 @@ import {
   type ModelRequest,
   type ToolPort,
   type Usage,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 import {
   COMPACT_USER_MESSAGE_MAX_TOKENS,
   COMPACTION_PROMPT,
   Conversation,
   SUMMARY_PREFIX,
   estimateTokens,
-} from '@futryn/core';
-import {SLASH_COMMANDS} from '@futryn/sdk';
+} from '@cosmew/core';
+import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {compactionNotice} from '../../apps/tui/src/ink/features/commands';
 import {memoryVault} from '../fixtures';
@@ -116,7 +116,7 @@ function harness(options: {contextLimit: number; brain?: Brain; toolBytes?: numb
 const compacted = (events: ModelEvent[]) =>
   events.filter((e): e is Extract<ModelEvent, {type: 'context.compacted'}> => e.type === 'context.compacted');
 
-test('auto compaction fires at 90% of the window, keeps recent user messages and the plan, counts usage', async () => {
+test('auto compaction fires at 85% of the window, keeps recent user messages and the plan, counts usage', async () => {
   const h = harness({contextLimit: 2500});
   h.app.conversations.savePlan?.(h.conversation.id, {
     items: [{step: 'ship the checkpoint feature', status: 'in_progress'}],
@@ -129,7 +129,7 @@ test('auto compaction fires at 90% of the window, keeps recent user messages and
   expect(event).toBeDefined();
   expect(event).toMatchObject({trigger: 'auto', strategy: 'model'});
   expect(event!.tokensAfter).toBeLessThan(event!.tokensBefore);
-  expect(event!.tokensBefore).toBeGreaterThanOrEqual(2500 * 0.9);
+  expect(event!.tokensBefore).toBeGreaterThanOrEqual(2500 * 0.85);
   expect(h.summaryCalls()).toBe(1);
 
   // The request that follows the summary sees the handoff, the retained user messages and the plan.
@@ -221,7 +221,7 @@ test('cancelling during the summary cancels the turn and leaves the durable hist
 
 test('recovery after restart loads the compacted state without another summary call', async () => {
   const h = harness({contextLimit: 2500});
-  for (let i = 0; i < 4; i++) await h.send(h.filler(`turn-${i}`));
+  for (let i = 0; i < 4 && !h.summaryCalls(); i++) await h.send(h.filler(`turn-${i}`));
   expect(h.summaryCalls()).toBe(1);
   const stored = h.app.conversations.get(h.conversation.id)!;
   const restarted = h.make({id: h.conversation.id, messages: stored.recovery!.messages});
@@ -358,4 +358,168 @@ test('the compaction call carries the turn cost and output caps', async () => {
     maxEstimatedCostUSD: 0.25,
   });
   expect(seen[0]).toMatchObject({maxOutputTokens: 512, maxEstimatedCostUSD: 0.25, tools: []});
+});
+
+test('87% measured pressure compacts before withdrawing tools and continues investigation', async () => {
+  let rounds = 0;
+  let offered: string[] = [];
+  const h = harness({
+    contextLimit: 4000,
+    toolBytes: 1500,
+    brain: request => {
+      if (isSummary(request)) return answer('Reduced investigation handoff', SUMMARY_USAGE);
+      if (++rounds > 1) {
+        offered = request.tools.map(t => t.name);
+        return answer('continued with tools');
+      }
+      return [
+        {type: 'toolCallComplete', call: {id: 'pressure', name: 'read', input: {path: 'source'}}},
+        {type: 'completed', finishReason: 'tool_calls', usage: usage(3480, 0)},
+      ];
+    },
+  });
+  const events = await h.send('Keep investigating the source');
+  expect(offered).toContain('read');
+  expect(h.summaryCalls()).toBe(1);
+  expect(compacted(events)[0]).toMatchObject({strategy: 'model', tokensBefore: 3480});
+  expect(events.at(-1)).toMatchObject({type: 'completed'});
+});
+
+test('producer pages are preserved verbatim while the whole request fits', async () => {
+  let rounds = 0;
+  let page = '';
+  const h = harness({
+    contextLimit: 100_000,
+    toolBytes: 40_000,
+    brain: request => {
+      if (++rounds > 1) {
+        page = request.messages.find(m => m.role === 'tool')!.content;
+        return answer('checked the entire page');
+      }
+      return [
+        {type: 'toolCallComplete', call: {id: 'page', name: 'read', input: {path: 'source'}}},
+        {type: 'completed', finishReason: 'tool_calls', usage: usage(10, 5)},
+      ];
+    },
+  });
+  await h.send('Read this page');
+  expect(page).toBe('BIGOUT-page ' + 'x'.repeat(40_000));
+  expect(h.summaryCalls()).toBe(0);
+});
+
+test.each(['failure', 'no-gain'] as const)('%s summary at 87% is attempted once and finishes honestly', async mode => {
+  let rounds = 0;
+  const h = harness({
+    contextLimit: 4000,
+    toolBytes: 1500,
+    brain: request => {
+      if (isSummary(request))
+        return mode === 'failure' ? new FutrynError('TRANSPORT') : answer('too long '.repeat(1500), SUMMARY_USAGE);
+      if (++rounds > 1) return answer('Context is full; investigation remains unfinished');
+      return [
+        {type: 'toolCallComplete', call: {id: 'full', name: 'read', input: {path: 'source'}}},
+        {type: 'completed', finishReason: 'tool_calls', usage: usage(3480, 0)},
+      ];
+    },
+  });
+  const events = await h.send('Investigate until the evidence is sufficient');
+  expect(h.summaryCalls()).toBe(1);
+  expect(h.requests.at(-1)!.tools).toEqual([]);
+  expect(compacted(events)).toHaveLength(0);
+  expect(h.receipts().at(-1).stopReason).toBe('context_window');
+  expect(h.app.conversations.recover(h.conversation.id).messages.some(m => m.toolCallId === 'full')).toBe(true);
+  if (mode === 'no-gain') expect(h.receipts().at(-1).usage.inputTokens).toBe(3480 + 1000 + 10);
+});
+
+test('UTF-8 context clipping is bounded and preserves real retrieval references through handoffs', async () => {
+  const {truncateToolResults} = await import('../../packages/core/src/context/builder');
+  const {assembleHandoff} = await import('../../packages/core/src/context/model-compaction');
+  const marker =
+    '[tool_output output_id=12345678-1234-1234-1234-123456789abc; use tool_output to retrieve archived evidence]';
+  const original: Message = {
+    role: 'tool',
+    toolName: 'read',
+    toolCallId: 'utf8',
+    content: 'Tiếng Việt 🐈 '.repeat(5000) + marker,
+  };
+  const [clipped] = truncateToolResults([original], 1024);
+  expect(Buffer.byteLength(clipped!.content)).toBeLessThan(1300);
+  expect(clipped!.content).not.toContain('\uFFFD');
+  expect(clipped!.content).toContain(marker);
+  expect(clipped!.content).toContain('not a complete read');
+  expect(assembleHandoff('Model omitted all handles', [original], null)).toContain(marker);
+  expect(assembleHandoff('No archive exists', [{...original, content: 'ordinary evidence'}], null)).not.toContain(
+    'output_id=',
+  );
+  expect(original.content).not.toContain('context truncation');
+});
+
+test('excerpt checkpoints keep retrieval references from the clipped middle evidence', async () => {
+  const {compactHistory, useContextSnapshot} = await import('../../packages/core/src/context/compaction');
+  const marker =
+    '[tool_output output_id=12345678-1234-1234-1234-123456789abc; use tool_output to retrieve archived evidence]';
+  const messages: Message[] = [
+    {role: 'user', content: 'first question'},
+    {role: 'assistant', content: '', toolCalls: [{id: 'ref', name: 'read', input: {path: 'src'}}]},
+    {role: 'tool', toolName: 'read', toolCallId: 'ref', content: 'x'.repeat(5000) + marker},
+    {role: 'user', content: 'second question'},
+    {role: 'assistant', content: 'answer'},
+    {role: 'user', content: 'third question'},
+  ];
+  const snapshot = await compactHistory(messages, undefined, 10_000);
+  expect(snapshot).toBeDefined();
+  expect(JSON.stringify(useContextSnapshot(messages, snapshot))).toContain(marker);
+});
+
+test('summarizer keeps a complete producer page when it fits including its middle evidence', async () => {
+  const {summarizeWithModel} = await import('../../packages/core/src/context/model-compaction');
+  const content = 'a'.repeat(20_000) + 'middle evidence Tiếng Việt 🐈' + 'z'.repeat(20_000);
+  let supplied = '';
+  const model: ModelPort = {
+    async *stream(request) {
+      supplied = request.messages.find(m => m.role === 'tool')!.content;
+      yield* answer('handoff', SUMMARY_USAGE);
+    },
+    generate: async () => {
+      throw new FutrynError('UNSUPPORTED');
+    },
+  };
+  await summarizeWithModel({
+    model,
+    selection: {accountId: 'a', modelId: 'fixture'},
+    visible: [
+      {role: 'assistant', content: '', toolCalls: [{id: 'page', name: 'read', input: {path: 'source'}}]},
+      {role: 'tool', toolName: 'read', toolCallId: 'page', content},
+    ],
+    window: 100_000,
+  });
+  expect(supplied).toBe(content);
+});
+
+test('mid-turn handoff keeps a small newest evidence round paired and the current user request', async () => {
+  let rounds = 0;
+  const h = harness({
+    contextLimit: 4000,
+    toolBytes: 300,
+    brain: request => {
+      if (isSummary(request)) return answer('Compact older evidence', SUMMARY_USAGE);
+      if (++rounds === 1) return answer('older evidence '.repeat(200));
+      if (rounds > 2) return answer('done');
+      return [
+        {type: 'toolCallComplete', call: {id: 'newest', name: 'read', input: {path: 'latest'}}},
+        {type: 'completed', finishReason: 'tool_calls', usage: usage(3480, 0)},
+      ];
+    },
+  });
+  await h.send('Earlier investigation');
+  await h.send('Keep the latest evidence and continue');
+  const next = h.requests[h.requests.findIndex(isSummary) + 1]!;
+  expect(next.messages.some(m => m.role === 'user' && m.content === 'Keep the latest evidence and continue')).toBe(
+    true,
+  );
+  const result = next.messages.findIndex(m => m.role === 'tool' && m.toolCallId === 'newest');
+  expect(result).toBeGreaterThan(0);
+  expect(next.messages[result - 1]!.toolCalls?.map(c => c.id)).toContain('newest');
+  expect(next.messages[result]!.content).toContain('BIGOUT-newest');
+  expect(next.tools.map(t => t.name)).toContain('read');
 });

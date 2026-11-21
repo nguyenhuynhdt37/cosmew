@@ -2,11 +2,11 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {SessionGrants} from '@futryn/security';
-import {ToolDispatcher} from '@futryn/tools';
+import {SessionGrants} from '@cosmew/security';
+import {ToolDispatcher} from '@cosmew/tools';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
-import {WorkspaceRoot} from '@futryn/workspace';
-import type {PlanState} from '@futryn/contracts';
+import {WorkspaceRoot} from '@cosmew/workspace';
+import type {PlanState} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
@@ -124,12 +124,12 @@ test('the plan is durable, offered in Plan mode, pinned above the composer and s
   expect(first.tui.getTranscript().at(-1)!.content).toContain('PLANNED');
   expect(first.client.plan()).toMatchObject({explanation: 'Fix the bug', items: PLAN.plan});
   const frame = first.tui.computeFrameSnapshot().plainText;
-  expect(frame).toContain('Plan · 1/4 completed');
-  expect(frame).toContain('✓ Reproduce the failure');
-  expect(frame).toContain('▸ Fix the parser');
-  expect(frame).toContain('○ Run the tests');
-  expect(frame).toContain('✗ Rewrite history');
-  expect(frame).toContain('⏺ update_plan(1/4 completed) · ok');
+  expect(frame).not.toContain('[----------]');
+  expect(frame).toContain('☒ Reproduce the failure');
+  expect(frame).toContain('☐ Fix the parser');
+  expect(frame).toContain('☐ Run the tests');
+  expect(frame).toContain('☒ Rewrite history');
+  expect(frame).toContain('⏺ Update Todos');
   const id = first.client.activeSession()!.id;
   await first.close();
 

@@ -3,7 +3,7 @@ import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {providerPresets} from '@futryn/models';
+import {providerPresets} from '@cosmew/models';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
 
@@ -182,7 +182,7 @@ test('ChatGPT API sign-in: dynamic client, PKCE, scope, verified id_token, token
   const c = await setup(auth, async url => auth.browser()(url));
   const account = await c.signIn();
   expect(auth.seen.authorize!.get('client_id')).toBe('dynamic_agent_client');
-  expect(auth.seen.authorize!.get('agent_name_hint')).toBe('Futryn');
+  expect(auth.seen.authorize!.get('agent_name_hint')).toBe('Cosmew');
   expect(auth.seen.authorize!.get('code_challenge_method')).toBe('S256');
   expect(auth.seen.authorize!.get('scope')).toContain('chatgpt.tokens.use.direct');
   expect(auth.seen.authorize!.get('resource')).toBe('https://api.openai.com/v1');

@@ -1,4 +1,4 @@
-# Futryn TUI V2 — engineering delivery
+# Cosmew TUI V2 — engineering delivery
 
 Date: 2026-11-17. Overall: **PARTIAL** against the entire master specification;
 **VERIFIED** for indexed long-session rendering, steady-state input responsiveness,
@@ -7,7 +7,7 @@ full Claude Code parity or Product MVP acceptance.
 
 ## Revisions and worktree
 
-Starting Futryn: `03d3d27bb5e70330ffe8807c3f345be5ac0a51f4`, branch `dev`.
+Starting Cosmew: `03d3d27bb5e70330ffe8807c3f345be5ac0a51f4`, branch `dev`.
 The starting worktree contained only untracked `giao-dien.html` and `hello.html`;
 both were preserved. During execution, independent documentation commit
 `21443f6291fc6a88415d7e978da8d40817317156` landed on `dev`; its AGENTS/CLAUDE/repository-map

@@ -16,3 +16,5 @@ export {
   COMPACTION_PROMPT,
   SUMMARY_PREFIX,
 } from './context/model-compaction';
+
+export {summarizeCheckpointSpan} from './context/rewind-summary';

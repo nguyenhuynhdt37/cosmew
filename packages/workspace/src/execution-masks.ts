@@ -1,13 +1,13 @@
 import {readdirSync} from 'node:fs';
 import {join} from 'node:path';
-import {FutrynError} from '@futryn/contracts';
+import {FutrynError} from '@cosmew/contracts';
 import type {WorkspaceRoot} from './paths';
 
 /** What a sandboxed command must not see or change inside the live workspace mount (ADR 0034). */
 export interface ExecutionMasks {
   /** Files replaced by an empty read-only file (secrets). Workspace-relative, `/` separators. */
   hiddenFiles: string[];
-  /** Directories replaced by an empty read-only directory (Futryn state, patch temporaries). */
+  /** Directories replaced by an empty read-only directory (Cosmew state, patch temporaries). */
   hiddenDirectories: string[];
   /** Entries mounted read-only over their real content (Git metadata). */
   readOnly: string[];

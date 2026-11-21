@@ -7,7 +7,7 @@ import {
   type Message,
   type StoredMessage,
   type ToolResult,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 /**
  * Pure reconstruction of a conversation from its execution journal (ADR 0030/0033). Nothing here
@@ -41,7 +41,7 @@ const INCOMPLETE_PREFIX =
 const UNKNOWN_OUTCOME =
   '[unknown: interrupted execution] Intent was recorded but no result was confirmed. Inspect current filesystem state; do not replay or reuse an old approval.';
 const NOT_EXECUTED =
-  '[not executed] The turn ended before Futryn dispatched this call. A new call requires current policy and fresh revalidation.';
+  '[not executed] The turn ended before Cosmew dispatched this call. A new call requires current policy and fresh revalidation.';
 
 const corrupt = () => new FutrynError('STORAGE');
 const isLive = (state: string) => state === 'pending' || state === 'running';
@@ -77,6 +77,7 @@ export function reconstructConversation(
   rows: TurnRow[],
   turns: DurableTurn[],
   legacy: StoredMessage[],
+  retracted: ReadonlySet<string> = new Set(),
 ): {messages: Message[]; pendingInput: PendingInputs} {
   const messages: Message[] = [];
   const pendingInput: PendingInputs = new Map();
@@ -91,7 +92,7 @@ export function reconstructConversation(
 
     const turn = turns[index]!;
     validateTurn(turn, row, pendingInput);
-    messages.push(...reconstructTurn(turn, pendingInput));
+    messages.push(...reconstructTurn(turn, pendingInput, retracted));
 
     // Legacy messages covered by this turn are replaced by its reconstruction.
     const end = row.end_revision ?? (rows[index + 1]?.user_revision ?? Infinity) - 1;
@@ -166,7 +167,11 @@ export function validateTurn(turn: DurableTurn, row: TurnRow, pendingInput: Pend
  *   ended inside an unfinished response keeps it, labelled incomplete.
  * - Completed tool calls and confirmed results always stay; unresolved calls get explicit outcomes.
  */
-export function reconstructTurn(turn: DurableTurn, pendingInput: PendingInputs): Message[] {
+export function reconstructTurn(
+  turn: DurableTurn,
+  pendingInput: PendingInputs,
+  retracted: ReadonlySet<string> = new Set(),
+): Message[] {
   const messages: Message[] = [];
   const segments = new ResponseSegments(messages);
   const steered: {steerId: string; message: Message}[] = [];
@@ -186,7 +191,7 @@ export function reconstructTurn(turn: DurableTurn, pendingInput: PendingInputs):
         messages.push(e.message);
         break;
       case 'user.steered':
-        steered.push({steerId: e.steerId, message: e.message});
+        if (!retracted.has(e.steerId)) steered.push({steerId: e.steerId, message: e.message});
         break;
       case 'tool.call':
         segments.add({role: 'assistant', content: '', toolCalls: [e.call]});

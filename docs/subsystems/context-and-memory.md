@@ -1,6 +1,6 @@
 # Context và memory
 
-**Trạng thái: Not implemented.** Mọi lifecycle và acceptance dưới đây là đặc tả cho phase tương lai.
+**Implemented slice (2026-11-19):** model/excerpt compaction, project context and user memories are implemented; see ADR 0054/0057 and [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md). Auto compact runs at 85% before tool withdrawal, producer pages remain intact when the request fits, and bounded archive references survive handoffs. Remaining lifecycle/acceptance below includes future design and is not a completion claim.
 
 ## 1. Mục đích và phạm vi
 

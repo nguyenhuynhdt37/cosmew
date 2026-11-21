@@ -5,7 +5,7 @@ import {
   type SubagentTranscriptStep,
   type SubagentType,
   type Usage,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 
 export interface ActiveSubagentTask {
   agentId: string;

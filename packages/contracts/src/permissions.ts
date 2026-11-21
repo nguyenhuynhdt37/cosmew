@@ -21,6 +21,7 @@ export const permissionPromptRequestSchema = z.strictObject({
     'network.search',
     'mcp.call',
     'extension.service',
+    'settings.trust',
   ]),
   action: z.string().min(1).max(200),
   target: z.string().min(1).max(1024),
@@ -57,42 +58,40 @@ export const permissionPromptResolutionSchema = z.strictObject({
 export type PermissionPromptResolution = z.infer<typeof permissionPromptResolutionSchema>;
 
 /**
- * Session permission mode (ADR 0027), shown with Claude Code's names. Since ADR 0040 every mode is
- * a Codex approval policy (`AskForApproval`, pinned 090be4df `core/src/exec_policy.rs`):
- * - default → `untrusted`: edits, commands and secret reads prompt (unless a project rule allows).
- * - acceptEdits → `untrusted` with workspace edits approved.
- * - auto → `on-request` (Futryn's default, as Codex): commands run in the sandbox and workspace
- *   edits apply without a prompt; dangerous commands, network and other sandbox
- *   escalations, and secret reads prompt.
- * - bypassPermissions → `never`: nothing prompts; what would prompt runs in the sandbox when that
- *   is safe (ordinary, unparsed commands and terminal input) or is refused (dangerous commands, escalations, secrets).
- * - plan: read-only; edits and commands are refused, secret reads still prompt.
- * The mode answers only what policy left as `ask`; deny rules (outside workspace, `.git`, Futryn
- * state) never change.
+ * Session permission mode (ADR 0061, supersedes the Codex model of ADR 0040/0053/0055). The four
+ * modes are Claude Code's: Shift+Tab cycles them, `/permissions` shows them, `--permission-mode`
+ * and `permissions.defaultMode` select the starting one.
+ * - default: file edits ask; commands ask unless a rule allows them or they run inside the OS
+ *   sandbox with `sandbox.autoAllowBashIfSandboxed`; reads of ordinary files are free.
+ * - acceptEdits: edits inside the working directory (and `additionalDirectories`) are approved;
+ *   commands follow `default`.
+ * - plan: read-only research; edits, commands and network are refused.
+ * - bypassPermissions: nothing prompts (`--dangerously-skip-permissions`). The OS sandbox still
+ *   applies when it is enabled. Deny rules and the hard path denials never change.
+ * The mode answers only what policy and rules left as `ask`; deny rules (and protected paths) win.
  */
-export const permissionModeSchema = z.enum(['default', 'acceptEdits', 'auto', 'bypassPermissions', 'plan']);
+export const permissionModeSchema = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
 export type PermissionMode = z.infer<typeof permissionModeSchema>;
 export const PERMISSION_MODES: readonly PermissionMode[] = permissionModeSchema.options;
-/** Codex approval policies (ADR 0040). `FUTRYN_APPROVAL_POLICY` selects the session's starting mode. */
-export const approvalPolicySchema = z.enum(['untrusted', 'on-request', 'never']);
-export type ApprovalPolicy = z.infer<typeof approvalPolicySchema>;
-export const APPROVAL_POLICY_FOR_MODE: Record<PermissionMode, ApprovalPolicy> = {
-  default: 'untrusted',
-  acceptEdits: 'untrusted',
-  auto: 'on-request',
-  plan: 'untrusted',
-  bypassPermissions: 'never',
+export const DEFAULT_PERMISSION_MODE: PermissionMode = 'default';
+/** Shift+Tab order, as Claude Code: default -> acceptEdits -> plan -> default (bypass only when the session started in it). */
+export const PERMISSION_MODE_CYCLE: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan'];
+export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
+  default: 'default',
+  acceptEdits: 'accept edits',
+  plan: 'plan mode',
+  bypassPermissions: 'bypass permissions',
 };
-/** The mode a configured approval policy starts a session in. */
-export const MODE_FOR_APPROVAL_POLICY: Record<ApprovalPolicy, PermissionMode> = {
-  untrusted: 'default',
-  'on-request': 'auto',
-  never: 'bypassPermissions',
-};
-/** Futryn's default, as Codex: workspace-write sandbox, `on-request` approvals (plan D3). */
-export const DEFAULT_PERMISSION_MODE: PermissionMode = 'auto';
+/** Shown whenever bypassPermissions is entered (`--dangerously-skip-permissions`, `/permissions`). */
+export const BYPASS_PERMISSIONS_WARNING =
+  'WARNING: bypassPermissions skips every permission prompt: file edits, commands and sandbox network requests are approved without asking. The OS sandbox (when enabled), deny rules and the audit trail still apply. Use it only in a disposable environment.';
 
-/** Codex `SandboxMode` (`protocol/src/config_types.rs`, pinned 090be4df); `FUTRYN_SANDBOX_MODE`, config `sandbox_mode`. */
+/**
+ * Internal enforcement mode of one command (not user configuration): `read-only` and
+ * `workspace-write` are OS sandboxes, `danger-full-access` marks a command that runs without one
+ * (sandbox disabled, an excluded command, or an approved `dangerouslyDisableSandbox`).
+ * Subagent profiles use it as a ceiling (a read-only explorer never gets `workspace-write`).
+ */
 export const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access']);
 export type SandboxModeSetting = z.infer<typeof sandboxModeSchema>;
 export const SANDBOX_MODES: readonly SandboxModeSetting[] = sandboxModeSchema.options;
@@ -104,147 +103,63 @@ export const SANDBOX_MODE_RANK: Record<SandboxModeSetting, number> = {
 };
 
 /**
- * Codex approval presets (`utils/approval-presets/src/lib.rs`, pinned 090be4df): the named pairs of
- * sandbox and approval policy that `/approvals` offers. Codex labels the middle one "Default"
- * (id `auto`); Futryn calls it Auto. A session whose sandbox or mode matches none of them is `custom`.
- */
-export const permissionPresetIdSchema = z.enum(['read-only', 'auto', 'full-access']);
-export type PermissionPresetId = z.infer<typeof permissionPresetIdSchema>;
-export interface PermissionPreset {
-  id: PermissionPresetId;
-  label: string;
-  description: string;
-  sandbox: SandboxModeSetting;
-  /** The session mode that carries the preset's approval policy. */
-  mode: PermissionMode;
-}
-export const PERMISSION_PRESETS: readonly PermissionPreset[] = [
-  {
-    id: 'read-only',
-    label: 'Read Only',
-    description:
-      'Futryn can read files in the workspace. Approval is required to edit files, run commands that write, or use the network.',
-    sandbox: 'read-only',
-    mode: 'auto',
-  },
-  {
-    id: 'auto',
-    label: 'Auto',
-    description:
-      'Futryn can read and edit files in the workspace and run commands in the sandbox. Approval is required for the network, for files outside the workspace and for commands outside the sandbox.',
-    sandbox: 'workspace-write',
-    mode: 'auto',
-  },
-  {
-    id: 'full-access',
-    label: 'Full Access',
-    description:
-      'No sandbox and no approval prompts: commands can change any file your user can and use the network. Project deny rules and the audit trail still apply. Exercise caution.',
-    sandbox: 'danger-full-access',
-    mode: 'bypassPermissions',
-  },
-];
-export const DEFAULT_PERMISSION_PRESET: PermissionPresetId = 'auto';
-/** Shown whenever Full Access is entered (Shift+Tab, `/permissions`, `fyn exec`): it removes the sandbox and the prompts. */
-export const FULL_ACCESS_WARNING =
-  'WARNING: Full Access runs commands WITHOUT the sandbox and WITHOUT approval prompts. They can change or delete any file your user can reach and use the network. Project deny rules and the audit trail still apply.';
-/** The preset a (sandbox, mode) pair equals, or `custom`. */
-export function permissionPresetFor(sandbox: SandboxModeSetting, mode: PermissionMode): PermissionPresetId | 'custom' {
-  return PERMISSION_PRESETS.find(preset => preset.sandbox === sandbox && preset.mode === mode)?.id ?? 'custom';
-}
-/** Resolve a preset id or its label (`full access`, case-insensitive). */
-export function findPermissionPreset(name: string): PermissionPreset | undefined {
-  const wanted = name.trim().toLowerCase().replace(/\s+/g, '-');
-  return PERMISSION_PRESETS.find(
-    preset => preset.id === wanted || preset.label.toLowerCase().replace(/\s+/g, '-') === wanted,
-  );
-}
-/**
- * What a permission request is about, as far as the approval policy is concerned:
- * - `execute`: an ordinary command inside the configured sandbox;
- * - `dangerous`: a command on Codex's dangerous list (`rm` with force, also through sudo/env/trap/`sh -c`);
- * - `stdin`: non-empty input to a running command. It follows `execute` (ADR 0053): the session
- *   runs inside its launch sandbox, so `untrusted` asks and `on-request`/`never` allow;
- * - `network` / `escalation`: anything beyond the sandbox (network, writes outside writable roots,
- *   `request_permissions`).
+ * What a permission request is about, as far as the permission mode is concerned:
+ * - `read` / `secret`: a file read; a secret-looking file asks;
+ * - `edit`: a file write inside the allowed directories;
+ * - `sandboxed-command`: a command that runs inside the OS sandbox with `autoAllowBashIfSandboxed` on;
+ * - `command`: any other command (sandbox off or auto-allow off, an excluded command, terminal input to one);
+ * - `escalation`: `dangerouslyDisableSandbox` - one command outside the sandbox;
+ * - `network`: a sandboxed command's connection to a domain that is not allowed yet;
+ * - `other`: web, MCP and the rest.
  */
 export type PermissionKind =
-  'read' | 'secret' | 'edit' | 'execute' | 'dangerous' | 'stdin' | 'network' | 'escalation' | 'other';
+  'read' | 'secret' | 'edit' | 'sandboxed-command' | 'command' | 'escalation' | 'network' | 'other';
 
 /**
- * The approval table (ADR 0040), after Codex `render_decision_for_unmatched_command` and
- * `assess_patch_safety`: dangerous commands prompt (`never` → forbidden); `on-request`/`never` run
- * sandboxed commands and approve writes inside writable roots; `untrusted` prompts for every
- * command and write; escalations prompt (`never` → refused). Secret reads prompt (OpenCode's `.env`
- * ask) and are refused under `never`. Project rules are applied before this table.
+ * The mode table (ADR 0061). Rules are applied before it (deny > ask > allow), except that `plan`
+ * refuses writes and execution first. `bypassPermissions` answers every remaining ask with allow.
  */
-export function decideApproval(
-  policy: ApprovalPolicy,
-  kind: PermissionKind,
-  options: {autoApproveEdits?: boolean; fullAccess?: boolean} = {},
-): 'allow' | 'ask' | 'deny' {
+export function permissionModeDecision(mode: PermissionMode, kind: PermissionKind): 'allow' | 'ask' | 'deny' {
+  if (kind === 'read') return 'allow';
+  if (mode === 'bypassPermissions') return 'allow';
+  if (mode === 'plan') return kind === 'secret' || kind === 'other' ? 'ask' : 'deny';
   switch (kind) {
-    case 'read':
-      return 'allow';
     case 'edit':
-      return policy === 'untrusted' && !options.autoApproveEdits ? 'ask' : 'allow';
-    case 'execute':
-    case 'stdin':
-      return policy === 'untrusted' ? 'ask' : 'allow';
-    case 'network':
-    case 'escalation':
-      // ADR 0055: with no sandbox there is nothing to escalate out of (Codex `danger-full-access`
-      // is `Unrestricted`: network and file access need no approval) - unless the policy is `untrusted`.
-      if (options.fullAccess && policy !== 'untrusted') return 'allow';
-      return policy === 'never' ? 'deny' : 'ask';
+      return mode === 'acceptEdits' ? 'allow' : 'ask';
+    case 'sandboxed-command':
+      return 'allow';
     default:
-      return policy === 'never' ? 'deny' : 'ask';
+      return 'ask';
   }
 }
 
-export function permissionModeDecision(
-  mode: PermissionMode,
-  kind: PermissionKind,
-  sandbox: SandboxModeSetting = 'workspace-write',
-): 'allow' | 'ask' | 'deny' {
-  if (mode === 'plan') {
-    if (kind === 'read') return 'allow';
-    return ['edit', 'execute', 'dangerous', 'stdin'].includes(kind) ? 'deny' : 'ask';
-  }
-  return decideApproval(APPROVAL_POLICY_FOR_MODE[mode], kind, {
-    autoApproveEdits: mode === 'acceptEdits',
-    fullAccess: sandbox === 'danger-full-access',
-  });
-}
-
-/** One-line explanation shown when Shift+Tab or /permissions changes the mode (ADR 0027/0040). */
+/** One-line explanation shown when Shift+Tab or /permissions changes the mode. */
 export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
-  default: 'untrusted: edits, commands and secret files ask first.',
-  acceptEdits: 'untrusted + edits: file edits are approved; commands and secret files ask.',
-  auto: 'on-request: sandboxed commands and workspace edits run; dangerous commands, network and secrets ask.',
-  plan: 'Read-only: edits and commands are refused.',
-  bypassPermissions:
-    'never: nothing asks. Sandboxed work runs; dangerous commands, escalations and secret files are refused.',
+  default: 'Asks before file edits and before commands that no rule or the sandbox auto-allow covers.',
+  acceptEdits: 'File edits in the working directory are approved; commands follow default.',
+  plan: 'Read-only: edits, commands and network are refused.',
+  bypassPermissions: 'No prompts. The OS sandbox (when enabled) and deny rules still apply.',
 };
 
 /**
- * Project permission rules (ADR 0028), written like Claude Code's: `Bash`, `Bash(npm test:*)`,
- * `Read(src/**)`, `Edit(**\/*.ts)`, `WebFetch(domain:example.com)`, `Tool(name)`. They answer only
- * requests that would otherwise ask; hard denies (outside workspace, `.git`, Futryn state) stay.
+ * Permission rules (ADR 0028, 0061), written like Claude Code's: `Bash`, `Bash(npm run test:*)`,
+ * `Read(./src/**)`, `Edit(**\/*.ts)` (`Write(...)` is an alias), `WebFetch(domain:example.com)`,
+ * `WebSearch`, `mcp__server__tool` and Cosmew's own `Tool(name)`. Paths are relative to the working
+ * directory (`/x` is relative to the project root, `//x` is absolute). They answer only requests
+ * that would otherwise ask; hard denies (outside workspace, `.git`, Cosmew state) stay.
  */
-export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'Tool', 'Network', 'Unsandboxed'] as const;
+export const PERMISSION_RULE_TOOLS = ['Bash', 'Read', 'Edit', 'WebFetch', 'WebSearch', 'Tool', 'Mcp'] as const;
 export type PermissionRuleTool = (typeof PERMISSION_RULE_TOOLS)[number];
-/**
- * `Network(curl:*)` lets a matching command use the network without asking, `Unsandboxed(npm run build)`
- * lets that exact command run outside the sandbox when the model requests `require_escalated` (ADR 0055,
- * the project form of Codex's execpolicy amendment for those prompts). They match like `Bash` rules.
- * A plain `Bash` allow rule never grants either: it covers sandboxed commands only.
- */
-export const COMMAND_RULE_TOOLS: readonly PermissionRuleTool[] = ['Bash', 'Network', 'Unsandboxed'];
+/** Rule tools whose target is a shell command. */
+export const COMMAND_RULE_TOOLS: readonly PermissionRuleTool[] = ['Bash'];
+const RULE_PATTERN =
+  /^(?:(?:Bash|Read|Edit|Write|WebFetch|WebSearch|Tool)(?:\([^()\n\u0000-\u001f]{1,500}\))?|mcp__[A-Za-z0-9_-]+(?:__[A-Za-z0-9_*-]+)?)$/;
+/** A rule as written in settings; `Write(...)` is normalized to `Edit(...)`. */
 export const permissionRuleSchema = z
   .string()
   .max(520)
-  .regex(/^(Bash|Read|Edit|WebFetch|Tool|Network|Unsandboxed)(\([^()\n\u0000-\u001f]{1,500}\))?$/);
+  .regex(RULE_PATTERN)
+  .transform(rule => (rule.startsWith('Write') ? 'Edit' + rule.slice(5) : rule));
 export const permissionRuleSetSchema = z.strictObject({
   allow: z.array(permissionRuleSchema).max(200),
   ask: z.array(permissionRuleSchema).max(200),
@@ -281,10 +196,17 @@ const globSource = (pattern: string) =>
 
 /** Does one rule cover one target? Paths compare workspace-relative with `/` separators. */
 export function permissionRuleMatches(rule: string, request: PermissionRuleRequest): boolean {
+  if (rule.startsWith('mcp__')) {
+    if (request.tool !== 'Mcp') return false;
+    const name = request.target.trim();
+    if (rule.endsWith('__*')) return name.startsWith(rule.slice(0, -1));
+    return name === rule || name.startsWith(rule + '__');
+  }
   const parsed = /^(\w+)(?:\((.*)\))?$/.exec(rule);
   if (!parsed || parsed[1] !== request.tool) return false;
   const pattern = parsed[2];
   if (pattern === undefined) return true;
+  if (request.tool === 'WebSearch') return false;
   const target = request.target.trim();
   if (COMMAND_RULE_TOOLS.includes(request.tool)) {
     if (pattern.endsWith(':*')) return target === pattern.slice(0, -2) || target.startsWith(pattern.slice(0, -2) + ' ');
@@ -312,7 +234,9 @@ export function permissionRuleMatches(rule: string, request: PermissionRuleReque
   }
   if (request.tool === 'Tool')
     return target === pattern || target.startsWith(pattern + ' ') || target.startsWith(pattern + ':');
-  return new RegExp('^' + globSource(pattern) + '$').test(target.replace(/^\.\//, ''));
+  // `//abs` patterns compare against an absolute target; every other pattern against a project-relative one.
+  if (pattern.startsWith('//')) return new RegExp('^' + globSource(pattern.slice(1)) + '$').test(target);
+  return new RegExp('^' + globSource(pattern.replace(/^\/(?!\/)/, '')) + '$').test(target.replace(/^\.\//, ''));
 }
 
 /**
@@ -518,7 +442,7 @@ function isMeaninglessExactCommand(words: readonly string[]): boolean {
 /**
  * Codex `BANNED_PREFIX_SUGGESTIONS` + `prefix_rule_would_approve_all_commands` guard: an `always`
  * amendment must be a valid scoped rule, never a catch-all (`Bash`, `Bash(*)`), never a banned
- * prefix wildcard, and never a prefix wildcard for `Unsandboxed`. When `request` is supplied, the
+ * prefix wildcard. When `request` is supplied, the
  * rule must also approve every segment of that request.
  */
 export function isSafeAlwaysRule(
@@ -526,13 +450,23 @@ export function isSafeAlwaysRule(
   request?: {tool: PermissionRuleTool; target: string; segments?: string[] | null},
 ): boolean {
   if (!permissionRuleSchema.safeParse(rule).success) return false;
+  if (rule.startsWith('mcp__')) {
+    const parts = rule.split('__');
+    // An exact tool (`mcp__server__tool`) can be saved. A whole server or a wildcard cannot.
+    if (parts.length !== 3 || parts.some(part => !part || part.includes('*'))) return false;
+    if (
+      request &&
+      permissionRuleDecision({allow: [rule], ask: [], deny: []}, {tool: 'Mcp', target: request.target}) !== 'allow'
+    )
+      return false;
+    return true;
+  }
   const parsed = /^(\w+)(?:\((.*)\))?$/.exec(rule);
   if (!parsed || !parsed[2]) return false;
   const tool = parsed[1] as PermissionRuleTool;
   const pattern = parsed[2].trim();
   if (!pattern || /^\*+$|^:\*$/.test(pattern)) return false;
   if (COMMAND_RULE_TOOLS.includes(tool)) {
-    if (tool === 'Unsandboxed' && (pattern.endsWith(':*') || pattern.includes('*'))) return false;
     if (pattern.endsWith(':*')) {
       const prefix = pattern.slice(0, -2).trim();
       if (!prefix || prefix.includes('*')) return false;
@@ -549,7 +483,7 @@ export function isSafeAlwaysRule(
 
 /**
  * The project Allow rule an `always` answer saves (ADR 0028/0055), Claude style: a command prefix
- * (`Bash(npm test:*)`) - or the exact command for `Unsandboxed`, a banned prefix, an interpreter/wrapper
+ * (`Bash(npm test:*)`) - or the exact command for a banned prefix, an interpreter/wrapper
  * or an `exact` request such as a dangerous command - the exact file for edits and secret reads, the
  * domain for web access. Null when no meaningful rule can safely stand for the request.
  */
@@ -573,7 +507,7 @@ export function suggestPermissionRule(request: {
       words.length > 1 && !words[1]!.startsWith('-') && /^[\w.:@/-]+$/.test(words[1]!)
         ? [words[0]!, words[1]!]
         : [words[0]!];
-    const exact = request.exact || request.tool === 'Unsandboxed' || isBannedPrefixSuggestion(prefixWords);
+    const exact = request.exact || isBannedPrefixSuggestion(prefixWords);
     const rule = exact ? `${request.tool}(${command})` : `${request.tool}(${prefixWords.join(' ')}:*)`;
     return isSafeAlwaysRule(rule, {
       tool: request.tool,
@@ -599,4 +533,74 @@ export function suggestPermissionRule(request: {
     return rule && isSafeAlwaysRule(rule) ? rule : null;
   }
   return null;
+}
+
+/** Where a settings file lives (ADR 0061). `cli` is the launch overlay (`--allowedTools`, `--disallowedTools`) and is not stored. */
+export type PermissionSettingsScope = 'user' | 'project' | 'local';
+export const PERMISSION_SETTINGS_SCOPES: readonly PermissionSettingsScope[] = ['user', 'project', 'local'];
+
+/** One settings file as `/permissions` shows it. */
+export interface PermissionSettingsFileInfo {
+  scope: PermissionSettingsScope;
+  path: string;
+  exists: boolean;
+  /** Repository files count only after the user approved their exact content; user settings always do. */
+  trusted: boolean;
+  rules: PermissionRuleSet;
+  defaultMode?: PermissionMode;
+  allowedDomains: string[];
+  diagnostics: string[];
+}
+
+/** A repository settings file whose content would loosen something, waiting for the user's decision. */
+export interface PendingSettingsTrust {
+  scope: Exclude<PermissionSettingsScope, 'user'>;
+  path: string;
+  hash: string;
+  /** What approving would grant, one line each. */
+  grants: string[];
+}
+
+/** Everything the permission engine reads from settings, already merged and trust-filtered. */
+export interface PermissionSettingsSnapshot {
+  rules: PermissionRuleSet;
+  defaultMode?: PermissionMode;
+  /** Absolute directories commands and edits may write besides the working directory. */
+  additionalDirectories: string[];
+  sandbox: {
+    enabled: boolean;
+    autoAllowBashIfSandboxed: boolean;
+    excludedCommands: string[];
+    allowUnsandboxedCommands: boolean;
+    allowedDomains: string[];
+  };
+  files: PermissionSettingsFileInfo[];
+  pendingTrust: PendingSettingsTrust[];
+  diagnostics: string[];
+}
+
+/**
+ * The settings port the SDK reads (implemented by the composition root, which owns the files).
+ * Writes are user actions (`/permissions`, an `always` answer) and are trusted immediately.
+ */
+export interface PermissionSettingsPort {
+  snapshot(): PermissionSettingsSnapshot;
+  addRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;
+  removeRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;
+  addAllowedDomain(scope: PermissionSettingsScope, domain: string): void;
+  /** Approve one exact file content: persisted (`always`) or for this session only. */
+  trust(path: string, hash: string, persist: boolean): void;
+}
+
+/** Domains as `sandbox.network.allowedDomains` entries: `example.com` or `*.example.com`. */
+export const DOMAIN_PATTERN = /^(?:\*\.)?(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
+export function hostMatchesDomainPattern(host: string, pattern: string): boolean {
+  const name = host.toLowerCase().replace(/\.$/, '');
+  const wanted = pattern.toLowerCase();
+  return wanted.startsWith('*.') ? name.endsWith(wanted.slice(1)) : name === wanted;
+}
+
+export function domainAllowed(host: string, patterns: readonly string[]): boolean {
+  return patterns.some(pattern => hostMatchesDomainPattern(host, pattern));
 }

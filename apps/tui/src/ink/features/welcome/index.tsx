@@ -1,30 +1,45 @@
 /** @jsxImportSource react */
-import {Box} from 'ink';
+import {Box, Text} from 'ink';
 import {useStatus} from '../../hooks';
-import {TextLine} from '../../ui';
-import {useTheme} from '../../theme';
-import type {FutrynClient} from '@futryn/sdk';
+import {safeText, useUiTheme} from '../../ui';
+import type {FutrynClient} from '@cosmew/sdk';
+import {version} from '../../../../package.json';
+import {CosmewMascot} from '../../ui/cosmew-mascot';
 export const useWelcome = () => useStatus();
 export interface WelcomeProps {
   status: ReturnType<FutrynClient['status']>;
   width?: number;
-  greeting?: string;
 }
-export function Welcome({status, width, greeting = 'Quiet desk. Clear answers.'}: WelcomeProps) {
-  const {color} = useTheme();
+/** Keep the final directory visible, using terminal cell width (including wide characters). */
+export function welcomePath(path: string, width: number): string {
+  const clean = safeText(path).replace(/\n/g, ' ');
+  if (Bun.stringWidth(clean) <= width) return clean;
+  let tail = clean.split('/').filter(Boolean).at(-1) ?? '';
+  while (tail && Bun.stringWidth(`/…/${tail}`) > width) tail = Array.from(tail).slice(1).join('');
+  return width >= 3 ? `/…/${tail}` : '…'.slice(0, width);
+}
+export function Welcome({status, width = 80}: WelcomeProps) {
+  const {color} = useUiTheme();
+  const mascotWidth = width < 32 ? 3 : 9;
+  const textWidth = Math.max(1, width - mascotWidth - 2);
+  const effort = status.reasoningEffort;
+  const model = status.selection?.modelId ?? 'No model selected';
   return (
-    <Box width={width} flexDirection="column">
-      <TextLine color={color('foregroundMuted')}>{greeting}</TextLine>
-      <TextLine>
-        {!status.activeAccount
-          ? 'Connect a provider to start · /login · /help'
-          : !status.selection
-            ? 'Choose a model to start · /model · /help'
-            : `${status.selection.modelId} · ${status.activeAccount.alias}`}
-      </TextLine>
-      <TextLine color={color('foregroundMuted')}>
-        Tips: /help · @ files · $ skills · Shift+Enter new line · Shift+Tab permissions
-      </TextLine>
+    <Box width={width} marginBottom={1}>
+      <Box width={mascotWidth} flexShrink={0} flexDirection="column" marginRight={2}>
+        <CosmewMascot width={width} />
+      </Box>
+      <Box width={textWidth} flexDirection="column">
+        <Text bold wrap="truncate-end">{`Cosmew v${version}`}</Text>
+        <Text color={color('dim')} wrap="truncate-end">
+          {safeText(
+            `${model}${effort ? ` with ${effort} effort` : ''} · ${status.activeAccount?.alias ?? 'no account'}`,
+          )}
+        </Text>
+        <Text color={color('dim')} wrap="truncate-end">
+          {welcomePath(status.workspace, textWidth)}
+        </Text>
+      </Box>
     </Box>
   );
 }

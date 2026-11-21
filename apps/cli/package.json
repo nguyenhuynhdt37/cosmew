@@ -1,25 +1,26 @@
 {
-  "name": "@futryn/cli",
+  "name": "@cosmew/cli",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
+    "cosmew": "./src/index.ts",
     "fyn": "./src/index.ts",
     "futryn": "./src/index.ts",
     "hannes": "./src/index.ts"
   },
   "dependencies": {
-    "@futryn/agents": "workspace:*",
-    "@futryn/code-intel": "workspace:*",
-    "@futryn/contracts": "workspace:*",
-    "@futryn/core": "workspace:*",
-    "@futryn/models": "workspace:*",
-    "@futryn/security": "workspace:*",
-    "@futryn/persistence": "workspace:*",
-    "@futryn/sdk": "workspace:*",
-    "@futryn/tui": "workspace:*",
-    "@futryn/tools": "workspace:*",
-    "@futryn/workspace": "workspace:*",
-    "@futryn/mcp": "workspace:*"
+    "@cosmew/agents": "workspace:*",
+    "@cosmew/code-intel": "workspace:*",
+    "@cosmew/contracts": "workspace:*",
+    "@cosmew/core": "workspace:*",
+    "@cosmew/models": "workspace:*",
+    "@cosmew/security": "workspace:*",
+    "@cosmew/persistence": "workspace:*",
+    "@cosmew/sdk": "workspace:*",
+    "@cosmew/tui": "workspace:*",
+    "@cosmew/tools": "workspace:*",
+    "@cosmew/workspace": "workspace:*",
+    "@cosmew/mcp": "workspace:*"
   }
 }

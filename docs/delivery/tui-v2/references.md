@@ -12,7 +12,7 @@ Official documentation is rolling, accessed on the date above, not falsely assig
 Git revision. HTML was accessible via web browsing; direct local `.md` downloads
 returned HTTP 403. Old OpenCode `/docs/tui/` redirects to V1; use the latest page below.
 
-| Category | Public documented reference | Futryn decision / evidence |
+| Category | Public documented reference | Cosmew decision / evidence |
 |---|---|---|
 | Fullscreen, composer position, visible-message rendering | [Claude fullscreen](https://code.claude.com/docs/en/fullscreen) | Indexed viewport, fixed composer; exact cold height measurement; bounded styled working set. Tests: transcript-virtualization, tui-performance. |
 | Compact/verbose, activity, streaming | [Claude interactive mode](https://code.claude.com/docs/en/interactive-mode) | Retain real event-driven cards; Ctrl+O expands details, Ctrl+R retains reasoning shortcut. No fabricated reasoning or completion. |

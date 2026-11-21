@@ -1,0 +1,36 @@
+00|
+01|  ⎿  /plan to preview
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+03|
+04|  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+05|   Ready to code?
+06|
+07|   Here is Claude's plan:
+08|  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+09|   Add subtract to index.ts
+10|
+11|   Context
+12|
+13|   index.ts currently exports a constant x and an add(a, b) function. The user wants a matching subtract function.
+14|
+15|   Change
+16|
+17|   In index.ts, add directly after add (same style: named export, typed params, 2-space indent, inferred return
+18|   type):
+19|
+20|   export function subtract(a: number, b: number) {
+21|     return a - b;
+22|   }
+23|
+24|   No other files need changes (repo has only index.ts, a.txt, poem.txt; no tests or build config).
+25|
+26|   Verification                                                                                                        ↓
+27|  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+28|   Claude has written up a plan and is ready to execute. Would you like to proceed?
+29|
+30|   ❯ 1. Yes, and use auto mode
+31|     2. Yes, manually approve edits
+32|     3. Tell Claude what to change
+33|        shift+tab to approve with this feedback
+34|
+35|   ctrl+g to edit in VS Code · ~/.claude/plans/plan-how-to-add-streamed-finch.md

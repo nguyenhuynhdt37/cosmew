@@ -25,7 +25,7 @@ import {
   type Settings,
   type SettingsStore,
   type ThemeManifest,
-} from '@futryn/contracts';
+} from '@cosmew/contracts';
 export {openPrivateDatabase} from './database';
 export {
   MigrationOutbox,
@@ -168,3 +168,7 @@ export class FileCustomThemeStore {
 }
 
 export {FileMemories} from './memories';
+
+export {SqliteToolOutputArchive} from './output-archive';
+
+export {CheckpointStore} from './checkpoint-store';

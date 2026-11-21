@@ -1,0 +1,30 @@
+00|
+01|     /context all to expand
+02|▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+03|  Settings  Status   Config   Usage   Stats
+04|
+05|  Session
+06|  Estimated cost:         $0.0000
+07|  Total duration (API):   0s
+08|  Total duration (wall):  1m 40s
+09|  Total code changes:     0 lines added, 0 lines removed
+10|  Usage:                  0 input, 0 output, 0 cache read, 0 cache write
+11|
+12|
+13|  Plugin skill-listing footprint
+14|  What each plugin's skill descriptions add to the system prompt (cached input after the first
+15|  turn). Agents and MCP tools not yet counted.
+16|
+17|  Notion                      10 skills · ~301 tok/turn
+18|  vercel                      4 skills · ~225 tok/turn
+19|  commit-commands             3 skills · ~99 tok/turn
+20|  hookify                     4 skills · ~93 tok/turn
+21|  ralph-loop                  3 skills · ~60 tok/turn
+22|  stripe                      2 skills · ~59 tok/turn
+23|  coderabbit                  1 skill · ~51 tok/turn
+24|  plugin-dev                  1 skill · ~42 tok/turn
+25|  feature-dev                 1 skill · ~35 tok/turn
+26|  claude-md-management        1 skill · ~30 tok/turn
+27|  agent-sdk-dev               1 skill · ~27 tok/turn
+28|  pr-review-toolkit           1 skill · ~27 tok/turn
+29|  code-review                 1 skill · ~18 tok/turn                                               ↓

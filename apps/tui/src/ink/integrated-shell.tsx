@@ -1,84 +1,156 @@
 /** @jsxImportSource react */
-import {useEffect, useRef, useState} from 'react';
-import {Box, useApp, useWindowSize, useStdout} from 'ink';
-import {FutrynError, type ToolCall, type ToolResult} from '@futryn/contracts';
-import {commandForShortcut} from '@futryn/sdk';
+import {useTerminalSize} from './hooks/use-terminal-size';
+import {useTerminalWheel} from './hooks/use-terminal-wheel';
+import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {spawn} from 'node:child_process';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {Box, Text, useApp, useStdout, type DOMElement} from 'ink';
+import {BYPASS_PERMISSIONS_WARNING, FutrynError, type ToolCall, type ToolResult} from '@cosmew/contracts';
 import {useOverlay} from './core';
-import {InputScope, useClientEvents, useFutrynClient, useKeymap, useTextInput} from './hooks';
+import {
+  InputScope,
+  ensureKeybindingsFile,
+  keyLabels,
+  keybindingsPath,
+  keymapStore,
+  loadKeybindings,
+  useClientEvents,
+  useFutrynClient,
+  useKeyRouter,
+  useKeybindings,
+  useTextInput,
+} from './hooks';
 import {useTheme} from './theme';
-import {Panel, TextLine, safeText} from './ui';
-import {deliverClipboard, writeMacClipboard} from '../clipboard';
-import {Header, useHeader} from './features/header';
+import {Panel, Rule, TextLine, safeText, spinnerTip, stringCells} from './ui';
+import {readMacClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
-import {Transcript, useTranscript, type TranscriptItem} from './features/transcript';
-import {ComposerView, useComposer} from './features/composer';
+import {
+  PromptAnchors,
+  Transcript,
+  isThinking,
+  rowWithin,
+  transcriptPlainText,
+  useDetailedTranscript,
+  useTranscript,
+  type TranscriptItem,
+} from './features/transcript';
+import {ComposerView, useComposer, editorName} from './features/composer';
 import {Plan, usePlan} from './features/plan';
 import {Notices, useNotices} from './features/notices';
 import {Subagents, useSubagents} from './features/subagents';
-import {StatusLine, useStatusLine} from './features/status';
+import {useStatusLine} from './features/status';
 import {PermissionRequestDialog, PermissionRulesDialog, usePermissions} from './features/permissions';
 import {QuestionRequestDialog} from './features/question';
 import {ConnectDialog} from './features/connect';
 import {ModelsDialog, EffortDialog} from './features/models';
 import {SessionsDialog} from './features/sessions';
 import {SettingsDialog} from './features/settings';
-import type {SettingsSection} from './features/settings/logic';
+import type {SettingsSection, SettingsTab} from './features/settings/logic';
+import {createPasteState} from './features/paste';
+import {
+  HooksDialog,
+  McpDialog,
+  RESULT_PREFIX,
+  RewindDialog,
+  cancelledResult,
+  closedResult,
+  commandResult,
+  type CommandResultLines,
+} from './features/panels';
 import {ThemesDialog} from './features/themes';
 import {HelpDialog} from './features/help';
 import {MemoryDialog} from './features/memory';
 import {AgentsDialog} from './features/agents';
 import {SkillsDialog} from './features/skills';
-import {Usage, useUsage, type ReportKind} from './features/usage';
-import {Diff, useDiff} from './features/diff';
+import {Usage, contextBlock, useUsage, type ReportKind} from './features/usage';
+import {DiffSidePanel, useDiff, diffPanelLayout, DIFF_PANEL_RESIZE_MESSAGE, changeReceipt} from './features/diff';
+import {BackgroundTasksDialog} from './features/background-tasks';
+import {PlanApprovalDialog} from './features/plan-approval';
 import {routeCommand, type CommandHost} from './features/commands';
+import {ScrollViewport, useLiveRows, useScrollback} from './screen';
+import {LiveDialog, Spinner} from './ui';
+import {useUiTheme} from './ui/ui-theme';
 
 export interface IntegratedShellProps {
   width?: number;
+  /** Used only when the output stream does not report a positive row count. */
+  rows?: number;
   initialCommand?: string;
   registerShutdown?: (shutdown: () => Promise<void>) => void;
 }
-function ReportDialog({kind}: {kind: ReportKind}) {
+/** `/status`, `/usage` and `/cost` are tabs of one settings panel; `/context` has its own grid view. */
+function ReportDialog({kind, width, tab}: {kind: ReportKind; width?: number; tab?: SettingsTab}) {
   const {close} = useOverlay();
   const state = useUsage({kind, onClose: close});
-  return <Usage state={state} />;
+  if (kind !== 'context')
+    return <SettingsDialog width={width} initialTab={tab ?? (kind === 'status' ? 'Status' : 'Usage')} />;
+  return <Usage state={state} width={width} />;
 }
-function DiffDialog({notice}: {notice(text: string): void}) {
-  const diff = useDiff();
-  const {stdout} = useStdout();
-  useEffect(() => {
-    void diff.refresh();
-  }, []);
-  useEffect(() => {
-    if (diff.error) notice(diff.error);
-  }, [diff.error]);
+/** Detailed transcript footer (spec 3): the composer is hidden while Ctrl+O is on. */
+function DetailedFooter({width}: {width: number}) {
+  const ui = useUiTheme();
+  const keymap = keymapStore.get();
+  const key = (context: 'Global' | 'Transcript', action: string) => keyLabels(keymap, context, action)[0];
+  // Keys come from the keymap; optional parts are dropped when the line would not leave room for `verbose`.
+  const optional = [
+    key('Transcript', 'transcript:openEditor') && `${key('Transcript', 'transcript:openEditor')} to open in code`,
+    key('Transcript', 'transcript:help') && `${key('Transcript', 'transcript:help')} for shortcuts`,
+  ].filter((part): part is string => !!part);
+  let line = `  Showing detailed transcript · ${key('Global', 'app:toggleTranscript') ?? 'ctrl+o'} to toggle · ↑/↓ to scroll`;
+  for (const part of optional) if (stringCells(`${line} · ${part}`) <= width - 12) line += ` · ${part}`;
   return (
-    <Panel title="Workspace diff">
-      <Diff
-        report={diff.report}
-        isActive
-        onRefresh={() => void diff.refresh()}
-        onCopy={text => {
-          const clean = safeText(text).slice(0, 65536);
-          if (Buffer.byteLength(clean) > 65536) {
-            notice('Diff is too large to copy.');
-            return;
-          }
-          void deliverClipboard(
-            `\x1b]52;c;${Buffer.from(clean).toString('base64')}\x07`,
-            sequence => {
-              stdout.write(sequence);
-            },
-            process.platform === 'darwin' && !process.env.SSH_CONNECTION && !process.env.SSH_TTY
-              ? writeMacClipboard
-              : undefined,
-          ).then(() => notice('Diff copied.'));
-        }}
-      />
-    </Panel>
+    <Box flexDirection="column" width={width} flexShrink={0}>
+      <Rule width={width} />
+      <Box width={width} justifyContent="space-between">
+        <Text color={ui.color('dim')}>{line}</Text>
+        <Text color={ui.color('dim')}>{'verbose  '}</Text>
+      </Box>
+    </Box>
   );
 }
-function HistoryDialog({items, initialOffset = 0}: {items: readonly TranscriptItem[]; initialOffset?: number}) {
+/** Transcript lines of a command result: the user-message line and the `⎿` text without its connector. */
+function resultParts(result: CommandResultLines): [string, string[]] {
+  return [
+    result.prompt.replace(/^❯ /, ''),
+    result.result.map(line => (line.startsWith(RESULT_PREFIX) ? line.slice(RESULT_PREFIX.length) : line.slice(5))),
+  ];
+}
+/** What Esc prints when it dismisses the panel a slash command opened (spec 7). */
+function dismissalResult(route: string, raw: string): CommandResultLines {
+  switch (route) {
+    case 'sessions':
+      return cancelledResult(raw, 'Resume');
+    case 'models':
+      return cancelledResult(raw, 'Model picker');
+    case 'effort':
+      return cancelledResult(raw, 'Effort');
+    case 'themes':
+      return cancelledResult(raw, 'Theme picker');
+    case 'rewind':
+      return cancelledResult(raw, 'Rewind');
+    case 'connect':
+    case 'accounts':
+    case 'switch':
+    case 'logout':
+      return cancelledResult(raw, 'Account');
+    case 'diff':
+      return commandResult(raw, 'Diff panel hidden');
+    default:
+      return closedResult(raw, route === 'settings' ? 'config' : route);
+  }
+}
+function HistoryDialog({
+  items,
+  initialOffset = 0,
+  width,
+}: {
+  items: readonly TranscriptItem[];
+  initialOffset?: number;
+  width?: number;
+}) {
   const [offset, setOffset] = useState(initialOffset);
   useTextInput((_input, key) => {
     if (key.pageUp || key.home)
@@ -86,7 +158,7 @@ function HistoryDialog({items, initialOffset = 0}: {items: readonly TranscriptIt
     if (key.pageDown || key.end) setOffset(n => (key.end ? 0 : Math.max(0, n - 8)));
   });
   return (
-    <Panel title="Transcript history">
+    <Panel title="Transcript history" width={width}>
       <Transcript items={items} historyOffset={offset} liveItems={8} isActive animate={false} />
       <TextLine>PgUp/PgDn Home/End · page · ↑↓ focus · Ctrl+O expand · Esc close</TextLine>
     </Panel>
@@ -103,26 +175,59 @@ function requestFailure(error: unknown): string {
   return `Request failed [${error.code}].${hint ? ' ' + hint : ''}`;
 }
 /** Owns SDK tasks; feature views never start a second agent loop or grant permissions. */
-export function IntegratedShell({width: requestedWidth, initialCommand, registerShutdown}: IntegratedShellProps) {
+export function IntegratedShell({
+  width: requestedWidth,
+  rows: requestedRows,
+  initialCommand,
+  registerShutdown,
+}: IntegratedShellProps) {
   const client = useFutrynClient();
   const overlay = useOverlay();
-  const {exit} = useApp();
+  const {exit, suspendTerminal} = useApp();
+  const {stdout} = useStdout();
+  const router = useKeyRouter();
+  const anchors = useRef(new Map<string, DOMElement>());
+  const dialogPress = useRef<{key: string; at: number} | null>(null);
   const {engine} = useTheme();
-  const {columns} = useWindowSize();
+  const {columns} = useTerminalSize();
+  const screenRows = useLiveRows(requestedRows);
+  const fullscreen = screenRows !== undefined;
   const width = Math.max(1, requestedWidth ?? columns);
   const transcript = useTranscript();
+  const detail = useDetailedTranscript();
+  const diff = useDiff();
+  const [diffOpen, setDiffOpen] = useState(false);
+  const diffLayout = diffPanelLayout(width, diffOpen);
+  const contentWidth = diffLayout.mainWidth;
+  const autoDiffOpened = useRef(false);
   const notices = useNotices();
   const plan = usePlan();
   const agents = useSubagents();
-  const header = useHeader();
   const permissions = usePermissions();
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [historyKey, setHistoryKey] = useState(0);
+  const [olderPages, setOlderPages] = useState(0);
+  const scroll = useScrollback(() => setOlderPages(n => n + 1));
+  useTerminalWheel(
+    event => {
+      const delta = -event.direction * 3;
+      scroll.scrollBy(delta);
+      if (delta > 0 && scroll.back + delta >= scroll.maxBack && transcript.items.length > 60 + olderPages * 40)
+        setOlderPages(n => n + 1);
+    },
+    fullscreen && ready && !overlay.active,
+  );
   const [section, setSection] = useState<SettingsSection>('General');
   const turn = useRef<AbortController | null>(null);
   const pending = useRef<Promise<void>>(Promise.resolve());
   const closing = useRef(false);
+  /** Raw slash command being routed: its notices become `⎿` result lines in the transcript. */
+  const routing = useRef<string | undefined>(undefined);
+  /** Panel a slash command opened, so Esc can print `⎿  <noun> cancelled`. */
+  const opened = useRef<{id: string; route: string; raw: string} | null>(null);
+  const closePanel = useRef(() => {});
+  const sendNow = useRef(false);
+  const editing = useRef(false);
   const commands = useRef(new Map<AbortController, Promise<void>>());
   const mounted = useRef(true);
   const started = useRef(false);
@@ -132,8 +237,11 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
   const current = useRef<{shutdown(): Promise<void>; command(raw: string): Promise<void>} | null>(null);
   const reset = () => {
     transcript.reset();
+    setDiffOpen(false);
+    autoDiffOpened.current = false;
     session.current = client.activeSession()?.id;
-    setHistoryKey(n => n + 1);
+    setOlderPages(0);
+    scroll.toBottom();
     notices.clearNotices();
   };
   const requestExit = () => {
@@ -145,6 +253,10 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
     if (closing.current) return;
     if (!ready && route !== 'connect' && route !== 'models') return;
     const changed = () => reset();
+    const show = (id: string, content: ReactNode) => {
+      opened.current = routing.current ? {id, route, raw: routing.current} : null;
+      overlay.open(id, content);
+    };
     const accountId = args
       ? (client
           .listAccounts()
@@ -155,9 +267,10 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
       case 'accounts':
       case 'switch':
       case 'logout':
-        overlay.open(
+        show(
           'connect',
           <ConnectDialog
+            width={width}
             initialStep={route === 'connect' ? 'provider' : 'accounts'}
             action={route === 'logout' ? 'logout' : route === 'switch' ? 'switch' : undefined}
             accountId={accountId}
@@ -167,21 +280,22 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
         );
         break;
       case 'models':
-        overlay.open(route, <ModelsDialog onChanged={changed} isStreaming={busy} />);
+        show(route, <ModelsDialog width={width} onChanged={changed} isStreaming={busy} />);
         break;
       case 'effort':
-        overlay.open(route, <EffortDialog />);
+        show(route, <EffortDialog width={width} />);
         break;
       case 'sessions':
-        overlay.open(route, <SessionsDialog onChanged={changed} />);
+        show(route, <SessionsDialog width={width} onChanged={changed} />);
         break;
       case 'themes':
-        overlay.open(route, <ThemesDialog />);
+        show(route, <ThemesDialog width={width} />);
         break;
       case 'settings':
-        overlay.open(
+        show(
           route,
           <SettingsDialog
+            width={width}
             initialSection={section}
             onSectionChange={setSection}
             onNavigate={action => open(action)}
@@ -190,9 +304,10 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
         );
         break;
       case 'help':
-        overlay.open(
+        show(
           route,
           <HelpDialog
+            width={width}
             onCommand={raw => {
               overlay.close();
               void current.current?.command(raw);
@@ -201,19 +316,22 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
         );
         break;
       case 'permissions':
-      case 'full-access':
-        overlay.open('permissions', <PermissionRulesDialog confirmFullAccessOnOpen={route === 'full-access'} />);
+        show('permissions', <PermissionRulesDialog width={width} />);
+        break;
+      case 'background-tasks':
+        show(route, <BackgroundTasksDialog width={width} />);
         break;
       case 'agents':
-        overlay.open(route, <AgentsDialog />);
+        show(route, <AgentsDialog width={width} />);
         break;
       case 'memory':
-        overlay.open(route, <MemoryDialog />);
+        show(route, <MemoryDialog width={width} />);
         break;
       case 'skills':
-        overlay.open(
+        show(
           route,
           <SkillsDialog
+            width={width}
             onInvoke={raw => {
               overlay.close();
               submit(raw);
@@ -221,13 +339,42 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
           />,
         );
         break;
-      case 'usage':
       case 'context':
+        // Claude Code prints the grid into the transcript; mid-turn it would land inside the running answer.
+        if (!turn.current && !shellCall.current) {
+          transcript.addContext(routing.current ?? '/context', contextBlock(client));
+          break;
+        }
+        show(route, <ReportDialog kind={route} width={width} />);
+        break;
+      case 'usage':
       case 'status':
-        overlay.open(route, <ReportDialog kind={route} />);
+        show(route, <ReportDialog kind={route} width={width} />);
+        break;
+      case 'cost':
+        show('usage', <ReportDialog kind="usage" tab="Stats" width={width} />);
+        break;
+      case 'rewind':
+        show(route, <RewindDialog width={width} onCancel={() => closePanel.current()} />);
+        break;
+      case 'mcp':
+        show(route, <McpDialog width={width} />);
+        break;
+      case 'hooks':
+        show(route, <HooksDialog width={width} />);
         break;
       case 'diff':
-        overlay.open(route, <DiffDialog notice={notices.addNotice} />);
+        if (width < 110) commandNotice(DIFF_PANEL_RESIZE_MESSAGE);
+        else if (diffOpen) {
+          setDiffOpen(false);
+          commandNotice('Diff panel hidden');
+        } else {
+          setDiffOpen(true);
+          void diff.refresh();
+        }
+        break;
+      case 'keybindings':
+        void editKeybindings();
         break;
       default:
         notices.addNotice(`Not implemented: ${route}`);
@@ -263,18 +410,38 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
     if (!ready || closing.current || turn.current || !client.toolsEnabled()) return false;
     const abort = new AbortController();
     turn.current = abort;
+    scroll.toBottom();
     setBusy(true);
     pending.current = (async () => {
       let prompt: string | undefined = text;
-      while (prompt && !closing.current && !abort.signal.aborted) {
-        transcript.begin(prompt);
+      while (
+        prompt !== undefined &&
+        (prompt.trim() || client.imageAttachments().length) &&
+        !closing.current &&
+        !abort.signal.aborted
+      ) {
+        const displayPrompt = [prompt, ...client.imageAttachments().map(image => image.label)]
+          .filter(Boolean)
+          .join('\n');
+        transcript.begin(displayPrompt, undefined, status.status.selection?.modelId);
         try {
           for await (const event of client.sendMessage(prompt, {signal: abort.signal})) {
-            if (mounted.current) transcript.applyEvent(event);
+            if (mounted.current) {
+              transcript.applyEvent(event);
+              if (event.type === 'toolResult' && changeReceipt(event.result).changes.length) {
+                if (width >= 110 && !autoDiffOpened.current) {
+                  autoDiffOpened.current = true;
+                  setDiffOpen(true);
+                }
+                void diff.refresh();
+              }
+            }
           }
-          transcript.finish({cancelled: abort.signal.aborted});
+          transcript.finish({cancelled: abort.signal.aborted || sendNow.current});
         } catch (error) {
-          transcript.finish(abort.signal.aborted ? {cancelled: true} : {error: requestFailure(error)});
+          transcript.finish(
+            abort.signal.aborted || sendNow.current ? {cancelled: true} : {error: requestFailure(error)},
+          );
         }
         session.current = client.activeSession()?.id;
         prompt = abort.signal.aborted ? undefined : client.takeQueuedMessage();
@@ -282,14 +449,177 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
     })().finally(() => {
       turn.current = null;
       if (mounted.current) setBusy(false);
+      // Ctrl+X Ctrl+S: the interrupted turn is over; the queued messages go out as the next turn.
+      if (sendNow.current) {
+        sendNow.current = false;
+        const next = !closing.current && mounted.current ? client.takeQueuedMessage() : undefined;
+        if (next !== undefined) submit(next);
+      }
     });
     return true;
+  };
+  const sendQueuedNow = () => {
+    if (!client.queuedInput().length) {
+      notices.addNotice('Nothing queued to send.');
+      return;
+    }
+    sendNow.current = true;
+    const disposition = client.sendQueuedNow();
+    if (disposition === 'idle' && !turn.current) {
+      sendNow.current = false;
+      const next = client.takeQueuedMessage();
+      if (next !== undefined) submit(next);
+    }
+  };
+  /** Hand the terminal to $VISUAL/$EDITOR on `file`; true when the editor exited cleanly. */
+  const runEditor = async (file: string): Promise<boolean> => {
+    const [bin, ...args] = (process.env.VISUAL || process.env.EDITOR || 'vi').trim().split(/\s+/);
+    let failed = false;
+    await suspendTerminal(async () => {
+      await new Promise<void>(resolve => {
+        const child = spawn(bin!, [...args, file], {stdio: 'inherit'});
+        child.once('error', () => {
+          failed = true;
+          resolve();
+        });
+        child.once('exit', code => {
+          failed = code !== 0;
+          resolve();
+        });
+      });
+    });
+    return !failed;
+  };
+  /** Ctrl+G: edit the draft in $VISUAL/$EDITOR on a private temp file while Ink hands over the terminal. */
+  const editInExternalEditor = async () => {
+    if (editing.current || process.platform === 'win32') {
+      if (process.platform === 'win32') notices.addNotice('Not implemented: external editor on Windows.');
+      return;
+    }
+    editing.current = true;
+    let dir: string | undefined;
+    try {
+      dir = await mkdtemp(join(tmpdir(), 'futryn-edit-'));
+      const file = join(dir, 'prompt.md');
+      await writeFile(file, composer.content, {mode: 0o600});
+      if (!(await runEditor(file))) notices.addNotice('The editor did not exit cleanly; the draft is unchanged.');
+      else composer.setDraft(createPasteState((await readFile(file, 'utf8')).replace(/\n$/, '')));
+    } catch {
+      notices.addNotice('Could not open the editor; the draft is unchanged.');
+    } finally {
+      editing.current = false;
+      if (dir) await rm(dir, {recursive: true, force: true}).catch(() => {});
+    }
+  };
+  /** Edit a private copy; only the SDK may publish a new pending plan revision. */
+  const editPlanInExternalEditor = async (plan: string): Promise<string | undefined> => {
+    if (editing.current) return;
+    if (process.platform === 'win32') throw new Error('External editor on Windows is unavailable.');
+    editing.current = true;
+    let dir: string | undefined;
+    try {
+      dir = await mkdtemp(join(tmpdir(), 'futryn-plan-edit-'));
+      const file = join(dir, 'plan.md');
+      await writeFile(file, plan, {mode: 0o600});
+      if (!(await runEditor(file))) throw new Error('The editor did not exit cleanly; plan unchanged.');
+      const text = await readFile(file, 'utf8');
+      return text === plan ? undefined : text;
+    } finally {
+      editing.current = false;
+      if (dir) await rm(dir, {recursive: true, force: true}).catch(() => {});
+    }
+  };
+  /** `v` in the transcript viewer: the conversation as text in $VISUAL/$EDITOR (a copy; edits are discarded). */
+  const openTranscriptInEditor = async () => {
+    if (editing.current) return;
+    if (process.platform === 'win32') {
+      notices.addNotice('Not implemented: external editor on Windows.');
+      return;
+    }
+    editing.current = true;
+    let dir: string | undefined;
+    try {
+      dir = await mkdtemp(join(tmpdir(), 'futryn-transcript-'));
+      const file = join(dir, 'transcript.md');
+      await writeFile(file, transcriptPlainText(transcript.items) + '\n', {mode: 0o600});
+      if (!(await runEditor(file))) notices.addNotice('The editor did not exit cleanly.');
+    } catch {
+      notices.addNotice('Could not open the editor.');
+    } finally {
+      editing.current = false;
+      if (dir) await rm(dir, {recursive: true, force: true}).catch(() => {});
+    }
+  };
+  /** `/keybindings`: create the user file from the template when missing, edit it, then reload it right away. */
+  const editKeybindings = async () => {
+    if (editing.current) return;
+    if (process.platform === 'win32') {
+      notices.addNotice('Not implemented: external editor on Windows.');
+      return;
+    }
+    editing.current = true;
+    const file = keybindingsPath();
+    try {
+      const created = ensureKeybindingsFile(file);
+      if (created) notices.addNotice(`Created ${file} from the template.`);
+      if (!(await runEditor(file))) notices.addNotice('The editor did not exit cleanly.');
+      keymapStore.set(loadKeybindings(file));
+    } catch {
+      notices.addNotice(`Could not open ${file} in an editor.`);
+    } finally {
+      editing.current = false;
+    }
+  };
+  /** `[` in the transcript viewer: leave the alternate screen and print the conversation into the native scrollback. */
+  const dumpScrollback = async () => {
+    if (!fullscreen) {
+      notices.addNotice('The conversation is already in the terminal scrollback.');
+      return;
+    }
+    const text = transcriptPlainText(transcript.items);
+    await suspendTerminal(() => {
+      stdout.write(`${text}\n`);
+    });
+    notices.addNotice('Conversation written to the terminal scrollback.');
+  };
+  /** `{` / `}`: scroll the detailed transcript to the previous / next prompt. */
+  const jumpPrompt = (direction: -1 | 1) => {
+    const content = scroll.content.current;
+    if (!fullscreen || !content) {
+      notices.addNotice('Not implemented: prompt jumps need the fullscreen transcript.');
+      return;
+    }
+    const tops = [...anchors.current.values()].map(el => rowWithin(el, content)).sort((a, b) => a - b);
+    const here = scroll.topRow;
+    const target = direction < 0 ? tops.findLast(top => top < here) : tops.find(top => top > here);
+    if (target === undefined) notices.addNotice(direction < 0 ? 'No earlier prompt.' : 'No later prompt.');
+    else scroll.showRow(target);
+  };
+  /** Ctrl+Z: stop the process after Ink releases the terminal; SIGCONT (fg) brings the screen back. */
+  const suspendProcess = () => {
+    if (process.platform === 'win32') return;
+    void suspendTerminal(
+      () =>
+        new Promise<void>(resolve => {
+          process.once('SIGCONT', () => resolve());
+          process.kill(process.pid, 'SIGTSTP');
+        }),
+    );
+  };
+  /** Notices raised while a command runs become its `⎿` result in the transcript; mid-turn they stay out of it. */
+  const printResult = (result: CommandResultLines) => {
+    const [prompt, lines] = resultParts(result);
+    transcript.addCommand(prompt, ...lines);
+  };
+  const commandNotice = (text: string) => {
+    if (routing.current && !turn.current && !shellCall.current) transcript.addCommand(routing.current, safeText(text));
+    else notices.addNotice(text);
   };
   const host: CommandHost = {
     client,
     busy: () => !!turn.current || (!!controls.current && composer.busy),
     open,
-    notice: notices.addNotice,
+    notice: commandNotice,
     reset,
     submit,
     exit: () => gate.exit(),
@@ -297,6 +627,7 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
   const command = async (raw: string) => {
     if (!ready || closing.current) return;
     const abort = new AbortController();
+    routing.current = raw.trim();
     const task = routeCommand({...host, signal: abort.signal}, raw);
     // /exit starts shutdown synchronously: do not make shutdown await itself.
     if (closing.current) return;
@@ -305,6 +636,7 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
       await task;
     } finally {
       commands.current.delete(abort);
+      if (routing.current === raw.trim()) routing.current = undefined;
     }
   };
   current.current = {shutdown, command};
@@ -313,8 +645,17 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
     onCommand: command,
     busy,
     workspaceAccess: ready,
-    isActive: ready && !overlay.active,
-    inputWidth: Math.max(1, width - 6),
+    isActive: ready && !overlay.active && !detail.detailed,
+    inputWidth: Math.max(1, width - 3),
+    onToggleTasks: plan.toggleTodos,
+    onRewind: () => open('rewind'),
+    onEditor: () => void editInExternalEditor(),
+    onSuspend: suspendProcess,
+    onSendQueuedNow: sendQueuedNow,
+    onRedraw: () => void suspendTerminal(() => {}),
+    onOpenAgents: () => open('background-tasks'),
+    onOpenBackgroundTasks: () => open('background-tasks'),
+    onReadClipboardImage: () => readMacClipboardImage(),
     onNotice: notices.addNotice,
     onEmptyHomeEnd: edge =>
       overlay.open(
@@ -335,7 +676,7 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
       return result.status === 'ok';
     },
     onShellStart: command => {
-      const call = {id: `shell-${crypto.randomUUID()}`, name: 'exec_command', input: {command}};
+      const call = {id: `shell-${crypto.randomUUID()}`, name: 'exec_command', input: {cmd: command}};
       shellCall.current = call;
       transcript.begin(`!${command}`);
       transcript.applyEvent({type: 'toolCallComplete', call});
@@ -350,7 +691,7 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
         shellCall.current = {
           id: `shell-${crypto.randomUUID()}`,
           name: 'exec_command',
-          input: {command: composer.content.slice(1).trim()},
+          input: {cmd: composer.content.slice(1).trim()},
         };
         transcript.begin(composer.content);
         transcript.applyEvent({type: 'toolCallComplete', call: shellCall.current});
@@ -367,7 +708,7 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
       const call = shellCall.current ?? {
         id: result.callId,
         name: 'exec_command',
-        input: {command: composer.content.slice(1).trim()},
+        input: {cmd: composer.content.slice(1).trim()},
       };
       if (!shellCall.current) {
         transcript.begin(composer.content);
@@ -404,6 +745,17 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
   const [interaction, setInteraction] = useState(0);
   useClientEvents({
     interaction: () => setInteraction(n => n + 1),
+    plan: () => setInteraction(n => n + 1),
+    background: event => {
+      if (event.parentSessionId && event.parentSessionId !== client.activeSession()?.id) return;
+      if (event.type === 'task.finished' && event.task.kind === 'shell' && event.delivery) {
+        const task = event.task;
+        transcript.addNotification(
+          `background:${client.activeSession()?.id}:${task.id}`,
+          `Background command "${task.description}" ${task.status === 'done' ? 'completed' : task.status}${task.exitCode === undefined ? '' : ` (exit code ${task.exitCode})`}`,
+        );
+      }
+    },
     // Idle parent: a queued <subagent> result becomes the next turn so the model can act on it (Codex wakes the parent).
     subagent: notice => {
       if (notice.delivery !== 'queued' || !ready || closing.current || turn.current || shellCall.current) return;
@@ -426,11 +778,13 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
     const waiting = client.listPendingPermissions();
     const permission = waiting.find(p => overlay.active?.id === `permission:${p.approvalId}`) ?? waiting.at(-1);
     const question = client.listPendingQuestions()[0];
+    const proposal = client.pendingPlanApproval();
     if (permission) {
       if (overlay.active?.id === `permission:${permission.approvalId}`) return;
       overlay.open(
         `permission:${permission.approvalId}`,
         <PermissionRequestDialog
+          width={width}
           request={permission}
           onDenied={reason => {
             if (!reason.trim()) return;
@@ -446,60 +800,281 @@ export function IntegratedShell({width: requestedWidth, initialCommand, register
       );
     } else if (question) {
       if (overlay.active?.id !== `question:${question.questionId}`)
-        overlay.open(`question:${question.questionId}`, <QuestionRequestDialog request={question} />);
-    } else if (overlay.active?.id.startsWith('permission:') || overlay.active?.id.startsWith('question:'))
+        overlay.open(`question:${question.questionId}`, <QuestionRequestDialog width={width} request={question} />);
+    } else if (proposal) {
+      if (overlay.active?.id !== `plan:${proposal.id}`)
+        overlay.open(
+          `plan:${proposal.id}`,
+          <PlanApprovalDialog
+            width={width}
+            onCancel={() => turn.current?.abort()}
+            onEdit={editPlanInExternalEditor}
+            editorLabel={editorName({...process.env, EDITOR: process.env.EDITOR || 'vi'})}
+          />,
+        );
+    } else if (
+      overlay.active?.id.startsWith('permission:') ||
+      overlay.active?.id.startsWith('question:') ||
+      overlay.active?.id.startsWith('plan:')
+    )
       overlay.close();
   }, [interaction, ready, overlay.active?.id]);
-  useKeymap({
-    close: () => {
-      if (!ready) {
-        if (overlay.active) overlay.close();
-        else gate.exit();
-      } else if (overlay.active) overlay.close();
-      else if (!composer.interrupt()) {
-        turn.current?.abort();
-        for (const abort of commands.current.keys()) abort.abort();
-      }
-    },
-    exit: () => gate.exit(),
-    permissions: () => {
-      if (ready && !overlay.active && !composer.busy) permissions.cyclePreset();
-    },
-    expand: () => {
-      if (ready && !overlay.active) overlay.open('history', <HistoryDialog items={transcript.items} />);
-    },
-  });
-  useTextInput((input, key) => {
-    if (!ready || overlay.active || !key.ctrl) return;
-    if (input === 'p') {
-      open('help');
+  /** Esc on a panel a slash command opened leaves `❯ /cmd` and `⎿  <noun> cancelled` behind (spec 7). */
+  const closeOverlay = () => {
+    if (!overlay.active) return;
+    const info = opened.current;
+    opened.current = null;
+    if (overlay.active.id.startsWith('plan:')) turn.current?.abort();
+    if (info && info.id === overlay.active.id) printResult(dismissalResult(info.route, info.raw));
+    overlay.close();
+  };
+  closePanel.current = closeOverlay;
+  /** Ctrl+C / Ctrl+D inside a dialog: the first press asks, a second within 1.5 s closes the dialog. */
+  const dialogExit = (label: 'Ctrl-C' | 'Ctrl-D') => {
+    const now = Date.now();
+    const last = dialogPress.current;
+    if (last && last.key === label && now - last.at < 1500) {
+      dialogPress.current = null;
+      closeOverlay();
       return;
     }
-    const label = ({l: 'Ctrl+L', s: 'Ctrl+S', d: 'Ctrl+D', n: 'Ctrl+N', t: 'Ctrl+T'} as Record<string, string>)[input];
-    if (label) {
-      const def = commandForShortcut(label);
-      if (def) void command(def.command);
+    dialogPress.current = {key: label, at: now};
+    notices.addNotice(`Press ${label} again to close`);
+  };
+  const stopWork = () => {
+    if (!composer.interrupt()) {
+      turn.current?.abort();
+      for (const abort of commands.current.keys()) abort.abort();
     }
+  };
+  const dialogCancel = () => {
+    if (!overlay.active) return false;
+    if (ready) closeOverlay();
+    else overlay.close();
+  };
+  const viewing = ready && detail.detailed && !overlay.active;
+  const scrolling = fullscreen && ready && !overlay.active;
+  const quickKeys = (): string => {
+    const keymap = keymapStore.get();
+    const labels = (action: string) => keyLabels(keymap, 'Transcript', action).join(' / ') || 'unbound';
+    return [
+      `${labels('transcript:exit')} exit`,
+      '↑/↓ PgUp/PgDn scroll',
+      `${labels('transcript:previousPrompt')} ${labels('transcript:nextPrompt')} prompts`,
+      `${labels('transcript:dumpScrollback')} to scrollback`,
+      `${labels('transcript:openEditor')} open in editor`,
+    ].join(' · ');
+  };
+  useKeybindings({
+    Global: {
+      'app:interrupt': () => {
+        if (!ready) {
+          if (overlay.active) overlay.close();
+          else gate.exit();
+          return;
+        }
+        if (overlay.active) return dialogExit('Ctrl-C');
+        if (detail.detailed) return detail.setDetailed(false);
+        // Running work is interrupted like Esc; only an idle prompt arms the exit.
+        if (turn.current || shellCall.current || composer.busy || commands.current.size) return stopWork();
+        if (composer.confirmExit()) gate.exit();
+      },
+      'app:exit': () => {
+        if (!ready) return gate.exit();
+        if (overlay.active) return dialogExit('Ctrl-D');
+        if (detail.detailed) return;
+        if (composer.pressEof()) gate.exit();
+      },
+      'app:toggleTranscript': () => {
+        if (composer.shortcuts) {
+          composer.interrupt();
+          return;
+        }
+        if (ready && !overlay.active) detail.toggleDetailed();
+      },
+    },
+    Chat: {
+      'chat:cancel': () => {
+        if (!ready) {
+          if (overlay.active) overlay.close();
+          else gate.exit();
+        } else if (overlay.active) closeOverlay();
+        else if (detail.detailed) detail.setDetailed(false);
+        else stopWork();
+      },
+      'chat:cycleMode': () => {
+        if (composer.shortcuts) {
+          composer.interrupt();
+          return;
+        }
+        if (ready && !overlay.active && !composer.busy) permissions.cycleMode();
+      },
+    },
+    // Dialogs that do not bind their own cancel key fall back to the shell (it prints the `cancelled` result).
+    Select: {'select:cancel': () => dialogCancel()},
+    Confirmation: {'confirm:no': () => dialogCancel()},
+    Settings: {'settings:close': () => dialogCancel()},
+    Help: {'help:dismiss': () => dialogCancel()},
+    EffortSlider: {'effort:cancel': () => dialogCancel()},
+    MessageSelector: {'rewind:cancel': () => dialogCancel()},
+    DiffDialog: {'diff:back': () => dialogCancel()},
+    Scroll: {
+      'scroll:pageUp': () => (scrolling ? scroll.pageUp() : false),
+      'scroll:pageDown': () => (scrolling ? scroll.pageDown() : false),
+      'scroll:top': () => (scrolling ? scroll.toTop() : false),
+      'scroll:bottom': () => (scrolling ? scroll.toBottom() : false),
+      'scroll:lineUp': () => (scrolling && detail.detailed ? scroll.scrollBy(1) : false),
+      'scroll:lineDown': () => (scrolling && detail.detailed ? scroll.scrollBy(-1) : false),
+    },
+    Transcript: {
+      'transcript:exit': () => (viewing ? detail.setDetailed(false) : false),
+      'transcript:previousPrompt': () => (viewing ? jumpPrompt(-1) : false),
+      'transcript:nextPrompt': () => (viewing ? jumpPrompt(1) : false),
+      'transcript:dumpScrollback': () => (viewing ? void dumpScrollback() : false),
+      'transcript:openEditor': () => (viewing ? void openTranscriptInEditor() : false),
+      'transcript:help': () => (viewing ? notices.addNotice(quickKeys()) : false),
+    },
   });
-  return (
-    <Box flexDirection="column" width={width} minWidth={0}>
-      <InputScope active={!overlay.active}>
-        {!ready ? (
+  // The shared router reports chord problems in the composer footer and runs `command:<name>` bindings.
+  useEffect(() => {
+    router?.configure({
+      onNotice: message => composer.flash(message, 1500),
+      onCommand: name => {
+        if (!ready || overlay.active || closing.current) return false;
+        void current.current?.command(`/${name}`);
+      },
+    });
+  });
+  useEffect(() => {
+    if (overlay.active) router?.reset();
+  }, [overlay.active?.id]);
+  // keybindings.json problems: shown once per distinct set of warnings (the watcher also logs them).
+  useEffect(() => {
+    let shown = '';
+    const show = () => {
+      const warnings = keymapStore.get().warnings;
+      const key = warnings.join('\n');
+      if (key === shown) return;
+      shown = key;
+      if (warnings.length)
+        notices.addNotice(
+          `Keybindings: ${warnings[0]}${warnings.length > 1 ? ` (+${warnings.length - 1} more, see ~/.cosmew/debug/keybindings.log)` : ''} Defaults stay in effect for those keys.`,
+        );
+    };
+    show();
+    return keymapStore.subscribe(show);
+  }, []);
+  const activity = transcript.items.findLast(item => item.streaming);
+  // The tail window keeps frame cost bounded in long sessions; paging to the top pulls older items in.
+  const windowSize = 60 + olderPages * 40;
+  const shownItems = fullscreen ? transcript.items.slice(-windowSize) : transcript.items;
+  const showBanner = ready && shownItems.length === transcript.items.length;
+  const tip = spinnerTip(transcript.items.filter(item => item.role === 'user').length);
+  const warning = composer.status.permissionMode === 'bypassPermissions' ? BYPASS_PERMISSIONS_WARNING : undefined;
+  // A dialog replaces the composer and footer; the transcript clips first so choices never leave the screen.
+  const dialogRows = screenRows ? Math.max(1, screenRows - 1) : undefined;
+  const body = (
+    <>
+      {!ready ? (
+        <Box display={overlay.active ? 'none' : 'flex'} marginTop={fullscreen ? 1 : 0}>
           <StartupGate state={gate} width={width} />
-        ) : (
-          <>
-            <Header status={header} version="Ink v3" width={width} />
-            {!transcript.items.length && <Welcome status={status.status} width={width} />}
-            <Transcript items={transcript.items} historyKey={String(historyKey)} width={width} />
-            <Subagents agents={agents.agents} width={width} />
-            <Notices notices={notices.notices} width={width} />
-            <Plan plan={plan.plan} width={width} />
-            <ComposerView controller={composer} width={width} />
-            <StatusLine {...status} width={width} />
-          </>
-        )}
+        </Box>
+      ) : (
+        <>
+          {showBanner ? (
+            <Box marginTop={fullscreen ? 1 : 0} flexDirection="column">
+              <Welcome status={status.status} width={contentWidth} />
+            </Box>
+          ) : null}
+          <PromptAnchors.Provider value={anchors.current}>
+            <Transcript
+              items={shownItems}
+              bounded
+              showSpinner={false}
+              width={contentWidth}
+              liveRows={Math.max(1, (screenRows ?? 24) - 6)}
+              detailed={detail.detailed}
+              model={status.status.selection?.modelId}
+            />
+          </PromptAnchors.Provider>
+          <Subagents agents={agents.agents} width={contentWidth} />
+          <Notices notices={notices.notices} width={contentWidth} />
+        </>
+      )}
+    </>
+  );
+  return (
+    <Box
+      flexDirection="column"
+      width={width}
+      minWidth={0}
+      height={screenRows}
+      overflow={fullscreen ? 'hidden' : undefined}
+    >
+      <InputScope active={!overlay.active}>
+        <Box flexDirection="row" flexGrow={fullscreen ? 1 : 0} flexShrink={1} minHeight={1} overflow="hidden">
+          <Box width={contentWidth} minWidth={0} flexDirection="column" flexGrow={1} flexShrink={1}>
+            {fullscreen && ready ? (
+              <ScrollViewport scroll={scroll}>{body}</ScrollViewport>
+            ) : (
+              <Box flexDirection="column" flexGrow={fullscreen ? 1 : 0}>
+                {body}
+              </Box>
+            )}
+          </Box>
+          {ready && diffLayout.visible && !overlay.active ? (
+            <DiffSidePanel
+              report={diff.report}
+              onChangeBase={base => {
+                void diff.refresh(base);
+              }}
+              width={diffLayout.panelWidth}
+              height={Math.max(1, (screenRows ?? 30) - 6)}
+              isActive={!overlay.active && !detail.detailed}
+              onClose={() => {
+                setDiffOpen(false);
+              }}
+              onNotice={notices.addNotice}
+            />
+          ) : null}
+        </Box>
+        {ready ? (
+          <Box flexDirection="column" flexShrink={0} display={overlay.active || detail.detailed ? 'none' : 'flex'}>
+            <ComposerView
+              controller={composer}
+              width={width}
+              maxRows={screenRows && screenRows < 16 ? 1 : 6}
+              showHints={!screenRows || screenRows >= 12}
+              fullscreen={fullscreen}
+              warning={warning}
+              activity={
+                activity ? (
+                  <Box flexDirection="column">
+                    <Spinner
+                      key={activity.id}
+                      startedAt={activity.startedAt}
+                      tokens={activity.usage?.outputTokens ?? undefined}
+                      effort={composer.status.reasoningEffort ?? undefined}
+                      thinking={isThinking(activity)}
+                      tip={tip}
+                      width={width}
+                    />
+                    {busy && plan.todosVisible ? <Plan plan={plan.plan} width={width} /> : null}
+                  </Box>
+                ) : busy && plan.todosVisible ? (
+                  <Plan plan={plan.plan} width={width} />
+                ) : undefined
+              }
+            />
+          </Box>
+        ) : null}
       </InputScope>
-      {overlay.active?.content}
+      {ready && detail.detailed && !overlay.active ? <DetailedFooter width={width} /> : null}
+      {overlay.active ? (
+        <Box flexDirection="column" flexShrink={0}>
+          <LiveDialog rows={dialogRows}>{overlay.active.content}</LiveDialog>
+        </Box>
+      ) : null}
     </Box>
   );
 }
