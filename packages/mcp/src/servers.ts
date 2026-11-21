@@ -20,6 +20,7 @@ export interface McpToolRecord {
   tool: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  readOnlyHint?: boolean;
 }
 
 export interface McpSnapshot {
@@ -38,7 +39,11 @@ export interface McpHubOptions {
 interface LiveServer {
   status: McpServerStatus;
   tools: McpToolRecord[];
-  call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+  call(
+    tool: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<string | {text: string; isError: true}>;
   close(): Promise<void>;
 }
 
@@ -85,7 +90,11 @@ export class McpHub {
     return this.connecting;
   }
 
-  async call(qualifiedName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  async call(
+    qualifiedName: string,
+    args: Record<string, unknown>,
+    signal?: AbortSignal,
+  ): Promise<string | {text: string; isError: true}> {
     if (this.closed || signal?.aborted) throw new FutrynError('CANCELLED');
     const match = this.servers.flatMap(server => server.tools).find(tool => tool.name === qualifiedName);
     const live = match
@@ -138,7 +147,14 @@ export class McpHub {
           transport: spec.transport,
           state: 'failed',
           tools: 0,
-          error: failed === 'TIMEOUT' ? 'timed out' : failed === 'CANCELLED' ? 'cancelled' : 'failed to start',
+          error:
+            failed === 'PROTOCOL'
+              ? 'MCP discovery refused: invalid or oversized input schema.'
+              : failed === 'TIMEOUT'
+                ? 'timed out'
+                : failed === 'CANCELLED'
+                  ? 'cancelled'
+                  : 'failed to start',
         },
         tools: [],
         call: () => Promise.reject(new FutrynError('TRANSPORT')),
@@ -231,14 +247,20 @@ async function listRemoteTools(
   client: Client,
   timeout: number,
   signal: AbortSignal,
-): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>}[]> {
-  const tools: {name: string; description?: string; inputSchema?: Record<string, unknown>}[] = [];
+): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[]> {
+  const tools: {name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[] =
+    [];
   let cursor: string | undefined;
   for (let page = 0; page < 4 && tools.length < 64; page++) {
     const listed = await client.listTools(cursor ? {cursor} : undefined, {timeout, signal});
     for (const tool of listed.tools) {
       if (tool.execution?.taskSupport === 'required') continue;
-      tools.push({name: tool.name, description: tool.description, inputSchema: tool.inputSchema});
+      tools.push({
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        readOnlyHint: tool.annotations?.readOnlyHint === true,
+      });
       if (tools.length >= 64) break;
     }
     const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
@@ -255,16 +277,16 @@ async function callRemote(
   redact: (text: string) => string,
   timeout: number,
   signal: AbortSignal,
-): Promise<string> {
+): Promise<string | {text: string; isError: true}> {
   try {
     const result = await client.callTool({name, arguments: args}, undefined, {timeout, signal});
-    if (result.isError) throw new FutrynError('TRANSPORT');
     const blocks = Array.isArray(result.content) ? result.content : [];
     const text = blocks
       .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
       .join('\n');
     const structured = result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '';
-    return clip(redact(text + structured), MAX_MCP_OUTPUT_BYTES);
+    const safe = clip(redact(text + structured), MAX_MCP_OUTPUT_BYTES);
+    return result.isError ? {text: safe, isError: true} : safe;
   } catch (error) {
     if (signal.aborted) throw new FutrynError('CANCELLED');
     if (error instanceof FutrynError) throw error;
@@ -275,7 +297,7 @@ async function callRemote(
 
 function expose(
   server: string,
-  tools: {name: string; description?: string; inputSchema?: Record<string, unknown>}[],
+  tools: {name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[],
   redact: (text: string) => string,
 ): McpToolRecord[] {
   const records: McpToolRecord[] = [];
@@ -290,24 +312,25 @@ function expose(
       tool: tool.name,
       description: clip(redact(tool.description ?? `MCP tool ${tool.name} on ${server}.`), 500),
       inputSchema: schemaOf(tool.inputSchema),
+      readOnlyHint: tool.readOnlyHint === true,
     });
   }
   return records;
 }
 
 function schemaOf(schema: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!schema || schema.type !== 'object') return {type: 'object', additionalProperties: true};
-  let encoded = '';
   try {
-    encoded = JSON.stringify(schema);
+    if (!schema || schema.type !== 'object') throw new Error('invalid schema');
+    const encoded = JSON.stringify(schema);
+    if (Buffer.byteLength(encoded) > 8192) throw new Error('oversized schema');
+    return JSON.parse(encoded) as Record<string, unknown>;
   } catch {
-    return {type: 'object', additionalProperties: true};
+    throw new FutrynError('PROTOCOL');
   }
-  if (encoded.length > 8192) return {type: 'object', additionalProperties: true};
-  return JSON.parse(encoded) as Record<string, unknown>;
 }
 
-function textOf(result: McpTextResult): string {
+function textOf(result: McpTextResult): string | {text: string; isError: true} {
   const structured = result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '';
-  return clip(result.text + structured, MAX_MCP_OUTPUT_BYTES);
+  const safe = clip(result.text + structured, MAX_MCP_OUTPUT_BYTES);
+  return result.isError ? {text: safe, isError: true} : safe;
 }

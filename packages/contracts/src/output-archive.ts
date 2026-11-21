@@ -5,7 +5,7 @@ export interface OutputArchiveScope {
 }
 export interface OutputArchiveSource {
   tool: string;
-  kind: 'read' | 'search' | 'command' | 'web';
+  kind: 'read' | 'search' | 'command' | 'web' | 'mcp';
   target: string;
   /** Producer already omitted bytes (for example command head/tail capture). */
   truncated: boolean;

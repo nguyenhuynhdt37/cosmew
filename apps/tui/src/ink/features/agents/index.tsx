@@ -2,16 +2,10 @@
 import {useState} from 'react';
 import {useFutrynClient} from '../../hooks';
 import {TextLine} from '../../ui';
-import {
-  Dialog,
-  PickerDialog,
-  Detail,
-  useDialogSize,
-  useDialogRefresh,
-  useDialogTask,
-  type DialogProps,
-} from '../picker';
-import {transcriptLines, typeRow, childRow} from './logic';
+import {PickerDialog, useDialogSize, useDialogRefresh, useDialogTask, type DialogProps} from '../picker';
+import {typeRow, childRow} from './logic';
+import {AgentConversation} from '../background-tasks/conversation';
+import {sessionTasks} from '../background-tasks/tasks';
 export {transcriptLines, typeRow, childRow, formatDuration, tokenTotal} from './logic';
 export function AgentsDialog(props: DialogProps) {
   const client = useFutrynClient();
@@ -22,17 +16,24 @@ export function AgentsDialog(props: DialogProps) {
   const [transcript, setTranscript] = useState(false);
   const report = client.agentTypes();
   const children = client.subagents();
-  const child = selected ? (client.inspectSubagent(selected) ?? children.find(c => c.id === selected)) : undefined;
-  if (child && transcript)
+  const listed = children.find(c => c.id === selected);
+  const child = listed ? (client.inspectSubagent(listed.id) ?? listed) : undefined;
+  const visibleTask = child ? sessionTasks(client).find(task => task.id === child.id) : undefined;
+  if (child && transcript && visibleTask)
     return (
-      <Dialog title={`Agent transcript · ${child.id}`} {...size}>
-        <Detail
-          text={transcriptLines(child).join('\n')}
-          visibleRows={size.visibleRows}
-          onBack={() => setTranscript(false)}
-        />
-        <TextLine>Enter back · ↑↓ scroll · Esc close</TextLine>
-      </Dialog>
+      <AgentConversation
+        task={visibleTask}
+        width={size.width}
+        onBack={() => setTranscript(false)}
+        message={task.message}
+        onStop={() => {
+          if (child.status !== 'running') return;
+          void task.run(() => {
+            task.setMessage(client.stopSubagent(child.id) ? 'Stopping agent…' : 'Agent is not running.');
+            refresh();
+          });
+        }}
+      />
     );
   if (child)
     return (

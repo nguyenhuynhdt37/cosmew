@@ -154,6 +154,7 @@
         "@cosmew/contracts": "workspace:*",
         "@cosmew/security": "workspace:*",
         "@cosmew/workspace": "workspace:*",
+        "ajv": "8.20.0",
         "tree-sitter-bash": "0.25.1",
         "turndown": "7.2.5",
         "web-tree-sitter": "0.27.1",

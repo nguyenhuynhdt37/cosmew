@@ -17,6 +17,7 @@ export interface McpClientOptions {
 /** Text-only bounded result. Remote tool results are data and never executable instructions. */
 export interface McpTextResult {
   text: string;
+  isError?: boolean;
   structuredContent?: unknown;
 }
 
@@ -130,7 +131,6 @@ export class McpClient {
         signal: combined,
         timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
       });
-      if (result.isError) throw new FutrynError('TRANSPORT');
       const blocks = Array.isArray(result.content) ? result.content : [];
       const text = blocks
         .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
@@ -139,6 +139,7 @@ export class McpClient {
       // structuredContent is not forwarded raw: the search adapter parses it then redacts its output.
       return {
         text: safe,
+        ...(result.isError ? {isError: true} : {}),
         ...(result.structuredContent
           ? {structuredContent: JSON.parse(this.options.redact(JSON.stringify(result.structuredContent)))}
           : {}),
@@ -159,7 +160,7 @@ export class McpClient {
   /** Tool names and schemas. Same deadlines and error mapping as `call`. No sampling or filesystem host services. */
   async listTools(
     signal?: AbortSignal,
-  ): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>}[]> {
+  ): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[]> {
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
     const combined = AbortSignal.any([this.lifetime.signal, deadline, ...(signal ? [signal] : [])]);
@@ -167,7 +168,12 @@ export class McpClient {
     try {
       await abortable(this.connect(), combined);
       if (combined.aborted || !this.client) throw new FutrynError('CANCELLED');
-      const tools: {name: string; description?: string; inputSchema?: Record<string, unknown>}[] = [];
+      const tools: {
+        name: string;
+        description?: string;
+        inputSchema?: Record<string, unknown>;
+        readOnlyHint?: boolean;
+      }[] = [];
       let cursor: string | undefined;
       for (let page = 0; page < 4 && tools.length < 64; page++) {
         const listed = await this.client.listTools(cursor ? {cursor} : undefined, {
@@ -176,7 +182,12 @@ export class McpClient {
         });
         for (const tool of listed.tools) {
           if (tool.execution?.taskSupport === 'required') continue;
-          tools.push({name: tool.name, description: tool.description, inputSchema: tool.inputSchema});
+          tools.push({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            readOnlyHint: tool.annotations?.readOnlyHint === true,
+          });
           if (tools.length >= 64) break;
         }
         const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;

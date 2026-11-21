@@ -95,6 +95,7 @@ export class WebSearchClient {
               ? {query, limit: numResults}
               : {objective: query, search_queries: [query]};
         const answer = await this.mcp!.call(tool, args, signal);
+        if (answer.isError) throw new FutrynError('TRANSPORT');
         results =
           this.provider === 'exa'
             ? parseExa(answer.text)

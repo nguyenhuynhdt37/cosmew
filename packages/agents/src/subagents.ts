@@ -268,9 +268,15 @@ export function prepareForkedParentMessages(messages: readonly Message[]): Messa
         }
         continue;
       }
+      const {providerReplay, reasoning, ...visible} = message;
+      // A signed response describes its original ordered calls. Filtering a partial response
+      // invalidates that continuation; do not accidentally turn it into legacy reasoning replay.
+      const unchanged = answeredCalls.length === message.toolCalls.length;
       forked.push({
-        ...message,
+        ...visible,
         toolCalls: answeredCalls,
+        ...(unchanged && providerReplay ? {providerReplay} : {}),
+        ...(unchanged && reasoning !== undefined ? {reasoning} : {}),
       });
       continue;
     }

@@ -9,6 +9,7 @@ import {runExec} from '../../apps/cli/src/exec';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {memoryVault, scriptedView, type ScriptedReply, type ScriptedView} from '../fixtures';
 
+import {writeSandboxSettings} from '../sandbox-config';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
@@ -22,6 +23,7 @@ type ExtendedScriptedReply = Omit<ScriptedReply, 'calls'> & {
 };
 
 interface SetupOptions {
+  sandbox?: boolean;
   /** Make the project a Git repository with one commit before startup. */
   git?: boolean;
   config?: string;
@@ -42,6 +44,7 @@ async function setup(options: SetupOptions) {
   const state = join(home, '.futryn');
   mkdirSync(project, {recursive: true});
   mkdirSync(state, {recursive: true, mode: 0o700});
+  if (options.sandbox) writeSandboxSettings(state);
   if (options.config) {
     writeFileSync(join(state, 'config.toml'), options.config, {mode: 0o600});
   }
@@ -223,6 +226,8 @@ test('explore subagent is read-only (exec_command runs in read-only sandbox, wri
   let childUserMessages = '';
 
   const h = await setup({
+    // Read-only child containment with auto-approved Bash is explicit under ADR 0081.
+    sandbox: true,
     files: {'src/auth.ts': 'export const token = "ok";\n'},
     script: view => {
       const isChild = view.system.includes('You are an explore subagent');
@@ -846,7 +851,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.40')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.42')).toBe(true);
 });
 
 test('S5c: isolation worktree edits stay out of the main checkout; unchanged worktrees vanish; non-git is refused', async () => {

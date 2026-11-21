@@ -27,22 +27,31 @@ export class CheckpointStore {
       promptId: id,
       text: this.redact(prompt).slice(0, 2000),
       fileChanges: [],
-      messages: messages.map(({role, content, toolCalls, toolCallId, toolName, reasoning}) => ({
+      messages: messages.map(({role, content, toolCalls, toolCallId, toolName, reasoning, providerReplay}) => ({
         role,
         content,
         ...(toolCalls ? {toolCalls} : {}),
         ...(toolCallId ? {toolCallId, toolName} : {}),
         ...(reasoning ? {reasoning} : {}),
+        ...(providerReplay ? {providerReplay} : {}),
       })),
       changes: [],
       files: 0,
       restorable: true,
     };
     const data = JSON.stringify(record);
+    // Only signatures/ciphertext bypass text redaction. Do not mutate them or let a plaintext
+    // duplicate in the replay envelope bypass the existing secret-bearing checkpoint guard.
+    const visible = record.messages.map(({providerReplay: _replay, ...message}) => message);
+    const plainData = JSON.stringify({...record, messages: visible});
+    const replayHasSecret = record.messages.some(message =>
+      message.providerReplay?.parts.some(part => part.type !== 'tool-call' && this.redact(part.text) !== part.text),
+    );
     // Never keep secret-bearing checkpoint contents. Large histories are not copied unboundedly.
     if (
-      this.hasSecret(record.messages) ||
-      this.redact(data) !== data ||
+      this.hasSecret(visible) ||
+      this.redact(plainData) !== plainData ||
+      replayHasSecret ||
       Buffer.byteLength(data) > MAX_CHECKPOINT_BYTES
     ) {
       record.messages = [];
@@ -191,11 +200,19 @@ export class CheckpointStore {
     if (saved.workspaceDiffSnapshot && this.hasSecret(saved.workspaceDiffSnapshot))
       saved.workspaceDiffSnapshot = {files: [], reason: 'Workspace baseline is unavailable or redacted.'};
     const data = JSON.stringify(record);
+    // Only signatures/ciphertext bypass text redaction. Do not mutate them or let a plaintext
+    // duplicate in the replay envelope bypass the existing secret-bearing checkpoint guard.
+    const visible = record.messages.map(({providerReplay: _replay, ...message}) => message);
+    const plainData = JSON.stringify({...record, messages: visible});
+    const replayHasSecret = record.messages.some(message =>
+      message.providerReplay?.parts.some(part => part.type !== 'tool-call' && this.redact(part.text) !== part.text),
+    );
     if (
       record.changes.some(
         c => this.redact(c.path) !== c.path || (c.before !== null && this.redact(c.before) !== c.before),
       ) ||
-      this.redact(data) !== data ||
+      this.redact(plainData) !== plainData ||
+      replayHasSecret ||
       Buffer.byteLength(data) > MAX_CHECKPOINT_BYTES
     ) {
       record.restorable = false;

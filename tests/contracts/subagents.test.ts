@@ -53,8 +53,8 @@ const SAMPLE_DESCRIPTORS: ToolDescriptor[] = [
   {name: 'agent', capability: 'agent.spawn', parallel: true, description: 'agent', inputSchema: {}},
 ];
 
-test('contract version is bumped to 1.40 and Codex defaults are preserved', () => {
-  expect(CONTRACT_VERSION).toBe('1.40');
+test('contract version is bumped to 1.42 and Codex defaults are preserved', () => {
+  expect(CONTRACT_VERSION).toBe('1.42');
   expect(DEFAULT_AGENT_MAX_THREADS).toBe(6);
   expect(DEFAULT_AGENT_MAX_DEPTH).toBe(1);
   expect(
