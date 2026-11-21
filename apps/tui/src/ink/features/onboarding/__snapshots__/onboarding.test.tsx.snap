@@ -1,0 +1,141 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`onboarding resumes at Connect and goes through security before trust at 80 columns 1`] = `
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Let's get started.
+
+  Choose the text style that looks best with your terminal
+
+  ❯ ✔ Auto
+      Dark
+      Light
+      Dark (colorblind-friendly)
+      Light (colorblind-friendly)
+      Dark (ANSI)
+      Light (ANSI)
+
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   1   function greet() {
+   2 -  console.log("Hello, World!");
+   2 +  console.log("Hello, Cosmew!");
+   3   }
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   Syntax highlighting: on
+
+  To change this later, run /theme
+  Enter to select
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Connect · provider
+  Ctrl+A providers / accounts · Esc cancels sign-in
+  ❯ Skip for now
+    Custom provider · any gateway or endpoint (9Router, LiteLLM…)
+
+  ↑/↓ to navigate · Enter to select · Esc to close
+
+────────────────────────────────────────────────────────────────────────────────
+ Security notes:
+
+ Cosmew can make mistakes.
+ Review Cosmew’s actions, especially when it runs code.
+
+ Due to prompt injection risks, use Cosmew only with code you trust.
+
+ Enter to continue
+
+────────────────────────────────────────────────────────────────────────────────
+ Accessing workspace:
+
+ /fixture
+
+ Quick safety check: Is this a project you created or one you trust? (Like your
+ own code, a well-known open source project, or work from your team). If not,
+ take a moment to review what's in this folder first.
+
+ Cosmew will be able to read, edit, and execute files here.
+
+ Consent is remembered for this workspace and does not grant individual tool
+ permissions.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel"
+`;
+
+exports[`onboarding resumes at Connect and goes through security before trust at 40 columns 1`] = `
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Let's get started.
+
+  Choose the text style that looks
+  best with your terminal
+
+  ❯ ✔ Auto
+      Dark
+      Light
+      Dark (colorblind-friendly)
+      Light (colorblind-friendly)
+      Dark (ANSI)
+      Light (ANSI)
+
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   1   function greet() {
+   2 -  console.log("Hello, World!");
+   2 +  console.log("Hello, Cosmew!");
+   3   }
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+   Syntax highlighting: on
+
+  To change this later, run /theme
+  Enter to select
+
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Connect · provider
+  Ctrl+A providers / accounts · Esc
+  cancels sign-in
+  ❯ Skip for now
+    Custom provider · any gateway or …
+
+  ↑/↓ to navigate · Enter to select ·
+  Esc to close
+
+────────────────────────────────────────
+ Security notes:
+
+ Cosmew can make mistakes.
+ Review Cosmew’s actions, especially
+ when it runs code.
+
+ Due to prompt injection risks, use
+ Cosmew only with code you trust.
+
+ Enter to continue
+
+────────────────────────────────────────
+ Accessing workspace:
+
+ /fixture
+
+ Quick safety check: Is this a project
+ you created or one you trust? (Like
+ your own code, a well-known open
+ source project, or work from your
+ team). If not, take a moment to review
+ what's in this folder first.
+
+ Cosmew will be able to read, edit, and
+  execute files here.
+
+ Consent is remembered for this
+ workspace and does not grant
+ individual tool permissions.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel"
+`;

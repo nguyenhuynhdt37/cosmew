@@ -297,7 +297,7 @@ test('interactive CLI/TUI entry accepts the Claude Code launch flags, warns on b
   cleanup.push(() => rmSync(home, {recursive: true, force: true}));
   const run = async (args: string[]) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, FUTRYN_HOME: home},
+      env: {...process.env, COSMEW_HOME: home, FUTRYN_HOME: home},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -311,7 +311,13 @@ test('interactive CLI/TUI entry accepts the Claude Code launch flags, warns on b
     return {stdout, stderr, code};
   };
 
+  const initial = await run(['status', '--json']);
+  expect(initial.code).toBe(0);
+  expect(initial.stderr).toContain('Notice: Sandbox is now off by default');
+  expect(JSON.parse(initial.stdout)).toMatchObject({permissionMode: 'default', sandbox: {enabled: false}});
+
   const skipTui = await run(['tui', '--dangerously-skip-permissions']);
+  expect(skipTui.stderr).not.toContain('Sandbox is now off by default');
   expect(skipTui.code).toBe(0);
   expect(skipTui.stderr).toContain('WARNING: bypassPermissions');
   expect(skipTui.stdout).toContain('WARNING: bypassPermissions');
@@ -323,7 +329,11 @@ test('interactive CLI/TUI entry accepts the Claude Code launch flags, warns on b
 
   const planStatus = await run(['status', '--permission-mode', 'plan', '--json']);
   expect(planStatus.code).toBe(0);
-  expect(JSON.parse(planStatus.stdout)).toMatchObject({permissionMode: 'plan', sandbox: {enabled: true}});
+  // ADR 0081: plan restricts tools without changing the default-off sandbox setting.
+  expect(JSON.parse(planStatus.stdout)).toMatchObject({
+    permissionMode: 'plan',
+    sandbox: {enabled: false, autoAllowBashIfSandboxed: false, allowUnsandboxedCommands: true},
+  });
 
   for (const bad of [
     ['tui', '--dangerously-skip-permissions', '--permission-mode', 'plan'],

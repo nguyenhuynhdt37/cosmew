@@ -52,16 +52,20 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const settingsHash = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 /** Lenient read: invalid fields are dropped with a diagnostic; invalid JSON gives an empty file. */
-export function parseSettings(text: string): {settings: SettingsFile; diagnostics: string[]} {
+export function parseSettings(text: string): {
+  settings: SettingsFile;
+  diagnostics: string[];
+  raw: Record<string, unknown>;
+} {
   const settings = emptySettingsFile();
   const diagnostics: string[] = [];
   let raw: unknown;
   try {
     raw = text.trim() ? JSON.parse(text) : {};
   } catch {
-    return {settings, diagnostics: ['not valid JSON; the file is ignored']};
+    return {settings, raw: {}, diagnostics: ['not valid JSON; the file is ignored']};
   }
-  if (!isRecord(raw)) return {settings, diagnostics: ['the top level must be an object; the file is ignored']};
+  if (!isRecord(raw)) return {settings, raw: {}, diagnostics: ['the top level must be an object; the file is ignored']};
   const strings = (value: unknown, label: string, accept: (item: string) => string | null): string[] => {
     if (value === undefined) return [];
     if (!Array.isArray(value)) {
@@ -123,7 +127,7 @@ export function parseSettings(text: string): {settings: SettingsFile; diagnostic
       }
     }
   }
-  return {settings, diagnostics};
+  return {settings, diagnostics, raw};
 }
 
 /** What a file would grant beyond tightening, in words for the trust prompt. Empty = nothing to approve. */
@@ -206,12 +210,12 @@ export function mergeSettings(layers: readonly SettingsLayer[], home: string): E
         first(
           layer => layer.file.sandbox.enabled,
           value => value === true,
-        ) ?? true,
+        ) ?? false,
       autoAllowBashIfSandboxed:
         first(
           layer => layer.file.sandbox.autoAllowBashIfSandboxed,
           value => value === false,
-        ) ?? true,
+        ) ?? false,
       excludedCommands: unique(trusted.flatMap(layer => layer.file.sandbox.excludedCommands)),
       allowUnsandboxedCommands:
         first(

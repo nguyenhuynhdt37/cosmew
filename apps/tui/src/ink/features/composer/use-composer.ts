@@ -16,6 +16,7 @@ import {completionContext, getCompletions, useAutocomplete, type Completion} fro
 import {recordHistory, useHistory} from '../history';
 import {createPasteState, expandPastes, insertPaste, replaceRange, type PasteState} from '../paste';
 import {footerShortcutColumns} from '../help/logic';
+import {sessionTasks} from '../background-tasks/tasks';
 import {
   edit,
   editSpan,
@@ -51,13 +52,13 @@ export interface ComposerOptions {
   onPasteImage?: () => void;
   onReadClipboardImage?: () => Promise<Parameters<FutrynClient['attachImage']>[0] | undefined>;
   onBackgroundTask?: () => void;
-  onOpenBackgroundTasks?: () => void;
+  onOpenBackgroundTasks?: (taskId?: string) => void;
   /** Ctrl+X Ctrl+S: the host transfers/interrupts the turn through SDK sendQueuedNow and drains the inbox. */
   onSendQueuedNow?: () => void;
   /** Ctrl+L: repaint the whole screen. */
   onRedraw?: () => void;
   /** Footer: Enter / ↓ on the selected agent opens the agents panel. */
-  onOpenAgents?: () => void;
+  onOpenAgents?: (taskId?: string) => void;
   /** Optional extra shells owned by a legacy host; SDK backgroundTasks supplies the normal count. */
   backgroundShells?: number;
   onNotice?: (message: string) => void;
@@ -65,6 +66,7 @@ export interface ComposerOptions {
   isActive?: boolean;
   /** Set only after folder consent; the SDK list API does not enforce this UI gate. */
   workspaceAccess?: boolean;
+  transcriptItems?: boolean;
   initialValue?: string;
   initialHistory?: readonly string[];
   inputWidth?: number;
@@ -89,6 +91,9 @@ function sessionHistory(client: FutrynClient): string[] {
 export function useComposer(options: ComposerOptions) {
   const client = useFutrynClient();
   const status = useStatus();
+  const reactiveRevision = client.currentReactiveEvent();
+  // The footer uses measured context for the accepted history. Editing or scrolling does not change it.
+  const contextEstimate = useMemo(() => client.context(), [client, reactiveRevision]);
   const [shortcuts, setShortcuts] = useState(false);
   const shortcutsRef = useRef(false);
   const dismissShortcuts = () => {
@@ -124,13 +129,7 @@ export function useComposer(options: ComposerOptions) {
     draftRef.current = next;
     setDraft(next);
   };
-  const [initialSession] = useState(() => client.activeSession());
-  const [initialEntries] = useState(
-    () =>
-      options.initialHistory ??
-      initialSession?.messages.filter(message => message.role === 'user').map(message => message.content) ??
-      [],
-  );
+  const [initialEntries] = useState(() => options.initialHistory ?? sessionHistory(client));
   const history = useHistory(initialEntries);
   const entriesRef = useRef(history.entries);
   entriesRef.current = history.entries;
@@ -150,7 +149,7 @@ export function useComposer(options: ComposerOptions) {
   const acceptanceSequence = useRef(0);
   const pendingInput = useRef<Promise<void>>(Promise.resolve());
   const mounted = useRef(true);
-  const sessionId = useRef(initialSession?.id);
+  const sessionId = useRef(status.activeSessionId ?? undefined);
   const menu = useAutocomplete();
   const busy = !!options.busy || shellBusy;
   useEffect(() => client.onBackgroundTaskEvent(() => rerender()), [client]);
@@ -164,9 +163,10 @@ export function useComposer(options: ComposerOptions) {
   useClientEvents({
     subagent: () => rerender(),
     reactive: event => {
+      if (event.kind.startsWith('subagent.')) rerender();
       // Session changes emit idle. Do not clone the full SDK session for token events.
       if (event.kind !== 'idle') return;
-      const id = client.activeSession()?.id;
+      const id = client.status().activeSessionId ?? undefined;
       if (id !== sessionId.current) {
         sessionId.current = id;
         // Keep the draft when moving sessions, but never navigate a stale history index.
@@ -243,7 +243,7 @@ export function useComposer(options: ComposerOptions) {
             .reverse()
             .map((content, i) => ({
               id: `local:${i}`,
-              sessionId: client.activeSession()?.id ?? '',
+              sessionId: status.activeSessionId ?? '',
               content,
               timestamp: '',
             }))
@@ -604,17 +604,8 @@ export function useComposer(options: ComposerOptions) {
     }
     return true;
   };
-  const runningTasks = () => {
-    const tasks = client.backgroundTasks().filter(task => task.status === 'running');
-    // Foreground children still have footer controls, even before they become background tasks.
-    return [
-      ...tasks,
-      ...client
-        .subagents()
-        .filter(agent => agent.status === 'running' && !tasks.some(task => task.id === agent.id))
-        .map(agent => ({...agent, kind: 'agent' as const})),
-    ];
-  };
+  const activeTasks = sessionTasks(client).filter(task => task.status === 'running');
+  const runningTasks = () => activeTasks;
   const runningAgents = runningTasks;
   const footerAgent = () => {
     const list = runningAgents();
@@ -632,6 +623,11 @@ export function useComposer(options: ComposerOptions) {
   const moveFooter = (step: number) => {
     const count = runningAgents().length;
     setFooter(at => ((((at ?? 0) + step) % count) + count) % count);
+  };
+  const openFooter = () => {
+    const selected = footerAgent();
+    const handler = selected?.kind === 'shell' ? options.onOpenBackgroundTasks : options.onOpenAgents;
+    bridge(handler ? () => handler(selected?.id) : undefined, 'task panel is not connected');
   };
   /** Every composer binding first closes the `?` table and is ignored while the history search owns the keys. */
   const guarded = (fn: (stroke: Keystroke) => void) => (stroke: Keystroke) => {
@@ -746,10 +742,9 @@ export function useComposer(options: ComposerOptions) {
     const agent = footerAgent();
     if (!agent) return;
     try {
-      const stopping =
-        agent.kind === 'agent' && !client.backgroundTasks().some(task => task.id === agent.id)
-          ? Promise.resolve(client.stopSubagent(agent.id))
-          : client.stopBackgroundTask(agent.id);
+      const stopping = agent.foreground
+        ? Promise.resolve(client.stopSubagent(agent.id))
+        : client.stopBackgroundTask(agent.id);
       void stopping
         .then(stopped => {
           report(stopped ? 'Stopping task…' : 'Task is not running.');
@@ -849,8 +844,7 @@ export function useComposer(options: ComposerOptions) {
         'history:previous': guarded(() => navigate(-1)),
         'history:next': guarded(() => {
           // Down on an empty input with nothing to scroll to moves focus to the footer's agent entry.
-          if (!draftRef.current.value && !navigation.current && !queued().length && runningAgents().length)
-            setFooter(0);
+          if (!draftRef.current.value && !navigation.current && runningAgents().length) setFooter(0);
           else navigate(1);
         }),
       },
@@ -859,18 +853,8 @@ export function useComposer(options: ComposerOptions) {
         'footer:previous': inFooter(() => moveFooter(-1)),
         'footer:up': inFooter(() => setFooter(null)),
         'footer:clearSelection': inFooter(() => setFooter(null)),
-        'footer:down': inFooter(() =>
-          bridge(
-            footerAgent()?.kind === 'shell' ? options.onOpenBackgroundTasks : options.onOpenAgents,
-            'task panel is not connected',
-          ),
-        ),
-        'footer:open': inFooter(() =>
-          bridge(
-            footerAgent()?.kind === 'shell' ? options.onOpenBackgroundTasks : options.onOpenAgents,
-            'task panel is not connected',
-          ),
-        ),
+        'footer:down': inFooter(openFooter),
+        'footer:open': inFooter(openFooter),
         'footer:close': closeFooter,
         'footer:stop': closeFooter,
       },
@@ -942,9 +926,9 @@ export function useComposer(options: ComposerOptions) {
   };
   return {
     status,
-    context: client.context(),
+    context: contextEstimate,
     shortcuts,
-    shortcutColumns: footerShortcutColumns(!!status.activeModel?.reasoningEfforts?.length),
+    shortcutColumns: footerShortcutColumns(!!status.activeModel?.reasoningEfforts?.length, options.transcriptItems),
     /** Shell must call this before exit; its startup/teardown lifecycle stays authoritative. */
     confirmExit: () => {
       dismissShortcuts();
@@ -996,10 +980,10 @@ export function useComposer(options: ComposerOptions) {
     pasteDeletedHint: deletedHint,
     /** Messages waiting behind the running turn, oldest first. */
     queued: queued(),
-    agents: client.backgroundTasks().filter(task => task.kind === 'agent' && task.status === 'running').length,
-    backgroundShells:
-      client.backgroundTasks().filter(task => task.kind === 'shell' && task.status === 'running').length +
-      (options.backgroundShells ?? 0),
+    tasks: runningTasks(),
+    selectedTask: footerAgent()?.id,
+    agents: runningTasks().filter(task => task.kind === 'agent').length,
+    backgroundShells: activeTasks.filter(task => task.kind === 'shell').length + (options.backgroundShells ?? 0),
     images: client.imageAttachments(),
     selectedImage,
     draft,

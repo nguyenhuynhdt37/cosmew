@@ -141,6 +141,8 @@ test('paths outside the workspace are denied without a prompt or any outside pat
 
 test('a provider that rejects tools marks the model unsupported and the next turn chats without tools', async () => {
   const c = await make({name: 'read', args: '{"path":"notes.txt"}'});
+  // Authenticate/verify the selected model through the public path before testing tool rejection.
+  expect(await c.client.verifyAccount()).toEqual({ok: true});
   c.server.set({status: 400});
   await c.tui.submitPrompt('hello');
   expect(c.tui.frame()).toContain('does not accept workspace tools');

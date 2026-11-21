@@ -5,8 +5,8 @@ import {keymapStore, shortcutColumns} from '../../hooks/keymap';
  * keymap (user remaps included) and lists only keys that work in this shell: image paste, fast mode and the
  * extended-thinking toggle have no backend, so they are left out.
  */
-export function helpShortcutColumns(efforts = true): readonly (readonly string[])[] {
-  return shortcutColumns(keymapStore.get(), {efforts, mac: process.platform === 'darwin'});
+export function helpShortcutColumns(efforts = true, transcriptItems = false): readonly (readonly string[])[] {
+  return shortcutColumns(keymapStore.get(), {efforts, transcriptItems, mac: process.platform === 'darwin'});
 }
 /** Default table (with effort), kept for callers that want a constant. */
 export const HELP_SHORTCUT_COLUMNS: readonly (readonly string[])[] = helpShortcutColumns();
@@ -35,8 +35,8 @@ export function commandRows() {
   }));
 }
 /** The `?` table: the same columns, without the effort line for a model that advertises no effort levels. */
-export function footerShortcutColumns(efforts: boolean): readonly (readonly string[])[] {
-  return helpShortcutColumns(efforts).map(column =>
+export function footerShortcutColumns(efforts: boolean, transcriptItems = false): readonly (readonly string[])[] {
+  return helpShortcutColumns(efforts, transcriptItems).map(column =>
     // The `?` table spells the newline key out (reference 02-shortcuts); /help abbreviates it.
     column.map(line => (line.startsWith('\\ then') ? `backslash (\\) then enter for newline` : line)),
   );

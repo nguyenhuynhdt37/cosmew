@@ -129,7 +129,7 @@ test('headless runner uses real dispatcher, JSONL order and final response outpu
     .split('\n')
     .map(line => JSON.parse(line));
   expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i + 1));
-  expect(events.every(e => e.contractVersion === '1.40')).toBe(true);
+  expect(events.every(e => e.contractVersion === '1.42')).toBe(true);
   expect(events.some(e => e.type === 'toolResult' && e.result.content.includes('real file'))).toBe(true);
   expect(events.at(-1).type).toBe('turn.completed');
   expect(readFileSync(join(x.root, 'last.txt'), 'utf8')).toBe('FINAL [REDACTED]\n');

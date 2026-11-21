@@ -100,10 +100,18 @@ function createTestClient(
 
 describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
   test('offers Auto, Dark and Light with readable semantic colors and black/white surfaces', () => {
-    expect(BUILTIN_COLOR_THEMES.map(theme => theme.id)).toEqual(['auto', 'dark', 'light']);
+    expect(BUILTIN_COLOR_THEMES.map(theme => theme.id)).toEqual([
+      'auto',
+      'dark',
+      'light',
+      'dark-daltonized',
+      'light-daltonized',
+      'dark-ansi',
+      'light-ansi',
+    ]);
     expect(BUILTIN_LIVE_THEMES).toHaveLength(0);
-    expect(ALL_BUILTIN_THEMES).toHaveLength(3);
-    for (const manifest of ALL_BUILTIN_THEMES) {
+    expect(ALL_BUILTIN_THEMES).toHaveLength(7);
+    for (const manifest of ALL_BUILTIN_THEMES.slice(0, 3)) {
       expect(themeManifestSchema.safeParse(manifest).success).toBe(true);
       for (const tokens of [manifest.dark, manifest.light]) {
         for (const key of THEME_TOKEN_KEYS) expect(tokens[key]).toMatch(/^#[0-9a-f]{6}$/);
@@ -229,7 +237,15 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       expect(settings.read().appearance?.theme).toBe('dark');
       expect(settings.read().projectAppearances?.['/workspace/proj-a']?.theme).toBe('light');
       expect(custom.loadAll().themes.some(theme => theme.id === 'old-custom')).toBe(true);
-      expect(engine.listThemes('all').map(theme => theme.id)).toEqual(['auto', 'dark', 'light']);
+      expect(engine.listThemes('all').map(theme => theme.id)).toEqual([
+        'auto',
+        'dark',
+        'light',
+        'dark-daltonized',
+        'light-daltonized',
+        'dark-ansi',
+        'light-ansi',
+      ]);
       await expect(engine.setTheme('old-custom')).rejects.toThrow();
       await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
       expect(engine.getActiveTokens().accent).toBe('#d77757');

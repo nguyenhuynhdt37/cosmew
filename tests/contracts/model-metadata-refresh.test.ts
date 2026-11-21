@@ -170,6 +170,7 @@ for (const stored of [false, true]) {
       sent = true;
       expect(x.client.status().reasoningEffort).toBe(stored ? 'low' : null);
     });
+    const verification = spyOn(x.client, 'verifyAccount').mockResolvedValue({ok: true});
     const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
     try {
       const result = runExec(
@@ -180,12 +181,16 @@ for (const stored of [false, true]) {
         },
         {prompt: 'hello', workspace: x.root, json: false},
       );
-      await Promise.resolve();
-      expect(sent).toBe(!stored);
-      x.finish();
+      if (stored) {
+        await Promise.resolve();
+        expect(sent).toBe(false);
+        x.finish();
+      }
+      expect(verification).toHaveBeenCalledTimes(1);
       expect(await result).toBe(0);
       expect(sent).toBe(true);
     } finally {
+      verification.mockRestore();
       send.mockRestore();
       output.mockRestore();
     }

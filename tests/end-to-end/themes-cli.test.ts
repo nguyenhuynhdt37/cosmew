@@ -23,12 +23,20 @@ async function cli(dir: string, args: string[]) {
   return {stdout, stderr, code};
 }
 
-test('CLI exposes only three appearances and rejects retired color themes', async () => {
+test('CLI exposes the Claude Code appearances and rejects retired color themes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-themes-cli-'));
   cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
   expect((await cli(dir, ['themes', 'set', 'dark'])).code).toBe(0);
   const listed = JSON.parse((await cli(dir, ['themes', 'list', '--json'])).stdout);
-  expect(listed.themes.map((theme: {id: string}) => theme.id)).toEqual(['auto', 'dark', 'light']);
+  expect(listed.themes.map((theme: {id: string}) => theme.id)).toEqual([
+    'auto',
+    'dark',
+    'light',
+    'dark-daltonized',
+    'light-daltonized',
+    'dark-ansi',
+    'light-ansi',
+  ]);
   expect(listed.mode).toBe('dark');
   expect((await cli(dir, ['themes', 'set', 'sakura'])).code).toBe(1);
   expect((await cli(dir, ['themes', 'wallpaper', 'neon-rain'])).code).toBe(1);

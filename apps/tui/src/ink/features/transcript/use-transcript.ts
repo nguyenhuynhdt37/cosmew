@@ -5,9 +5,10 @@ import type {ContextBlock} from '../usage/logic';
 import {messagesToTranscript, reduceTranscript} from './logic';
 export function useTranscript() {
   const client = useFutrynClient();
-  const [state, dispatch] = useReducer(reduceTranscript, undefined, () => ({
-    items: messagesToTranscript(client.activeSession()?.messages ?? [], client.activeSession()?.id),
-  }));
+  const [state, dispatch] = useReducer(reduceTranscript, undefined, () => {
+    const session = client.activeSession();
+    return {items: messagesToTranscript(session?.messages ?? [], session?.id)};
+  });
   return {
     items: state.items,
     begin: useCallback((prompt: string, id: string = crypto.randomUUID(), model?: string) => {
@@ -32,14 +33,16 @@ export function useTranscript() {
     addNotice: useCallback((text: string) => dispatch({type: 'notice', text}), []),
     addNotification: useCallback((id: string, text: string) => dispatch({type: 'notification', id, text}), []),
     reset: useCallback(
-      (messages?: readonly Message[], sessionId?: string) =>
+      (messages?: readonly Message[], sessionId?: string) => {
+        const session = messages === undefined ? client.activeSession() : undefined;
         dispatch({
           type: 'reset',
           items: messagesToTranscript(
-            messages ?? client.activeSession()?.messages ?? [],
-            sessionId ?? client.activeSession()?.id,
+            messages ?? session?.messages ?? [],
+            sessionId ?? session?.id ?? client.status().activeSessionId ?? undefined,
           ),
-        }),
+        });
+      },
       [client],
     ),
   };

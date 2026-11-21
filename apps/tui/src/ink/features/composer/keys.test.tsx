@@ -41,6 +41,20 @@ const mount = async (
 };
 const ARROW = {up: '\x1b[A', down: '\x1b[B', left: '\x1b[D', right: '\x1b[C'};
 
+test('Down can manage a foreground child even while a message is queued', async () => {
+  const fixture = dialogFixture({
+    startSession: () => ({id: 'queue-owner', selection, messages: []}),
+    subagents: () => [{...child, background: false}],
+    queuedInput: () => [{steerId: 'queued', content: 'follow up'}],
+  });
+  fixture.client.createSession();
+  const view = await mount({busy: true}, {fixture});
+  await key(view, ARROW.down);
+  expect(view.lastFrame()).toContain('agent 1/1');
+  expect(controller.queued).toEqual(['follow up']);
+  expect(controller.content).toBe('');
+});
+
 test('Ctrl+D: text is edited, an empty input needs a second press within 800 ms', async () => {
   const view = await mount({initialValue: 'abc'});
   await key(view, '\x01'); // Ctrl+A

@@ -76,6 +76,16 @@ export class ToolOrchestrator {
     const finish = (result: ToolOutput): ToolResult => {
       let content = this.options.redact(result.content);
       let pointer = '';
+      let evidenceOutputId: string | undefined;
+      const attachments = result.attachments?.map(a => ({
+        ...a,
+        ...(a.name ? {name: this.options.redact(a.name)} : {}),
+      }));
+      // Producer text (including any marker-looking text) is hashed verbatim. Only host metadata
+      // added below is excluded; never trust a remote producer's digest or archive handle.
+      const evidenceDigest = createHash('sha256')
+        .update(JSON.stringify([content, attachments ?? null, !!result.truncated]))
+        .digest('hex');
       // Best-effort evidence persistence must never turn a completed side effect into a retryable failure.
       if (
         archiveSource &&
@@ -91,6 +101,7 @@ export class ToolOrchestrator {
             permissionContext: archiveContext,
             sourceTruncated: !!result.truncated,
           });
+          evidenceOutputId = outputId;
           pointer = `\n\n[tool_output output_id=${outputId}; use tool_output to retrieve archived evidence]`;
         } catch {
           pointer = '\n\n[tool_output unavailable: archive storage failed; captured evidence cannot be retrieved.]';
@@ -101,11 +112,11 @@ export class ToolOrchestrator {
       content = clipped.text + pointer;
       const final = toolResultSchema.parse({
         ...result,
+        evidenceDigest,
+        evidenceOutputId,
         ...(result.skillDirectory ? {skillDirectory: this.options.redact(result.skillDirectory)} : {}),
         ...(result.target ? {target: this.options.redact(result.target)} : {}),
-        ...(result.attachments
-          ? {attachments: result.attachments.map(a => ({...a, ...(a.name ? {name: this.options.redact(a.name)} : {})}))}
-          : {}),
+        ...(result.attachments ? {attachments} : {}),
         content,
         truncated: result.truncated || clipped.clipped || undefined,
         callId: call.id,
@@ -230,12 +241,12 @@ export class ToolOrchestrator {
       const before = prepared.kind === 'patch' ? this.knownErrors(prepared.plan) : undefined;
       if (
         this.options.outputArchive &&
-        ['read', 'search', 'command', 'web-fetch', 'web-search'].includes(prepared.kind)
+        ['read', 'search', 'command', 'web-fetch', 'web-search', 'mcp'].includes(prepared.kind)
       ) {
         const kind = prepared.kind;
         archiveSource = {
           tool: call.name,
-          kind: kind === 'web-fetch' || kind === 'web-search' ? 'web' : (kind as 'read' | 'search' | 'command'),
+          kind: kind === 'web-fetch' || kind === 'web-search' ? 'web' : (kind as 'read' | 'search' | 'command' | 'mcp'),
           target: this.options
             .redact(
               'file' in prepared
@@ -376,6 +387,12 @@ export class ToolOrchestrator {
       if (!again || again.absolute !== file.absolute || again.kind !== file.kind) return targetChanged();
       const gate = this.revalidateRead(file, authorization.viaSession, audit, true, undefined, initialDecision);
       return {gate, viaSession: authorization.viaSession, sourceRead: {file, decision: initialDecision}};
+    }
+    if (prepared.source.kind === 'mcp') {
+      const authorization = await this.authorizeMcp(prepared.source.tool, prepared.source.target, audit, signal);
+      if (authorization.gate) return authorization;
+      if (!prepared.valid()) return deny();
+      return authorization;
     }
     // No command/network replay: the unchanged effective policy and grants bound the captured data.
     audit({target: null, phase: 'decided', decision: 'allow', reason: 'output-current-permission-context'});
@@ -819,6 +836,27 @@ export class ToolOrchestrator {
       }
     }
     const decision = this.commandDecision(prepared, file);
+    // After exclusions and escape selection, reject an impossible sandboxed launch before asking.
+    // Keep policy denials (including plan/read-only) on their existing permission path.
+    if (
+      !prepared.stdin &&
+      !prepared.sandbox?.unsandboxed &&
+      decision.effect !== 'deny' &&
+      sandboxConfig(this.options).permissionMode !== 'plan' &&
+      !this.options.analysisOnly?.() &&
+      !runtime.availability().ok
+    ) {
+      audit({target: label, phase: 'decided', decision: 'deny', reason: 'sandbox-unavailable'});
+      return {
+        gate: {
+          status: 'error',
+          code: 'SANDBOX_UNAVAILABLE',
+          content: 'The command sandbox is unavailable. Nothing was run.',
+          target: label,
+        },
+        viaSession: false,
+      };
+    }
     const grant = commandGrantTarget(
       prepared.grantCommand ?? command,
       file.absolute,
@@ -925,7 +963,7 @@ export class ToolOrchestrator {
         content: 'The session expired before input approval. Nothing was sent.',
         target: label,
       };
-    if ((prepared.stdin || !prepared.sandbox?.unsandboxed) && !runtime.availability().ok)
+    if (!prepared.stdin && !prepared.sandbox?.unsandboxed && !runtime.availability().ok)
       return {
         status: 'error',
         code: 'SANDBOX_UNAVAILABLE',

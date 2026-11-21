@@ -1,10 +1,13 @@
 /** @jsxImportSource react */
 import {Box, Text} from 'ink';
-import {useMemo, type ReactNode} from 'react';
+import {memo, useMemo, type ReactNode} from 'react';
 import {Lexer, type Token, type Tokens} from 'marked';
+import {WindowedRows} from '../screen';
 import {useTheme} from '../theme';
+import {DiffView} from './diff';
 import {CodeBlock} from './code-block';
-import {safeText, TextLine} from './text-line';
+import {safeText, stringCells, TextLine} from './text-line';
+import {renderCache} from './render-cache';
 import {useUiTheme} from './ui-theme';
 export interface MarkdownProps {
   text: string;
@@ -77,16 +80,27 @@ function Inline({tokens, depth = 0}: {tokens: Token[]; depth?: number}) {
     </>
   );
 }
-function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; depth?: number}) {
+function Blocks({
+  tokens,
+  width,
+  depth = 0,
+  explicitSpacing = false,
+}: {
+  tokens: (Token | null)[];
+  width: number;
+  depth?: number;
+  explicitSpacing?: boolean;
+}) {
   const {color} = useTheme();
   if (depth > 24) return <Text>…</Text>;
   const inline = (token: Tokens.Paragraph | Tokens.Heading | Tokens.Text): ReactNode => (
     <Inline tokens={token.tokens ?? Lexer.lexInline(token.text)} />
   );
-  const last = tokens.findLastIndex(token => token.type !== 'space');
+  const last = tokens.findLastIndex(token => token !== null && token.type !== 'space');
   return (
     <Box flexDirection="column" minWidth={0}>
       {tokens.map((token, index) => {
+        if (token === null) return <Box key={index} height={1} flexShrink={0} />;
         let content: ReactNode;
         switch (token.type) {
           case 'space':
@@ -99,7 +113,12 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
             content = <Text>{inline(token as Tokens.Paragraph)}</Text>;
             break;
           case 'code':
-            content = <CodeBlock code={token.text} language={token.lang} width={width} label={false} />;
+            content =
+              token.lang === 'diff' || token.lang === 'patch' ? (
+                <DiffView diff={token.text} width={width ?? 80} showHunks />
+              ) : (
+                <CodeBlock code={token.text} language={token.lang} width={width} label={false} />
+              );
             break;
           case 'blockquote':
             content = (
@@ -187,7 +206,7 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
           <Box
             key={index}
             flexDirection="column"
-            marginBottom={token.type === 'text' || index === last ? 0 : 1}
+            marginBottom={explicitSpacing || token.type === 'text' || index === last ? 0 : 1}
             minWidth={0}
           >
             {content}
@@ -197,20 +216,61 @@ function Blocks({tokens, width, depth = 0}: {tokens: Token[]; width: number; dep
     </Box>
   );
 }
-export function Markdown({text, width = 80}: MarkdownProps) {
+/**
+ * Common long Markdown answers consist of short paragraphs, headings and single-line code fences.
+ * Each supported block is known to consume one Ink row. Fall back to the regular layout for blocks
+ * whose exact height depends on wrapping, nested structure or a multi-line code renderer.
+ */
+function singleLineBlocks(tokens: Token[], width: number): (Token | null)[] | undefined {
+  const blocks = tokens.filter(token => token.type !== 'space');
+  if (blocks.length < 48) return;
+  const rows: (Token | null)[] = [];
+  for (let index = 0; index < blocks.length; index++) {
+    const token = blocks[index]!;
+    if (token.type === 'code') {
+      if (
+        !token.text ||
+        /[\t\n]/.test(token.text) ||
+        ['diff', 'patch'].includes(token.lang ?? '') ||
+        stringCells(token.text) > width
+      )
+        return;
+    } else if (
+      !['text', 'heading', 'paragraph'].includes(token.type) ||
+      /[\n&<>\[]/.test(token.raw.trim()) ||
+      !token.raw.trim() ||
+      stringCells(token.raw.trim()) > width
+    )
+      return;
+    rows.push(token);
+    if (index < blocks.length - 1 && token.type !== 'text') rows.push(null);
+  }
+  return rows;
+}
+const markdownTokens = renderCache<string, Token[]>(32);
+export const Markdown = memo(function Markdown({text, width = 80}: MarkdownProps) {
   const tokens = useMemo(() => {
-    const source = safeText(text).slice(0, 262144);
-    try {
-      return Lexer.lex(source, {gfm: true});
-    } catch {
-      return [{type: 'text', raw: source, text: source}] as Token[];
-    }
+    const source = safeText(text.slice(0, 262144));
+    return markdownTokens(source, () => {
+      try {
+        return Lexer.lex(source, {gfm: true});
+      } catch {
+        return [{type: 'text', raw: source, text: source}];
+      }
+    });
   }, [text]);
   const columns = Math.max(1, Math.floor(width));
+  const rows = useMemo(() => singleLineBlocks(tokens, columns), [tokens, columns]);
   return (
     <Box width={columns} flexDirection="column" minWidth={0}>
-      <Blocks tokens={tokens} width={columns} />
+      {rows ? (
+        <WindowedRows count={rows.length}>
+          {(first, end) => <Blocks tokens={rows.slice(first, end)} width={columns} explicitSpacing />}
+        </WindowedRows>
+      ) : (
+        <Blocks tokens={tokens} width={columns} />
+      )}
       {text.length > 262144 ? <Text>… Markdown truncated at 262144 characters</Text> : null}
     </Box>
   );
-}
+});

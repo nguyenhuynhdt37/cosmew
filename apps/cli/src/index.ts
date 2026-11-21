@@ -706,6 +706,11 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
           if (report) output(app, mcpReportView(report));
         } else if (['/plugin', '/plugins', '/compact'].some(c => text === c || text.startsWith(c + ' '))) {
           output(app, `${text.split(' ')[0]}: Not implemented in PA1/TUI1. No backend operation was performed.`);
+        } else if (parsedCommand?.definition?.command === '/tasks') {
+          output(
+            app,
+            '/tasks is an interactive panel. Run cosmew to view background shells and agents, inspect output, or stop a task.',
+          );
         } else if (text === '/doctor') {
           output(app, await app.createFutrynClient(resolve('.')).diagnose(signal));
         } else if (text === '/help' || text === '/?') {

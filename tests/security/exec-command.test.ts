@@ -92,11 +92,20 @@ test('platforms without a native sandbox are closed, without an unsafe fallback'
       'read',
       'glob',
       'grep',
+      // A host-capable runtime retains transport for owned sessions after sandbox health fails.
+      // Offering stdin grants no launch or session authority; Windows remains hidden.
+      ...(commands.capabilities?.().unsandboxed ? ['write_stdin'] : []),
       'apply_patch',
       'edit',
       'write',
       'web_fetch',
     ]);
+    const unknown = await tools.invoke({
+      id: crypto.randomUUID(),
+      name: 'write_stdin',
+      input: {session_id: crypto.randomUUID()},
+    });
+    expect(unknown.code).toBe(commands.capabilities?.().unsandboxed ? 'SESSION_NOT_FOUND' : 'UNSUPPORTED');
     expect(await invoke(tools, {cmd: 'touch forbidden'})).toMatchObject({status: 'error', code: 'SANDBOX_UNAVAILABLE'});
   }
   expect(prompts).toBe(0);

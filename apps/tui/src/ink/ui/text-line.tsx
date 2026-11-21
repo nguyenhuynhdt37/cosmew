@@ -51,10 +51,10 @@ export function cellWidth(char: string): number {
     return 2;
   return 1;
 }
+export const graphemes = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
+/** Width of a terminal string, including joined emoji and combining sequences. */
 export function stringCells(text: string): number {
-  let total = 0;
-  for (const char of text) total += cellWidth(char);
-  return total;
+  return Bun.stringWidth(text);
 }
 export interface WrapRun {
   text: string;

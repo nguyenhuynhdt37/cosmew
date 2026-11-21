@@ -226,10 +226,63 @@ const SYSTEM_THEME: ThemeManifest = makePreset({
   },
 });
 
+/** Intent-based accessible / ANSI approximations; measured Claude colours: Needs verification. */
+const EXTRA_THEMES = ['dark-daltonized', 'light-daltonized', 'dark-ansi', 'light-ansi'].map(id => {
+  const mode = id.startsWith('light') ? 'light' : 'dark';
+  const ansi = id.endsWith('ansi');
+  const tokens = {...SYSTEM_THEME[mode]};
+  Object.assign(
+    tokens,
+    mode === 'dark'
+      ? {success: '#56b4e9', diffAdded: '#56b4e9', error: '#e69f00', diffRemoved: '#e69f00'}
+      : {success: '#0072b2', diffAdded: '#0072b2', error: '#a65f00', diffRemoved: '#a65f00'},
+  );
+  if (ansi) {
+    const colors = [
+      '#000000',
+      '#800000',
+      '#008000',
+      '#808000',
+      '#000080',
+      '#800080',
+      '#008080',
+      '#c0c0c0',
+      '#808080',
+      '#ff0000',
+      '#00ff00',
+      '#ffff00',
+      '#0000ff',
+      '#ff00ff',
+      '#00ffff',
+      '#ffffff',
+    ];
+    for (const key of Object.keys(tokens) as (keyof ThemeTokens)[]) {
+      const rgb = parseHexRgb(tokens[key]);
+      tokens[key] = colors.reduce((best, color) => {
+        const distance = (hex: string) =>
+          parseHexRgb(hex).reduce((sum, channel, at) => sum + (channel - rgb[at]!) ** 2, 0);
+        return distance(color) < distance(best) ? color : best;
+      });
+    }
+  }
+  return {
+    ...SYSTEM_THEME,
+    id,
+    name: `${mode === 'light' ? 'Light' : 'Dark'} (${ansi ? 'ANSI' : 'colorblind-friendly'})`,
+    description: ansi
+      ? 'Standard 16-color ANSI palette approximation'
+      : 'Blue/orange differences for red-green color blindness',
+    defaultMode: mode,
+    dark: tokens,
+    light: tokens,
+  } as ThemeManifest;
+});
+
 export const BUILTIN_COLOR_THEMES: readonly ThemeManifest[] = [
   {...SYSTEM_THEME, name: 'Auto', description: 'Follow the terminal background (dark fallback)'},
   {...SYSTEM_THEME, id: 'dark', name: 'Dark', description: 'Dark background, light text'},
   {...SYSTEM_THEME, id: 'light', name: 'Light', description: 'Light background, dark text', defaultMode: 'light'},
+  ...EXTRA_THEMES,
 ];
 export const BUILTIN_LIVE_THEMES: readonly ThemeManifest[] = [];
 export const ALL_BUILTIN_THEMES: readonly ThemeManifest[] = BUILTIN_COLOR_THEMES;

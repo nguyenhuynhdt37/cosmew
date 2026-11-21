@@ -36,20 +36,20 @@ exports[`CodeBlock falls back for unknown languages 1`] = `
 `;
 
 exports[`Diff numbers hunk lines, handles header-like source and folds 1`] = `
-"      │ --- a/file
-      │ +++ b/file
-      │ @@ -10,2 +20,2 @@
-10    │ --- old text
+"--- a/file
++++ b/file
+@@ -10,2 +20,2 @@
+ 10 --- old text
 Ctrl+O expand diff · +2 lines"
 `;
 
 exports[`Diff numbers hunk lines, handles header-like source and folds 2`] = `
-"      │ --- a/file
-      │ +++ b/file
-      │ @@ -10,2 +20,2 @@
-10    │ --- old text
-   20 │ +++ new text
-11 21 │  context"
+"--- a/file
++++ b/file
+@@ -10,2 +20,2 @@
+ 10 --- old text
+ 20 +++ new text
+ 21  context"
 `;
 
 exports[`ListPicker filters, navigates, selects and cancels 1`] = `

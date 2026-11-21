@@ -1,9 +1,197 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {stripVTControlCharacters} from 'node:util';
+import type {FutrynClient} from '@cosmew/sdk';
 import {join, resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
+
+const completedOnboarding = ['theme', 'auth', 'security'];
+
+function finishFixtureOnboarding(client: FutrynClient) {
+  for (const step of completedOnboarding) client.completeOnboardingStep(step);
+}
+
+test.skipIf(process.platform === 'win32')(
+  'Ink diff PTY at 140 columns: Tab, file keys, detail, SGR clicks and wheel keep the prompt usable',
+  async () => {
+    const server = fixtureServer();
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-diff-pty-')));
+    const runtimeDir = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-diff-runtime-')));
+    const app = startup(join(dir, 'state'), {vault: memoryVault()});
+    let terminal: Bun.Terminal | undefined;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      // Every Git mutation is confined to this disposable repository. Ignore the
+      // fixture's durable state so only the intended files reach the panel.
+      const git = (...args: string[]) => {
+        const result = Bun.spawnSync(
+          [
+            'git',
+            '-c',
+            'core.hooksPath=/dev/null',
+            '-c',
+            'commit.gpgsign=false',
+            '-c',
+            'user.name=PTY fixture',
+            '-c',
+            'user.email=pty@example.invalid',
+            ...args,
+          ],
+          {
+            cwd: dir,
+            env: {...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null'},
+            stdout: 'pipe',
+            stderr: 'pipe',
+          },
+        );
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+      };
+      git('init', '-q', '-b', 'main');
+      writeFileSync(join(dir, '.git/info/exclude'), 'state/\n');
+      writeFileSync(join(dir, 'a.txt'), 'A_BASE\n');
+      writeFileSync(join(dir, 'b.txt'), 'B_BASE\n');
+      const additional = Array.from({length: 16}, (_, i) => `file-${String(i).padStart(2, '0')}.txt`);
+      for (const name of additional) writeFileSync(join(dir, name), 'BASE\n');
+      git('add', 'a.txt', 'b.txt', ...additional);
+      git('commit', '-qm', 'PTY diff baseline');
+      for (const file of ['a', 'b'])
+        writeFileSync(
+          join(dir, `${file}.txt`),
+          Array.from({length: 80}, (_, i) => `${file.toUpperCase()}_CHANGE_${String(i).padStart(2, '0')}`).join('\n') +
+            '\n',
+        );
+
+      for (const name of additional) writeFileSync(join(dir, name), `BODY_${name.slice(0, -4)}\n`);
+
+      app.registry.add(server.provider('chat', {id: 'diff-pty', auth: 'none'}));
+      await app.accounts.add('diff-pty', 'Diff fixture', {kind: 'none'});
+      const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
+      await client.discoverModels();
+      client.selectModel('fixture-model');
+      client.trustWorkspace();
+      client.updateAppearance({animations: {...client.getAppearance().animations, enabled: false}});
+      let output = '';
+      terminal = new Bun.Terminal({
+        cols: 140,
+        rows: 40,
+        data(_t, bytes) {
+          output += Buffer.from(bytes).toString('utf8');
+        },
+      });
+      child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
+        cwd: dir,
+        terminal,
+        env: {
+          PATH: process.env.PATH,
+          HOME: runtimeDir,
+          TMPDIR: runtimeDir,
+          BUN_INSTALL_CACHE_DIR: join(runtimeDir, 'bun-cache'),
+          XDG_CACHE_HOME: join(runtimeDir, 'cache'),
+          COSMEW_HOME: join(dir, 'state'),
+          FUTRYN_COMMAND_BACKEND: 'none',
+          TERM: 'xterm-256color',
+          LANG: 'en_US.UTF-8',
+          NO_COLOR: '1',
+        },
+      });
+      const wait = async (text: string, from = 0) => {
+        const deadline = Date.now() + 8000;
+        while (!output.slice(from).includes(text) && Date.now() < deadline && child!.exitCode === null)
+          await Bun.sleep(5);
+        expect(
+          output.slice(from).includes(text),
+          `waiting for ${text}; tail: ${JSON.stringify(output.slice(-5000))}`,
+        ).toBe(true);
+        expect(child!.exitCode).toBeNull();
+      };
+      const send = async (text: string) => {
+        const from = output.length;
+        terminal!.write(text);
+        await Bun.sleep(150);
+        return from;
+      };
+      await wait('manual mode on'); // The fixture client persisted folder consent, so the trust dialog is skipped.
+      await send('/diff');
+      await send('\r');
+      await wait('source: Uncommitted');
+      await wait('18 files changed +176 -18');
+      await wait('A_CHANGE_00');
+      await wait('tab focus');
+      let from = await send('draft beside diff');
+      await wait('draft beside diff', from);
+      await send('\x03'); // Clear the draft before moving focus.
+      from = await send('\t');
+      await wait('esc prompt', from);
+      from = await send('\x1b[B');
+      await wait('B_CHANGE_00', from);
+      from = await send('\x1b[A');
+      await wait('A_CHANGE_00', from);
+      from = await send('j');
+      await wait('B_CHANGE_00', from);
+      from = await send('k');
+      await wait('A_CHANGE_00', from);
+
+      from = await send('\x1b[6~');
+      // The pointer is repainted as a partial cell update, so only the freshly written body line is a stable raw-stream marker;
+      // the highlighted row itself is asserted by the Ink frame tests.
+      await wait('BODY_file-06', from);
+      from = await send('\x1b[<65;100;7M');
+      await wait('BODY_file-09', from);
+      from = await send('\x1b[H');
+      await wait('A_CHANGE_00', from);
+
+      // SGR uses one-based coordinates. Row 4 is the list hint and rows 5 and 6 are files.
+      from = await send('\x1b[<0;100;6M');
+      await wait('B_CHANGE_00', from);
+      from = await send('\r');
+      await wait('esc back', from);
+      await send('\x1b[B'); // In detail, arrows scroll instead of selecting a file.
+      from = await send('\x1b[<65;100;15M'.repeat(30));
+      await wait('B_CHANGE_79', from);
+      from = await send('\x1b[<64;100;15M'.repeat(30));
+      await wait('B_CHANGE_00', from);
+      from = await send('\x1b');
+      await wait('esc prompt', from);
+      from = await send('\x1b');
+      await wait('tab focus', from);
+
+      from = await send('\x1b[<0;125;2M');
+      await wait('source: Branch', from);
+      await send('\t');
+      from = await send('\x1b[D');
+      await wait('source: Uncommitted', from);
+      from = await send('\x1b[C');
+      await wait('source: Branch', from);
+      await send('\x1b[<0;139;1M');
+      from = await send('prompt after close');
+      await wait('prompt after close', from);
+      expect(output.slice(from)).not.toContain('source:');
+      expect(output).toContain('\x1b[?1006h');
+      await send('\x03');
+      await send('\x03');
+      await wait('Press Ctrl-C again to exit');
+      await send('\x03');
+      const timer = setTimeout(() => child?.kill('SIGKILL'), 5000);
+      expect(await child.exited).toBe(0);
+      clearTimeout(timer);
+      expect(output).toContain('\x1b[?1006l');
+      expect(output.lastIndexOf('\x1b[?1049l')).toBeGreaterThan(output.indexOf('\x1b[?1049h'));
+    } finally {
+      child?.kill('SIGKILL');
+      if (child) await child.exited;
+      terminal?.close();
+      await app.shutdownCommands();
+      app.db.close();
+      server.server.stop(true);
+      rmSync(dir, {recursive: true, force: true});
+      rmSync(runtimeDir, {recursive: true, force: true});
+    }
+  },
+  30000,
+);
 
 test.skipIf(process.platform === 'win32')(
   'Ink native PTY: consent, prompt, tool/session permission, plan, agents, memory, permission mode, compact, resize and exit',
@@ -18,6 +206,7 @@ test.skipIf(process.platform === 'win32')(
       app.registry.add(server.provider('chat', {id: 'ink-pty', auth: 'none'}));
       await app.accounts.add('ink-pty', 'Ink fixture', {kind: 'none'});
       const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
       await client.discoverModels();
       client.selectModel('fixture-model');
       client.addPermissionRule('ask', 'Read(note.txt)');
@@ -139,6 +328,7 @@ test.skipIf(process.platform === 'win32')(
       app.registry.add(server.provider('chat', {id: 'screen-ink', auth: 'none'}));
       await app.accounts.add('screen-ink', 'Screen fixture', {kind: 'none'});
       const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
       await client.discoverModels();
       client.selectModel('fixture-model');
       let output = '';
@@ -208,6 +398,7 @@ test.skipIf(process.platform === 'win32')(
       app.registry.add(server.provider('chat', {id: 'flags-ink', auth: 'none'}));
       await app.accounts.add('flags-ink', 'Flags fixture', {kind: 'none'});
       const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
       await client.discoverModels();
       client.selectModel('fixture-model');
       for (const [args, expected] of [
@@ -354,6 +545,7 @@ test.skipIf(process.platform === 'win32')(
       );
       await app.accounts.add('ink-stream', 'Stream fixture', {kind: 'none'});
       const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
       await client.discoverModels();
       client.selectModel('stream-model');
       let output = '';
@@ -428,6 +620,9 @@ test.skipIf(process.platform === 'win32')(
     for (const delay of [0, 50, 400])
       for (const end of ['\x07', '\x1b\\']) {
         const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-osc-pty-')));
+        const state = join(dir, 'state');
+        mkdirSync(state, {mode: 0o700});
+        writeFileSync(join(state, 'settings.json'), JSON.stringify({onboardingCompleted: completedOnboarding}));
         let output = '';
         let queried = false;
         const timers: ReturnType<typeof setTimeout>[] = [];
@@ -451,7 +646,7 @@ test.skipIf(process.platform === 'win32')(
         const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts')], {
           cwd: dir,
           terminal,
-          env: {...process.env, HANNES_HOME: join(dir, 'state'), NO_COLOR: '1', FUTRYN_THEME_MODE: 'system'},
+          env: {HOME: dir, TMPDIR: dir, COSMEW_HOME: state, TERM: 'xterm-256color', NO_COLOR: '1'},
         });
         try {
           const wait = async (text: string, from = 0) => {
@@ -487,7 +682,7 @@ test.skipIf(process.platform === 'win32')(
 );
 
 test.skipIf(process.platform === 'win32')(
-  'Ink transcript parity PTY: search, navigate, Ctrl+E, legend and q keep process alive',
+  'Ink transcript parity PTY: SGR expands a bash receipt, search and viewer keys keep process alive',
   async () => {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-transcript-pty-')));
     const server = fixtureServer();
@@ -498,11 +693,33 @@ test.skipIf(process.platform === 'win32')(
       app.registry.add(server.provider('chat', {id: 'transcript-pty', auth: 'none'}));
       await app.accounts.add('transcript-pty', 'Transcript fixture', {kind: 'none'});
       const client = app.createFutrynClient(dir);
+      finishFixtureOnboarding(client);
       await client.discoverModels();
       client.selectModel('fixture-model');
+      client.trustWorkspace(); // Skip the trust dialog: a key sent before input is ready is lost and Enter would exit.
       const historyId = app.conversations.create(client.status().selection!);
       app.conversations.append(historyId, {role: 'user', content: 'needle first'}, 'committed');
       app.conversations.append(historyId, {role: 'assistant', content: 'needle second'}, 'committed');
+      app.conversations.append(historyId, {role: 'user', content: 'Check a stored tool result'}, 'committed');
+      app.conversations.append(
+        historyId,
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{id: 'stored-bash', name: 'exec_command', input: {cmd: 'echo fixture receipt'}}],
+        },
+        'committed',
+      );
+      app.conversations.append(
+        historyId,
+        {
+          role: 'tool',
+          toolCallId: 'stored-bash',
+          toolName: 'exec_command',
+          content: 'PTY_BASH_RECEIPT_LINE',
+        },
+        'committed',
+      );
       let output = '';
       terminal = new Bun.Terminal({
         cols: 100,
@@ -542,12 +759,30 @@ test.skipIf(process.platform === 'win32')(
         await Bun.sleep(150);
         return from;
       };
-      await wait('Accessing workspace:');
-      await send('\x1b[A');
-      await send('\r');
       await wait('manual mode on');
       await wait('needle second');
-      let from = await send('\x0f');
+      const summary = 'Ran 1 shell command (click or ctrl+o to expand)';
+      const footer = '⏸ manual mode on';
+      const summaryRow = () => {
+        const lines = stripVTControlCharacters(output).split(/\r?\n/);
+        const last = lines.findLastIndex(line => line.trim() === footer);
+        if (last < 0) return 0;
+        const first = lines.findLastIndex((line, index) => index < last && line.trim() === summary);
+        return first >= 0 && last - first < 36 ? 36 - (last - first) : 0;
+      };
+      const readyBy = Date.now() + 8000;
+      while (!summaryRow() && Date.now() < readyBy) await Bun.sleep(10);
+      expect(summaryRow(), JSON.stringify(output.slice(-5000))).toBeGreaterThan(0);
+      expect(output).not.toContain('PTY_BASH_RECEIPT_LINE');
+      let from = await send(`\x1b[<0;3;${summaryRow()}M`);
+      const receipt = () =>
+        stripVTControlCharacters(output.slice(from))
+          .split(/\r?\n/)
+          .some(line => line.trim() === '⎿  PTY_BASH_RECEIPT_LINE');
+      const clickedBy = Date.now() + 8000;
+      while (!receipt() && Date.now() < clickedBy && child.exitCode === null) await Bun.sleep(10);
+      expect(receipt(), JSON.stringify(output.slice(-5000))).toBe(true);
+      from = await send('\x0f');
       await wait('Showing detailed transcript', from);
       from = await send('/');
       await wait('Search transcript…', from);
@@ -578,6 +813,137 @@ test.skipIf(process.platform === 'win32')(
       app.db.close();
       server.server.stop(true);
       rmSync(dir, {recursive: true, force: true});
+    }
+  },
+  30000,
+);
+
+test.skipIf(process.platform === 'win32')(
+  'Ink fresh HOME PTY resumes after theme, skips sign-in, and opens Theme and No sandbox without network',
+  async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-onboarding-pty-')));
+    const home = join(root, 'home');
+    const temp = join(root, 'tmp');
+    const workspace = join(root, 'project');
+    for (const path of [home, temp, workspace]) mkdirSync(path, {mode: 0o700});
+    const state = join(home, '.cosmew');
+    const settings = join(state, 'settings.json');
+    const requests = join(root, 'network-attempts');
+    const preload = join(root, 'record-fetch.ts');
+    writeFileSync(
+      preload,
+      `import {appendFileSync} from 'node:fs';
+const fetchLocal = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+  const url = new URL(input instanceof Request ? input.url : input);
+  if (url.protocol === 'data:' || url.protocol === 'file:') return fetchLocal(input, init);
+  appendFileSync(${JSON.stringify(requests)}, url.origin + '\\n');
+  throw new Error('Unexpected network request during onboarding');
+};
+`,
+    );
+
+    let output = '';
+    let terminal: Bun.Terminal | undefined;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    const launch = () => {
+      output = '';
+      const decoder = new TextDecoder();
+      terminal = new Bun.Terminal({
+        cols: 100,
+        rows: 36,
+        data(_terminal, bytes) {
+          output += decoder.decode(bytes, {stream: true});
+        },
+      });
+      child = Bun.spawn(
+        [
+          process.execPath,
+          '--config=/dev/null',
+          '--no-env-file',
+          '--preload',
+          preload,
+          resolve('apps/cli/src/index.ts'),
+        ],
+        {
+          cwd: workspace,
+          terminal,
+          env: {
+            HOME: home,
+            TMPDIR: temp,
+            COSMEW_HOME: state,
+            BUN_INSTALL_CACHE_DIR: join(temp, 'bun-cache'),
+            XDG_CACHE_HOME: join(temp, 'cache'),
+            TERM: 'xterm-256color',
+            LANG: 'en_US.UTF-8',
+            NO_COLOR: '1',
+          },
+        },
+      );
+    };
+    const waitForPaint = async (markers: readonly string[], from = 0) => {
+      const deadline = Date.now() + 6000;
+      let length = -1;
+      let stableSince = Date.now();
+      while (Date.now() < deadline && child?.exitCode === null) {
+        if (length !== output.length) {
+          length = output.length;
+          stableSince = Date.now();
+        }
+        const fresh = stripVTControlCharacters(output.slice(from));
+        if (markers.every(marker => fresh.includes(marker)) && Date.now() - stableSince >= 65) return;
+        await Bun.sleep(10);
+      }
+      throw new Error(`Waiting for ${markers.join(', ')}. Last PTY bytes: ${JSON.stringify(output.slice(-3500))}`);
+    };
+    const write = (keys: string) => {
+      const from = output.length;
+      terminal!.write(keys);
+      return from;
+    };
+    const completed = () => JSON.parse(readFileSync(settings, 'utf8')).onboardingCompleted;
+    try {
+      expect(existsSync(state)).toBe(false);
+      launch();
+      await waitForPaint(["Let's get started.", 'To change this later, run /theme', 'Enter to select']);
+      const auth = ['Connect · provider', 'Skip for now', 'Enter to select · Esc to close'];
+      await waitForPaint(auth, write('\r'));
+      expect(completed()).toEqual(['theme']);
+
+      write('\x03');
+      const timer = setTimeout(() => child?.kill('SIGKILL'), 4000);
+      try {
+        expect(await child!.exited).toBe(0);
+      } finally {
+        clearTimeout(timer);
+      }
+      terminal!.close();
+      launch();
+
+      await waitForPaint(auth);
+      expect(output).not.toContain("Let's get started.");
+      await waitForPaint(['Security notes:', 'Cosmew can make mistakes.', 'Enter to continue'], write('\r'));
+      expect(completed()).toEqual(['theme', 'auth']);
+      await waitForPaint(['Accessing workspace:', 'Yes, I trust this folder', 'Enter to confirm'], write('\r'));
+      expect(completed()).toEqual(completedOnboarding);
+      // The cursor move may repaint only the pointer cell.
+      await waitForPaint(['❯'], write('\x1b[A'));
+      await waitForPaint(['manual mode on'], write('\r'));
+
+      await waitForPaint(['/config'], write('/config'));
+      await waitForPaint(['Settings', 'Search settings…', 'Esc to go back'], write('\r'));
+      await waitForPaint(['Theme', '(Enter to choose)', 'Esc to go back'], write('Theme'));
+      await waitForPaint(['Workspace', 'Esc to go back'], write('\x1b'));
+      await waitForPaint(['manual mode on'], write('\x1b'));
+      await waitForPaint(['/sandbox'], write('/sandbox'));
+      await waitForPaint(['Sandbox', 'Mode', 'No sandbox (active)', 'Enter to apply · Esc to close'], write('\r'));
+      expect(child!.exitCode).toBeNull();
+      expect(existsSync(requests) ? readFileSync(requests, 'utf8') : '').toBe('');
+    } finally {
+      child?.kill('SIGKILL');
+      if (child) await child.exited;
+      terminal?.close();
+      rmSync(root, {recursive: true, force: true});
     }
   },
   30000,

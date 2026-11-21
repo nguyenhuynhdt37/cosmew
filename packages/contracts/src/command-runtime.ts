@@ -160,3 +160,9 @@ export interface CommandRuntime {
   /** Close admission and settle owned runs; this does not certify descendant containment. */
   shutdown?(): Promise<void>;
 }
+
+/** Dependency presence only, not proof of OS sandbox containment. */
+export interface SandboxDependenciesReport {
+  platform: string;
+  items: {name: 'seatbelt' | 'ripgrep' | 'bwrap' | 'socat'; ok: boolean; detail?: string}[];
+}

@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Conversation} from '@cosmew/core';
@@ -232,22 +232,26 @@ test('a repeated call ID in a later model round is rejected without executing it
   expect(app.conversations.recover(c.id).messages.filter(m => m.toolCallId === call.id)).toHaveLength(1);
 });
 
-test('partial HTML verification gives a concrete complete-read correction instead of repeated vague planning', async () => {
+test('partial created HTML receives a useful repair and complete-document inspection correction', async () => {
   const app = setup();
+  const root = mkdtempSync(join(tmpdir(), 'cosmew-html-verification-'));
+  cleanup.push(() => rmSync(root, {recursive: true, force: true}));
   let round = 0;
   const full = '<!doctype html><html><head><title>Sales</title></head><body>CTA</body></html>';
   const port = model(async function* (request) {
     round++;
-    if (round === 1) {
-      yield {type: 'toolCallComplete', call: {id: 'partial-html', name: 'read', input: {path: 'helo.html', limit: 1}}};
-      yield {type: 'completed', finishReason: 'tool_calls', usage};
-      return;
-    }
-    if (request.instructions?.includes('"offset":1') && request.instructions.includes('"limit":2000') && round === 3) {
-      yield {
-        type: 'toolCallComplete',
-        call: {id: 'whole-html', name: 'read', input: {path: 'helo.html', offset: 1, limit: 2000}},
-      };
+    const call =
+      round === 1
+        ? {id: 'create-html', name: 'write', input: {path: 'helo.html', content: '<!doctype html>'}}
+        : round === 2
+          ? {id: 'partial-html', name: 'read', input: {path: 'helo.html', limit: 1}}
+          : round === 4 && request.instructions?.includes('missing document ranges')
+            ? {id: 'repair-html', name: 'write', input: {path: 'helo.html', content: full}}
+            : round === 5
+              ? {id: 'whole-html', name: 'read', input: {path: 'helo.html'}}
+              : undefined;
+    if (call) {
+      yield {type: 'toolCallComplete', call};
       yield {type: 'completed', finishReason: 'tool_calls', usage};
       return;
     }
@@ -257,19 +261,26 @@ test('partial HTML verification gives a concrete complete-read correction instea
   const c = new Conversation(selection, port, app.conversations, undefined, {
     descriptors: () => [
       ...tools.descriptors(),
-      {name: 'apply_patch', description: 'Write', inputSchema: {type: 'object'}, capability: 'fs.write'},
+      {name: 'write', description: 'Write', inputSchema: {type: 'object'}, capability: 'fs.write'},
     ],
-    invoke: async call => ({
-      callId: call.id,
-      name: call.name,
-      status: 'ok',
-      content: call.id === 'partial-html' ? '1\t<!doctype html>' : full,
-      truncated: call.id === 'partial-html',
-    }),
+    invoke: async call => {
+      if (call.name === 'write') writeFileSync(join(root, 'helo.html'), (call.input as {content: string}).content);
+      return {
+        callId: call.id,
+        name: call.name,
+        status: 'ok',
+        content:
+          call.name === 'write'
+            ? JSON.stringify({changes: [{path: 'helo.html', action: 'update'}]})
+            : readFileSync(join(root, 'helo.html'), 'utf8'),
+        truncated: call.id === 'partial-html',
+      };
+    },
   });
   await send(c, 'Create helo.html');
+  expect(readFileSync(join(root, 'helo.html'), 'utf8')).toBe(full);
   expect(app.conversations.recover(c.id).task!.state).toBe('verified');
-  expect(round).toBe(4);
+  expect(round).toBe(6);
 });
 
 test('a retained running command is pending work, never proof that checks passed', async () => {

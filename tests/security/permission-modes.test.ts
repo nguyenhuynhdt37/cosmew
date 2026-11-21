@@ -42,6 +42,7 @@ type Settings = Record<string, unknown>;
 async function chain(
   options: {
     mode?: PermissionMode;
+    defaults?: boolean;
     /** `~/.cosmew/settings.json` of the test. */
     user?: Settings;
     project?: Settings;
@@ -61,7 +62,10 @@ async function chain(
     () => rmSync(home, {recursive: true, force: true}),
     () => rmSync(root, {recursive: true, force: true}),
   );
-  if (options.user) writeFileSync(join(home, 'settings.json'), JSON.stringify(options.user), {mode: 0o600});
+  const user = options.defaults
+    ? options.user
+    : {...options.user, sandbox: {enabled: true, autoAllowBashIfSandboxed: true, ...(options.user?.sandbox as object)}};
+  if (user) writeFileSync(join(home, 'settings.json'), JSON.stringify(user), {mode: 0o600});
   if (options.project || options.local) mkdirSync(join(root, '.cosmew'), {recursive: true});
   if (options.project) writeFileSync(join(root, '.cosmew', 'settings.json'), JSON.stringify(options.project));
   if (options.local) writeFileSync(join(root, '.cosmew', 'settings.local.json'), JSON.stringify(options.local));
@@ -941,4 +945,15 @@ describe('trusted additional directories and sandbox off', () => {
       expect(seen.at(-1)?.cwdRoots).toEqual([granted]);
     },
   );
+});
+
+test('new defaults ask for shell approval, while plan and deny still refuse', async () => {
+  const regular = await chain({defaults: true});
+  expect((await regular.attempt('exec_command', exec('ls'))).outcome).toBe('prompt');
+  expect(regular.launches).toEqual([]);
+  const plan = await chain({defaults: true, mode: 'plan'});
+  expect((await plan.attempt('exec_command', exec('ls'))).outcome).toBe('refused');
+  const deny = await chain({defaults: true, user: {permissions: {deny: ['Bash']}}});
+  expect((await deny.attempt('exec_command', exec('ls'))).outcome).toBe('refused');
+  expect(deny.launches).toEqual([]);
 });

@@ -108,3 +108,21 @@ test('stream facade owns no input listener and resets mouse modes across editor 
   source.destroy();
   output.destroy();
 });
+
+test('left presses are separate control events; releases, motion, modifiers and paste cannot activate controls', () => {
+  const report = '\x1b[<0;100;4M';
+  for (let split = 1; split < report.length; split++) {
+    const parser = new MouseInputFilter();
+    const clicks: unknown[] = [];
+    const wheels: TerminalWheel[] = [];
+    const wheel = (event: TerminalWheel) => wheels.push(event);
+    const click = (event: unknown) => clicks.push(event);
+    expect(
+      parser.feed(report.slice(0, split), wheel, click) + parser.feed(report.slice(split) + '\t', wheel, click),
+    ).toBe('\t');
+    expect(clicks).toEqual([{kind: 'click', column: 100, row: 4}]);
+    parser.feed('\x1b[<0;100;4m\x1b[<32;100;4M\x1b[<4;100;4M\x1b[200~' + report + '\x1b[201~', wheel, click);
+    expect(clicks).toHaveLength(1);
+    expect(wheels).toEqual([]);
+  }
+});

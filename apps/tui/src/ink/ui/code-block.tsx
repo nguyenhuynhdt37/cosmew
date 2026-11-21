@@ -1,9 +1,10 @@
 /** @jsxImportSource react */
 import {Box, Text} from 'ink';
-import {useMemo} from 'react';
+import {memo, useMemo} from 'react';
 import {DEFAULT_THEME, highlight, supportsLanguage, type Theme} from 'cli-highlight';
 import {fgHex} from '../../theme/theme';
 import {useTheme} from '../theme';
+import {renderCache} from './render-cache';
 import {safeText} from './text-line';
 export interface CodeBlockProps {
   code: string;
@@ -13,26 +14,18 @@ export interface CodeBlockProps {
   /** Show the language name above the code (default); Markdown answers omit it, as the reference does. */
   label?: boolean;
 }
-export function CodeBlock({code, language, lineNumbers = false, width, label = true}: CodeBlockProps) {
+export const CodeBlock = memo(function CodeBlock({
+  code,
+  language,
+  lineNumbers = false,
+  width,
+  label = true,
+}: CodeBlockProps) {
   const theme = useTheme();
-  const source = safeText(code).slice(0, 262144);
+  const source = useMemo(() => safeText(code.slice(0, 262144)), [code]);
   const lang = safeText(language ?? '').split(/\s/)[0] ?? '';
-  const rendered = useMemo(() => {
-    if (!theme.colors || !theme.syntaxHighlighting || !lang || !supportsLanguage(lang)) return source;
-    const style: Theme = Object.fromEntries(Object.keys(DEFAULT_THEME).map(key => [key, (text: string) => text]));
-    const paint = (color: string) => (text: string) => `${fgHex(color, theme.engine.colorCapability)}${text}\x1b[39m`;
-    style.keyword = paint(theme.tokens.syntaxKeyword);
-    style.string = paint(theme.tokens.syntaxString);
-    style.comment = paint(theme.tokens.syntaxComment);
-    style.title = paint(theme.tokens.syntaxFunction);
-    style.number = paint(theme.tokens.markdownCode);
-    try {
-      return highlight(source, {language: lang, ignoreIllegals: true, theme: style});
-    } catch {
-      return source;
-    }
-  }, [source, lang, theme.colors, theme.syntaxHighlighting, theme.tokens, theme.engine]);
-  const lines = rendered.split('\n');
+  const rendered = useHighlightedCode(source, lang);
+  const lines = useMemo(() => rendered.split('\n'), [rendered]);
   const digits = String(lines.length).length;
   return (
     <Box flexDirection="column" width={width} minWidth={0}>
@@ -50,4 +43,38 @@ export function CodeBlock({code, language, lineNumbers = false, width, label = t
       {code.length > 262144 ? <Text>… code truncated at 262144 characters</Text> : null}
     </Box>
   );
+});
+
+const highlights = renderCache<string, string>(128);
+
+/** Shared bounded highlighter; callers only invoke it for visible source rows. */
+export function useHighlightedCode(source: string, lang: string) {
+  const theme = useTheme();
+  return useMemo(() => {
+    if (!theme.colors || !theme.syntaxHighlighting || !lang || !supportsLanguage(lang)) return source;
+    const key = JSON.stringify([
+      lang,
+      theme.engine.colorCapability,
+      theme.tokens.syntaxKeyword,
+      theme.tokens.syntaxString,
+      theme.tokens.syntaxComment,
+      theme.tokens.syntaxFunction,
+      theme.tokens.markdownCode,
+      source,
+    ]);
+    return highlights(key, () => {
+      const style: Theme = Object.fromEntries(Object.keys(DEFAULT_THEME).map(key => [key, (text: string) => text]));
+      const paint = (color: string) => (text: string) => `${fgHex(color, theme.engine.colorCapability)}${text}\x1b[39m`;
+      style.keyword = paint(theme.tokens.syntaxKeyword);
+      style.string = paint(theme.tokens.syntaxString);
+      style.comment = paint(theme.tokens.syntaxComment);
+      style.title = paint(theme.tokens.syntaxFunction);
+      style.number = paint(theme.tokens.markdownCode);
+      try {
+        return highlight(source, {language: lang, ignoreIllegals: true, theme: style});
+      } catch {
+        return source;
+      }
+    });
+  }, [source, lang, theme.colors, theme.syntaxHighlighting, theme.tokens, theme.engine.colorCapability]);
 }

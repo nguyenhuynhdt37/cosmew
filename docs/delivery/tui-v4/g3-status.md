@@ -86,3 +86,30 @@ keys yield to `/` query input. Enter keeps search; n/N wrap and reveal a match a
 `?` shows the live-keymap legend in three columns or one narrow column. `v` without an editor reports
 `no $VISUAL/$EDITOR set` without suspending. See [parity evidence and limits](transcript-mode-parity.md).
 Successful upstream search/highlight, exact message normalization and host latency remain **Needs verification**.
+
+2026-11-21 sandbox controls (ADR 0081): user settings defaults off/regular
+permissions, recorded startup notice, `/sandbox` tabs and exclusions, dependency
+presence report, and current-turn SANDBOX_DENIED banner implemented. Binary
+2.1.330 wording checked; complete OS violation monitoring and Linux live
+containment remain Needs verification. Native/port-binding tests require the
+coordinator's environment; no e2e acceptance is claimed by the sandboxed worker.
+
+## First-run and first send — 2026-11-21
+
+| Flow | Status | Evidence |
+|---|---|---|
+| Theme → optional Connect → security notes → folder consent | Verified in Ink at 80 and 40 columns and in a fresh-HOME macOS PTY | `onboarding.test.tsx` and its golden frames, `tui-ink-pty.test.ts` |
+| Restart after theme and skip sign-in | Verified with Ctrl+C and relaunch in the same isolated HOME | `tui-ink-pty.test.ts` checks each committed step ID and opens the signed-out composer |
+| No startup probe, verify before first send | Verified with hermetic providers and the headless CLI runner | `gate.test.tsx`, `first-send.test.ts`. Live provider acceptance **Needs verification**. |
+| Fresh `/config` and `/sandbox` | Verified in macOS PTY | Settings search finds Theme, Sandbox Mode shows `No sandbox (active)`, the process stays open, and the fetch recorder stays empty |
+| `/terminal-setup` | Not implemented | Claude Code 2.1.330 enables this step conditionally. See [ADR 0086](../../adr/0086-first-run-onboarding.md). |
+
+The pre-onboarding 80- and 40-column frames were rendered from the earlier startup
+gate in the Git index with the same Ink fixture. They live in `golden-ink/pre-onboarding-{80,40}.txt`.
+
+Sequential checks in the Codex sandbox passed typecheck and lint. `bun test apps` recorded
+538 passed, 4 skipped and 0 failed. `bun test tests` recorded 680 passed, 9 skipped and 308
+failed. The sandbox refused 252 fixture listen attempts. The other failures were in native
+sandbox and process tests or tests that tried to create directories outside the writable roots.
+The PTY file recorded 2 passed and 6 blocked by fixture port binding. Manual fresh- and
+existing-HOME acceptance in the user's terminal remains **Needs verification**.

@@ -27,3 +27,12 @@ test('wave 1 guidance describes only offered capabilities and actual configured 
   expect(full).toContain('configured sandbox');
   expect(full).toContain('untrusted');
 });
+
+test('repair guidance distinguishes correctable errors, denials, unknown mutations and optional sandboxing', () => {
+  const guidance = explorationGuidance(['read', 'write', 'exec_command']);
+  expect(guidance).not.toContain('A denied or failed call is final');
+  expect(guidance).not.toContain('Sandboxed commands normally run without asking');
+  expect(guidance).not.toContain('then read it to verify');
+  for (const boundary of ['disabled by default', 'autoAllowBashIfSandboxed', 'deny/ask', 'unknown', 'correct'])
+    expect(guidance).toContain(boundary);
+});

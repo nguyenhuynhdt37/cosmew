@@ -6,6 +6,7 @@ import {mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {cleanup} from 'ink-testing-library';
+import {settle, trackFrames} from './wait';
 import {Text, renderToString, render as inkRender} from 'ink';
 import type {ModelEvent} from '@cosmew/contracts';
 import {ThemeEngine} from '../../theme/theme';
@@ -18,6 +19,7 @@ import {LiveDialog} from '../ui';
 import {PermissionRequestDialog} from '../features/permissions';
 import {ThemeProvider} from '../theme';
 import {useTextInput} from '../hooks/input-scope';
+import {buildKeymap, keymapStore} from '../hooks/keymap';
 import {queryTerminalBackground} from '../../theme/terminal-background';
 import {createTerminalMouseInput} from '../../input/mouse-input';
 import {TerminalMouseProvider} from '../hooks/use-terminal-wheel';
@@ -36,6 +38,7 @@ class SizedStream extends EventEmitter {
     this.columns = columns;
     this.rows = rows;
     this.setMaxListeners(32);
+    trackFrames(this);
   }
   write = (frame: string, callback?: () => void) => {
     this.frames.push(frame);
@@ -85,6 +88,7 @@ function openSized(
   hang = false,
   historyItems = 0,
   historyText = (n: number) => `history ${n} needle`,
+  events?: readonly ModelEvent[] | (() => AsyncIterable<ModelEvent>),
 ) {
   const prompts: string[] = [];
   let finishStreaming = () => {};
@@ -102,6 +106,10 @@ function openSized(
     }),
     async *sendTurn(_id, content, signal): AsyncIterable<ModelEvent> {
       prompts.push(content);
+      if (events) {
+        yield* typeof events === 'function' ? events() : events;
+        return;
+      }
       if (answerLines) {
         yield {
           type: 'textDelta',
@@ -193,8 +201,6 @@ function openSized(
   };
 }
 
-const settle = () => new Promise<void>(resolve => setTimeout(resolve, 40));
-
 async function waitFor(read: () => string, text: string) {
   const deadline = Date.now() + 4000;
   while (!read().includes(text) && Date.now() < deadline) await settle();
@@ -210,8 +216,9 @@ async function openReady(
   hang = false,
   historyItems = 0,
   historyText = (n: number) => `history ${n} needle`,
+  events?: readonly ModelEvent[] | (() => AsyncIterable<ModelEvent>),
 ) {
-  const view = openSized(columns, rows, debug, answerLines, hang, historyItems, historyText);
+  const view = openSized(columns, rows, debug, answerLines, hang, historyItems, historyText, events);
   await waitFor(view.fullFrame, 'Accessing workspace:');
   view.stdin.write('\u001b[A');
   await settle();
@@ -859,7 +866,7 @@ test.skipIf(process.platform === 'win32')(
     await writeFile(editor, '#!/bin/sh\n/bin/cp -p "$1" "$FUTRYN_TEST_TRANSCRIPT_COPY"\n', {mode: 0o700});
     process.env.VISUAL = editor;
     process.env.FUTRYN_TEST_TRANSCRIPT_COPY = copy;
-    const view = await openReady(80, 24, true, 2);
+    const view = await openReady(80, 24, true, 2, false, 1000);
     try {
       view.stdin.write('editor prompt');
       await settle();
@@ -873,7 +880,10 @@ test.skipIf(process.platform === 'win32')(
       await waitFor(() => view.stdout.frames.slice(start).join(''), 'Showing detailed transcript');
       const deadline = Date.now() + 3000;
       while (!(await stat(copy).catch(() => undefined)) && Date.now() < deadline) await settle();
-      expect(await readFile(copy, 'utf8')).toContain('> editor prompt\n\nanswer line 1');
+      const exported = await readFile(copy, 'utf8');
+      expect(exported).toContain('> history 0 needle');
+      expect(exported).toContain('history 999 needle');
+      expect(exported).toContain('> editor prompt\n\nanswer line 1');
       expect((await stat(copy)).mode & 0o777).toBe(0o600);
       expect(view.fixture.client.activeSession()?.messages).toEqual(messages);
       expect(view.stdout.frames.slice(start).join('')).toContain('\x1b[?25h');
@@ -942,7 +952,7 @@ test('raw terminal replies never emit Escape or cancel workspace consent', async
     await settle();
     expect(stdout.lastFrame()).toContain('❯ Yes, I trust this folder');
     stdin.write('\x1b');
-    await Bun.sleep(100);
+    await settle();
     expect(escapes).toBe(1); // Actual Escape still reaches the input layer.
   } finally {
     view.unmount();
@@ -1078,8 +1088,9 @@ test('detailed transcript search keeps a 5000-item history responsive while warm
     const start = performance.now();
     view.stdin.write('jkgqn');
     await new Promise<void>(resolve => setImmediate(resolve));
-    // A synchronous full-history scan/render would delay this input-turn callback.
-    expect(performance.now() - start).toBeLessThan(16.7);
+    // A synchronous full-history scan/render of 5000 items takes seconds; the budget only has to catch that order of
+    // magnitude, so it is generous enough not to flake when the machine is busy (a frame budget of 16.7 ms did).
+    expect(performance.now() - start).toBeLessThan(250);
     await waitFor(view.fullFrame, 'jkgqn');
     view.stdin.write('\x15');
     await settle();
@@ -1088,6 +1099,26 @@ test('detailed transcript search keeps a 5000-item history responsive while warm
     await waitFor(view.fullFrame, 'history 0 needle');
     // Search must reveal the oldest item through a bounded mounted window, not mount all 5000.
     expect(view.fullFrame()).not.toContain('history 4999 needle');
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'n/N to navigate');
+    const matched = view.fullFrame();
+    view.stdin.write('\x05');
+    await settle();
+    expect(view.fullFrame()).toBe(matched);
+    const printedAt = view.stdout.frames.length;
+    view.stdin.write('[');
+    const printed = () =>
+      view.stdout.frames
+        .slice(printedAt)
+        .some(text => text.includes('history 0 needle') && text.includes('history 4999 needle'));
+    const deadline = Date.now() + 4000;
+    while (!printed() && Date.now() < deadline) await settle();
+    expect(printed()).toBe(true);
+    await settle();
+    view.stdin.write('G');
+    await waitFor(view.fullFrame, 'history 4999 needle');
+    view.stdin.write('g');
+    await waitFor(view.fullFrame, 'history 0 needle');
   } finally {
     view.unmount();
   }
@@ -1132,6 +1163,202 @@ test('detailed transcript search reveals a match after wide emoji output', async
     view.stdin.write('target');
     await waitFor(view.fullFrame, '1 of 1');
     await waitFor(() => view.fullFrame().split('─')[0] ?? '', 'target');
+  } finally {
+    view.unmount();
+  }
+});
+
+const expandEvents: ModelEvent[] = [
+  {type: 'reasoningDelta', text: 'Reasoning fixture body'},
+  {type: 'toolCallComplete', call: {id: 'bash-1', name: 'exec_command', input: {cmd: 'fixture command'}}},
+  {type: 'toolCallComplete', call: {id: 'read-1', name: 'read', input: {path: 'fixture.ts'}}},
+  {
+    type: 'toolResult',
+    result: {
+      callId: 'bash-1',
+      name: 'exec_command',
+      status: 'ok',
+      content: Array.from({length: 500}, (_, n) => `fixture output row ${n}`).join('\n'),
+    },
+  },
+  {type: 'toolResult', result: {callId: 'read-1', name: 'read', status: 'ok', content: 'file fixture body'}},
+  {type: 'toolCallComplete', call: {id: 'refused', name: 'grep', input: {pattern: 'fixture'}}},
+  {type: 'toolResult', result: {callId: 'refused', name: 'grep', status: 'denied', content: 'denied fixture'}},
+  {type: 'textDelta', text: 'Finished expandable turn'},
+];
+
+async function openExpansionFixture() {
+  const view = await openReady(100, 38, true, 0, false, 0, undefined, expandEvents);
+  view.stdin.write('expand fixture');
+  await waitFor(view.fullFrame, '❯ expand fixture');
+  view.stdin.write('\r');
+  await waitFor(view.fullFrame, 'Finished expandable turn');
+  return view;
+}
+
+function clickLine(view: Awaited<ReturnType<typeof openExpansionFixture>>, text: string, code = 0) {
+  const row = view.rows().findIndex(line => line.includes(text));
+  expect(row, text).toBeGreaterThanOrEqual(0);
+  const col = view.rows()[row]!.search(/\S/) + 1;
+  view.stdin.write(`\x1b[<${code};${col};${row + 1}M`);
+}
+
+test('normal transcript SGR toggles merged tools and thinking and offers the omitted output', async () => {
+  const view = await openExpansionFixture();
+  try {
+    const summary = 'Read 1 file, ran 1 shell command';
+    await waitFor(view.fullFrame, 'click or ctrl+o to expand');
+    expect(view.fullFrame()).toContain('denied fixture');
+    clickLine(view, summary, 4); // Shift-click belongs to terminal selection.
+    await settle();
+    expect(view.fullFrame()).not.toContain('fixture command');
+    clickLine(view, summary);
+    await waitFor(view.fullFrame, 'fixture command');
+    expect(view.fullFrame()).toContain('file fixture body');
+    expect(view.fullFrame()).toContain('… +488 lines');
+    expect(view.fullFrame()).toContain('fixture output row 499');
+    expect(view.fullFrame()).not.toContain('fixture output row 250');
+    clickLine(view, summary);
+    await settle();
+    expect(view.fullFrame()).not.toContain('fixture command');
+    clickLine(view, 'Thinking');
+    await waitFor(view.fullFrame, 'Reasoning fixture body');
+    clickLine(view, 'Thinking');
+    await settle();
+    expect(view.fullFrame()).not.toContain('Reasoning fixture body');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, '… +488 lines');
+    clickLine(view, '… +488 lines');
+    await waitFor(view.fullFrame, 'fixture output row 499');
+    view.stdin.write('g');
+    await waitFor(view.fullFrame, 'fixture output row 0');
+    expect(view.fullFrame()).toContain('hide full output');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('normal transcript focus and toggle keys reveal reasoning without inserting input', async () => {
+  const view = await openExpansionFixture();
+  const original = keymapStore.get();
+  keymapStore.set(
+    buildKeymap(
+      JSON.stringify({
+        bindings: [
+          {
+            context: 'Transcript',
+            bindings: {
+              'alt+up': null,
+              'alt+enter': null,
+              'alt+u': 'transcript:focusPrevious',
+              'alt+a': 'transcript:toggleItem',
+            },
+          },
+        ],
+      }),
+    ),
+  );
+  try {
+    view.stdin.write('\x1bu');
+    await waitFor(view.fullFrame, '›');
+    view.stdin.write('\x1bu');
+    await settle();
+    view.stdin.write('\x1bu');
+    await waitFor(view.fullFrame, '› ✻ Thinking');
+    view.stdin.write('\x1ba');
+    await waitFor(view.fullFrame, 'Reasoning fixture body');
+    view.stdin.write('\x1ba');
+    await settle();
+    expect(view.fullFrame()).not.toContain('Reasoning fixture body');
+    expect(view.fullFrame()).toContain('alt+a toggle');
+    view.stdin.write('?');
+    await waitFor(view.fullFrame, 'toggle activity');
+  } finally {
+    keymapStore.set(original);
+    view.unmount();
+  }
+});
+
+test('a running tool and thinking keep their expansion as more events arrive', async () => {
+  const moveOn = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const view = await openReady(100, 38, true, 0, false, 24, undefined, async function* () {
+    yield {type: 'reasoningDelta', text: 'First reasoning'};
+    await moveOn.promise;
+    yield {type: 'reasoningDelta', text: '\n\nMore reasoning'};
+    const call = {id: 'live-bash', name: 'exec_command', input: {cmd: 'echo one\necho two'}};
+    yield {type: 'toolCallComplete', call};
+    yield {type: 'toolOutputDelta', callId: call.id, name: call.name, stream: 'stdout', text: 'live first'};
+    await finish.promise;
+    yield {type: 'toolOutputDelta', callId: call.id, name: call.name, stream: 'stdout', text: '\nlive second'};
+    yield {
+      type: 'toolResult',
+      result: {callId: call.id, name: call.name, status: 'error', exitCode: 1, content: 'live first\nlive second'},
+    };
+    yield {type: 'textDelta', text: 'live turn finished'};
+  });
+  try {
+    view.stdin.write('live fixture');
+    await waitFor(view.fullFrame, '❯ live fixture');
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, '✻ Thinking…');
+    clickLine(view, '✻ Thinking…');
+    await waitFor(view.fullFrame, 'First reasoning');
+    moveOn.resolve();
+    await waitFor(view.fullFrame, 'Running 1 shell command');
+    expect(view.fullFrame()).toContain('More reasoning');
+    clickLine(view, 'Running 1 shell command');
+    await waitFor(view.fullFrame, 'live first');
+    expect(view.fullFrame()).toContain('echo two');
+    finish.resolve();
+    await waitFor(view.fullFrame, 'live turn finished');
+    expect(view.fullFrame()).toContain('live second');
+    expect(view.fullFrame()).toContain('More reasoning');
+    view.stdin.write('\x1b[1;5H');
+    await waitFor(view.fullFrame, 'history 0 needle');
+    expect(view.fullFrame()).not.toContain('live second');
+    view.stdin.write('\x1b[1;5F');
+    await waitFor(view.fullFrame, 'live second');
+    view.stdin.write('/clear');
+    await waitFor(view.fullFrame, '❯ /clear');
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'Started a fresh conversation');
+    expect(view.fullFrame()).not.toContain('First reasoning');
+    expect(view.fullFrame()).not.toContain('live second');
+  } finally {
+    moveOn.resolve();
+    finish.resolve();
+    view.unmount();
+  }
+});
+
+test('a standalone edit title expands and collapses its diff in place', async () => {
+  const apply = {id: 'edit-fixture', name: 'edit', input: {path: 'a.ts'}};
+  const diff = '@@ -0,0 +1,60 @@\n' + Array.from({length: 60}, (_, n) => `+added-${n}`).join('\n');
+  const view = await openReady(100, 92, true, 0, false, 0, undefined, [
+    {type: 'toolCallComplete', call: apply},
+    {
+      type: 'toolResult',
+      result: {
+        callId: apply.id,
+        name: apply.name,
+        status: 'ok',
+        content: JSON.stringify({changes: [{path: 'a.ts', action: 'update', diff}]}),
+      },
+    },
+    {type: 'textDelta', text: 'Edit turn done'},
+  ]);
+  try {
+    view.stdin.write('test edit');
+    await waitFor(view.fullFrame, '❯ test edit');
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'Edit turn done');
+    expect(view.fullFrame()).not.toContain('added-59');
+    clickLine(view, 'Update(a.ts)');
+    await waitFor(view.fullFrame, 'added-59');
+    clickLine(view, 'Update(a.ts)');
+    await settle();
+    expect(view.fullFrame()).not.toContain('added-59');
   } finally {
     view.unmount();
   }

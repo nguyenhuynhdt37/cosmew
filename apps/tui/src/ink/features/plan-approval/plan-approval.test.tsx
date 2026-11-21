@@ -1,5 +1,7 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
+import type {TerminalMouseEvent, TerminalMouseInput} from '../../../input/mouse-input';
+import {TerminalMouseProvider} from '../../hooks/use-terminal-wheel';
 import {readFileSync} from 'node:fs';
 import {cleanup} from 'ink-testing-library';
 import {LiveDialog} from '../../ui/dialog-layout';
@@ -207,4 +209,56 @@ test('the footer names the host editor and authoritative artifact path at 80x36'
   expect(view.lastFrame()!.split('\n').length).toBeLessThanOrEqual(36);
   abort.abort();
   expect(await cancelled).toBe('CANCELLED');
+});
+
+test('plan wheel scrolls its proposal and clicking approval only highlights until Enter', async () => {
+  const {fixture, abort, pending} = setup();
+  const listeners = new Set<(event: TerminalMouseEvent) => void>();
+  const source: TerminalMouseInput = {
+    stdin: {} as TerminalMouseInput['stdin'],
+    subscribe: () => () => {},
+    subscribeMouse: listener => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose: () => listeners.clear(),
+  };
+  const view = renderInk(
+    <TerminalMouseProvider value={source}>
+      <PlanApprovalDialog width={80} visibleRows={2} onCancel={() => abort.abort()} />
+    </TerminalMouseProvider>,
+    {fixture},
+  );
+  await settle();
+  const row = (text: string) => {
+    const index = view
+      .lastFrame()!
+      .split('\n')
+      .findIndex(line => line.includes(text));
+    expect(index).toBeGreaterThanOrEqual(0);
+    return index + 1;
+  };
+  for (const listener of [...listeners]) listener({direction: 1, column: 4, row: row('Add subtract')});
+  await settle();
+  expect(view.lastFrame()).not.toContain('Add subtract');
+  for (const listener of [...listeners]) listener({kind: 'click', column: 5, row: row('manually approve')});
+  await settle();
+  expect(view.lastFrame()).toContain('❯ 2. Yes, manually approve edits');
+  expect(fixture.client.pendingPlanApproval()).not.toBeNull();
+  expect(fixture.client.permissionMode()).toBe('plan');
+  view.stdin.write('\r');
+  await settle();
+  expect(await pending).toEqual({kind: 'approved', mode: 'manual'});
+});
+
+test('plan diff fences use the shared signed gutter and hanging indent', async () => {
+  const {Markdown} = await import('../../ui');
+  const view = renderInk(<Markdown text={'```diff\n@@ -0,0 +138,1 @@\n+' + 'x'.repeat(300) + '\n```'} width={40} />);
+  await settle();
+  const rows = view.lastFrame()!.split('\n');
+  expect(rows[0]).toContain('@@');
+  expect(rows[1]).toStartWith(' 138 +');
+  expect(rows.slice(2).every(row => !row.includes('+') && row.startsWith('      '))).toBe(true);
 });

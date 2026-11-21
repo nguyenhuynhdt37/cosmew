@@ -57,7 +57,7 @@ export const shellOf = (value: string | undefined) => (value === undefined ? ('b
 export const execDescriptor = {
   name: 'exec_command',
   description:
-    'Runs a command in the Cosmew sandbox (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for ongoing interaction via write_stdin. The project directory is the live workspace: file changes there (and in any additional directories the user configured) are real and visible to other tools and git. Writes anywhere else are blocked; .git is readable but never writable; reads work everywhere except credential locations (~/.ssh, ~/.aws, keychains, browser profiles, Cosmew state) and secret files. There is no direct network: HTTP(S) goes through a local proxy (HTTP_PROXY/HTTPS_PROXY are set) that only reaches domains the user allowed, asks the user about a new domain, and always reaches localhost. If a command legitimately cannot work inside the sandbox, retry it with dangerouslyDisableSandbox true and a justification: the user is asked first and, if approved, that one command runs WITHOUT the sandbox. Use it only after a sandboxed attempt failed because of the sandbox, never to bypass a denied domain or path. The permission mode decides prompts: sandboxed commands normally run without asking unless a rule says ask or deny.',
+    'Runs a command (a PTY when tty is true, plain pipes otherwise), returning output or a session ID for write_stdin. Changes in the live workspace are real and visible to other tools and git. The sandbox is disabled by default; ordinary shell permission checks still apply, and default/acceptEdits ask unless a rule allows the command. When enabled, the sandbox limits writes to working directories, protects credential/state paths and .git writes, and routes HTTP(S) through a domain-filtering proxy; these protections do not apply to unsandboxed commands. autoAllowBashIfSandboxed defaults to false; when explicitly enabled it skips the ordinary Bash prompt for sandboxed commands, while deny/ask rules still apply. Settings may exclude commands from the sandbox under normal shell permissions. If an enabled sandbox blocks a legitimate operation, dangerouslyDisableSandbox with a justification requests one separately approved unsandboxed attempt; never use it to bypass a denied domain or path.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -67,7 +67,8 @@ export const execDescriptor = {
       shell: {type: 'string', description: 'Shell binary: bash (default) or sh.'},
       login: {
         type: 'boolean',
-        description: 'Request login-shell startup (trusted image profile only). Omit for a non-login shell.',
+        description:
+          'Request login-shell startup, which may read shell profile files under the effective launch permissions. Omit for a non-login shell.',
       },
       yield_time_ms: {
         type: 'integer',
@@ -88,7 +89,7 @@ export const execDescriptor = {
       dangerouslyDisableSandbox: {
         type: 'boolean',
         description:
-          'Run this one command WITHOUT the sandbox. Always asks the user (and is refused when settings disallow unsandboxed commands). Requires a justification.',
+          'When the sandbox is enabled, request this one command WITHOUT it: requires a justification, always asks separately, and is refused if allowUnsandboxedCommands is false. When the sandbox is disabled, this flag adds no escalation; ordinary shell permissions apply.',
       },
       justification: {
         type: 'string',

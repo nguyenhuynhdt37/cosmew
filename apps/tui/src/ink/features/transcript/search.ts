@@ -52,14 +52,14 @@ export async function buildSearchIndexAsync(
   }
   return signal?.aborted ? null : index;
 }
-export function findMatches(index: SearchIndex, query: string): SearchMatch[] {
-  if (!query) return [];
-  const needle = query.toLowerCase();
-  const matches: SearchMatch[] = [];
-  index.forEach((text, itemIndex) => {
+function collectMatches(text: string, itemIndex: number, needle: string, matches: SearchMatch[]): void {
+  let folded: string;
+  let offsets: number[] | undefined;
+  if (/^[\x00-\x7f]*$/.test(text)) folded = text.toLowerCase();
+  else {
     // Map folded UTF-16 offsets back to the original text (e.g. capital dotted I).
-    let folded = '';
-    const offsets: number[] = [];
+    folded = '';
+    offsets = [];
     let original = 0;
     for (const character of text) {
       const lower = character.toLowerCase();
@@ -67,14 +67,20 @@ export function findMatches(index: SearchIndex, query: string): SearchMatch[] {
       for (let n = 0; n < lower.length; n++) offsets.push(original);
       original += character.length;
     }
-    let at = 0;
-    while ((at = folded.indexOf(needle, at)) >= 0) {
-      const start = offsets[at]!;
-      const last = offsets[at + needle.length - 1]!;
-      matches.push({itemIndex, start, end: last + (text.codePointAt(last)! > 0xffff ? 2 : 1)});
-      at += needle.length;
-    }
-  });
+  }
+  let at = 0;
+  while ((at = folded.indexOf(needle, at)) >= 0) {
+    const start = offsets?.[at] ?? at;
+    const last = offsets?.[at + needle.length - 1] ?? at + needle.length - 1;
+    matches.push({itemIndex, start, end: last + (text.codePointAt(last)! > 0xffff ? 2 : 1)});
+    at += needle.length;
+  }
+}
+export function findMatches(index: SearchIndex, query: string): SearchMatch[] {
+  if (!query) return [];
+  const needle = query.toLowerCase();
+  const matches: SearchMatch[] = [];
+  index.forEach((text, itemIndex) => collectMatches(text, itemIndex, needle, matches));
   return matches;
 }
 export function searchStatus(state: {
@@ -98,12 +104,34 @@ export async function findMatchesAsync(
 ): Promise<SearchMatch[] | null> {
   const matches: SearchMatch[] = [];
   if (!query) return matches;
-  for (let at = 0; at < index.length; at += 16) {
+  const needle = query.toLowerCase();
+  for (let at = 0; at < index.length;) {
     await new Promise<void>(resolve => setImmediate(resolve));
     if (signal.aborted) return null;
-    matches.push(
-      ...findMatches(index.slice(at, at + 16), query).map(match => ({...match, itemIndex: match.itemIndex + at})),
-    );
+    const deadline = performance.now() + 4;
+    do {
+      collectMatches(index[at]!, at, needle, matches);
+      at++;
+    } while (at < index.length && performance.now() < deadline);
   }
   return matches;
+}
+
+/** Keep Ink's highlight and measured prefix bounded even when a match is in a huge tool result. */
+export function searchExcerpt(text: string, match: SearchMatch, width: number): SearchMatch & {text: string} {
+  const budget = Math.max(120, width * 4);
+  const head = Math.max(0, match.start - budget);
+  const tail = Math.min(text.length, match.end + budget);
+  const firstNewline = text.indexOf('\n', head);
+  let start = head && firstNewline >= 0 && firstNewline < match.start ? firstNewline + 1 : head;
+  // An excerpt can start halfway through a surrogate pair.
+  if (/[\udc00-\udfff]/.test(text[start] ?? '')) start--;
+
+  const omitted = start ? '…\n' : '';
+  return {
+    ...match,
+    start: match.start - start + omitted.length,
+    end: match.end - start + omitted.length,
+    text: omitted + text.slice(start, tail) + (tail < text.length ? '\n…' : ''),
+  };
 }

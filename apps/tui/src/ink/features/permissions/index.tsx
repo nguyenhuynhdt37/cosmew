@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
 import {useEffect, useState} from 'react';
 import {Box, Text} from 'ink';
 import {
@@ -21,7 +22,7 @@ import {
   PanelTabs,
   Rule,
   TextLine,
-  parseUnifiedDiff,
+  DiffView,
   safeText,
   useDialogRows,
   useUiTheme,
@@ -80,36 +81,36 @@ export function PermissionsDialog(props: PermissionsDialogProps) {
 /** Rows of the edit preview: `Edit file` shows `1 -old` / `1 +new`, `Create file` plain numbered lines. */
 function EditPreview({request, width, maxLines}: {request: PermissionPromptRequest; width: number; maxLines: number}) {
   const {color} = useTheme();
-  const ui = useUiTheme();
-  const rows = parseUnifiedDiff(request.diffPreview ?? '').filter(row => row.kind !== 'meta' && row.kind !== 'hunk');
+  const [rowCount, setRowCount] = useState(0);
   const create = createsFile(request);
   const limit = Math.max(1, Math.floor(maxLines));
-  const digits = rows.reduce((size, row) => Math.max(size, String(row.newLine ?? row.oldLine ?? 0).length), 1);
+  const [offset, setOffset] = useState(0);
+  const maxOffset = Math.max(0, rowCount - limit);
+  const start = Math.min(offset, maxOffset);
+  const scroll = (delta: number) => setOffset(value => Math.max(0, Math.min(maxOffset, value + delta)));
+  const mouse = useMouseTarget(event => {
+    if ('direction' in event) scroll(event.direction * 3);
+  });
+  useKeybindings({
+    Select: {
+      'select:pageUp': () => scroll(-limit),
+      'select:pageDown': () => scroll(limit),
+    },
+  });
   return (
-    <Box flexDirection="column" width={width} minWidth={0}>
-      {rows.slice(0, limit).map((row, at) => {
-        const number = String(row.kind === 'removed' ? row.oldLine : (row.newLine ?? row.oldLine)).padStart(digits);
-        const sign = create ? ' ' : row.kind === 'added' ? '+' : row.kind === 'removed' ? '-' : ' ';
-        const gutter = ` ${number} ${create ? '' : sign}`;
-        const text = safeText(row.text.slice(1));
-        const changed = !create && row.kind !== 'context';
-        const bg = !changed ? undefined : ui.color(row.kind === 'added' ? 'diffAdded' : 'diffRemoved');
-        const fill = Math.max(0, width - gutter.length - Array.from(text).length);
-        return (
-          <Box key={at} minWidth={0}>
-            <Text backgroundColor={bg} color={changed ? color(row.kind === 'added' ? 'success' : 'error') : undefined}>
-              {gutter}
-            </Text>
-            <Box flexShrink={1} minWidth={0}>
-              <Text backgroundColor={bg} wrap="truncate-end">
-                {text + ' '.repeat(bg ? fill : 0)}
-              </Text>
-            </Box>
-          </Box>
-        );
-      })}
-      {rows.length > limit ? (
-        <Text color={color('foregroundMuted')}>{` ↓ ${rows.length - limit} more lines`}</Text>
+    <Box ref={mouse} flexDirection="column" width={width} minWidth={0}>
+      <DiffView
+        diff={request.diffPreview ?? ''}
+        width={width}
+        variant={create ? 'new' : 'update'}
+        offset={start}
+        viewportRows={limit}
+        onRowCount={setRowCount}
+      />
+      {rowCount > limit ? (
+        <Text
+          color={color('foregroundMuted')}
+        >{` ${start + 1}–${Math.min(rowCount, start + limit)}/${rowCount} lines · PgUp/PgDn scroll`}</Text>
       ) : null}
     </Box>
   );
@@ -268,7 +269,14 @@ export function PermissionRequestDialog({
           />
         ) : (
           <>
-            <OptionList items={optionItems} cursor={cursor} indent={0} width={width - 2} />
+            <OptionList
+              items={optionItems}
+              cursor={cursor}
+              onCursorChange={setCursor}
+              isActive={!task.busy}
+              indent={0}
+              width={width - 2}
+            />
             {task.message ? <TextLine color={color('warning')}>{task.message}</TextLine> : null}
             {compact ? null : <Box height={1} />}
             <TextLine color={muted}>{footer.join(' · ')}</TextLine>
@@ -428,7 +436,13 @@ export function PermissionRulesDialog(props: PermissionRulesDialogProps) {
   const muted = color('foregroundMuted');
   return (
     <Panel width={size.width}>
-      <PanelTabs title="Permissions" tabs={RULE_TABS} selected={tab} />
+      <PanelTabs
+        title="Permissions"
+        tabs={RULE_TABS}
+        selected={tab}
+        onSelect={value => setTab(value as RuleTab)}
+        isActive={!adding && !remove}
+      />
       <Box height={1} />
       <TextLine>{TAB_NOTE[tab]}</TextLine>
       {client.permissionMode() === 'bypassPermissions' ? (

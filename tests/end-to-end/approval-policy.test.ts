@@ -1,5 +1,14 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import type {CommandRuntime, PermissionMode} from '@cosmew/contracts';
@@ -8,11 +17,8 @@ import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
 
-/**
- * ADR 0061 end to end: the product default is the Claude Code `default` permission mode with the
- * sandbox on. Commands that run inside the sandbox need no prompt (`autoAllowBashIfSandboxed`); a
- * file edit asks, and `acceptEdits` approves it.
- */
+/** ADR 0081: ordinary commands and edits ask; containment tests explicitly enable the sandbox. */
+import {writeSandboxSettings} from '../sandbox-config';
 
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -24,6 +30,7 @@ async function make(
   runtime: (root: string, state: string) => CommandRuntime,
   mode?: PermissionMode,
   prepare?: (root: string) => void,
+  sandbox = false,
 ) {
   const home = mkdtempSync(join(tmpdir(), 'futryn-policy-home-')),
     root = realpathSync.native(mkdtempSync(join(tmpdir(), 'futryn-policy-project-')));
@@ -31,6 +38,7 @@ async function make(
     () => rmSync(home, {recursive: true, force: true}),
     () => rmSync(root, {recursive: true, force: true}),
   );
+  if (sandbox) writeSandboxSettings(home);
   prepare?.(root);
   const server = fixtureServer();
   cleanup.push(() => server.server.stop(true));
@@ -57,9 +65,10 @@ function fixtureRuntime(ran: string[]): (root: string, state: string) => Command
     label: 'fixture',
     availability: () => ({ok: true}),
     capabilities: () => ({
-      modes: ['read-only', 'workspace-write'],
+      modes: ['read-only', 'workspace-write', 'danger-full-access'],
       network: false,
       tty: false,
+      unsandboxed: true,
       shells: ['bash'],
       tools: [],
     }),
@@ -70,29 +79,48 @@ function fixtureRuntime(ran: string[]): (root: string, state: string) => Command
   });
 }
 
-test('default mode: `bun test` and `rm -rf` run in the sandbox without a prompt; a workspace edit asks', async () => {
-  const ran: string[] = [];
-  const c = await make(view => {
-    const done = view.results.map(r => (r.name === 'exec_command' ? r.input.cmd : r.name));
-    if (!done.includes('bun test')) return {calls: [{name: 'exec_command', input: {cmd: 'bun test'}}]};
-    if (!done.includes('rm -rf build')) return {calls: [{name: 'exec_command', input: {cmd: 'rm -rf build'}}]};
-    if (!done.includes('write')) return {calls: [{name: 'write', input: {path: 'notes.md', content: 'ok\n'}}]};
-    return {text: 'DONE ' + view.results.map(r => r.content.slice(0, 40)).join(' | ')};
-  }, fixtureRuntime(ran));
-  expect(c.client.permissionMode()).toBe('default');
-  await c.tui.submitPrompt('Run the tests, clean up, note it');
-  const end = Date.now() + 6000;
-  while (Date.now() < end && !c.client.listPendingPermissions().length) await Bun.sleep(5);
-  const pending = c.client.listPendingPermissions();
-  // Both commands already ran inside the sandbox; the only prompt is the file edit.
-  expect(ran).toEqual(['bun test', 'rm -rf build']);
-  expect(pending).toHaveLength(1);
-  expect(pending[0]).toMatchObject({capability: 'fs.write'});
-  await c.tui.nextPermission();
-  await c.tui.handleKey('Escape');
-  await c.tui.idle();
-  expect(() => readFileSync(join(c.root, 'notes.md'), 'utf8')).toThrow();
-}, 20000);
+for (const sandbox of [false, true])
+  test(
+    sandbox
+      ? 'default mode with explicit sandbox auto-allow: `bun test` and `rm -rf` run without a prompt; a workspace edit asks'
+      : 'default mode: `bun test`, `rm -rf` and a workspace edit ask under regular permissions',
+    async () => {
+      const ran: string[] = [];
+      const c = await make(
+        view => {
+          const done = view.results.map(r => (r.name === 'exec_command' ? r.input.cmd : r.name));
+          if (!done.includes('bun test')) return {calls: [{name: 'exec_command', input: {cmd: 'bun test'}}]};
+          if (!done.includes('rm -rf build')) return {calls: [{name: 'exec_command', input: {cmd: 'rm -rf build'}}]};
+          if (!done.includes('write')) return {calls: [{name: 'write', input: {path: 'notes.md', content: 'ok\n'}}]};
+          return {text: 'DONE ' + view.results.map(r => r.content.slice(0, 40)).join(' | ')};
+        },
+        fixtureRuntime(ran),
+        undefined,
+        undefined,
+        sandbox,
+      );
+      expect(c.client.permissionMode()).toBe('default');
+      await c.tui.submitPrompt('Run the tests, clean up, note it');
+      // ADR 0081: sandbox is off and ordinary Bash permissions ask before each command.
+      expect(c.client.status().sandbox.enabled).toBe(sandbox);
+      if (!sandbox)
+        for (const [index, command] of ['bun test', 'rm -rf build'].entries()) {
+          await c.tui.nextPermission();
+          expect(ran).toEqual(['bun test', 'rm -rf build'].slice(0, index));
+          expect(c.client.listPendingPermissions()).toHaveLength(1);
+          expect(c.client.listPendingPermissions()[0]).toMatchObject({capability: 'process.execute', target: command});
+          await c.tui.handleKey('1');
+        }
+      await c.tui.nextPermission();
+      expect(ran).toEqual(['bun test', 'rm -rf build']);
+      expect(c.client.listPendingPermissions()).toHaveLength(1);
+      expect(c.client.listPendingPermissions()[0]).toMatchObject({capability: 'fs.write'});
+      await c.tui.handleKey('Escape');
+      await c.tui.idle();
+      expect(() => readFileSync(join(c.root, 'notes.md'), 'utf8')).toThrow();
+    },
+    20000,
+  );
 
 test('acceptEdits approves the workspace edit without a prompt', async () => {
   const ran: string[] = [];
@@ -113,9 +141,12 @@ test.skipIf(process.platform !== 'darwin')(
   'default mode in the real Seatbelt sandbox: rg runs without a prompt and cannot write outside the workspace',
   async () => {
     let runs = 0;
+    const outside = join(tmpdir(), `fyn-policy-outside-${crypto.randomUUID()}`);
+    cleanup.push(() => rmSync(outside, {force: true}));
     const c = await make(
       view => {
         if (!view.results.length) return {calls: [{name: 'exec_command', input: {cmd: 'rg -n marker source.ts'}}]};
+        if (view.results.length === 1) return {calls: [{name: 'exec_command', input: {cmd: `touch ${outside}`}}]};
         return {text: 'DONE'};
       },
       (root, state) => {
@@ -139,14 +170,22 @@ test.skipIf(process.platform !== 'darwin')(
           },
         } satisfies CommandRuntime;
       },
+      undefined,
+      undefined,
+      true, // Explicit sandbox + auto-approved Bash; these are not the ADR 0081 defaults.
     );
     writeFileSync(join(c.root, 'source.ts'), 'export const marker = 1;\n');
     await c.tui.submitPrompt('find marker');
     expect(c.client.listPendingPermissions()).toHaveLength(0);
-    expect(runs).toBe(1);
+    expect(runs).toBe(2);
     const result = c.tui.getTranscript().at(-1)?.toolResults?.[0];
     expect(result).toMatchObject({status: 'ok', exitCode: 0});
     expect(result?.content).toContain('1:export const marker = 1;');
+    // The research SeatbeltRuntime reports the real exit/output, without NativeCommandRuntime's denial tag.
+    const denied = c.tui.getTranscript().at(-1)?.toolResults?.[1];
+    expect(denied?.exitCode).toBe(1);
+    expect(denied?.content).toMatch(/Operation not permitted|Permission denied/);
+    expect(existsSync(outside)).toBe(false);
     expect(readdirSync(c.root)).toEqual(['source.ts']);
   },
 );

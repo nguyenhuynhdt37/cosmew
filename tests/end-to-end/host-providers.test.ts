@@ -318,10 +318,10 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
   const type = async (text: string) => {
     for (const key of text) await tui.handleKey(key);
   };
-  // No account yet: consent, then the startup gate offers Sign in, which opens the shared connect dialog.
+  // Open the explicit /login route after consent; startup may allow a no-account draft.
   await tui.handleKey('Up');
   await tui.handleKey('Enter');
-  await tui.waitFor('Sign in');
+  await type('/login');
   await tui.handleKey('Enter');
   await tui.waitFor('Custom provider'); // the provider list of the shared connect dialog
   for (let i = 0; i < 7; i++) await tui.handleKey('Down'); // last row: the custom provider

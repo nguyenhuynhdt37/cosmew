@@ -1,6 +1,5 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
-import {useState} from 'react';
 import {cleanup} from 'ink-testing-library';
 import {renderInk, createClientFixture, settle} from '../../testing';
 import {StatusLine, useStatusLine} from './index';
@@ -9,7 +8,7 @@ import {Welcome, useWelcome} from '../welcome';
 import {ContextMeter, contextPercent, useContextMeter} from '../context-meter';
 import {StartupGate, useStartupGate} from '../startup-gate';
 import {Usage, useUsage, reportRows} from '../usage';
-import {failureMessage, suggestedAlternative} from '../startup-gate/logic';
+import {verificationMessage} from '../startup-gate/logic';
 afterEach(cleanup);
 test('terminal welcome displays the Cosmew mascot beside the product name', async () => {
   const fixture = createClientFixture();
@@ -89,8 +88,6 @@ test('startup defaults Exit and sends no probe before consent', async () => {
       onExit: () => {
         exits++;
       },
-      openOverlay: () => {},
-      overlayOpen: false,
     });
     return <StartupGate state={state} />;
   }
@@ -103,38 +100,6 @@ test('startup defaults Exit and sends no probe before consent', async () => {
   expect(exits).toBe(1);
   expect(probes).toBe(0);
   expect(ready).toBe(0);
-});
-test('consent without account locks chat and routes sign-in to host', async () => {
-  const routes: string[] = [];
-  let ready = 0;
-  function Gate() {
-    const [overlayOpen, setOverlayOpen] = useState(false);
-    const state = useStartupGate({
-      onReady: () => {
-        ready++;
-      },
-      onExit: () => {},
-      openOverlay: route => {
-        routes.push(route);
-        setOverlayOpen(true);
-      },
-      overlayOpen,
-    });
-    return <StartupGate state={state} />;
-  }
-  const view = renderInk(<Gate />);
-  await settle();
-  view.stdin.write('\u001b[A');
-  await settle();
-  view.stdin.write('\r');
-  await settle();
-  expect(view.lastFrame()).toContain('Sign in');
-  expect(ready).toBe(0);
-  view.stdin.write('\r');
-  await settle();
-  expect(routes).toEqual(['connect']);
-  view.unmount();
-  expect(view.fixture.client.toolsEnabled()).toBe(false);
 });
 test('reports retain summary, detailed billing, context and status; toggle details', async () => {
   const fixture = createClientFixture();
@@ -153,8 +118,8 @@ test('reports retain summary, detailed billing, context and status; toggle detai
   await settle();
   expect(view.lastFrame()).toContain('SESSION USAGE');
 });
-test('startup failures distinguish auth from retryable errors and suggest sign-in with no alternate', () => {
-  expect(failureMessage('AUTH')).toContain('rejected');
-  expect(failureMessage('PROTOCOL')).toContain('retry');
-  expect(suggestedAlternative([], 'failed')).toBe(0);
+test('first-send diagnostics distinguish account, connection and model failures', () => {
+  expect(verificationMessage('auth')).toContain('rejected');
+  expect(verificationMessage('network')).toContain('connection');
+  expect(verificationMessage('model')).toContain('/model');
 });

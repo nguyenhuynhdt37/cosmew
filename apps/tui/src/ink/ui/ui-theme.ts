@@ -1,3 +1,4 @@
+import {mixHex} from '../../theme/presets';
 import {useTheme} from '../theme';
 /** Presentation aliases only: the existing ThemeEngine owns mode, customization and NO_COLOR. */
 export function useUiTheme() {
@@ -20,9 +21,7 @@ export function useUiTheme() {
     /** The `⏺` marker of a finished tool or event (measured, spec 9); `success` stays for other uses. */
     toolSuccess: light ? '#4e9a06' : '#b5bd68',
     error: theme.tokens.error,
-    diffAdded: light ? '#e4f0da' : '#3d423c',
-    diffRemoved: light ? '#f7d9d9' : '#7a2936',
-    panel: light ? '#f5f5f5' : '#262626',
+    panel: theme.tokens.backgroundPanel,
     planDivider: light ? theme.tokens.foregroundMuted : '#73767b',
     userMessage: theme.tokens.composerBackground,
   };
@@ -30,6 +29,10 @@ export function useUiTheme() {
     ...theme,
     uiTokens: tokens,
     color: (token: keyof typeof tokens) => (theme.colors ? tokens[token] : undefined),
+    diffTint: (token: 'diffAdded' | 'diffRemoved') =>
+      theme.colors ? mixHex(theme.tokens.backgroundPanel, theme.tokens[token], light ? 0.12 : 0.16) : undefined,
+    diffHunk: () => (theme.colors ? mixHex(theme.tokens.syntaxFunction, theme.tokens.diffAdded, 0.25) : undefined),
+    diffSelection: () => (theme.colors ? mixHex(theme.tokens.selection, theme.tokens.info, 0.18) : undefined),
   };
 }
 export type UiThemeToken = keyof ReturnType<typeof useUiTheme>['uiTokens'];

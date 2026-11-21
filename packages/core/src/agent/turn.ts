@@ -1,6 +1,9 @@
 import {
   FutrynError,
+  isFileChangeTool,
   messageSchema,
+  providerReplaySchema,
+  type ProviderReplay,
   type ExecutionEventData,
   type Message,
   type ModelEvent,
@@ -27,7 +30,15 @@ import {
   summarizeWithModel,
 } from '../context/model-compaction';
 import {budgetExhaustedNotice, explorationGuidance} from './guidance';
-import {artifactWork, observeResult, recoveryContext, taskForRequest} from './progress';
+import {
+  artifactEvidence,
+  artifactWork,
+  isPendingCheck,
+  observeResult,
+  recoveryContext,
+  requiresHtmlDocument,
+  taskForRequest,
+} from './progress';
 import {ProgressQueue} from './progress-queue';
 import {TurnTools, toolMessage, type InFlight} from './turn-tools';
 import {SAFETY_LIMITS, estimateTokens, type ActiveTurn, type TurnHost, type TurnRequest} from './turn-types';
@@ -37,10 +48,21 @@ const RECOVERY_INSTRUCTION =
 const STAGNATION_NOTICE =
   'Progress correction: recent calls produced only identical reads, refusals or failures. Use existing evidence; choose a different justified step or report the blocker. Never retry a denied mutation.';
 
-const artifactNotice = (targets: string[]) =>
-  'Artifact progress correction: the requested artifact has no complete verification read yet. Partial HTML excerpts do not establish full document structure. For these targets, use read with ' +
-  JSON.stringify(targets.map(path => ({path, offset: 1, limit: 2000}))) +
-  '. If output remains truncated, report the verification limit rather than claiming completion. If the user still requests implementation, perform the approved change and verify the target. Do not merely promise it. If blocked, report the precise blocker and stop. Do not retry denied writes.';
+const artifactNotice = (task: NonNullable<TurnHost['state']['task']>) => {
+  const missing = task.artifactTargets.filter(path => !artifactEvidence(task, path));
+  const html = missing.filter(path => requiresHtmlDocument(task, path));
+  return (
+    'Artifact progress correction: successful target changes or relevant content evidence are still missing for ' +
+    JSON.stringify(missing) +
+    '. A read alone does not prove a requested modification occurred; a successful check does not prove an unwritten artifact exists. ' +
+    (html.length
+      ? 'For newly created HTML documents, partial excerpts do not establish complete document structure. Inspect the missing document ranges for ' +
+        JSON.stringify(html) +
+        '; if content is incomplete, correct it using an authorized write and inspect the result. '
+      : '') +
+    'Use task-appropriate evidence and checks; do not mechanically reread full source files. Report actual check results and verification limits. If blocked, report the precise blocker. Do not retry denied writes or blindly replay a mutation whose outcome is unknown.'
+  );
+};
 
 const defaultSleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
@@ -77,6 +99,7 @@ interface SampleResult {
   reasoningBytes: number;
   /** The streamed reasoning, kept so a provider that requires it can be sent it back (ADR 0048). */
   reasoningText: string;
+  providerReplay?: ProviderReplay;
   terminal?: Extract<ModelEvent, {type: 'completed'}>;
   calls: ToolCall[];
   /** Codex InstantInterrupt: accepted steering stopped this response; its unfinished items are void. */
@@ -186,7 +209,12 @@ export class TurnRun {
       budget: this.budget,
       signal: this.signal,
       progress: this.progress,
-      parallelSlots: Math.max(SAFETY_LIMITS.parallelTools, host.options.parallelSlots?.() ?? 0),
+      parallelSlots: (() => {
+        const configured = host.options.parallelSlots?.();
+        return configured === undefined || !Number.isFinite(configured)
+          ? SAFETY_LIMITS.parallelTools
+          : Math.max(1, Math.floor(configured));
+      })(),
       record: event => this.record(event),
       workExhausted: () => this.workExhausted(),
       onSettled: (call, result, sequence) => this.observeTaskResult(call, result, sequence),
@@ -479,6 +507,7 @@ export class TurnRun {
       offerTools,
       taskMessage.length > 0,
     );
+    this.tools.retainVisibleEvidence(history);
     return {history, available, tools, offerTools, instructions};
   }
 
@@ -651,6 +680,9 @@ export class TurnRun {
             role: 'assistant',
             content: committed ? result.text : '',
             toolCalls: result.calls,
+            ...(committed && !result.streamError && !result.preempted && result.providerReplay
+              ? {providerReplay: result.providerReplay}
+              : {}),
             ...(result.reasoningText ? {reasoning: result.reasoningText} : {}),
           },
           ...result.calls.map((call, index) => toolMessage(call, results[index]!)),
@@ -758,6 +790,11 @@ export class TurnRun {
     if (result.terminal) throw new FutrynError('PROTOCOL');
     if (event.type === 'textDelta' || event.type === 'toolCallComplete') this.rejectionCandidate = false;
 
+    if (event.type === 'providerReplay') {
+      if (result.providerReplay) throw new FutrynError('PROTOCOL');
+      result.providerReplay = providerReplaySchema.parse(event.replay);
+      return undefined;
+    }
     if (event.type === 'textDelta') {
       result.text += event.text;
       result.textBytes += Buffer.byteLength(event.text);
@@ -844,7 +881,12 @@ export class TurnRun {
     // Codex Completed { end_turn: Some(false) }. Only providers that expose such a signal set it
     // (Anthropic pause_turn); absence is never treated as "continue".
     if (terminal.endTurn === false && !stop) {
-      if (sample.text) steps.push({role: 'assistant', content: sample.text});
+      if (sample.text || sample.providerReplay)
+        steps.push({
+          role: 'assistant',
+          content: sample.text,
+          ...(sample.providerReplay ? {providerReplay: sample.providerReplay} : {}),
+        });
       return {kind: 'follow-up'};
     }
     if (!sample.text.trim() || ['error', 'unknown', 'tool-calls', 'tool_calls'].includes(terminal.finishReason)) {
@@ -854,22 +896,28 @@ export class TurnRun {
     // Codex: needs_follow_up = model_needs_follow_up || has_pending_input. Accepted steering that
     // arrived during this response continues the same turn instead of starting an unrelated one.
     if (this.turn.pending.length && !stop) {
-      steps.push({role: 'assistant', content: sample.text});
+      steps.push({
+        role: 'assistant',
+        content: sample.text,
+        ...(sample.providerReplay ? {providerReplay: sample.providerReplay} : {}),
+      });
       return {kind: 'follow-up'};
     }
 
     // Evidence-based artifact check, like a Codex Stop hook that blocks once: an unverified requested
     // artifact gets one continuation with an explicit prompt. It never turns an answer into a
     // failure, and a denied or blocked mutation is reported by the model, not retried.
-    const toolNames = host.tools?.descriptors().map(d => d.name) ?? [];
-    const needsArtifact = !!task && !host.options.analysisOnly?.() && artifactWork(task, toolNames);
-    const verified = !!task?.artifactTargets.every(path =>
-      task.verifiedActions.some(a => a.status === 'verified:' + path),
-    );
+    const needsArtifact = !!task && !host.options.analysisOnly?.() && artifactWork(task);
+    const verified = !!task?.artifactTargets.every(path => artifactEvidence(task, path));
     const blocked = task?.failures.some(f => f.includes('denied')) || this.tools.writeDenied;
-    if (needsArtifact && !verified && !stop && !blocked && this.corrections++ < 1) {
-      steps.push({role: 'assistant', content: sample.text});
-      this.progressNotice = artifactNotice(task!.artifactTargets);
+    const canWrite = host.tools?.descriptors().some(d => isFileChangeTool(d.name));
+    if (needsArtifact && canWrite && !verified && !stop && !blocked && this.corrections++ < 1) {
+      steps.push({
+        role: 'assistant',
+        content: sample.text,
+        ...(sample.providerReplay ? {providerReplay: sample.providerReplay} : {}),
+      });
+      this.progressNotice = artifactNotice(task!);
       return {kind: 'follow-up'};
     }
     return {kind: 'complete', needsArtifact, verified};
@@ -894,7 +942,11 @@ export class TurnRun {
     receipt.outcome = 'completed';
     receipt.stopReason = stop ?? 'completed';
     receipt.finishedAt = new Date().toISOString();
-    const answer: Message = {role: 'assistant', content: sample.text};
+    const answer: Message = {
+      role: 'assistant',
+      content: sample.text,
+      ...(sample.providerReplay ? {providerReplay: sample.providerReplay} : {}),
+    };
     store.complete(host.id, this.revision!, answer, receipt, this.steps);
     this.completed = true;
     state.messages.push(...this.carried, this.user, ...this.steps, answer);
@@ -905,9 +957,11 @@ export class TurnRun {
 
   private finalTaskState(next: {needsArtifact: boolean; verified: boolean}): 'verified' | 'unfinished' {
     const task = this.host.state.task!;
-    if (next.needsArtifact) return next.verified ? 'verified' : 'unfinished';
-    const openWork = task.failures.length > 0 || task.pending.some(p => p.startsWith('Collect command session '));
-    return openWork ? 'unfinished' : 'verified';
+    // Historical read/cancellation failures stay visible during recovery, but a later confirmed
+    // artifact change and inspection can finish that work. Failed checks remain unresolved.
+    const failed = !next.needsArtifact && task.failures.some(f => !/^(?:exec_command|write_stdin)\b/.test(f));
+    const openWork = failed || task.pending.some(isPendingCheck);
+    return openWork || (next.needsArtifact && !next.verified) ? 'unfinished' : 'verified';
   }
 
   // -------------------------------------------------------------------------------------------

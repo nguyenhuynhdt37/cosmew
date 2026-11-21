@@ -1,12 +1,16 @@
 /** @jsxImportSource react */
-import {useRef, useState} from 'react';
+import {useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text} from 'ink';
 import type {ToolResult, WorkspaceDiffReport, WorkspaceDiffBase} from '@cosmew/sdk';
-import {useEvents, useFutrynClient, useKeybindings, useKeymap, useTextInput} from '../../hooks';
+import {useEvents, useFutrynClient, useKeybindings, useKeymap} from '../../hooks';
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
+import {MouseRow} from '../../ui/mouse-row';
+import {useBindingLabel} from '../../hooks/keymap';
 import {useUiTheme} from '../../ui/ui-theme';
 import {useTheme} from '../../theme';
 import {DiffView, TextLine, Truncate} from '../../ui';
-import {changeReceipt, workspaceUnifiedDiff} from './logic';
+import {DiffFileList, useDiffFiles} from './file-list';
+import {changeReceipt, diffLanguage, workspaceUnifiedDiff, workspaceViewRows} from './logic';
 export * from './logic';
 export * from './panel';
 export interface ToolDiffProps {
@@ -42,7 +46,10 @@ export function ToolDiff({result, expanded = false, width, maxLines}: ToolDiffPr
             <DiffView
               diff={change.diff}
               width={rowWidth}
+              language={diffLanguage(change.path)}
               variant={change.action === 'add' ? 'new' : 'update'}
+              windowRows={expanded}
+              tailLines={maxLines === undefined ? 0 : Math.floor(maxLines / 2)}
               maxLines={
                 expanded
                   ? undefined
@@ -68,10 +75,12 @@ export function ToolDiff({result, expanded = false, width, maxLines}: ToolDiffPr
     </Box>
   );
 }
-export function useDiff() {
+export function useDiff(open = false) {
   const client = useFutrynClient();
-  const base = useRef<WorkspaceDiffBase>('session');
+  const base = useRef<WorkspaceDiffBase>('uncommitted');
+  const toolsEnabled = useRef(client.toolsEnabled());
   const generation = useRef(0);
+  const pending = useRef(false);
   const session = useRef(client.activeSession()?.id);
   const read = (): WorkspaceDiffReport => {
     try {
@@ -90,30 +99,59 @@ export function useDiff() {
   };
   const [report, setReport] = useState(read);
   const [error, setError] = useState<string>();
-  useEvents({
-    reactive: () => {
-      const current = client.activeSession()?.id;
-      if (session.current !== current) {
-        session.current = current;
-        base.current = 'session';
-        generation.current++;
-      }
-      setReport(read());
-    },
-  });
   const refresh = async (nextBase: WorkspaceDiffBase = base.current) => {
     base.current = nextBase;
     const request = ++generation.current;
     const sessionId = client.activeSession()?.id;
+    pending.current = true;
+    // Keep the inspected source/capabilities until its replacement is ready.
+    setReport(previous => (previous.files.length ? previous : {...previous, message: 'Loading diff…'}));
     try {
       const next = await client.refreshWorkspaceDiff({base: nextBase});
       if (request !== generation.current || client.activeSession()?.id !== sessionId) return;
       setReport(next);
       setError(undefined);
-    } catch {
-      if (request === generation.current) setError('Workspace diff refresh failed');
+    } catch (cause) {
+      if (request !== generation.current || client.activeSession()?.id !== sessionId) return;
+      const message = cause instanceof Error ? cause.message : 'Workspace diff refresh failed';
+      setError(message);
+      setReport({...read(), state: 'error', message, files: [], totalAdditions: 0, totalDeletions: 0});
+    } finally {
+      if (request === generation.current) pending.current = false;
     }
   };
+  const reconcile = () => {
+    const current = client.activeSession()?.id;
+    const enabled = client.toolsEnabled();
+    const consentChanged = toolsEnabled.current !== enabled;
+    const changed = session.current !== current || consentChanged;
+    if (session.current !== current) base.current = 'uncommitted';
+    session.current = current;
+    toolsEnabled.current = enabled;
+    // A consent transition invalidates even a refresh that already captured a denied SDK report.
+    if (changed) {
+      generation.current++;
+      pending.current = false;
+    }
+    if (!pending.current) setReport(read());
+    if (changed) {
+      setError(undefined);
+      // A hidden pane must not compete with an in-flight /review refresh on session changes.
+      // Consent changes still refresh to replace a cached denial.
+      if (enabled && (open || consentChanged)) void refresh();
+    }
+  };
+  useEvents({reactive: reconcile});
+  // Reconcile after subscribing: startup may enable tools between render and passive effects.
+  useEffect(() => {
+    reconcile();
+    return () => {
+      generation.current++;
+    };
+  }, [client]);
+  useEffect(() => {
+    if (open) void refresh();
+  }, [client, open]);
   return {report, error, refresh};
 }
 export interface DiffProps {
@@ -127,20 +165,29 @@ export interface DiffProps {
 /** Workspace /diff view; host owns clipboard and overlay lifecycle. */
 export function Diff({report, width, maxLines = 30, isActive = false, onRefresh, onCopy}: DiffProps) {
   const {color} = useTheme();
-  const ui = useUiTheme();
   const [layer, setLayer] = useState<'all' | 'staged' | 'unstaged' | 'untracked'>('all');
   const [index, setIndex] = useState(0);
   const [offset, setOffset] = useState(0);
   const [expanded, setExpanded] = useState(false);
-  const files = report.files.filter(file => layer === 'all' || file.layer === layer);
+  const layered = useMemo(
+    () => report.files.filter(file => layer === 'all' || file.layer === layer),
+    [report.files, layer],
+  );
+  const {files, group, toggle} = useDiffFiles(layered);
+  const toggleGroup = () => {
+    toggle();
+    setIndex(0);
+    setOffset(0);
+  };
   const selected = Math.min(index, Math.max(0, files.length - 1));
   const file = files[selected];
-  const lines = file?.lines ?? [];
-  const start = Math.min(offset, Math.max(0, lines.length - maxLines));
+  const diffRows = useMemo(() => (file ? workspaceViewRows(file) : []), [file]);
+  const [physicalRows, setPhysicalRows] = useState(0);
+  const start = Math.min(offset, Math.max(0, physicalRows - maxLines));
   const LAYERS = ['all', 'staged', 'unstaged', 'untracked'] as const;
-  const maxStart = Math.max(0, lines.length - maxLines);
+  const maxStart = Math.max(0, physicalRows - maxLines);
   const goFile = (step: number) => {
-    setIndex((selected + step + files.length) % Math.max(1, files.length));
+    setIndex(value => Math.max(0, Math.min(files.length - 1, Math.min(value, files.length - 1) + step)));
     setOffset(0);
   };
   const goSource = (step: number) => {
@@ -153,65 +200,87 @@ export function Diff({report, width, maxLines = 30, isActive = false, onRefresh,
   useKeybindings(
     {
       DiffDialog: {
-        'diff:previousFile': () => goFile(-1),
-        'diff:nextFile': () => goFile(1),
+        'diff:toggleGenerated': toggleGroup,
+        ...Object.fromEntries(
+          (['all', 'staged', 'unstaged', 'untracked'] as const).map(target => [
+            `diff:${target}`,
+            () => {
+              setLayer(target);
+              setIndex(0);
+              setOffset(0);
+            },
+          ]),
+        ),
+        'diff:refresh': () => onRefresh?.(),
+        'diff:copy': () => {
+          if (file) onCopy?.(`${file.path}\n${workspaceUnifiedDiff(file)}`);
+        },
+        'diff:previousFile': () => (expanded ? setOffset(Math.max(0, start - 1)) : goFile(-1)),
+        'diff:nextFile': () => (expanded ? setOffset(Math.min(maxStart, start + 1)) : goFile(1)),
         'diff:previousSource': () => goSource(-1),
         'diff:nextSource': () => goSource(1),
         'diff:open': () => setExpanded(value => !value),
         'diff:back': () => (expanded ? setExpanded(false) : false),
-        'diff:pageUp': () => setOffset(Math.max(0, start - maxLines)),
-        'diff:pageDown': () => setOffset(Math.min(maxStart, start + maxLines)),
-        'diff:top': () => setOffset(0),
-        'diff:bottom': () => setOffset(maxStart),
+        'diff:pageUp': () =>
+          expanded ? setOffset(Math.max(0, start - Math.max(1, Math.floor(maxLines / 2)))) : goFile(-8),
+        'diff:fullPageUp': () => (expanded ? setOffset(Math.max(0, start - maxLines)) : goFile(-8)),
+        'diff:pageDown': () =>
+          expanded ? setOffset(Math.min(maxStart, start + Math.max(1, Math.floor(maxLines / 2)))) : goFile(8),
+        'diff:fullPageDown': () => (expanded ? setOffset(Math.min(maxStart, start + maxLines)) : goFile(8)),
+        'diff:top': () => (expanded ? setOffset(0) : goFile(-files.length)),
+        'diff:bottom': () => (expanded ? setOffset(maxStart) : goFile(files.length)),
       },
     },
     {isActive},
   );
-  useTextInput(
-    (input, key) => {
-      if (key.ctrl || key.meta || key.shift || key.eventType === 'release') return;
-      const target = ({a: 'all', s: 'staged', u: 'unstaged', n: 'untracked'} as const)[input.toLowerCase() as 'a'];
-      if (target) {
-        setLayer(target);
-        setIndex(0);
-        setOffset(0);
-      }
-      if (input.toLowerCase() === 'r') onRefresh?.();
-      if (input.toLowerCase() === 'c' && file) onCopy?.(`${file.path}\n${workspaceUnifiedDiff(file)}`);
-    },
-    {isActive},
-  );
+  const mouse = useMouseTarget(event => {
+    if ('direction' in event) setOffset(value => Math.max(0, Math.min(maxStart, value + event.direction * 3)));
+  }, isActive);
+  const fileKeys = useBindingLabel('DiffDialog', 'diff:nextFile');
+  const sourceKeys = useBindingLabel('DiffDialog', 'diff:nextSource');
+  const pageKeys = useBindingLabel('DiffDialog', 'diff:pageDown');
+  const openKeys = useBindingLabel('DiffDialog', 'diff:open');
+  const backKeys = useBindingLabel('DiffDialog', 'diff:back');
   return (
     <Box width={width} minWidth={0} flexDirection="column">
-      <Text color={color('foregroundMuted')}>
-        /diff · {layer} · {files.length} files +{files.reduce((n, file) => n + file.additions, 0)} -
-        {files.reduce((n, file) => n + file.deletions, 0)}
-        {report.truncated ? ' · bounded' : ''}
-      </Text>
+      <MouseRow isActive={isActive} onHighlight={() => goSource(1)}>
+        <Text color={color('foregroundMuted')}>
+          /diff · {layer} · {files.length} files +{files.reduce((n, file) => n + file.additions, 0)} -
+          {files.reduce((n, file) => n + file.deletions, 0)}
+          {report.truncated ? ' · bounded' : ''}
+        </Text>
+      </MouseRow>
+      {!expanded ? (
+        <DiffFileList
+          group={{...group, onToggle: toggleGroup}}
+          files={files}
+          selected={selected}
+          width={width ?? 80}
+          isActive={isActive}
+          onMove={goFile}
+          onSelect={at => {
+            setIndex(at);
+            setOffset(0);
+          }}
+        />
+      ) : null}
       {file ? (
         <>
           <TextLine
             width={width}
           >{`${selected + 1}/${files.length} ${file.path}${file.oldPath ? ` ← ${file.oldPath}` : ''} · ${file.layer ?? file.status}${file.binary ? ' · binary' : ''}${file.truncated ? ' · bounded' : ''}`}</TextLine>
-          {(expanded ? lines : lines.slice(start, start + maxLines)).map((line, at) => (
-            <TextLine
-              key={at}
-              backgroundColor={
-                line.type === 'add' ? ui.color('diffAdded') : line.type === 'del' ? ui.color('diffRemoved') : undefined
-              }
-              width={width}
-              color={color(
-                line.type === 'add'
-                  ? 'diffAdded'
-                  : line.type === 'del'
-                    ? 'diffRemoved'
-                    : line.type === 'hunk'
-                      ? 'accent'
-                      : 'diffContext',
-              )}
-            >{`${String(line.oldLine ?? '').padStart(4)} ${String(line.newLine ?? '').padStart(4)} │ ${line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}${line.content}`}</TextLine>
-          ))}
-          {!lines.length ? <Text>Empty or binary diff</Text> : null}
+          <Box ref={mouse} flexDirection="column">
+            <DiffView
+              lines={diffRows}
+              width={width ?? 80}
+              offset={offset}
+              viewportRows={maxLines}
+              onRowCount={setPhysicalRows}
+              showHunks
+              language={diffLanguage(file.path)}
+            />
+            {!file.lines.length ? <Text>Empty or binary diff</Text> : null}
+          </Box>
         </>
       ) : (
         <TextLine width={width}>
@@ -222,7 +291,7 @@ export function Diff({report, width, maxLines = 30, isActive = false, onRefresh,
         </TextLine>
       )}
       <Text dimColor>
-        ←/→ File · ↑/↓ Scroll · A All · S Staged · U Unstaged · N New · R Refresh · C Copy · Ctrl+O Expand
+        {`${fileKeys} ${expanded ? 'scroll' : 'files'} · ${sourceKeys} source · ${openKeys} open · ${backKeys} back · ${pageKeys} scroll`}
       </Text>
     </Box>
   );

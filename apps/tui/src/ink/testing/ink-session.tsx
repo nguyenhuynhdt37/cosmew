@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {render} from 'ink-testing-library';
+import {render, settle, waitForFrame} from './wait';
 import type {FutrynClient} from '@cosmew/sdk';
 import {InkApp} from '../app';
 import {messagesToTranscript, type TranscriptItem} from '../features/transcript/logic';
@@ -26,6 +26,8 @@ export interface InkSession {
   frame(): string;
   /** Every frame rendered so far, joined (transcript rows scrolled into Static stay visible). */
   frames(): string;
+  discardCapturedFrames(): void;
+  pressToFrame(keys: string, predicate: (frame: string) => boolean): Promise<number>;
   press(keys: string): Promise<void>;
   type(text: string): Promise<void>;
   /** Types text, presses Enter, and resolves once no turn or slash command is running. */
@@ -68,9 +70,10 @@ const KEYS: Record<string, string> = {
 
 /**
  * Mounts the real Ink TUI over a real SDK client (ink-testing-library; no PTY). The startup gate is driven
- * through its own dialog: Yes, I trust this folder, then the real account verification request.
+ * through its own dialog: Yes, I trust this folder. First-run coverage drives onboarding separately.
  */
 export async function openInk(client: FutrynClient, options: InkSessionOptions = {}): Promise<InkSession> {
+  for (const step of ['theme', 'auth', 'security']) client.completeOnboardingStep(step);
   let open = 0;
   const send = client.sendMessage.bind(client);
   client.sendMessage = ((...args: Parameters<typeof send>) => {
@@ -97,18 +100,35 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
       }}
     />,
   );
+  if (options.rows !== undefined) {
+    // The Ink test stream otherwise has no row count. Ink falls back to synchronous terminal-size
+    // probes on every layout, even if InkApp has an explicit viewport height.
+    Object.defineProperties(view.stdout, {
+      rows: {value: options.rows},
+      columns: {value: options.width ?? 110},
+    });
+  }
   const frame = () => (view.lastFrame() ?? '').replace(ANSI, '');
   const session: InkSession = {
     client,
     frame,
     frames: () => view.frames.join('\n').replace(ANSI, ''),
+    discardCapturedFrames: () => {
+      view.frames.splice(0, Math.max(0, view.frames.length - 1));
+    },
+    async pressToFrame(keys, predicate) {
+      const start = performance.now();
+      view.stdin.write(keys);
+      await waitForFrame({lastFrame: frame}, predicate, 30000);
+      return performance.now() - start;
+    },
     async press(keys) {
       view.stdin.write(keys);
-      await sleep(40);
+      await settle();
     },
     async type(text) {
       view.stdin.write(text);
-      await sleep(40);
+      await settle();
     },
     async waitFor(text, ms = 8000) {
       const end = Date.now() + ms;
@@ -131,13 +151,13 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
         pending[0]!.capability === 'settings.trust' ? 'No, skip this settings file' : 'Esc to cancel · Tab to amend',
         3000,
       );
-      await sleep(120); // the dialog subscribes to input after its first paint
+      await settle();
       return pending[0]!;
     },
     async idle(ms = 15000) {
       const end = Date.now() + ms;
       while (open > 0 && Date.now() < end) await sleep(10);
-      await sleep(200); // let dialogs close and the composer take input again
+      await settle();
       if (open > 0) throw new Error('A turn is still running');
     },
     async submit(text) {
@@ -159,7 +179,7 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
     },
     async executeSlashCommand(text) {
       await session.submit(text);
-      await sleep(200); // an opened dialog subscribes to input after its first paint
+      await settle();
     },
     computeFrameSnapshot: () => ({plainText: frame()}),
     advanceStartupGate() {},
@@ -185,7 +205,7 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
         throw new Error(
           `Startup gate did not open the composer:\n${frame()}\nhistory: ${session.frames().slice(-3000)}\nstderr: ${view.stderr.frames.join('\n')}`,
         );
-      await sleep(250); // Ink re-subscribes raw input after the gate unmounts.
+      await settle();
     }
   } catch (error) {
     await session.close(); // never leave a mounted app behind a failed startup

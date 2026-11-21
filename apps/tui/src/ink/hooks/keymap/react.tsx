@@ -4,6 +4,9 @@ import {useInput} from 'ink';
 import {useInputEnabled} from '../input-scope';
 import {KeyRouter, type ContextHandlers, type Registration} from './router';
 import {keymapStore} from './store';
+import type {KeyContext} from './defaults';
+import {chordsFor} from './keymap';
+import {displayChord, parseChord} from './keystroke';
 
 const RouterContext = createContext<KeyRouter | null>(null);
 /** One dispatcher for the whole app: nested features register contexts instead of each reading stdin. */
@@ -51,4 +54,20 @@ export function useKeybindings(handlers: ContextHandlers, options: KeybindingOpt
     };
   }, [router]);
   useInput((input, key) => void local?.dispatch(input, key), {isActive: !!local && enabled});
+}
+
+/** Current user-remapped key label, shared by panel footers and dispatch. */
+export function useBindingLabel(context: KeyContext, action: string): string {
+  const map = useSyncExternalStore(
+    listener => keymapStore.subscribe(listener),
+    () => keymapStore.get(),
+  );
+  return (
+    chordsFor(map, context, action)
+      .map(chord => {
+        const parsed = parseChord(chord);
+        return parsed.ok ? displayChord(parsed.value) : chord;
+      })
+      .join('/') || 'unbound'
+  );
 }

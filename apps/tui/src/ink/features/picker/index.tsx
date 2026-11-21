@@ -1,5 +1,7 @@
 /** @jsxImportSource react */
 import {useCallback, useEffect, useRef, useState, type ReactNode} from 'react';
+import {Box} from 'ink';
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
 import {FutrynError} from '@cosmew/contracts';
 import {useOverlay} from '../../core';
 import {useClientEvents, useKeymap, useTextInput} from '../../hooks';
@@ -173,6 +175,9 @@ export function Detail({text, visibleRows = 10, onBack}: {text: string; visibleR
   const limit = Math.max(1, visibleRows);
   const max = Math.max(0, lines.length - limit);
   const start = Math.min(offset, max);
+  const mouseRef = useMouseTarget(event => {
+    if ('direction' in event) setOffset(value => Math.max(0, Math.min(max, value + event.direction)));
+  });
   useKeymap({
     submit: onBack,
     previous: () => setOffset(Math.max(0, start - 1)),
@@ -180,7 +185,9 @@ export function Detail({text, visibleRows = 10, onBack}: {text: string; visibleR
   });
   return (
     <>
-      <TextLine>{lines.slice(start, start + limit).join('\n')}</TextLine>
+      <Box ref={mouseRef} flexDirection="column" minWidth={0}>
+        <TextLine>{lines.slice(start, start + limit).join('\n')}</TextLine>
+      </Box>
       <TextLine>{`${start + 1}–${Math.min(lines.length, start + limit)}/${lines.length}${text.length > 262144 ? ' · truncated' : ''}`}</TextLine>
     </>
   );
@@ -232,6 +239,6 @@ export function useDialogTask() {
 }
 
 /** Input stays with the feature so tabs cannot steal text-entry or approval keys. */
-export function DialogTabs({tabs, selected, title}: {tabs: readonly string[]; selected: string; title?: string}) {
-  return <PanelTabs title={title} tabs={tabs} selected={selected} />;
+export function DialogTabs(props: import('../../ui/panel-tabs').PanelTabsProps) {
+  return <PanelTabs {...props} />;
 }

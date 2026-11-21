@@ -8,6 +8,7 @@ import {messagesToTranscript, toolState} from '../../apps/tui/src/ink/features/t
 import {SeatbeltRuntime} from '@cosmew/tools';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
+import {writeSandboxSettings} from '../sandbox-config';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const fn of cleanup.splice(0).reverse()) await fn();
@@ -21,9 +22,7 @@ async function make(enabled = true, real = false) {
   );
   writeFileSync(join(ws, 'source.ts'), 'export const marker = 1;\n');
   // These tests pin the approval dialog for commands, so sandboxed commands must still ask (ADR 0061).
-  writeFileSync(join(dir, 'settings.json'), JSON.stringify({sandbox: {autoAllowBashIfSandboxed: false}}), {
-    mode: 0o600,
-  });
+  writeSandboxSettings(dir, false);
   let runs = 0,
     factories = 0,
     shutdowns = 0;
@@ -34,7 +33,9 @@ async function make(enabled = true, real = false) {
     shutdown: async () => {
       shutdowns++;
     },
-    run: async () => {
+    run: async request => {
+      expect(request.sandbox?.mode).toBe('read-only');
+      expect(request.sandbox?.unsandboxed).not.toBe(true);
       runs++;
       return {
         kind: 'exited',
@@ -68,6 +69,8 @@ async function make(enabled = true, real = false) {
               availability: () => ({ok: true as const}),
               shutdown: () => candidate.shutdown(),
               run: async (request, signal) => {
+                expect(request.sandbox?.mode).toBe('read-only');
+                expect(request.sandbox?.unsandboxed).not.toBe(true);
                 runs++;
                 return candidate.run(request, signal);
               },

@@ -151,6 +151,13 @@ export const attachmentSchema = z.strictObject({
 export type Attachment = z.infer<typeof attachmentSchema>;
 
 export const toolResultSchema = z.strictObject({
+  /** Host-only canonical redacted producer evidence, before host clipping/archive references (ADR 0083). */
+  evidenceDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
+  /** Fresh host archive handle; never accepted from a producer. */
+  evidenceOutputId: z.string().uuid().optional(),
   /** Media for the model (ADR 0041); at most 8 per result. */
   attachments: z.array(attachmentSchema).max(8).optional(),
   /** Historical authorization binding, never a reusable grant. */

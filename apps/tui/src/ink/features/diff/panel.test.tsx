@@ -4,8 +4,8 @@ import {cleanup} from 'ink-testing-library';
 import {readFileSync} from 'node:fs';
 import type {WorkspaceDiffReport} from '@cosmew/contracts';
 import {renderInk, settle} from '../../testing';
-import {DiffSidePanel, diffPanelLayout, workspaceViewDiff, DIFF_BASE_UNSUPPORTED} from './panel';
-import {parseUnifiedDiff} from '../../ui/diff';
+import {DiffSidePanel, diffPanelLayout} from './panel';
+import {workspaceViewRows} from './logic';
 afterEach(cleanup);
 const report: WorkspaceDiffReport = {
   workspace: '/w',
@@ -42,9 +42,10 @@ test('responsive pane reserves 52 body columns only from 110 columns upward', ()
 });
 test('reconstructed diff retains SDK old/new numbers across hunks', () => {
   const file = report.files[0]!;
-  const rows = parseUnifiedDiff(
-    workspaceViewDiff({...file, lines: [...file.lines, {type: 'add', oldLine: null, newLine: 50, content: 'later'}]}),
-  );
+  const rows = workspaceViewRows({
+    ...file,
+    lines: [...file.lines, {type: 'add', oldLine: null, newLine: 50, content: 'later'}],
+  });
   expect(rows.find(row => row.kind === 'removed')?.oldLine).toBe(7);
   expect(rows.find(row => row.kind === 'added')?.newLine).toBe(12);
   expect(rows.at(-1)?.newLine).toBe(50);
@@ -74,8 +75,8 @@ test('pane renders reference structure, SDK rows, modified keys and truthful uns
   view.stdin.write('\x18');
   view.stdin.write('b');
   await settle();
-  expect(notice).toBe(DIFF_BASE_UNSUPPORTED);
-  expect(view.lastFrame()).toContain('bases unavailable in SDK');
+  expect(notice).toBe('');
+  expect(view.lastFrame()).toContain('Comparison bases unavailable');
   expect(view.lastFrame()).toContain('source: Current');
 });
 test('shrinking reports clamps stale file selection and small panes retain their bounds', async () => {
@@ -107,6 +108,8 @@ test('focused paging reaches the last row and clamps repeated page-down; inactiv
   await settle();
   expect(view.lastFrame()).toContain('row-1');
   expect(view.lastFrame()).not.toContain('row-50');
+  view.stdin.write('\r'); // Paging operates on the body after Enter.
+  await settle();
   view.stdin.write('G');
   await settle();
   expect(view.lastFrame()).toContain('row-50');
@@ -148,7 +151,8 @@ test('Enter opens the file, Esc returns to the list before closing, and source a
   expect(view.lastFrame()).toContain('b.txt');
   view.stdin.write('\x1b[C');
   await settle();
-  expect(notice).toBe(DIFF_BASE_UNSUPPORTED);
+  expect(notice).toBe('');
+  expect(view.lastFrame()).toContain('Comparison bases unavailable');
   expect(view.lastFrame()).toContain('source: Current');
   view.stdin.write('\x1b');
   await settle();
@@ -171,9 +175,10 @@ test.skipIf(process.env.FORCE_COLOR !== '3')('panel and diff backgrounds follow 
   const ansi = (hex: string) =>
     `\x1b[48;2;${[0, 2, 4].map(at => Number.parseInt(hex.slice(at, at + 2), 16)).join(';')}m`;
   const lightPanel = light.find(run => run[7].includes('source: Current'))![3];
-  const lightAdd = light.find(run => /1 \+/.test(run[7]))![3];
-  const lightRemove = light.find(run => /1 -/.test(run[7]))![3];
-  const darkAdd = dark.find(run => /1 \+/.test(run[7]))![3];
+  const lightAdd = 'dce8df'; // Soft tint derived from active theme tokens.
+  const lightRemove = 'f0dcdd';
+  const darkAdd = '2d402d';
+  expect(dark.some(run => /1 \+/.test(run[7]))).toBe(true);
   for (const dark of [false, true]) {
     const engine = new ThemeEngine({env: {FORCE_COLOR: '3'}, systemDarkPreference: dark});
     const view = renderInk(<DiffSidePanel report={report} height={24} />, {themeEngine: engine});
@@ -181,7 +186,7 @@ test.skipIf(process.env.FORCE_COLOR !== '3')('panel and diff backgrounds follow 
     const frame = view.lastFrame()!;
     expect(frame).toContain(dark ? '\x1b[48;2;38;38;38m' : ansi(lightPanel));
     expect(frame).toContain(ansi(dark ? darkAdd : lightAdd));
-    expect(frame).toContain(dark ? '\x1b[48;2;122;41;54m' : ansi(lightRemove));
+    expect(frame).toContain(dark ? '\x1b[48;2;73;49;52m' : ansi(lightRemove));
     view.unmount();
   }
 });
@@ -230,7 +235,8 @@ test('Ctrl+X B cycles real comparison bases and skips unavailable bases with the
   view.stdin.write('b');
   await settle();
   expect(selected).toBe('session');
-  expect(notice).toContain('Branch unavailable: Detached HEAD');
+  expect(notice).toBe('');
+  expect(view.lastFrame()).toContain('Detached HEAD');
   expect(view.lastFrame()).toContain('Branch unavailable');
   view.rerender(
     <DiffSidePanel
@@ -264,4 +270,80 @@ test('mode-only file changes show metadata in the side panel', async () => {
   await settle();
   expect(view.lastFrame()).toContain('old mode 100644');
   expect(view.lastFrame()).toContain('new mode 100755');
+});
+
+for (const scenario of [
+  {name: 'changes', value: {...report, base: 'uncommitted' as const}, text: '12 +HELLO'},
+  {name: 'empty', value: {...report, files: [], totalAdditions: 0, totalDeletions: 0}, text: 'No changes'},
+  {
+    name: 'denied',
+    value: {
+      ...report,
+      state: 'denied' as const,
+      gitAvailable: false,
+      files: [],
+      totalAdditions: 0,
+      totalDeletions: 0,
+      message: 'Folder consent required.',
+    },
+    text: 'Folder consent required.',
+  },
+  {
+    name: 'branch error',
+    value: {
+      ...report,
+      base: 'branch' as const,
+      state: 'error' as const,
+      files: [],
+      message: 'No local default branch or merge base. No network fetch is performed.',
+    },
+    text: 'No local default branch or merge base.',
+  },
+]) {
+  test(`120-column frame: ${scenario.name} has a visible body`, async () => {
+    const {Box} = await import('ink');
+    const layout = diffPanelLayout(120, true);
+    const view = renderInk(
+      <Box width={120} height={30}>
+        <Box width={layout.mainWidth} />
+        <DiffSidePanel report={scenario.value} width={layout.panelWidth} height={30} />
+      </Box>,
+    );
+    await settle();
+    const frame = view.lastFrame()!;
+    expect(frame).toContain(scenario.text);
+    expect(frame.split('\n')).toHaveLength(30);
+    for (const row of frame.split('\n')) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(120);
+    if (scenario.name === 'changes') expect(frame).toContain('source: Uncommitted');
+  });
+}
+
+test('identical capability failures appear once in the panel and never in transcript notices', async () => {
+  const reason = 'Git inspection exceeded its aggregate deadline.';
+  let notices = 0;
+  const view = renderInk(
+    <DiffSidePanel
+      report={{
+        ...report,
+        base: 'uncommitted',
+        capabilities: {
+          session: {available: false, reason},
+          uncommitted: {available: false, reason},
+          branch: {available: false, reason},
+        },
+      }}
+      onChangeBase={() => {}}
+      onNotice={() => {
+        notices++;
+      }}
+      height={30}
+    />,
+  );
+  await settle();
+  view.stdin.write('\x18');
+  view.stdin.write('b');
+  await settle();
+  expect(view.lastFrame()!.split(reason)).toHaveLength(2);
+  expect(notices).toBe(0);
+  expect(view.lastFrame()).toContain('source: Uncommitted');
 });

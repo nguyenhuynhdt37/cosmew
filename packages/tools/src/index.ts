@@ -20,7 +20,7 @@ export {
 } from './exec/runtime';
 export type {CommandOutcome, CommandRequest, CommandRuntime, RuntimeAvailability} from '@cosmew/contracts';
 export {likelySandboxDenied} from './exec/sandbox-denial';
-export {NativeCommandRuntime, NATIVE_LIMITS, type NativeRuntimeOptions} from './exec/native';
+export {sandboxDependencies, NativeCommandRuntime, NATIVE_LIMITS, type NativeRuntimeOptions} from './exec/native';
 export {DEFAULT_SANDBOX_CONFIG, type SandboxConfig} from './context';
 export {
   SandboxProxy,

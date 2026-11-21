@@ -420,3 +420,10 @@ fixtureServer before spawn (1.01 ms), not at a wait. Post-change security+contra
 **546 pass, 5 skip, 119 fail** (43.16 s). Logs: `/tmp/pty-full-suite.log`,
 `/tmp/pty-fixed-security-contracts.log`, `/tmp/pty-{contracts,mcp,workspace,themes}.log`,
 `/tmp/pty-{typecheck,lint}.log`. No timeout increase, production change, commit, stash or reset.
+
+## Long-session follow-up (2026-11-21)
+
+The fullscreen branch now windows Ink rows across the whole conversation. Ctrl+E remains an
+inline-only show-all action, with the existing 30-item limit before expansion. The scrollback and
+editor commands still receive the complete transcript. See [performance measurements](performance-transcript.md)
+and [in-place activity expansion](transcript-expand-parity.md).

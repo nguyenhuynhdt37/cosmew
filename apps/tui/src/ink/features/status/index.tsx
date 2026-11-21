@@ -114,6 +114,7 @@ export function ComposerFooter({
   shells = 0,
   message,
   remaining,
+  transcriptHint,
   shortcuts,
   width,
 }: {
@@ -125,6 +126,7 @@ export function ComposerFooter({
   shells?: number;
   message?: string;
   remaining?: number | null;
+  transcriptHint?: string;
   shortcuts?: readonly (readonly string[])[];
   width: number;
 }) {
@@ -178,6 +180,7 @@ export function ComposerFooter({
           ? theme.color('warning')
           : color('dim');
   const suffix = footerSuffix({busy, agents, shells});
+  if (transcriptHint) suffix.push(transcriptHint);
   return (
     <Box paddingLeft={2} width={width}>
       <Text wrap="truncate-end">
@@ -186,4 +189,10 @@ export function ComposerFooter({
       </Text>
     </Box>
   );
+}
+
+/** Count reflects backend SANDBOX_DENIED outcomes in the current turn, not an OS log monitor. */
+export function SandboxBanner({enabled, count}: {enabled: boolean; count: number}) {
+  if (!enabled || count <= 0) return null;
+  return <TextLine>{`⧈ Sandbox blocked ${count} ${count === 1 ? 'operation' : 'operations'}`}</TextLine>;
 }

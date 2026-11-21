@@ -151,3 +151,34 @@ Tests: contracts/input-retraction, plan-approval, checkpoints, p3-history-settin
 TUI composer/keys, composer/composer, picker/dialogs, plan-approval, testing/plan-editor, panels và diff/panel.
 Alt+O/Alt+T vẫn Not implemented vì adapter chưa có fast/thinking flag; reasoning effort không giả thành toggle.
 Không đổi giới hạn Ink mouse/wheel hay clipboard native. Chi tiết và nghiệm chứng: [P3](p2-status.md#p3--sdkbackend-và-tui-cùng-wave).
+
+2026-11-21 Tasks 1–2: `/config` Theme + Enter opens `/theme`'s picker; Esc returns
+to Config. Theme assignment normalizes both ID and mode. Four daltonized/ANSI
+palettes are available (exact upstream colors: Needs verification). Appearance
+writes use user settings JSON; Ctrl+G project scope lasts only for this session.
+See [ADR 0080](../../adr/0080-user-settings-appearance.md).
+
+Sandbox: `/sandbox` opens Mode | Dependencies | Overrides | Config; Tab/Shift+Tab
+switch tabs, Up/Down choose, Enter saves, Esc closes. The Settings Sandbox row
+opens the same dialog. `/sandbox exclude "<pattern>"` saves an idempotent user
+exclusion, including during an active turn. No raw-key bindings are added.
+
+
+Diff correction (2026-11-21): diff actions stay remappable in `/keybindings`
+and appear in the panel footer, but are excluded from the global `?` reference
+table. Source refresh keeps the last inspected source/capabilities until the new
+report arrives; an empty pane shows `Loading diff…`. Unknown capabilities do not
+select Branch. Source errors appear once in the panel, with their actual reason.
+The 140-column PTY fixture isolates HOME/TMPDIR/cache from its Git repository and
+asserts exactly two changed files. The Ctrl+Y deleted-text hint belongs to the
+full-width composer slot above its rule, including while a side panel is open.
+
+## First-run keys — 2026-11-21
+
+| Phím | Trạng thái | Test |
+|---|---|---|
+| ↑/↓, Enter trong Theme và Connect | done. Dùng Select, Enter chọn theme hoặc `Skip for now` | `onboarding.test.tsx`, fresh-HOME PTY |
+| Enter tại Security notes | done. Xác nhận xong mới hiện hộp tin cậy thư mục | `onboarding.test.tsx`, fresh-HOME PTY |
+| Ctrl+C khi đang onboarding | done. Thoát, lần sau tiếp tục từ bước chưa ghi | fresh-HOME PTY dừng sau theme rồi chạy lại ở Connect |
+| Enter gửi nháp lần đầu | done. Kiểm tra tài khoản/model trước khi gửi, giữ nháp khi lỗi. Esc ngắt kiểm tra đang chạy | `gate.test.tsx`, `integration.test.tsx`, `first-send.test.ts` |
+| `/terminal-setup` | Not implemented | [ADR 0086](../../adr/0086-first-run-onboarding.md) |

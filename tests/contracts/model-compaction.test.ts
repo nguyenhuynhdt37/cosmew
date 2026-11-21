@@ -116,20 +116,34 @@ function harness(options: {contextLimit: number; brain?: Brain; toolBytes?: numb
 const compacted = (events: ModelEvent[]) =>
   events.filter((e): e is Extract<ModelEvent, {type: 'context.compacted'}> => e.type === 'context.compacted');
 
+/** A 4k usable window leaves room for the summary prompt after a fixture output increment.
+ * Each completed fixture reply adds this much real history regardless of host guidance size.
+ * Allow one current user request plus rounding headroom; stop at the observed summary, not a
+ * fixed round count that accidentally depends on verbose versus compact host instructions.
+ */
+const AUTO_WINDOW = 4000;
+const autoCompactionTurnBound = Math.ceil(AUTO_WINDOW / estimateTokens('lorem ipsum dolor sit amet '.repeat(65))) + 2;
+async function reachAutoSummary(h: ReturnType<typeof harness>, signal?: AbortSignal) {
+  const seen: ModelEvent[][] = [];
+  for (let i = 0; i < autoCompactionTurnBound && !h.summaryCalls(); i++)
+    seen.push(await h.send(h.filler(`turn-${i}`), signal));
+  expect(h.summaryCalls()).toBe(1);
+  return seen;
+}
+
 test('auto compaction fires at 85% of the window, keeps recent user messages and the plan, counts usage', async () => {
-  const h = harness({contextLimit: 2500});
+  const h = harness({contextLimit: AUTO_WINDOW});
   h.app.conversations.savePlan?.(h.conversation.id, {
     items: [{step: 'ship the checkpoint feature', status: 'in_progress'}],
     updatedAt: new Date().toISOString(),
   });
-  const seen: ModelEvent[][] = [];
-  for (let i = 0; i < 4; i++) seen.push(await h.send(h.filler(`turn-${i}`)));
+  const seen = await reachAutoSummary(h);
   const events = seen.flat();
   const [event] = compacted(events);
   expect(event).toBeDefined();
   expect(event).toMatchObject({trigger: 'auto', strategy: 'model'});
   expect(event!.tokensAfter).toBeLessThan(event!.tokensBefore);
-  expect(event!.tokensBefore).toBeGreaterThanOrEqual(2500 * 0.85);
+  expect(event!.tokensBefore).toBeGreaterThanOrEqual(AUTO_WINDOW * 0.85);
   expect(h.summaryCalls()).toBe(1);
 
   // The request that follows the summary sees the handoff, the retained user messages and the plan.
@@ -139,7 +153,7 @@ test('auto compaction fires at 85% of the window, keeps recent user messages and
   expect(text).toContain(SUMMARY_PREFIX);
   expect(text).toContain('SUMMARY-BODY-1');
   expect(text).toContain('ship the checkpoint feature');
-  for (let i = 0; i < 3; i++) expect(text).toContain(`turn-${i} please`);
+  for (let i = 0; i < seen.length; i++) expect(text).toContain(`turn-${i} please`);
   // The summarization request carried the whole visible history; it ends with the checkpoint prompt.
   expect(h.requests[index]!.messages.length).toBeGreaterThan(3);
   expect(h.requests[index]!.tools).toEqual([]);
@@ -147,7 +161,7 @@ test('auto compaction fires at 85% of the window, keeps recent user messages and
   // The checkpoint is durable; the journal history is intact.
   const recovered = h.app.conversations.recover(h.conversation.id);
   expect(recovered.compaction).toMatchObject({strategy: 'model'});
-  expect(recovered.messages.filter(m => m.role === 'user')).toHaveLength(4);
+  expect(recovered.messages.filter(m => m.role === 'user')).toHaveLength(seen.length);
 
   // The compaction call's usage is counted in the turn that paid for it.
   const turn = h.receipts().find(r => (r.usage?.inputTokens ?? 0) >= SUMMARY_USAGE.inputTokens!);
@@ -204,24 +218,26 @@ test('a failed model summary falls back to the excerpt checkpoint; the turn stil
 test('cancelling during the summary cancels the turn and leaves the durable history and checkpoint untouched', async () => {
   const controller = new AbortController();
   const h = harness({
-    contextLimit: 2500,
+    contextLimit: AUTO_WINDOW,
     brain: request => {
       if (!isSummary(request)) return answer(BULK());
       controller.abort();
       return new FutrynError('CANCELLED');
     },
   });
-  for (let i = 0; i < 3; i++) await h.send(h.filler(`t${i}`));
-  await expect(h.send(h.filler('t3'), controller.signal)).rejects.toBeDefined();
+  // Every candidate turn carries the signal; the fixture aborts it only when summary starts.
+  await expect(reachAutoSummary(h, controller.signal)).rejects.toMatchObject({code: 'CANCELLED'});
+  expect(controller.signal.aborted).toBe(true);
+  expect(h.summaryCalls()).toBe(1);
   expect(h.requests.some(isSummary)).toBe(true);
   const recovered = h.app.conversations.recover(h.conversation.id);
   expect(recovered.compaction).toBeUndefined();
-  expect(recovered.messages.filter(m => m.role === 'user').map(m => m.content.slice(0, 2))).toContain('t0');
+  expect(recovered.messages.filter(m => m.role === 'user').map(m => m.content)).toContain(h.filler('turn-0'));
 });
 
 test('recovery after restart loads the compacted state without another summary call', async () => {
-  const h = harness({contextLimit: 2500});
-  for (let i = 0; i < 4 && !h.summaryCalls(); i++) await h.send(h.filler(`turn-${i}`));
+  const h = harness({contextLimit: AUTO_WINDOW});
+  await reachAutoSummary(h);
   expect(h.summaryCalls()).toBe(1);
   const stored = h.app.conversations.get(h.conversation.id)!;
   const restarted = h.make({id: h.conversation.id, messages: stored.recovery!.messages});

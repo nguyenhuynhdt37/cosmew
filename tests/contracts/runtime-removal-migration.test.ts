@@ -114,13 +114,16 @@ test('migrations v7 + v8 delete every runtime account and credential (Codex incl
     // User data beyond the removed providers is untouched.
     expect(app.db.query("SELECT id FROM conversations WHERE id='keep-me'").get()).toBeTruthy();
     expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(10);
-    // One-time notices (v7 and v8), delivered exactly once.
+    // ADR 0081 adds the default-off notice after the two migration notices; all are one-time.
     const notices = app.takeStartupNotices();
-    expect(notices).toHaveLength(2);
+    expect(notices).toHaveLength(3);
     expect(notices[0]).toContain('grok');
     expect(notices[0]).toContain('copilot');
     expect(notices[1]).toContain('Codex');
     expect(notices[1]).toContain('Active account is now openai');
+    expect(notices[2]).toContain('Sandbox is now off by default');
+    expect(notices[2]).toContain('/sandbox');
+    expect(existsSync(join(dir, 'settings.json'))).toBe(true);
     expect(app.takeStartupNotices()).toEqual([]);
   } finally {
     app.db.close();

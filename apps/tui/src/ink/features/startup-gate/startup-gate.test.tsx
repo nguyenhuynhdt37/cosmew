@@ -13,8 +13,6 @@ test('trust frame defaults to refusal and never probes or enables tools on Enter
     const state = useStartupGate({
       onReady: () => ready++,
       onExit: () => exits++,
-      openOverlay: () => {},
-      overlayOpen: false,
     });
     return <StartupGate state={state} width={80} />;
   }
@@ -30,7 +28,6 @@ test('trust frame defaults to refusal and never probes or enables tools on Enter
   expect(frame).toContain('Quick safety check:');
   expect(frame).toContain('Cosmew will be able to read, edit, and execute files here.');
   expect(frame).toContain('Consent is remembered for this workspace');
-  expect(frame).toContain('Account check sends a small, potentially billed request.');
   expect(frame).toContain('❯ No, exit');
   expect(frame).toContain('Enter to confirm · Esc to cancel');
   // Spec 5 order: title, path, paragraph, access line, dim consent block, "Security guide", choices, footer.
@@ -61,7 +58,7 @@ test('trust frame defaults to refusal and never probes or enables tools on Enter
 test('trust selection persists for this workspace; later mounts skip the folder prompt', async () => {
   let ready = 0;
   function Gate() {
-    const state = useStartupGate({onReady: () => ready++, onExit: () => {}, openOverlay: () => {}, overlayOpen: false});
+    const state = useStartupGate({onReady: () => ready++, onExit: () => {}});
     return <StartupGate state={state} width={36} />;
   }
   const view = renderInk(<Gate />);
@@ -71,23 +68,23 @@ test('trust selection persists for this workspace; later mounts skip the folder 
   expect(view.lastFrame()).toContain('❯ Yes, I trust this folder');
   view.stdin.write('\r');
   await settle();
-  expect(view.lastFrame()).toContain('Sign in');
+  expect(view.lastFrame()).not.toContain('Accessing workspace:');
   expect(view.fixture.client.toolsEnabled()).toBe(true);
   expect(view.fixture.client.workspaceTrusted()).toBe(true);
-  expect(ready).toBe(0);
+  expect(ready).toBe(1);
   view.unmount();
   expect(view.fixture.client.toolsEnabled()).toBe(false);
   const second = renderInk(<Gate />, {fixture: view.fixture});
   await settle();
   expect(second.lastFrame()).not.toContain('Accessing workspace:');
-  expect(second.lastFrame()).toContain('Sign in');
+  expect(ready).toBe(2);
   second.unmount();
 });
 
 test('trust copy wraps without leading whitespace and separates choices and footer at 80/36 columns', async () => {
   for (const width of [80, 36]) {
     function Gate() {
-      const state = useStartupGate({onReady() {}, onExit() {}, openOverlay() {}, overlayOpen: false});
+      const state = useStartupGate({onReady() {}, onExit() {}});
       return <StartupGate state={state} width={width} />;
     }
     const view = renderInk(<Gate />);

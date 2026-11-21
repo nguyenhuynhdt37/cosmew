@@ -1,5 +1,6 @@
 /** @jsxImportSource react */
 import {useState} from 'react';
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
 import {Box, Text} from 'ink';
 import {useFutrynClient, useKeybindings, useTextInput} from '../../hooks';
 import {useOverlay} from '../../core';
@@ -25,6 +26,12 @@ export function PlanApprovalDialog({
   const [cursor, setCursor] = useState(0);
   const [feedback, setFeedback] = useState('');
   const [offset, setOffset] = useState(0);
+  const planMouseRef = useMouseTarget(event => {
+    if ('direction' in event)
+      setOffset(n =>
+        Math.max(0, Math.min(Math.max(0, (proposal?.plan.split('\n').length ?? 1) - 1), n + event.direction)),
+      );
+  }, !task.busy);
   const submit = (choice = cursor, approveWithFeedback = false) => {
     if (!proposal || task.busy) return;
     if (choice === 2 && !feedback.trim()) {
@@ -114,7 +121,7 @@ export function PlanApprovalDialog({
       </Text>
       <TextLine>Here is Cosmew's plan:</TextLine>
       <Rule width={size.width - 2} glyph="╌" color={ui.color('planDivider')} />
-      <Box flexDirection="column" maxHeight={size.visibleRows} overflow="hidden">
+      <Box ref={planMouseRef} flexDirection="column" maxHeight={size.visibleRows} overflow="hidden">
         <Markdown
           text={proposal?.plan.split('\n').slice(offset).join('\n') ?? 'No plan waiting.'}
           width={size.width - 2}
@@ -125,6 +132,8 @@ export function PlanApprovalDialog({
       <OptionList
         width={size.width - 2}
         cursor={cursor}
+        onCursorChange={setCursor}
+        isActive={!task.busy}
         items={[
           {id: 'acceptEdits', label: 'Yes, and accept edits automatically'},
           {id: 'manual', label: 'Yes, manually approve edits'},

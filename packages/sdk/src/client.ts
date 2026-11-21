@@ -1,3 +1,5 @@
+import type {SandboxDependenciesReport} from '@cosmew/contracts';
+import type {SandboxSettingsPatch} from '@cosmew/contracts';
 import {isCodingModel} from '@cosmew/contracts';
 import {parseSlashCommand} from './commands';
 import {summarizeUsage} from './telemetry';
@@ -5,6 +7,7 @@ import {quotaItems, type AccountLimits, type FetchAccountLimits} from './limits'
 import {createHash} from 'node:crypto';
 import {
   FutrynError,
+  ProviderBillingError,
   appearanceSchema,
   defaultAppearance,
   partialAppearanceSchema,
@@ -178,7 +181,22 @@ export interface McpStatusReport {
   problems: string[];
 }
 
+export type AccountVerification =
+  | {ok: true}
+  | {ok: false; reason: 'no-account' | 'auth' | 'network' | 'model'}
+  | {ok: false; reason: 'billing'; providerHint?: string};
+
+export interface AppearanceStore {
+  read(): AppearanceConfig;
+  write(patch: PartialAppearanceConfig): void;
+  notices?(): readonly string[];
+  onboardingState?(): {completed: readonly string[]; hasStoredTheme: boolean};
+  completeOnboardingStep?(id: string): void;
+}
+
 export interface FutrynBackendPorts {
+  /** Host-owned user appearance storage; absent ports retain legacy embedding behavior. */
+  appearanceStore?: AppearanceStore;
   workspace: string;
   checkpoints?(sessionId: string): CheckpointView[];
   rewindCheckpoint?(
@@ -195,6 +213,7 @@ export interface FutrynBackendPorts {
   openMemoryDirectory?(): Promise<void>;
   memoryAction?(action: 'read' | 'delete' | 'write', name: string, entry?: MemoryWrite): Promise<ToolResult>;
   terminalRuntime?(): TerminalRuntimeReport;
+  sandboxDependencies?(): Promise<SandboxDependenciesReport>;
   /** Names of the Cosmew tools actually offered now (folder consent + runtime availability). */
   availableTools?(): string[];
   /**
@@ -338,6 +357,12 @@ export interface FutrynBackendPorts {
   sanitizeText(text: string): string;
 }
 
+/** Provider continuation is private model state; UI/session exports receive only visible messages. */
+function visibleMessage<T extends Message>(message: T): Omit<T, 'providerReplay'> {
+  const {providerReplay: _providerReplay, ...visible} = message;
+  return visible;
+}
+
 /** The committed history of a stored session: the journal reconstruction when present. */
 function committedSessionMessages(stored: SessionRecord): Message[] {
   if (stored.recovery?.messages) return stored.recovery.messages;
@@ -408,9 +433,12 @@ export class FutrynClient {
   private lastUsage: Usage | null = null;
   /** Status is read on every UI frame; explicit usage reports remain fresh reads. */
   private statusUsage: ReturnType<FutrynClient['usage']> | null = null;
+  private readonly accountVerifications = new Map<string, Promise<AccountVerification>>();
   private sending = false;
   private sendAbort?: AbortController;
   /** Turn identity of the running send, used to reject stale steering (Codex expected_turn_id). */
+  private sandboxBlockedOperations = 0;
+  private readonly sandboxDeniedCalls = new Set<string>();
   private activeTurnId: string | undefined;
   /** Messages submitted while a turn was finishing (Codex start_or_steer → next turn), in order. */
   private readonly claimedNextTurn = new Map<string, {id: string; content: string}>();
@@ -436,7 +464,6 @@ export class FutrynClient {
     ports.observeBackgroundTasks?.(event => this.handleBackgroundTaskEvent(event));
     this.settingsPort = ports.permissionSettings ?? memoryPermissionSettings();
     this.permissionModeValue = this.initialPermissionMode();
-    this.refreshModelMetadata();
   }
 
   /** The starting mode (ADR 0061): the launch flag, else `permissions.defaultMode`, else `default`. */
@@ -474,6 +501,7 @@ export class FutrynClient {
   /** Source of an effective appearance field; workspace overrides outrank user preferences. */
   appearanceSource(key: keyof AppearanceConfig): 'default' | 'user' | 'workspace' {
     const state = this.ports.settings.read();
+    if (this.ports.appearanceStore) return this.projectAppearance?.[key] !== undefined ? 'workspace' : 'user';
     if (state.projectAppearances?.[this.ports.workspace]?.[key] !== undefined) return 'workspace';
     return state.appearance ? 'user' : 'default';
   }
@@ -676,6 +704,33 @@ export class FutrynClient {
     return this.settingsPort.snapshot();
   }
 
+  /** Change user sandbox policy for subsequent commands; invalidate pending approvals and grants. */
+  updateSandbox(patch: SandboxSettingsPatch): PermissionSettingsSnapshot {
+    if (!this.settingsPort.updateSandbox) throw new FutrynError('UNSUPPORTED');
+    this.settingsPort.updateSandbox(patch);
+    this.denyPendingPermissions();
+    this.revokeToolGrants();
+    this.notifyStateChange();
+    return this.permissionSettings();
+  }
+
+  async sandboxDependencies(): Promise<SandboxDependenciesReport> {
+    if (!this.ports.sandboxDependencies) throw new FutrynError('UNSUPPORTED');
+    return structuredClone(await this.ports.sandboxDependencies());
+  }
+
+  private recordSandboxDenied(result: ToolResult): void {
+    if (
+      !this.settingsPort.snapshot().sandbox.enabled ||
+      result.code !== 'SANDBOX_DENIED' ||
+      !['exec_command', 'write_stdin'].includes(result.name) ||
+      this.sandboxDeniedCalls.has(result.callId)
+    )
+      return;
+    this.sandboxDeniedCalls.add(result.callId);
+    this.sandboxBlockedOperations++;
+  }
+
   /** Effective rules of the working directory: user + project + local settings (deny > ask > allow). */
   permissionRules(): PermissionRuleSet {
     const {rules} = this.settingsPort.snapshot();
@@ -745,15 +800,19 @@ export class FutrynClient {
       this.currentSession = session;
     }
     const session = this.currentSession;
+    this.sandboxBlockedOperations = 0;
+    this.sandboxDeniedCalls.clear();
     this.sending = true;
     const shellAbort = new AbortController();
     this.sendAbort = shellAbort;
     const shellSignal = options.signal ? AbortSignal.any([options.signal, shellAbort.signal]) : shellAbort.signal;
     try {
-      return await this.ports.runShellCommand(command, shellSignal, options.onOutput, {
+      const result = await this.ports.runShellCommand(command, shellSignal, options.onOutput, {
         sessionId: session.id,
         callId: options.callId ?? `shell-${crypto.randomUUID()}`,
       });
+      this.recordSandboxDenied(result);
+      return result;
     } finally {
       this.sending = false;
       this.sendAbort = undefined;
@@ -1393,6 +1452,7 @@ export class FutrynClient {
         : 'read-only';
     return {
       workspace: this.ports.workspace,
+      sandboxBlockedOperations: this.sandboxBlockedOperations,
       mode: this.currentMode,
       permissionMode: this.permissionModeValue,
       /** `sandbox.*` of the merged settings (ADR 0061). */
@@ -1548,6 +1608,58 @@ export class FutrynClient {
       this.notifyStateChange();
       throw error;
     }
+  }
+
+  /** Verify the pinned selection once per credential generation and model on this client. */
+  async verifyAccount(signal?: AbortSignal): Promise<AccountVerification> {
+    const {activeAccount: account, selection} = this.status();
+    if (!account || account.status === 'logged-out') return {ok: false, reason: 'no-account'};
+    if (!selection) return {ok: false, reason: 'model'};
+    const interrupted = {ok: false, reason: 'network'} as const;
+    if (signal?.aborted) return interrupted;
+
+    const key = JSON.stringify([account.id, account.authGeneration ?? 1, selection.modelId]);
+    let pending = this.accountVerifications.get(key);
+    if (!pending) {
+      const deadline = AbortSignal.timeout(20_000);
+      const requestSignal = signal ? AbortSignal.any([signal, deadline]) : deadline;
+      pending = Promise.resolve().then(async (): Promise<AccountVerification> => {
+        try {
+          if (requestSignal.aborted) return interrupted;
+          await this.ports.validateAccount({...account, defaultModel: selection.modelId}, requestSignal, true);
+          if (requestSignal.aborted) return interrupted;
+          return {ok: true};
+        } catch (error) {
+          if (requestSignal.aborted) return interrupted;
+          const code = error instanceof FutrynError ? error.code : undefined;
+          if (code === 'PROVIDER_BILLING') {
+            const providerHint = error instanceof ProviderBillingError ? error.providerHint : undefined;
+            return {ok: false, reason: 'billing', ...(providerHint ? {providerHint} : {})};
+          }
+          if (code === 'AUTH' || code === 'FORBIDDEN') return {ok: false, reason: 'auth'};
+          if (code === 'NOT_FOUND' || code === 'INVALID_INPUT' || code === 'UNSUPPORTED')
+            return {ok: false, reason: 'model'};
+          return interrupted;
+        } finally {
+          if (signal?.aborted) this.accountVerifications.delete(key);
+          this.notifyStateChange();
+        }
+      });
+      this.accountVerifications.set(key, pending);
+    }
+
+    const result = await pending;
+    if (signal?.aborted) return interrupted;
+    const current = this.status();
+    if (!current.activeAccount || current.activeAccount.status === 'logged-out')
+      return {ok: false, reason: 'no-account'};
+    if (
+      current.activeAccount.id !== account.id ||
+      (current.activeAccount.authGeneration ?? 1) !== (account.authGeneration ?? 1) ||
+      current.selection?.modelId !== selection.modelId
+    )
+      return {ok: false, reason: 'model'};
+    return result;
   }
 
   async diagnose(signal?: AbortSignal, generate = false): Promise<string> {
@@ -1745,7 +1857,15 @@ export class FutrynClient {
   }
 
   getSession(id: string): SessionRecord | undefined {
-    return this.ports.getSession(id);
+    const stored = this.ports.getSession(id);
+    if (!stored) return undefined;
+    return {
+      ...stored,
+      messages: stored.messages.map(visibleMessage),
+      ...(stored.recovery
+        ? {recovery: {...stored.recovery, messages: stored.recovery.messages.map(visibleMessage)}}
+        : {}),
+    };
   }
 
   createSession(projectScoped = false): {id: string; selection: Selection; messages: Message[]} {
@@ -1767,13 +1887,12 @@ export class FutrynClient {
     }
     this.currentSession = session;
     this.sessionSelection = null;
-    this.refreshModelMetadata();
     this.lastUsage = null;
     this.notifyStateChange();
     return {
       id: this.currentSession.id,
       selection: {...this.currentSession.selection},
-      messages: [...this.currentSession.messages],
+      messages: this.currentSession.messages.map(visibleMessage),
     };
   }
 
@@ -1786,14 +1905,13 @@ export class FutrynClient {
     this.clearSessionAuthorization();
     this.currentSession = session;
     this.sessionSelection = null;
-    this.refreshModelMetadata();
     this.currentMode = mode;
     this.lastUsage = stored?.turns?.at(-1)?.usage ?? null;
     this.notifyStateChange();
     return {
       id: this.currentSession.id,
       selection: {...this.currentSession.selection},
-      messages: [...this.currentSession.messages],
+      messages: this.currentSession.messages.map(visibleMessage),
     };
   }
 
@@ -1816,7 +1934,7 @@ export class FutrynClient {
     this.currentMode = mode;
     this.lastUsage = null;
     this.notifyStateChange();
-    return {id: fork.id, selection: {...fork.selection}, messages: fork.messages.map(message => ({...message}))};
+    return {id: fork.id, selection: {...fork.selection}, messages: fork.messages.map(visibleMessage)};
   }
 
   deleteSession(id: string): boolean {
@@ -1856,7 +1974,7 @@ export class FutrynClient {
     return {
       id: this.currentSession.id,
       selection: {...this.currentSession.selection},
-      messages: this.currentSession.messages.map(m => ({...m})),
+      messages: this.currentSession.messages.map(visibleMessage),
     };
   }
 
@@ -1920,7 +2038,6 @@ export class FutrynClient {
       this.rememberSessionMode(session.id, this.currentMode);
       this.currentSession = session;
       this.sessionSelection = null;
-      this.refreshModelMetadata();
       const pendingKey = `pending:${session.selection.accountId}:${session.selection.modelId}`;
       const pendingEffort = this.sessionEfforts.get(pendingKey);
       if (pendingEffort !== undefined) {
@@ -1931,11 +2048,14 @@ export class FutrynClient {
         this.sessionEfforts.delete(pendingKey);
       }
     }
+    this.refreshModelMetadata();
     const images = this.pendingImages.splice(0).map(i => i.attachment);
     this.imageGeneration++;
     const session = this.currentSession;
     const claimed = this.claimedNextTurn.get(session.id);
     const queuedInputId = claimed?.content === trimmed ? claimed.id : undefined;
+    this.sandboxBlockedOperations = 0;
+    this.sandboxDeniedCalls.clear();
     this.sending = true;
     const sendAbort = new AbortController();
     this.sendAbort = sendAbort;
@@ -1985,6 +2105,7 @@ export class FutrynClient {
             this.emitReactiveEvent('tool', event.call.name);
             break;
           case 'toolResult':
+            this.recordSandboxDenied(event.result);
             this.streamingSteps.push({
               role: 'tool',
               content: event.result.content,
@@ -2233,6 +2354,8 @@ export class FutrynClient {
     if (!this.ports.compactSession) throw new FutrynError('UNSUPPORTED');
     const session = this.currentSession;
     if (!session) return {compacted: false, tokensBefore: 0, tokensAfter: 0, usage: null, reason: 'empty'};
+    this.sandboxBlockedOperations = 0;
+    this.sandboxDeniedCalls.clear();
     this.sending = true; // blocks sendMessage and session changes while the checkpoint is written
     this.emitReactiveEvent('thinking', 'Compacting context');
     try {
@@ -2248,7 +2371,10 @@ export class FutrynClient {
   }
 
   usage() {
-    const record = this.currentSession ? this.ports.getSession(this.currentSession.id) : undefined;
+    return this.usageFromRecord(this.currentSession ? this.ports.getSession(this.currentSession.id) : undefined);
+  }
+
+  private usageFromRecord(record?: SessionRecord) {
     const turns = record?.turns ?? [];
     const completed = turns.filter(t => t.outcome === 'completed').length;
     // Steering delivered inside a turn is a user message of that turn, not another turn.
@@ -2360,6 +2486,8 @@ export class FutrynClient {
     return this.limitsRefresh;
   }
 
+  private readonly contextMessageBytes = new WeakMap<Message, number>();
+
   context(draft = '') {
     const status = this.status();
     const history = this.currentSession?.messages ?? [];
@@ -2367,18 +2495,28 @@ export class FutrynClient {
     const pending = this.sending ? record?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
     const trimmedDraft = draft.trim();
     const requestDraft = /^[\/!]/.test(trimmedDraft) ? '' : trimmedDraft;
-    const components = [
-      ...history,
+    const tail: Message[] = [
       ...(pending ? [{role: pending.role, content: pending.content}] : []),
       ...(pending ? this.streamingSteps : []),
-      ...(pending && this.streamingText ? [{role: 'assistant', content: this.streamingText}] : []),
-      ...(requestDraft ? [{role: 'user', content: requestDraft}] : []),
+      ...(pending && this.streamingText ? [{role: 'assistant' as const, content: this.streamingText}] : []),
+      ...(requestDraft ? [{role: 'user' as const, content: requestDraft}] : []),
     ];
-    const bytes = new TextEncoder().encode(JSON.stringify(components)).length;
+    // For a JSON array, UTF-8 byte counts are additive across its serialized entries and commas.
+    // The SDK replaces messages on recovery/rewind and appends new objects when committing a turn.
+    const count = history.length + tail.length;
+    let bytes = 2 + Math.max(0, count - 1);
+    for (const message of [...history, ...tail]) {
+      let length = this.contextMessageBytes.get(message);
+      if (length === undefined) {
+        length = Buffer.byteLength(JSON.stringify(message), 'utf8');
+        this.contextMessageBytes.set(message, length);
+      }
+      bytes += length;
+    }
     const instructionBytes = this.projectContext()?.usedBytes ?? 0;
-    const messageCount = components.length + (instructionBytes ? 1 : 0);
+    const messageCount = count + (instructionBytes ? 1 : 0);
     const estimate = messageCount ? Math.ceil((bytes + instructionBytes) / 4) + messageCount * 16 + 64 : 0;
-    const latest = this.usage().last;
+    const latest = this.usageFromRecord(record).last;
     const observation = record?.turns?.findLast(turn => turn.context && turn.context.source !== 'estimate');
     const last = observation?.context ?? null;
     const limit = last?.limitTokens ?? status.activeModel?.contextLimit ?? null;
@@ -2504,12 +2642,28 @@ export class FutrynClient {
     return target;
   }
 
+  private projectAppearance: PartialAppearanceConfig | undefined;
+
+  onboardingState() {
+    return this.ports.appearanceStore?.onboardingState?.();
+  }
+
+  completeOnboardingStep(id: string): void {
+    this.ports.appearanceStore?.completeOnboardingStep?.(id);
+  }
+
+  appearanceNotices(): readonly string[] {
+    return this.ports.appearanceStore?.notices?.() ?? [];
+  }
+
   // Appearance & Custom Themes
   getAppearance(projectScoped = true): AppearanceConfig {
     const state = this.ports.settings.read();
-    const base = state.appearance ?? defaultAppearance();
+    const base = this.ports.appearanceStore?.read() ?? state.appearance ?? defaultAppearance();
     if (!projectScoped) return appearanceSchema.parse(base);
-    const projectOverride = state.projectAppearances?.[this.ports.workspace];
+    const projectOverride = this.ports.appearanceStore
+      ? this.projectAppearance
+      : state.projectAppearances?.[this.ports.workspace];
     if (!projectOverride) return appearanceSchema.parse(base);
     return appearanceSchema.parse({
       ...base,
@@ -2529,6 +2683,17 @@ export class FutrynClient {
 
   updateAppearance(patch: PartialAppearanceConfig, scope: 'global' | 'project' = 'global'): AppearanceConfig {
     const validatedPatch = partialAppearanceSchema.parse(patch);
+    if (this.ports.appearanceStore) {
+      if (scope === 'global') this.ports.appearanceStore.write(validatedPatch);
+      else
+        this.projectAppearance = partialAppearanceSchema.parse({
+          ...this.projectAppearance,
+          ...validatedPatch,
+          animations: {...this.projectAppearance?.animations, ...validatedPatch.animations},
+        });
+      this.notifyStateChange();
+      return this.getAppearance(true);
+    }
     this.ports.settings.update(s => {
       const currentGlobal = s.appearance ?? defaultAppearance();
       if (scope === 'global') {
@@ -3045,7 +3210,19 @@ function memoryPermissionSettings(): PermissionSettingsPort {
   const files = new Map<PermissionSettingsScope, {rules: PermissionRuleSet; domains: string[]}>(
     scopes.map(scope => [scope, {rules: {allow: [], ask: [], deny: []}, domains: []}]),
   );
+  const sandbox = {
+    enabled: false,
+    autoAllowBashIfSandboxed: false,
+    excludedCommands: [] as string[],
+    allowUnsandboxedCommands: true,
+  };
   return {
+    updateSandbox(patch) {
+      for (const key of ['enabled', 'autoAllowBashIfSandboxed', 'allowUnsandboxedCommands'] as const)
+        if (patch[key] !== undefined) sandbox[key] = patch[key];
+      if (patch.excludeCommand && !sandbox.excludedCommands.includes(patch.excludeCommand))
+        sandbox.excludedCommands.push(patch.excludeCommand);
+    },
     snapshot() {
       const union = (pick: (rules: PermissionRuleSet) => string[]) => [
         ...new Set(scopes.flatMap(scope => pick(files.get(scope)!.rules))),
@@ -3054,10 +3231,8 @@ function memoryPermissionSettings(): PermissionSettingsPort {
         rules: {allow: union(r => r.allow), ask: union(r => r.ask), deny: union(r => r.deny)},
         additionalDirectories: [],
         sandbox: {
-          enabled: true,
-          autoAllowBashIfSandboxed: true,
-          excludedCommands: [],
-          allowUnsandboxedCommands: true,
+          ...sandbox,
+          excludedCommands: [...sandbox.excludedCommands],
           allowedDomains: [...new Set(scopes.flatMap(scope => files.get(scope)!.domains))],
         },
         files: scopes.map(scope => ({

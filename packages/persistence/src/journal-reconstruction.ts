@@ -92,10 +92,19 @@ export function reconstructConversation(
 
     const turn = turns[index]!;
     validateTurn(turn, row, pendingInput);
-    messages.push(...reconstructTurn(turn, pendingInput, retracted));
+    const end = row.end_revision ?? (rows[index + 1]?.user_revision ?? Infinity) - 1;
+    const continuation = legacy
+      .slice(cursor)
+      .filter(
+        message =>
+          message.revision <= end &&
+          message.state === 'committed' &&
+          message.role === 'assistant' &&
+          (message.providerReplay || message.reasoning),
+      );
+    messages.push(...reconstructTurn(turn, pendingInput, retracted, continuation));
 
     // Legacy messages covered by this turn are replaced by its reconstruction.
-    const end = row.end_revision ?? (rows[index + 1]?.user_revision ?? Infinity) - 1;
     while (cursor < legacy.length && legacy[cursor]!.revision <= end) cursor++;
   }
   while (cursor < legacy.length) takeLegacy();
@@ -171,9 +180,10 @@ export function reconstructTurn(
   turn: DurableTurn,
   pendingInput: PendingInputs,
   retracted: ReadonlySet<string> = new Set(),
+  continuation: readonly Message[] = [],
 ): Message[] {
   const messages: Message[] = [];
-  const segments = new ResponseSegments(messages);
+  const segments = new ResponseSegments(messages, [...continuation]);
   const steered: {steerId: string; message: Message}[] = [];
   let requests = 0;
 
@@ -253,10 +263,15 @@ class ResponseSegments {
   private provisional = false;
   private committed = true;
 
-  constructor(private readonly out: Message[]) {}
+  private responseOpen = false;
+  constructor(
+    private readonly out: Message[],
+    private readonly continuation: Message[] = [],
+  ) {}
 
   /** A new model request starts a new response. */
   open({provisional}: {provisional: boolean}): void {
+    this.responseOpen = true;
     this.provisional = provisional;
     this.committed = !provisional;
   }
@@ -283,12 +298,33 @@ class ResponseSegments {
    */
   close({superseded}: {superseded: boolean}): void {
     this.flushText();
-    if (this.committed || !this.provisionalText) {
+    if (this.committed && this.responseOpen) {
+      // The event journal proves completion and tool outcomes; private message.parts owns provider
+      // state. Reattach only to a response with exactly the same visible text and ordered calls.
+      // This keeps signatures out of user-facing event history without trusting a partial response.
+      const calls = this.segment.flatMap(message => message.toolCalls ?? []);
+      const text = this.segment
+        .filter(message => message.role === 'assistant')
+        .map(message => message.content)
+        .join('');
+      const index = this.continuation.findIndex(
+        message => message.content === text && JSON.stringify(message.toolCalls ?? []) === JSON.stringify(calls),
+      );
+      if (index >= 0) {
+        const {
+          revision: _revision,
+          state: _state,
+          ...canonical
+        } = this.continuation.splice(index, 1)[0]! as StoredMessage;
+        this.out.push(canonical, ...this.segment.filter(message => message.role !== 'assistant'));
+      } else this.out.push(...this.segment);
+    } else if (this.committed || !this.provisionalText) {
       this.out.push(...this.segment);
     } else {
       this.out.push(...this.segment.filter(m => m.role !== 'assistant' || m.toolCalls));
       if (!superseded) this.out.push({role: 'assistant', content: INCOMPLETE_PREFIX + this.provisionalText});
     }
+    this.responseOpen = false;
     this.segment = [];
     this.provisionalText = '';
     this.committed = true;

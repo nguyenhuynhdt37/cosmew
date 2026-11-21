@@ -61,8 +61,11 @@ function encodeParts(message: Message): string | null {
     toolCallId: message.toolCallId,
     toolName: message.toolName,
     reasoning: message.reasoning,
+    providerReplay: message.providerReplay,
   };
-  return message.toolCalls || message.toolCallId ? JSON.stringify(parts) : null;
+  return message.toolCalls || message.toolCallId || message.reasoning || message.providerReplay
+    ? JSON.stringify(parts)
+    : null;
 }
 
 function decodeRow(row: StoredRow): StoredMessage {
@@ -73,9 +76,13 @@ function decodeRow(row: StoredRow): StoredMessage {
   )
     throw new FutrynError('STORAGE');
   const parts = row.parts
-    ? (JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName' | 'reasoning'>)
+    ? (JSON.parse(row.parts) as Pick<Message, 'toolCalls' | 'toolCallId' | 'toolName' | 'reasoning' | 'providerReplay'>)
     : {};
-  if (Object.keys(parts).some(key => !['toolCalls', 'toolCallId', 'toolName', 'reasoning'].includes(key)))
+  if (
+    Object.keys(parts).some(
+      key => !['toolCalls', 'toolCallId', 'toolName', 'reasoning', 'providerReplay'].includes(key),
+    )
+  )
     throw new FutrynError('STORAGE');
   const message = messageSchema.parse({role: row.role, content: row.content, ...parts});
   return {...message, revision: row.revision, state: row.state};
@@ -613,7 +620,16 @@ export class SqliteConversations implements ConversationStore {
     try {
       return this.db
         .transaction(() => {
-          message = messageSchema.parse(this.clean(message));
+          const original = messageSchema.parse(message);
+          const {providerReplay, ...visible} = original;
+          const clean = this.clean(visible) as Omit<Message, 'providerReplay'>;
+          // Opaque signatures/encrypted bytes must stay exact. Plaintext and canonical tool inputs
+          // still obey normal redaction; altering signed plaintext invalidates the whole envelope.
+          const safe =
+            providerReplay &&
+            JSON.stringify(clean) === JSON.stringify(visible) &&
+            providerReplay.parts.every(part => part.type === 'tool-call' || this.redact(part.text) === part.text);
+          message = messageSchema.parse({...clean, ...(safe ? {providerReplay} : {})});
           const row = this.db
             .query('UPDATE conversations SET revision=revision+1 WHERE id=? RETURNING revision')
             .get(id) as {revision: number} | null;

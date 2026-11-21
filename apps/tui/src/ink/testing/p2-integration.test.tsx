@@ -3,6 +3,8 @@ import {expect, test} from 'bun:test';
 import type {BackgroundTaskEvent, ModelEvent, WorkspaceDiffReport} from '@cosmew/contracts';
 import {dialogFixture, selection} from '../features/picker/test-fixture';
 import {openInk} from './ink-session';
+import {settle} from './wait';
+import {buildKeymap, keymapStore} from '../hooks/keymap';
 
 const report: WorkspaceDiffReport = {
   workspace: '/fixture',
@@ -237,6 +239,133 @@ test('send-now chord uses SDK queue transfer and delivers the interrupted inbox 
     expect(prompts).toEqual(['first', 'second']);
     expect(client.queuedInput()).toEqual([]);
   } finally {
+    await ui.close();
+  }
+});
+
+test('/diff after trusted startup replaces the mount-time denial with refreshed uncommitted changes', async () => {
+  let cached: WorkspaceDiffReport = {...report, files: [], message: 'Not inspected.'};
+  const {client, settings} = fixture({
+    getWorkspaceDiff: options => ({...cached, base: options?.base}),
+    refreshWorkspaceDiff: async options => {
+      cached = {
+        ...report,
+        state: 'ready',
+        base: options?.base,
+        files: options?.base === 'session' ? [] : report.files,
+      };
+      return cached;
+    },
+  });
+  settings.trustedWorkspaces = [client.workspace()];
+  client.setToolsEnabled(false); // runInkTui does this before mounting the startup gate.
+  const states: WorkspaceDiffReport['state'][] = [];
+  const read = client.getWorkspaceDiff.bind(client);
+  client.getWorkspaceDiff = options => {
+    const value = read(options);
+    states.push(value.state);
+    return value;
+  };
+  const ui = await openInk(client, {width: 120, rows: 36});
+  try {
+    expect(states[0]).toBe('denied');
+    await ui.executeSlashCommand('/diff');
+    expect(ui.frame()).toContain('source: Uncommitted');
+    expect(ui.frame()).toContain('a.txt');
+    expect(ui.frame()).not.toContain('Folder consent required.');
+  } finally {
+    await ui.close();
+  }
+});
+
+test('review cancellation settles after session switch while the diff panel is hidden', async () => {
+  const {client} = fixture({
+    getWorkspaceDiff: () => report,
+    async *sendTurn(): AsyncIterable<ModelEvent> {
+      yield {type: 'textDelta', text: 'Saved answer'};
+    },
+  });
+  const ui = await openInk(client, {width: 140, rows: 36});
+  try {
+    await ui.submit('first conversation');
+    await ui.idle();
+    let complete!: (value: WorkspaceDiffReport) => void;
+    let requests = 0;
+    client.refreshWorkspaceDiff = () =>
+      new Promise(resolve => {
+        requests++;
+        complete = resolve;
+      });
+    await ui.submit('/review original review request');
+    client.clearSessionView();
+    await settle();
+    expect(requests).toBe(1);
+    complete(report);
+    await settle();
+    expect(ui.frame()).toContain('Review cancelled');
+    expect(client.activeSession()).toBeNull();
+    expect(client.mode()).toBe('chat');
+  } finally {
+    await ui.close();
+  }
+});
+
+test('Tab focuses side diff, plain keys navigate and Escape preserves the composer draft', async () => {
+  const {client} = fixture({
+    getWorkspaceDiff: () => ({...report, files: [...report.files, {...report.files[0]!, path: 'second.txt'}]}),
+  });
+  const ui = await openInk(client, {width: 140, rows: 36});
+  try {
+    await ui.executeSlashCommand('/diff');
+    await ui.type('keep draft');
+    await ui.handleKey('Tab');
+    expect(ui.frame()).toContain('esc prompt');
+    await ui.type('j');
+    expect(ui.frame()).toContain('keep draft');
+    expect(ui.frame()).not.toContain('keep draftj');
+    await ui.handleKey('Enter');
+    expect(ui.frame()).toContain('esc back');
+    await ui.handleKey('Escape');
+    expect(ui.frame()).toContain('esc prompt');
+    await ui.handleKey('Escape');
+    expect(ui.frame()).toContain('tab focus');
+    await ui.type('!');
+    expect(ui.frame()).toContain('keep draft!');
+  } finally {
+    await ui.close();
+  }
+});
+
+test('diff focus and footer follow live user key remaps', async () => {
+  const {client} = fixture({getWorkspaceDiff: () => report});
+  const ui = await openInk(client, {width: 140, rows: 36});
+  try {
+    await ui.executeSlashCommand('/diff');
+    keymapStore.set(
+      buildKeymap(
+        JSON.stringify({
+          bindings: [
+            {
+              context: 'DiffPanel',
+              bindings: {
+                tab: null,
+                'ctrl+p': 'diff:focus',
+                'ctrl+q': 'diff:blur',
+              },
+            },
+          ],
+        }),
+      ),
+    );
+    await settle();
+    expect(ui.frame()).toContain('ctrl+p focus');
+    await ui.handleKey('Ctrl+P');
+    expect(ui.frame()).toContain('prompt');
+    expect(ui.frame()).not.toContain('ctrl+p focus');
+    await ui.handleKey('Ctrl+Q');
+    expect(ui.frame()).toContain('ctrl+p focus');
+  } finally {
+    keymapStore.reset();
     await ui.close();
   }
 });

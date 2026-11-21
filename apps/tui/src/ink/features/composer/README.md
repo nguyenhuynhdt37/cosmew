@@ -207,3 +207,9 @@ opens `BackgroundTasksDialog`. The panel shows task state glyphs, Enter opens ou
 tail directly, Esc returns to the list, and x stops the selected running task. The host
 continues to own turn/notification delivery and shutdown; this feature creates no loop.
 The keymap-generated help restores Ctrl+V and Ctrl+B rows.
+
+The task area below the input shows running shell/agent descriptions separately
+from the conversation, capped at three rows (one on short terminals). Footer
+count, selection and task panel share the same session-scoped UI projection,
+including foreground child agents. Down on empty input selects work even with
+queued messages; history navigation and typed drafts retain their existing rules.

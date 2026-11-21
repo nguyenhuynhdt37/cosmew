@@ -2,7 +2,7 @@ import type {ToolCall, ToolResult} from '@cosmew/contracts';
 import {isFileChangeTool} from '@cosmew/contracts';
 import {diffStats, plural} from '../../ui/diff';
 import {changeReceipt} from '../diff/logic';
-import {toolDisplay} from './logic';
+import {toolDisplay, toolState} from './logic';
 
 /** What a tool call counts as in the merged one-line summary of the normal transcript. */
 export type ToolCategory = 'edit' | 'search' | 'read' | 'list' | 'shell' | 'other';
@@ -40,12 +40,11 @@ export interface SegmentContext {
 /** Whether a call must keep its own `⏺ Name(arg)` entry: refusals, errors with a reason, and tools with a body. */
 function standsAlone(call: ToolCall, result: ToolResult | undefined, live: boolean, category: ToolCategory): boolean {
   if (category === 'other') return true;
-  const display = toolDisplay(call, result, live);
-  if (display.status === 'denied') return true;
-  if (display.status === 'stopped') return true;
-  if (display.status === 'error') {
+  const state = toolState(result, live);
+  if (state.startsWith('denied') || state.startsWith('stopped')) return true;
+  if (state.startsWith('error')) {
     // `Ran 1 shell command · 1 failed` is only honest when the exit code was the whole story.
-    return category !== 'shell' || display.lines.length > 1;
+    return category !== 'shell' || toolDisplay(call, result, live).lines.length > 1;
   }
   return false;
 }
@@ -116,8 +115,7 @@ export function segmentTools(callIds: readonly string[], context: SegmentContext
     const items = run.map(id => {
       const call = context.calls.get(id)!;
       const result = context.results.get(id);
-      const status = toolDisplay(call, result, context.live).status;
-      return {call, result, failed: status === 'error'};
+      return {call, result, failed: toolState(result, context.live).startsWith('error')};
     });
     const running = items.some(item => !item.result) && context.live;
     segments.push({kind: 'summary', callIds: run, text: summaryText(items, running), running});

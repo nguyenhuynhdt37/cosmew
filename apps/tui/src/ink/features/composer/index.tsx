@@ -1,12 +1,13 @@
 /** @jsxImportSource react */
 import {useTerminalSize} from '../../hooks/use-terminal-size';
+import {useBindingLabel} from '../../hooks/keymap';
 import {Box, Text} from 'ink';
 import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import {nextGrapheme} from '../../../input/text';
 import {useTheme} from '../../theme';
 import {Rule, TextLine, safeText} from '../../ui';
 import {useUiTheme} from '../../ui/ui-theme';
-import {ComposerFooter, contextLeft} from '../status';
+import {ComposerFooter, SandboxBanner, contextLeft} from '../status';
 import {Autocomplete} from '../autocomplete';
 import {History} from '../history';
 import {visualRows} from './logic';
@@ -73,6 +74,7 @@ export interface ComposerViewProps {
   activity?: ReactNode;
   /** Warning line between the lower rule and the footer. */
   warning?: string;
+  transcriptHint?: string;
 }
 /** Controlled view lets Phase 2 share interrupt ownership with InkApp without refs. */
 export function ComposerView({
@@ -84,8 +86,10 @@ export function ComposerView({
   fullscreen = false,
   activity,
   warning,
+  transcriptHint,
 }: ComposerViewProps) {
-  const {columns} = useTerminalSize();
+  const {columns, rows: terminalRows} = useTerminalSize();
+  const manageKey = useBindingLabel('Chat', 'history:next');
   const {color} = useTheme();
   const ui = useUiTheme();
   const [example, setExample] = useState(0);
@@ -95,6 +99,8 @@ export function ComposerView({
     return () => clearInterval(timer);
   }, [controller.draft.value, isActive, placeholder]);
   const queued = controller.queued;
+  const taskRows = (terminalRows ?? 24) < 24 ? 1 : 3;
+  const taskStart = Math.max(0, controller.tasks.findIndex(task => task.id === controller.selectedTask) - taskRows + 1);
   // Running: empty placeholder, or the queue hint when messages wait (spec 2).
   const hint = controller.busy
     ? queued.length
@@ -229,6 +235,27 @@ export function ComposerView({
         </Box>
       ) : null}
       {fullscreen && !controller.shortcuts ? <Text> </Text> : null}
+      <SandboxBanner enabled={controller.status.sandbox.enabled} count={controller.status.sandboxBlockedOperations} />
+      {!controller.shortcuts && controller.tasks.length ? (
+        <Box flexDirection="column" width={outerWidth} paddingLeft={2} minWidth={0}>
+          <Text wrap="truncate-end" color={ui.color('dim')}>
+            {`Tasks · ${manageKey} to manage`}
+          </Text>
+          {controller.tasks.slice(taskStart, taskStart + taskRows).map(task => (
+            <Text
+              key={task.id}
+              wrap="truncate-end"
+              inverse={task.id === controller.selectedTask}
+              color={ui.color('dim')}
+            >
+              {`${task.id === controller.selectedTask ? '❯' : '●'} ${task.kind} · ${safeText(task.description).replace(/\s+/g, ' ')}${task.foreground ? '' : ' · background'}`}
+            </Text>
+          ))}
+          {controller.tasks.length > taskRows ? (
+            <Text wrap="truncate-end" dimColor>{`${controller.tasks.length} tasks · ←/→ select after ↓`}</Text>
+          ) : null}
+        </Box>
+      ) : null}
       <ComposerFooter
         mode={controller.status.permissionMode}
         bash={mode === 'bash'}
@@ -239,6 +266,7 @@ export function ComposerView({
         shortcuts={controller.shortcuts ? controller.shortcutColumns : undefined}
         message={controller.notice || controller.completionError}
         remaining={contextLeft(controller.context)}
+        transcriptHint={transcriptHint}
       />
     </Box>
   );

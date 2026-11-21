@@ -4,6 +4,8 @@ import type {ReactNode} from 'react';
 import {useTheme} from '../theme';
 import {useUiTheme} from './ui-theme';
 import {safeText} from './text-line';
+import {MouseRow} from './mouse-row';
+import {useMouseTarget} from '../hooks/use-terminal-wheel';
 export interface OptionItem {
   id: string;
   label: string;
@@ -21,6 +23,11 @@ export interface OptionItem {
 export interface OptionListProps {
   items: readonly OptionItem[];
   cursor: number;
+  /** Pointer input changes the highlight; Enter remains the explicit confirmation. */
+  onCursorChange?: (index: number) => void;
+  isActive?: boolean;
+  /** Split lists can keep wheel navigation across all of their sections. */
+  onWheel?: (direction: -1 | 1) => void;
   /** Columns left of the pointer (permission dialogs use 1, questions 0). */
   indent?: number;
   width?: number;
@@ -28,18 +35,40 @@ export interface OptionListProps {
   start?: number;
 }
 /** Numbered, wrapping choice list of permission, question and plan dialogs: `❯ 1. Yes`. */
-export function OptionList({items, cursor, indent = 0, width, start = 1}: OptionListProps) {
+export function OptionList({
+  items,
+  cursor,
+  indent = 0,
+  width,
+  start = 1,
+  onCursorChange,
+  isActive = true,
+  onWheel,
+}: OptionListProps) {
   const {color} = useTheme();
   const ui = useUiTheme();
   const muted = color('foregroundMuted');
+  const mouseRef = useMouseTarget(event => {
+    if ('direction' in event && items.length) {
+      if (onWheel) onWheel(event.direction);
+      else onCursorChange?.(Math.max(0, Math.min(items.length - 1, cursor + event.direction)));
+    }
+  }, isActive && !!onCursorChange);
   let number = start - 1;
   return (
-    <Box flexDirection="column" width={width} minWidth={0}>
+    <Box ref={mouseRef} flexDirection="column" width={width} minWidth={0}>
       {items.map((item, index) => {
         const active = index === cursor;
         const shown = item.numbered === false ? '' : `${++number}. `;
         return (
-          <Box key={item.id} flexDirection="column" minWidth={0} paddingLeft={indent}>
+          <MouseRow
+            key={item.id}
+            flexDirection="column"
+            minWidth={0}
+            paddingLeft={indent}
+            onHighlight={onCursorChange ? () => onCursorChange(index) : undefined}
+            isActive={isActive}
+          >
             <Box minWidth={0}>
               <Box flexShrink={0}>
                 <Text color={active ? ui.color('selected') : undefined}>{active ? '❯ ' : '  '}</Text>
@@ -59,7 +88,7 @@ export function OptionList({items, cursor, indent = 0, width, start = 1}: Option
                 </Text>
               </Box>
             ) : null}
-          </Box>
+          </MouseRow>
         );
       })}
     </Box>

@@ -1,5 +1,7 @@
 # ADR 0061 — Claude Code permission modes, settings files and sandbox
 
+> Default values only superseded by [ADR 0081](0081-sandbox-defaults-like-claude-code.md): enabled=false, autoAllowBashIfSandboxed=false, allowUnsandboxedCommands=true. Other decisions below remain in force.
+
 Date: 2026-11-18. Status: accepted (user decision: "switch the permission and sandbox model from Codex to the Claude Code CLI model"). Supersedes [ADR 0053](0053-codex-sandbox-and-approval-alignment.md) and [ADR 0055](0055-codex-approval-decisions-network-and-full-access.md), and the Codex approval policy / `request_permissions` parts of [ADR 0040](0040-codex-approval-policy.md). The command classification (Tree-sitter allowlist parser, dangerous heuristic, banned prefix suggestions) of ADR 0040/0055 stays; the unified-exec terminal of [ADR 0034](0034-unified-exec-terminal-parity.md)/[0035](0035-native-sandbox-default.md) stays with the changed sandbox profile below. Memory write gating of [ADR 0057](0057-user-scoped-project-memories.md) maps to the new modes (see Decision 6).
 
 Contract 1.35 -> **1.36**. SQLite schema unchanged (the settings store gained an optional `trustedProjectSettings` map and a lenient legacy `projectPermissionRules`).

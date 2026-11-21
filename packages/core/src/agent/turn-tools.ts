@@ -92,11 +92,28 @@ export class TurnTools {
   /** Write calls that may have changed files; an interrupted turn keeps them in history. */
   readonly appliedSteps: Message[] = [];
   /** Successful read results by tool + arguments, to spot rereads of unchanged content. */
-  private readonly seen = new Map<string, string>();
+  private readonly seen = new Map<string, {fingerprint: string; message: Message}>();
   private readonly gate: ExecutionGate;
 
   constructor(private readonly options: TurnToolsOptions) {
     this.gate = new ExecutionGate(options.parallelSlots);
+  }
+
+  /** Only full evidence still present in the actual outgoing request can justify suppression.
+   * A summary or clipped page is not the original result, even if it retained the call id.
+   * Archive availability can change; absent full visible evidence, deliver the fresh read again.
+   */
+  retainVisibleEvidence(history: Message[]): void {
+    const visible = new Map(history.filter(m => m.role === 'tool').map(m => [m.toolCallId, m]));
+    for (const [key, entry] of this.seen) {
+      const message = visible.get(entry.message.toolCallId);
+      if (
+        !message ||
+        message.content !== entry.message.content ||
+        stable(message.attachments) !== stable(entry.message.attachments)
+      )
+        this.seen.delete(key);
+    }
   }
 
   descriptor(call: ToolCall) {
@@ -258,12 +275,16 @@ export class TurnTools {
   private markUnchanged(call: ToolCall, result: ToolResult): ToolResult {
     const key = call.name + '\0' + stable(call.input);
     // Attachments are part of what was read: a changed image with the same summary is not unchanged.
-    const seen = result.content + (result.attachments ? '\0' + stable(result.attachments) : '');
-    if (this.seen.get(key) === seen) {
+    const fingerprint =
+      (result.evidenceDigest ?? result.content) + '\0' + stable(result.attachments) + '\0' + !!result.truncated;
+    if (this.seen.get(key)?.fingerprint === fingerprint) {
       const {attachments: _attachments, ...rest} = result;
-      return {...rest, content: UNCHANGED};
+      const pointer = result.evidenceOutputId
+        ? `\n\n[tool_output output_id=${result.evidenceOutputId}; use tool_output to retrieve archived evidence]`
+        : '';
+      return {...rest, content: UNCHANGED + pointer};
     }
-    this.seen.set(key, seen);
+    this.seen.set(key, {fingerprint, message: toolMessage(call, result)});
     return result;
   }
 

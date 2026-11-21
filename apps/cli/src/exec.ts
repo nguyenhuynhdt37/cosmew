@@ -1,7 +1,13 @@
 import {closeSync, constants, openSync, realpathSync, statSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
-import {BYPASS_PERMISSIONS_WARNING, CONTRACT_VERSION, FutrynError, type HeadlessEvent} from '@cosmew/contracts';
+import {
+  BYPASS_PERMISSIONS_WARNING,
+  CONTRACT_VERSION,
+  FutrynError,
+  ProviderBillingError,
+  type HeadlessEvent,
+} from '@cosmew/contracts';
 import {
   PERMISSION_CLI_OPTIONS,
   resolvePermissionFlags,
@@ -35,7 +41,7 @@ prompt is denied (file edits in default mode, commands outside the sandbox, new 
 (bypassPermissions) approves everything without asking; the OS sandbox and deny rules still apply. Settings come from
 ~/.cosmew/settings.json and the project's .cosmew/settings.json / settings.local.json (legacy .futryn/.hannes roots are read); repository settings that loosen
 anything are ignored here unless approved earlier in the TUI.
-Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 64 invalid arguments.
+Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 3 provider billing, 64 invalid arguments.
 `;
 
 /** Own lifecycle so invalid exec arguments never open state or enter an interactive command. */
@@ -154,6 +160,25 @@ export async function runExec(
     failed(new FutrynError('AUTH'));
     return 2;
   }
+  const status = client.status();
+  if (!status.activeAccount || status.activeAccount.status === 'logged-out' || !status.selection) {
+    failed(new FutrynError('AUTH'));
+    return 2;
+  }
+  const verification = await client.verifyAccount(signal);
+  if (signal?.aborted) {
+    failed(new FutrynError('CANCELLED'));
+    return 1;
+  }
+  if (!verification.ok) {
+    if (verification.reason === 'billing') {
+      failed(new ProviderBillingError(verification.providerHint));
+      return 3;
+    }
+    const codes = {auth: 'AUTH', 'no-account': 'AUTH', network: 'TRANSPORT', model: 'NOT_FOUND'} as const;
+    failed(new FutrynError(codes[verification.reason]));
+    return verification.reason === 'no-account' || verification.reason === 'model' ? 2 : 1;
+  }
   const metadata = client.refreshModelMetadata({effortOnly: true});
   if (metadata) {
     let cancel: () => void = () => {};
@@ -183,13 +208,7 @@ export async function runExec(
     process.stderr.write(
       `Notice: ignoring the loosening parts of ${pending.path} (untrusted repository settings: ${pending.grants.join('; ')}). Approve it once in the TUI to use them.\n`,
     );
-  const status = client.status();
-  if (
-    !status.activeAccount ||
-    status.activeAccount.status === 'logged-out' ||
-    !status.selection ||
-    !status.toolsEnabled
-  ) {
+  if (!client.status().toolsEnabled) {
     failed(new FutrynError('AUTH'));
     return 2;
   }

@@ -1,8 +1,8 @@
 import {createElement} from 'react';
-import {cleanup, render} from 'ink-testing-library';
+import {cleanup} from 'ink-testing-library';
 import {InkApp} from '../../app';
 import {dialogFixture} from '../picker/test-fixture';
-import {renderInk, settle} from '../../testing';
+import {render, renderInk, settle} from '../../testing';
 import {buildKeymap, keymapStore} from '../../hooks/keymap';
 import {DetailedFooter} from './detailed-footer';
 import {afterEach, expect, test} from 'bun:test';

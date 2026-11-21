@@ -69,12 +69,29 @@ test('MCP HTTP initializes once per endpoint, calls with arguments, bounds and r
 });
 
 test('MCP limits response bytes and returns safe upstream errors', async () => {
-  for (const options of [{huge: true}, {error: true}]) {
+  for (const options of [{huge: true}]) {
     const f = fixture(options);
     const client = new McpClient({endpoint: f.url, redact: t => t});
     cleanups.push(() => client.close());
     await expect(client.call('web_search_exa', {query: 'test'})).rejects.toThrow();
   }
+});
+
+test('MCP HTTP application errors retain redacted guidance and search refuses error-shaped results', async () => {
+  const f = fixture({error: true});
+  const client = new McpClient({endpoint: f.url, redact: t => t.replaceAll('sk-secret-fixture', '[REDACTED]')});
+  cleanups.push(() => client.close());
+  const error = await client.call('web_search_exa', {query: 'test'});
+  expect(error.isError).toBe(true);
+  expect(error.text).toContain('[REDACTED]');
+  expect(error.text).not.toContain('sk-secret-fixture');
+  const search = new WebSearchClient({
+    keys: {},
+    redact: t => t,
+    fetch: ((_input, init) => fetch(f.url, init)) as typeof fetch,
+  });
+  cleanups.push(() => search.close());
+  await expect(search.search('test', 2)).rejects.toMatchObject({code: 'TRANSPORT'});
 });
 
 test('MCP timeout and cancellation stop pending calls', async () => {

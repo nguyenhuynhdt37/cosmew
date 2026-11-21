@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
-import {cleanup, render} from 'ink-testing-library';
+import {cleanup} from 'ink-testing-library';
 import {FutrynError, type ModelEvent} from '@cosmew/contracts';
 import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {InkApp} from '../app';
@@ -8,9 +8,9 @@ import {openInk} from './ink-session';
 import {dialogFixture, selection, account} from '../features/picker/test-fixture';
 import {routeCommand, type CommandHost} from '../features/commands';
 import {ListPicker} from '../ui';
-import {renderInk, settle} from './index';
+import {render, renderInk, settle, waitForFrame} from './index';
 afterEach(cleanup);
-/** Consent plus the real account check take a few frames; wait for the ready composer before typing. */
+/** Consent and composer setup take a few frames; wait for the ready composer before typing. */
 const untilReady = async (view: {lastFrame(): string | undefined}) => {
   for (let wait = 0; wait < 100 && !view.lastFrame()?.includes('manual mode on'); wait++) await settle();
   await settle(); // input handlers register one commit after the frame
@@ -77,12 +77,13 @@ test('host gates initial command, streams tool and session approval, history foc
   await key(view, '\x1b[A');
   await key(view, '\r');
   await settle();
-  expect(f.checks()).toBe(1);
+  expect(f.checks()).toBe(0);
   expect(f.client.mode()).toBe('plan');
   await key(view, 'hello');
   await key(view, '\r');
   await settle();
   expect(f.prompts).toEqual(['hello']);
+  expect(f.checks()).toBe(1);
   expect(view.lastFrame()).toContain('2. Yes, and');
   await key(view, '2');
   await settle();
@@ -107,20 +108,24 @@ test('host gates initial command, streams tool and session approval, history foc
   expect(f.client.toolsEnabled()).toBe(false);
   expect(f.client.listPendingPermissions()).toEqual([]);
 });
-test('startup verification failure stays locked and exit cancels pending probe', async () => {
+test('cancelling a pending first-send check keeps the draft and sends no prompt', async () => {
   const f = fixture();
-  f.ports.validateAccount = async () => {
-    throw new FutrynError('AUTH');
+  let request: AbortSignal | undefined;
+  f.ports.validateAccount = async (_account, signal) => {
+    request = signal;
+    await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve(), {once: true}));
+    throw new FutrynError('CANCELLED');
   };
-  const view = render(<InkApp client={f.client} width={80} initialCommand="/plan" />);
-  await settle();
-  await key(view, '\x1b[A');
+  f.client.trustWorkspace();
+  const view = render(<InkApp client={f.client} width={80} />);
+  await untilReady(view);
+  await key(view, 'kept input');
   await key(view, '\r');
-  expect(view.lastFrame()).toContain('rejected');
-  expect(f.client.mode()).toBe('chat');
+  expect(request).toBeDefined();
+  await key(view, '\x1b');
+  expect(request?.aborted).toBe(true);
+  expect(view.lastFrame()).toContain('kept input');
   expect(f.prompts).toEqual([]);
-  view.unmount();
-  expect(f.client.toolsEnabled()).toBe(false);
 });
 test('controlled picker tracks highlight and fixed decision numbering', async () => {
   const highlights: string[] = [];
@@ -218,14 +223,17 @@ test('host routes quick memory to public API and shell output/escape to transcri
   await settle();
   await key(view, '#Prefer concise explanations');
   await key(view, '\r');
+  await waitForFrame(view, frame => frame.includes('Memory saved.'));
   expect(writes).toHaveLength(1);
   expect(writes[0]).toMatchObject({action: 'write', entry: {type: 'feedback', content: 'Prefer concise explanations'}});
   expect(view.lastFrame()).toContain('Memory saved.');
   await key(view, '!echo shell');
   await key(view, '\r');
+  await waitForFrame(view, frame => frame.includes('SHELL_STREAM_MARKER') && frame.includes('Bash(echo shell)'));
   expect(view.lastFrame()).toContain('SHELL_STREAM_MARKER');
   expect(view.lastFrame()).toContain('Bash(echo shell)');
   await key(view, '\x1b');
+  await waitForFrame(view, frame => frame.includes('Shell cancelled'));
   expect(signal?.aborted).toBe(true);
   expect(view.lastFrame()).toContain('Shell cancelled');
   await shutdown();
@@ -249,7 +257,7 @@ test('permission denial reason reaches SDK steering and permission cleanup does 
   await key(view, '\r');
   expect(view.lastFrame()).toContain('Esc to cancel · Tab to amend');
   // The dialog opens asynchronously; allow Ink to attach its passive input subscriptions.
-  await Bun.sleep(200);
+  await settle();
   await key(view, '\t');
   await key(view, 'Use another file');
   await key(view, '\r');
@@ -360,7 +368,7 @@ test('unsupported backend commands say Not implemented and effort status preserv
   expect(f.client.status().reasoningEffort).toBe(before);
 });
 
-test('startup sign-in connects then chooses model before verification unlocks chat', async () => {
+test('the signed-out composer can open Connect and choose a model', async () => {
   const f = fixture();
   let connected = false;
   f.settings.accounts = [];
@@ -377,13 +385,13 @@ test('startup sign-in connects then chooses model before verification unlocks ch
   await settle();
   await key(view, '\x1b[A');
   await key(view, '\r');
-  expect(view.lastFrame()).toContain('Sign in');
+  expect(view.lastFrame()).toContain('manual mode on');
+  await key(view, '/connect');
   await key(view, '\r');
-  await Bun.sleep(200);
   await key(view, '\r');
-  await Bun.sleep(100);
+  await settle();
   await key(view, '\r');
-  await Bun.sleep(100);
+  await settle();
   await key(view, 'fixture-private-key');
   await key(view, '\r');
   await settle();
@@ -392,10 +400,10 @@ test('startup sign-in connects then chooses model before verification unlocks ch
   expect(view.lastFrame()).not.toContain('fixture-private-key');
   expect(f.checks()).toBe(1);
   await key(view, '\r');
-  await Bun.sleep(100);
+  await settle();
   await key(view, '\r');
-  await Bun.sleep(100);
-  expect(f.checks()).toBe(2);
+  await settle();
+  expect(f.checks()).toBe(1);
   expect(view.lastFrame()).toContain('manual mode on');
   view.unmount();
   expect(f.client.toolsEnabled()).toBe(false);
@@ -616,7 +624,7 @@ test('slash commands leave their result under ❯ /cmd; Esc on a panel prints a 
     expect(view.lastFrame()).toMatch(/❯ \/rewind\n  ⎿\s+Rewind cancelled/);
     // Esc Esc on an empty prompt is the same panel.
     await key(view, '\x1b');
-    await Bun.sleep(30);
+    await settle();
     await key(view, '\x1b');
     await settle();
     expect(view.lastFrame()).toContain('Restore the code and/or conversation');

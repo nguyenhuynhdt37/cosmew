@@ -416,8 +416,8 @@ test.skipIf(process.env.FORCE_COLOR !== '3')(
       expect(rows[0]!.replace(/\x1b\[[\d;]*m/g, '')).toHaveLength(40);
       const removed = rows.find(row => row.includes('hello'))!;
       const added = rows.find(row => row.includes('HELLO'))!;
-      expect(/\x1b\[48;2;(\d+;\d+;\d+)m/.exec(removed)?.[1]).toBe(dark ? '122;41;54' : '247;217;217');
-      expect(/\x1b\[48;2;(\d+;\d+;\d+)m/.exec(added)?.[1]).toBe(dark ? '61;66;60' : '228;240;218');
+      expect(/\x1b\[48;2;(\d+;\d+;\d+)m/.exec(removed)?.[1]).toBe(dark ? '73;49;52' : '240;220;221');
+      expect(/\x1b\[48;2;(\d+;\d+;\d+)m/.exec(added)?.[1]).toBe(dark ? '45;64;45' : '220;232;223');
       view.unmount();
     }
   },

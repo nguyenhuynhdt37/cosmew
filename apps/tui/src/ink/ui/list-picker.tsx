@@ -8,6 +8,8 @@ import {Pointer} from './pointer';
 import {SearchBox} from './search-box';
 import {useDialogRows} from './dialog-layout';
 import {safeText} from './text-line';
+import {MouseRow} from './mouse-row';
+import {useMouseTarget} from '../hooks/use-terminal-wheel';
 export interface PickerItem {
   id: string;
   label: string;
@@ -93,6 +95,9 @@ export function ListPicker<T extends PickerItem>({
   const rows = Math.max(1, Math.min(Math.floor(visibleRows), compact ? Math.max(1, dialogRows - 5) : Infinity));
   const top = Math.max(0, index - rows + 1);
   const move = (to: number) => setCursor(Math.max(0, Math.min(filtered.length - 1, to)));
+  const mouseRef = useMouseTarget(event => {
+    if ('direction' in event) move(index + event.direction);
+  }, isActive);
   // J/K navigate only when no text field is receiving letters; Ctrl+N/P and the arrows always do.
   const letter = (stroke: Keystroke) => filterable && isPrintable(stroke);
   useKeybindings(
@@ -176,7 +181,7 @@ export function ListPicker<T extends PickerItem>({
   const labelWidth = Math.max(0, ...visible.map(item => Array.from(safeText(item.label)).length));
   const below = Math.max(0, filtered.length - (top + rows));
   return (
-    <Box flexDirection="column" minWidth={0}>
+    <Box ref={mouseRef} flexDirection="column" minWidth={0}>
       {filterable && (query || searching || (!compact && (showSearch ?? items.length > 8))) ? (
         <SearchBox value={query} placeholder={placeholder} />
       ) : null}
@@ -189,7 +194,7 @@ export function ListPicker<T extends PickerItem>({
         const active = top + offset === index;
         const label = safeText(item.label);
         return (
-          <Box key={item.id} minWidth={0}>
+          <MouseRow key={item.id} minWidth={0} onHighlight={() => move(top + offset)} isActive={isActive}>
             <Text wrap="truncate-end">
               <Pointer selected={active} />
               {markerSlot ? item.current ? <Text color={color('success')}>{'✔ '}</Text> : '  ' : null}
@@ -204,7 +209,7 @@ export function ListPicker<T extends PickerItem>({
                 >{`${' '.repeat(Math.max(2, labelWidth - Array.from(label).length + 2))}${safeText(item.description)}`}</Text>
               ) : null}
             </Text>
-          </Box>
+          </MouseRow>
         );
       })}
       {below > 0 ? <Text color={muted}>{`    ↓ ${below} more`}</Text> : null}

@@ -1,3 +1,4 @@
+import type {SandboxDependenciesReport} from '@cosmew/contracts';
 import {createHash, randomUUID} from 'node:crypto';
 import {
   existsSync,
@@ -665,7 +666,9 @@ export class NativeCommandRuntime implements CommandRuntime {
       kind,
       ...(session.ended ? {} : {sessionId: session.id}),
       ...(kind === 'spawn-failed' ? {sandboxFailed: true} : {}),
-      ...(kind === 'exited' && likelySandboxDenied(exitCode, output) ? {sandboxDenied: true} : {}),
+      ...(!session.sandbox.unsandboxed && kind === 'exited' && likelySandboxDenied(exitCode, output)
+        ? {sandboxDenied: true}
+        : {}),
       exitCode,
       signal: kind === 'exited' ? session.signal : session.stop ? 'SIGTERM' : null,
       output,
@@ -1042,3 +1045,23 @@ function findExecutable(name: string, path: string): string | undefined {
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** Reuses native backend discovery; it never starts a shell or claims the self-test passed. */
+export async function sandboxDependencies(
+  options: {
+    platform?: NodeJS.Platform;
+    path?: string;
+    probe?: (name: SandboxDependenciesReport['items'][number]['name']) => boolean;
+  } = {},
+): Promise<SandboxDependenciesReport> {
+  const platform = options.platform ?? process.platform;
+  const names: SandboxDependenciesReport['items'][number]['name'][] =
+    platform === 'darwin' ? ['seatbelt', 'ripgrep'] : platform === 'linux' ? ['ripgrep', 'bwrap', 'socat'] : [];
+  const probe =
+    options.probe ??
+    (name =>
+      name === 'seatbelt'
+        ? existsSync('/usr/bin/sandbox-exec')
+        : !!findExecutable(name === 'ripgrep' ? 'rg' : name, options.path ?? process.env.PATH ?? ''));
+  return {platform, items: names.map(name => ({name, ok: probe(name)}))};
+}

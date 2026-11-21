@@ -29,24 +29,23 @@ import {
   stringCells,
   type WrapRun,
 } from '../../ui';
+import {WindowedRows} from '../../screen';
+import {renderCache} from '../../ui/render-cache';
 import {useUiTheme} from '../../ui/ui-theme';
 import {TodoItems, todosFromInput} from '../plan';
 import {ToolDiff} from '../diff';
+import {changeReceipt} from '../diff/logic';
 import {Notices} from '../notices';
 import {ContextBlockView} from '../usage';
 import {toolDisplay, transcriptParts, transcriptWindow, type TranscriptItem as Item} from './logic';
+import {ActivityNavigation, ActivityRow} from './activity';
 import {segmentTools} from './summary';
+import {TRANSCRIPT_ITEM_GAP} from './viewport';
 import {DETAILED_RECENT_LIMIT, visibleWindow} from './show-all';
 /** The detailed-transcript viewer jumps between prompts (`{` / `}`): user items register their box here. */
 export const SearchAnchors = createContext<Map<string, DOMElement> | null>(null);
 export const PromptAnchors = createContext<Map<string, DOMElement> | null>(null);
-/** Row of `el` inside `root`, summed from Yoga's computed tops. */
-export function rowWithin(el: DOMElement, root: DOMElement): number {
-  let top = 0;
-  for (let node: DOMElement | undefined = el; node && node !== root; node = node.parentNode as DOMElement | undefined)
-    top += node.yogaNode?.getComputedTop() ?? 0;
-  return top;
-}
+export {rowWithin} from '../../screen';
 export * from './logic';
 export * from './summary';
 export type TranscriptItem = Item;
@@ -172,17 +171,18 @@ function Emphasis({line, color}: {line: string; color?: string}) {
   );
 }
 /** A merged summary line: `  Ran 1 shell command · 1 failed`, dim, numbers bold. */
-function SummaryLine({text, width}: {text: string; width: number}) {
+function SummaryLine({text, width, focused, hint}: {text: string; width?: number; focused?: boolean; hint?: string}) {
   const ui = useUiTheme();
   return (
     <Box width={width} minWidth={0}>
       <Text color={ui.color('dim')} wrap="wrap">
-        {'  '}
+        {focused ? '› ' : '  '}
         {emphasizeDigits(safeText(text)).map((part, index) => (
           <Text key={index} bold={part.bold}>
             {part.text}
           </Text>
         ))}
+        {hint ? ` ${hint}` : ''}
       </Text>
     </Box>
   );
@@ -195,11 +195,41 @@ interface ToolEntryProps {
   expanded: boolean;
   width: number;
   animate: boolean;
+  itemId: string;
+  activityId: string;
+  focusedId?: string;
+  expandHint?: string;
+  fullOutput?: boolean;
 }
 /** One tool, as `⏺ Name(argument)` with `  ⎿  ` result lines (Update/Write with their diff). */
-function ToolEntry({call, result, streaming, streamed, expanded, width, animate}: ToolEntryProps) {
+const ToolEntry = memo(function ToolEntry({
+  call,
+  result,
+  streaming,
+  streamed,
+  expanded,
+  width,
+  animate,
+  itemId,
+  activityId,
+  focusedId,
+  expandHint,
+  fullOutput,
+}: ToolEntryProps) {
   const {color} = useTheme();
-  const display = toolDisplay(call, result, streaming, expanded, streamed);
+  const navigation = useContext(ActivityNavigation);
+  const display = useMemo(
+    () => toolDisplay(call, result, streaming, expanded, streamed),
+    [call, result, streaming, expanded, streamed],
+  );
+  const outputId = `${activityId}:output`;
+  const {head, tail, missing} = useMemo(
+    () =>
+      expanded
+        ? previewToolLines(display.lines, display.status === 'running')
+        : {head: display.lines, tail: [], missing: 0},
+    [display, expanded],
+  );
   const failed = display.status === 'error' || display.status === 'denied';
   const fileChange = isFileChangeTool(call.name);
   const applied = fileChange && (result?.status === 'ok' || result?.code === 'PARTIAL_APPLY');
@@ -208,36 +238,96 @@ function ToolEntry({call, result, streaming, streamed, expanded, width, animate}
   const name = paren < 0 ? display.title : display.title.slice(0, paren);
   const argument = paren < 0 ? '' : display.title.slice(paren);
   const plain = fileChange || display.title.startsWith('Answered');
+  const title = (
+    <Text wrap="wrap">
+      {focusedId === activityId ? '› ' : ''}
+      <ToolDot status={display.status} animate={animate} />
+      <Text bold>{safeText(name)}</Text>
+      {safeText(argument)}
+      {expandHint ? <Text dimColor> {expandHint}</Text> : null}
+    </Text>
+  );
+  const paintLines = (lines: string[]) =>
+    lines.map((line, at) => (
+      <Emphasis
+        key={at}
+        line={safeText(line)}
+        color={
+          failed &&
+          (display.status === 'denied' ||
+            !['exec_command', 'write_stdin'].includes(call.name) ||
+            line.startsWith('Error:'))
+            ? color('error')
+            : plain
+              ? undefined
+              : color('foregroundMuted')
+        }
+      />
+    ));
+  const command = call.name === 'exec_command' ? (call.input as {cmd?: unknown} | null)?.cmd : undefined;
+  const diffLimit = 48;
+  const longDiff =
+    expanded &&
+    fileChange &&
+    applied &&
+    changeReceipt(result).changes.some(change => change.diff.split('\n', diffLimit + 1).length > diffLimit);
+  const outputLabel = (
+    <Text dimColor>
+      {focusedId === outputId ? '› ' : ''}
+      {fullOutput
+        ? '(click to hide full output)'
+        : missing
+          ? `… +${missing} lines${navigation ? ' (click for full output)' : ''}`
+          : '(click for full diff)'}
+    </Text>
+  );
+  const outputControl = navigation ? (
+    <ActivityRow id={outputId} itemId={itemId} width={Math.max(1, width - 5)}>
+      {outputLabel}
+    </ActivityRow>
+  ) : (
+    outputLabel
+  );
   return (
     <Box flexDirection="column" width={width} minWidth={0}>
-      <Text wrap="wrap">
-        <ToolDot status={display.status} animate={animate} />
-        <Text bold>{safeText(name)}</Text>
-        {safeText(argument)}
-      </Text>
+      {expandHint ? (
+        <ActivityRow id={activityId} itemId={itemId} width={width}>
+          {title}
+        </ActivityRow>
+      ) : (
+        title
+      )}
       {pending ? null : (
         <ResultLine width={width}>
+          {expanded && typeof command === 'string' && command.includes('\n') ? (
+            <TextLine width={Math.max(1, width - 5)}>{command}</TextLine>
+          ) : null}
           {call.name === 'update_plan' && result?.status === 'ok' ? (
             <TodoItems items={todosFromInput(call.input)} width={Math.max(1, width - 5)} />
-          ) : (
-            display.lines.map((line, at) => (
-              <Emphasis
-                key={at}
-                line={safeText(line)}
-                color={
-                  failed &&
-                  (display.status === 'denied' ||
-                    !['exec_command', 'write_stdin'].includes(call.name) ||
-                    line.startsWith('Error:'))
-                    ? color('error')
-                    : plain
-                      ? undefined
-                      : color('foregroundMuted')
-                }
+          ) : fullOutput ? (
+            <>
+              {outputControl}
+              <WindowedOutput
+                lines={display.lines}
+                width={Math.max(1, width - 5)}
+                color={color(failed ? 'error' : 'foregroundMuted')}
               />
-            ))
+            </>
+          ) : (
+            <>
+              {paintLines(head)}
+              {missing || longDiff ? outputControl : null}
+              {paintLines(tail)}
+            </>
           )}
-          {applied ? <ToolDiff result={result} expanded={expanded} width={Math.max(1, width - 5)} /> : null}
+          {applied ? (
+            <ToolDiff
+              result={result}
+              expanded={fullOutput}
+              maxLines={expanded ? diffLimit : undefined}
+              width={Math.max(1, width - 5)}
+            />
+          ) : null}
           {result?.attachments?.map((attachment, at) => (
             <TextLine key={at} width={Math.max(1, width - 5)}>{`[${attachment.mime}] ${attachment.name}`}</TextLine>
           ))}
@@ -245,12 +335,88 @@ function ToolEntry({call, result, streaming, streamed, expanded, width, animate}
       )}
     </Box>
   );
+});
+/** Expanded output keeps its full logical height and mounts only rows near the terminal viewport. */
+function WindowedOutput({lines, width, color}: {lines: string[]; width: number; color?: string}) {
+  const rows = useMemo(
+    () =>
+      lines.flatMap(line => {
+        const safe = safeText(line);
+        return stringCells(safe) <= width
+          ? [safe || ' ']
+          : wrapRuns([{text: safe}], width).map(row => row.map(run => run.text).join('') || ' ');
+      }),
+    [lines, width],
+  );
+  return (
+    <WindowedRows count={rows.length}>
+      {(first, end) => <Text color={color}>{rows.slice(first, end).join('\n')}</Text>}
+    </WindowedRows>
+  );
+}
+function previewToolLines(lines: string[], live: boolean) {
+  const limit = 12;
+  if (lines.length <= limit) return {head: lines, tail: [], missing: 0};
+  const head = live ? 0 : limit / 2;
+  return {head: lines.slice(0, head), tail: lines.slice(-(limit - head)), missing: lines.length - limit};
 }
 type Block =
   | {kind: 'hook'; index: number; name: string; text: string}
   | {kind: 'text'; index: number; text: string; at?: number}
   | {kind: 'reasoning'; index: number; text: string}
   | {kind: 'tools'; index: number; callIds: string[]};
+interface ItemPresentation {
+  detailedBlocks: Block[];
+  normalBlocks: Block[];
+  calls: ReadonlyMap<string, ToolCall>;
+  results: ReadonlyMap<string, ToolResult>;
+  files: string[];
+  postHooks: number;
+}
+const recentPresentations = renderCache<Item, ItemPresentation>(48);
+function itemPresentation(item: Item): ItemPresentation {
+  return recentPresentations(item, () => {
+    const parts = item.role === 'assistant' ? transcriptParts(item) : [];
+    let textPrefix = '';
+    let renderedTextLength = 0;
+    let postHooks = 0;
+    const blocks: Block[] = [];
+    parts.forEach((part, index) => {
+      if (part.kind === 'text') {
+        textPrefix += part.text;
+        const clean = parseMemoryCitations(textPrefix, true).content;
+        const text = clean.slice(renderedTextLength);
+        renderedTextLength = clean.length;
+        if (text) blocks.push({kind: 'text', index, text, at: part.at});
+      } else if (part.kind === 'reasoning') blocks.push({kind: 'reasoning', index, text: part.text});
+      else if (part.kind === 'hook') {
+        if (part.event.event === 'PostToolUse') postHooks++;
+        blocks.push({kind: 'hook', index, name: part.event.name, text: part.event.summary});
+      } else {
+        const last = blocks.at(-1);
+        if (last?.kind === 'tools') last.callIds.push(...part.callIds);
+        else blocks.push({kind: 'tools', index, callIds: [...part.callIds]});
+      }
+    });
+    const normalBlocks: Block[] = [];
+    for (const block of blocks) {
+      if (block.kind === 'hook') continue;
+      const last = normalBlocks.at(-1);
+      if (block.kind === 'tools' && last?.kind === 'tools')
+        normalBlocks[normalBlocks.length - 1] = {...last, callIds: [...last.callIds, ...block.callIds]};
+      else normalBlocks.push(block);
+    }
+    // Citations can straddle text deltas or parts, so extract file names from the joined prefix.
+    return {
+      detailedBlocks: blocks,
+      normalBlocks,
+      files: parseMemoryCitations(textPrefix, !!item.streaming).files,
+      calls: new Map(item.toolCalls?.map(call => [call.id, call])),
+      results: new Map(item.toolResults?.map(result => [result.callId, result])),
+      postHooks,
+    };
+  });
+}
 export interface TranscriptItemProps {
   item: Item;
   width?: number;
@@ -283,25 +449,14 @@ export const TranscriptItem = memo(function TranscriptItem({
 }: TranscriptItemProps) {
   const {color} = useTheme();
   const ui = useUiTheme();
+  const navigation = useContext(ActivityNavigation);
+  const expansionHint = navigation?.expandHint;
   const anchors = useContext(PromptAnchors);
   const searchAnchors = useContext(SearchAnchors);
   const {rows} = useTerminalSize();
   const liveRows = liveRowBudget ?? Math.max(8, (rows || 24) - 12);
   const bodyWidth = Math.max(1, width - 2);
-  const parts = transcriptParts(item);
-  // Parse the joined assistant text once so a citation split between deltas is still hidden.
-  const citations =
-    item.role === 'assistant'
-      ? parseMemoryCitations(
-          parts
-            .filter(part => part.kind === 'text')
-            .map(part => part.text)
-            .join(''),
-          !!item.streaming,
-        )
-      : {content: item.content, files: []};
-  const calls = new Map(item.toolCalls?.map(call => [call.id, call]));
-  const results = new Map(item.toolResults?.map(result => [result.callId, result]));
+  const {detailedBlocks, normalBlocks, files, calls, results, postHooks} = itemPresentation(item);
   const label = model ?? item.model;
   const entries: {key: string; node: ReactNode; attached?: boolean}[] = [];
   if (item.role === 'user') {
@@ -318,29 +473,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   } else if (item.role !== 'assistant')
     entries.push({key: 'other', node: <TextLine width={width}>{item.content}</TextLine>});
   else {
-    let textPrefix = '';
-    let renderedTextLength = 0;
-    const blocks: Block[] = [];
-    parts.forEach((part, index) => {
-      if (part.kind === 'text') {
-        textPrefix += part.text;
-        const cleanPrefix = parseMemoryCitations(textPrefix, true).content;
-        const full = cleanPrefix.slice(renderedTextLength);
-        renderedTextLength = cleanPrefix.length;
-        // A live item re-renders every frame: keep it to a viewport-sized tail so cost and latency stay bounded
-        // while a long answer streams; the finished item is committed in full.
-        const text = item.streaming ? liveTail(full, liveRows) : full;
-        if (text) blocks.push({kind: 'text', index, text, at: part.at});
-      } else if (part.kind === 'reasoning') blocks.push({kind: 'reasoning', index, text: part.text});
-      else if (part.kind === 'hook') {
-        if (detailed) blocks.push({kind: 'hook', index, name: part.event.name, text: part.event.summary});
-      } else {
-        const last = blocks.at(-1);
-        if (last?.kind === 'tools') last.callIds.push(...part.callIds);
-        else blocks.push({kind: 'tools', index, callIds: [...part.callIds]});
-      }
-    });
-    for (const block of blocks) {
+    for (const block of detailed ? detailedBlocks : normalBlocks) {
       if (block.kind === 'text') {
         const stamp = [block.at !== undefined ? formatTime(block.at) : '', label ?? ''].filter(Boolean).join(' ');
         if (detailed && stamp)
@@ -358,7 +491,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           node: (
             <Box minWidth={0}>
               <Text color={color('foreground')}>⏺ </Text>
-              <Markdown text={block.text} width={bodyWidth} />
+              <Markdown text={item.streaming ? liveTail(block.text, liveRows) : block.text} width={bodyWidth} />
             </Box>
           ),
         });
@@ -375,15 +508,32 @@ export const TranscriptItem = memo(function TranscriptItem({
       } else if (block.kind === 'reasoning') {
         const id = `${item.id}:reasoning:${block.index}`;
         const open = detailed || expandedIds.has(id);
+        const title = (
+          <Text dimColor italic color={color('foregroundMuted')}>
+            {focusedId === id ? '› ' : ''}✻ Thinking… {open ? '▾' : '▸'}
+            {!detailed && expansionHint
+              ? open
+                ? ' (click to collapse)'
+                : ` ${expansionHint}`
+              : focusedId === id
+                ? ' (Ctrl+O)'
+                : ''}
+          </Text>
+        );
         entries.push({
           key: id,
           node: (
             <Box flexDirection="column" minWidth={0}>
-              <Text dimColor italic color={color('foregroundMuted')}>
-                {focusedId === id ? '› ' : ''}✻ Thinking… {open ? '▾' : '▸'}
-                {focusedId === id ? ' (Ctrl+O)' : ''}
-              </Text>
-              {open ? <Markdown text={block.text} width={width} /> : null}
+              {navigation && !detailed ? (
+                <ActivityRow id={id} itemId={item.id} width={width}>
+                  {title}
+                </ActivityRow>
+              ) : (
+                title
+              )}
+              {open ? (
+                <Markdown text={item.streaming ? liveTail(block.text, liveRows) : block.text} width={width} />
+              ) : null}
             </Box>
           ),
         });
@@ -393,35 +543,71 @@ export const TranscriptItem = memo(function TranscriptItem({
           calls,
           results,
           live: !!item.streaming,
-          isolated: callId => detailed || isUserShell(callId) || expandedIds.has(toolId(callId)),
+          isolated: callId => detailed || isUserShell(callId) || (!navigation && expandedIds.has(toolId(callId))),
         });
-        segments.forEach((segment, at) => {
-          if (segment.kind === 'summary')
+        const tool = (callId: string, expanded: boolean, standalone: boolean) => {
+          const id = toolId(callId);
+          return (
+            <ToolEntry
+              key={id}
+              itemId={item.id}
+              activityId={id}
+              call={calls.get(callId)!}
+              result={results.get(callId)}
+              streaming={!!item.streaming}
+              streamed={item.toolOutput?.[callId]}
+              expanded={expanded}
+              fullOutput={expanded && expandedIds.has(`${id}:output`)}
+              expandHint={
+                standalone && navigation && !detailed && !isUserShell(callId)
+                  ? expanded
+                    ? '(click to collapse)'
+                    : expansionHint
+                  : undefined
+              }
+              focusedId={focusedId === id || focusedId === `${id}:output` ? focusedId : undefined}
+              width={width}
+              animate={animate}
+            />
+          );
+        };
+        segments.forEach(segment => {
+          if (segment.kind === 'summary') {
+            const id = toolId(segment.callIds[0]!);
+            const open = !!navigation && expandedIds.has(id);
+            const title = (
+              <SummaryLine
+                text={segment.text}
+                width={navigation ? undefined : width}
+                focused={focusedId === id && !!navigation}
+                hint={open ? '(click to collapse)' : expansionHint}
+              />
+            );
             entries.push({
-              key: `tools:${block.index}:${at}`,
-              node: <SummaryLine text={segment.text} width={width} />,
-            });
-          else {
-            const call = calls.get(segment.callId)!;
-            entries.push({
-              key: toolId(segment.callId),
-              node: (
-                <ToolEntry
-                  call={call}
-                  result={results.get(segment.callId)}
-                  streaming={!!item.streaming}
-                  streamed={item.toolOutput?.[segment.callId]}
-                  expanded={detailed || isUserShell(segment.callId) || expandedIds.has(toolId(segment.callId))}
-                  width={width}
-                  animate={animate}
-                />
+              key: id,
+              node: navigation ? (
+                <Box flexDirection="column">
+                  <ActivityRow id={id} itemId={item.id} width={width}>
+                    {title}
+                  </ActivityRow>
+                  {open ? segment.callIds.map(callId => tool(callId, true, false)) : null}
+                </Box>
+              ) : (
+                title
               ),
             });
-          }
+          } else
+            entries.push({
+              key: toolId(segment.callId),
+              node: tool(
+                segment.callId,
+                detailed || isUserShell(segment.callId) || expandedIds.has(toolId(segment.callId)),
+                true,
+              ),
+            });
         });
       }
     }
-    const postHooks = parts.filter(part => part.kind === 'hook' && part.event.event === 'PostToolUse').length;
     if (detailed && postHooks)
       entries.push({
         key: 'hook-count',
@@ -432,14 +618,11 @@ export const TranscriptItem = memo(function TranscriptItem({
           </ResultLine>
         ),
       });
-    if (citations.files.length)
+    if (files.length)
       entries.push({
         key: 'memory',
         node: (
-          <TextLine
-            width={width}
-            color={color('foregroundMuted')}
-          >{`Ký ức đã dùng: ${citations.files.join(', ')}`}</TextLine>
+          <TextLine width={width} color={color('foregroundMuted')}>{`Ký ức đã dùng: ${files.join(', ')}`}</TextLine>
         ),
       });
     if (item.interrupted)
@@ -495,7 +678,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       width={width}
       minWidth={0}
       flexDirection="column"
-      marginBottom={1}
+      marginBottom={TRANSCRIPT_ITEM_GAP}
       ref={
         anchors || searchAnchors
           ? (el: DOMElement | null) => {
@@ -542,6 +725,7 @@ export interface TranscriptProps {
   historyKey?: string;
   focusedId?: string;
   onFocusChange?: (id: string) => void;
+  expandedByItem?: ReadonlyMap<string, ReadonlySet<string>>;
   animate?: boolean;
   /** Explicit bounded history inspection: 0 = newest page, disables Static. */
   historyOffset?: number;
@@ -561,7 +745,7 @@ export interface TranscriptProps {
   model?: string;
   formatTime?: (ms: number) => string;
 }
-export function Transcript({
+export const Transcript = memo(function Transcript({
   items,
   width: requestedWidth,
   isActive = false,
@@ -569,6 +753,7 @@ export function Transcript({
   historyKey = 'transcript',
   focusedId,
   onFocusChange,
+  expandedByItem,
   animate = true,
   historyOffset,
   bounded = false,
@@ -599,7 +784,7 @@ export function Transcript({
   );
   const showAllKey = keyLabels(keymap, 'Transcript', 'transcript:toggleShowAll')[0] ?? 'unbound';
   const hintKey = showAllKey === 'ctrl+e' ? 'Ctrl+E' : showAllKey;
-  const ids = live.flatMap(activityIds);
+  const ids = isActive ? live.flatMap(activityIds) : [];
   const selected = focusedId ?? (localFocus && ids.includes(localFocus) ? localFocus : ids.at(-1));
   const focus = (delta: number) => {
     if (!ids.length) return;
@@ -653,17 +838,17 @@ export function Transcript({
           key={item.id}
           item={item}
           width={width}
-          focusedId={selected}
-          expandedIds={expandedIds}
+          focusedId={selected?.startsWith(`${item.id}:`) ? selected : undefined}
+          expandedIds={expandedByItem ? expandedByItem.get(item.id) : expandedIds}
           liveRows={liveRows}
           showSpinner={showSpinner}
           animate={animate}
           detailed={detailed}
-          searchMatch={searchMatch}
+          searchMatch={searchMatch?.id === item.id ? searchMatch : undefined}
           model={model}
           formatTime={formatTime}
         />
       ))}
     </Box>
   );
-}
+});

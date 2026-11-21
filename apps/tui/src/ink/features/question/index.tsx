@@ -162,7 +162,12 @@ export function QuestionRequestDialog({request, ...props}: DialogProps & {reques
   ];
   return (
     <Panel width={size.width} ruleStyle="dialog" padding={0} accent={muted}>
-      <PanelTabs tabs={chips} selected={selectedChip} />
+      <PanelTabs
+        tabs={chips}
+        selected={selectedChip}
+        onSelect={value => goTo(chips.indexOf(value))}
+        isActive={!task.busy}
+      />
       <Box height={1} />
       {review ? (
         <>
@@ -180,6 +185,8 @@ export function QuestionRequestDialog({request, ...props}: DialogProps & {reques
               {id: 'cancel', label: 'Cancel'},
             ]}
             cursor={reviewCursor}
+            onCursorChange={setReviewCursor}
+            isActive={!task.busy}
             width={size.width}
           />
         </>
@@ -188,11 +195,21 @@ export function QuestionRequestDialog({request, ...props}: DialogProps & {reques
           <TextLine bold>{question.question}</TextLine>
           {question.multiple ? <TextLine color={muted}>Select all that apply.</TextLine> : null}
           <Box height={1} />
-          <OptionList items={optionItems} cursor={cursor} width={size.width} />
+          <OptionList
+            items={optionItems}
+            cursor={cursor}
+            onCursorChange={setCursor}
+            onWheel={direction => setCursor(Math.max(0, Math.min(chatRow, cursor + direction)))}
+            isActive={!task.busy}
+            width={size.width}
+          />
           <Rule glyph="─" color={muted} width={size.width} />
           <OptionList
             items={[{id: 'chat', label: 'Chat about this'}]}
             cursor={cursor - chatRow}
+            onCursorChange={() => setCursor(chatRow)}
+            onWheel={direction => setCursor(Math.max(0, Math.min(chatRow, cursor + direction)))}
+            isActive={!task.busy}
             start={otherRow + 2}
             width={size.width}
           />

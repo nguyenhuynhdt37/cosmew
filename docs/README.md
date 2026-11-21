@@ -6,7 +6,7 @@ The continued Claude task implements W0–W7 from the approved
 [approval ADR 0040](adr/0040-codex-approval-policy.md), [extended read ADR 0041](adr/0041-full-read.md),
 [plan/questions ADR 0042](adr/0042-plan-and-questions.md),
 [LSP ADR 0043](adr/0043-sandboxed-code-intelligence.md), [MCP/web ADR 0044](adr/0044-mcp-and-web-tools.md). Login rework: [ADR 0045](adr/0045-remove-delegated-and-chat-only-runtimes.md), [0046](adr/0046-host-provider-config.md), [0047](adr/0047-chatgpt-direct-api-and-copilot-supergrok-research.md), [0048](adr/0048-deepseek-reasoning-replay.md).
-Public contract is 1.40 (Cosmew rename and reasoning declarations: [ADR 0078](adr/0078-user-declared-reasoning-efforts.md)); previous contract is 1.39 (P3: [ADR 0074](adr/0074-p3-review-and-session-controls.md); P1 SDK: [delivery](delivery/tui-v4/p1-backend.md), [ADRs 0069–0073](adr/0069-p1-queued-input-and-status.md); permissions: [ADR 0061](adr/0061-claude-code-permissions-and-sandbox.md); working directories: [ADR 0067](adr/0067-working-directories.md); user MCP connect: [ADR 0068](adr/0068-user-mcp-connect.md), no contract bump; memories: [ADR 0057](adr/0057-user-scoped-project-memories.md); skills: [ADR 0056](adr/0056-skills-discovery-and-mediated-invocation.md)); SQLite schema 10. Context/evidence continuation: [ADR 0063](adr/0063-retrievable-tool-evidence-and-context-continuation.md). ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
+Public contract is 1.42 (background task display: [ADR 0088](adr/0088-background-task-display.md)); previous contract is 1.41 (provider replay, evidence dedup and MCP corrections: [delivery](delivery/tool-reliability-fixes.md)); previous contract is 1.40 (Cosmew rename and reasoning declarations: [ADR 0078](adr/0078-user-declared-reasoning-efforts.md)); previous contract is 1.39 (P3: [ADR 0074](adr/0074-p3-review-and-session-controls.md); P1 SDK: [delivery](delivery/tui-v4/p1-backend.md), [ADRs 0069–0073](adr/0069-p1-queued-input-and-status.md); permissions: [ADR 0061](adr/0061-claude-code-permissions-and-sandbox.md); working directories: [ADR 0067](adr/0067-working-directories.md); user MCP connect: [ADR 0068](adr/0068-user-mcp-connect.md), no contract bump; memories: [ADR 0057](adr/0057-user-scoped-project-memories.md); skills: [ADR 0056](adr/0056-skills-discovery-and-mediated-invocation.md)); SQLite schema 10. Context/evidence continuation: [ADR 0063](adr/0063-retrievable-tool-evidence-and-context-continuation.md). ChatGPT sign-in fixes: [ADR 0050](adr/0050-chatgpt-invalid-grant-recovery.md).
 UAT diagnostics, usage and execution evidence: [ADR 0051](adr/0051-uat-diagnostics-usage-and-execution-evidence.md). Wave 2 S1 headless exec: [ADR 0052](adr/0052-headless-exec-and-sdk-interactions.md). Codex sandbox/approval alignment (superseded by [ADR 0061](adr/0061-claude-code-permissions-and-sandbox.md): Claude Code permission modes, settings files and sandbox), model compaction, and presets/Full Access: [ADR 0053](adr/0053-codex-sandbox-and-approval-alignment.md), [0054](adr/0054-model-compaction.md), [0055](adr/0055-codex-approval-decisions-network-and-full-access.md). Other wave 2/3 steps remain future work.
 This is not authenticated-generation or Product MVP completion evidence.
 
@@ -21,7 +21,10 @@ Fullscreen wheel/trackpad navigation and terminal input lifecycle: [ADR 0079](ad
 TUI V2: [architecture decision](adr/0039-tui-v2-virtualized-transcript.md),
 [usage](delivery/tui-v2/usage.md), [benchmarks and acceptance](delivery/tui-v2/report.md).
 
-Latest execution milestone: [ADR 0062](adr/0062-remove-docker-command-backend.md) — commands use the OS sandbox only. The Docker backend of [ADR 0032](adr/0032-contained-command-sessions.md), [ADR 0034](adr/0034-unified-exec-terminal-parity.md) and [ADR 0035](adr/0035-native-sandbox-default.md) is gone. Historical gate descriptions below do not enable it.
+Sandbox defaults and controls: [ADR 0081](adr/0081-sandbox-defaults-like-claude-code.md) — sandbox off, regular shell permissions, `/sandbox` enables containment.
+Resumable first-run theme, optional sign-in and security notes: [ADR 0086](adr/0086-first-run-onboarding.md).
+
+Latest execution milestone: [ADR 0062](adr/0062-remove-docker-command-backend.md) — Docker backend removed; native containment is optional under ADR 0081. The Docker backend of [ADR 0032](adr/0032-contained-command-sessions.md), [ADR 0034](adr/0034-unified-exec-terminal-parity.md) and [ADR 0035](adr/0035-native-sandbox-default.md) is gone. Historical gate descriptions below do not enable it.
 
 Project/repository rename: [ADR 0076](adr/0076-cosmew-project-rename.md). Cosmew is the product; `fyn` is the short CLI command. Historical documents retain legacy product names where recording earlier decisions.
 
@@ -37,6 +40,8 @@ Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-
 
 Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
 Claude Code command-name and autocomplete parity: [ADR 0077](adr/0077-claude-slash-command-parity.md).
+
+User settings appearance, one-time SQLite import and extended palette picker: [ADR 0080](adr/0080-user-settings-appearance.md).
 
 Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/futryn-tui-acceptance.md).
 

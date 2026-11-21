@@ -7,6 +7,7 @@ import {NativeCommandRuntime} from '@cosmew/tools';
 import {openInk} from '../../apps/tui/src/ink/testing/ink-session';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault, type ScriptedReply, type ScriptedView} from '../fixtures';
+import {writeSandboxSettings} from '../sandbox-config';
 const nativeTest = test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'));
 const clean: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -34,6 +35,8 @@ async function setup(protocol: 'chat' | 'anthropic', script: (v: ScriptedView) =
     join(root, 'lint.ts'),
     "import {readFileSync} from 'node:fs';if(!readFileSync('entry.ts','utf8').trimEnd().endsWith(';'))process.exit(1);console.log('LINT_PASS');",
   );
+  // This acceptance tests sandboxed Bash, explicitly enabled with auto-approval (ADR 0081).
+  writeSandboxSettings(home);
   const server = fixtureServer();
   server.set({script});
   clean.push(() => server.server.stop(true));
@@ -147,6 +150,8 @@ nativeTest(
       await tui.submitPrompt('/diff');
       await tui.waitFor('src/math');
       await tui.handleKey('Escape');
+      // Complete the public startup verification before replacing the fixture with a review-only script.
+      expect(await c.client.verifyAccount()).toEqual({ok: true});
       c.server.set({
         script: view => {
           expect(view.system).toContain('Current session mode: REVIEW');
@@ -159,6 +164,9 @@ nativeTest(
         },
       });
       await tui.submitPrompt('/review');
+      // Slash dispatch can outlive submitPrompt's short turn-start observation window under suite load.
+      await tui.waitFor('No actionable findings');
+      await tui.idle();
       expect(c.client.mode()).toBe('review');
       expect(tui.getTranscript().at(-1)?.content).toContain('No actionable findings');
       expect(readFileSync(join(c.root, 'src/math.ts'), 'utf8')).toContain('a + b');

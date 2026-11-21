@@ -1,6 +1,22 @@
 import {expect, test} from 'bun:test';
 import {SLASH_COMMANDS, acceptSlashSelection, parseSlashCommand} from '@cosmew/sdk';
 
+test('/tasks and /bashes expose the background task overlay during a running response', () => {
+  for (const name of ['/tasks', '/bashes']) {
+    const parsed = parseSlashCommand(name);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.definition).toMatchObject({
+      command: '/tasks',
+      handler: 'overlay',
+      overlay: 'background-tasks',
+      duringRequest: true,
+    });
+    expect(parsed.definition?.unavailable).toBeUndefined();
+    expect(parsed.definition?.autocomplete).not.toBe(false);
+    expect(parsed.definition?.help).not.toBe(false);
+  }
+});
+
 test('/config accepts key=value arguments for the interactive settings route', () => {
   const parsed = parseSlashCommand('/config theme=dark');
   expect(parsed.error).toBeUndefined();

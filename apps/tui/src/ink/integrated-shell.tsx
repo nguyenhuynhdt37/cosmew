@@ -1,7 +1,8 @@
+import {SandboxDialog} from './features/sandbox';
 /** @jsxImportSource react */
 import {useTerminalSize} from './hooks/use-terminal-size';
 import {useTerminalWheel} from './hooks/use-terminal-wheel';
-import {useEffect, useRef, useState, type ReactNode} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -15,6 +16,7 @@ import {
   keybindingsPath,
   keymapStore,
   loadKeybindings,
+  useBindingLabel,
   useClientEvents,
   useFutrynClient,
   useKeyRouter,
@@ -26,6 +28,7 @@ import {Panel, TextLine, safeText, spinnerTip} from './ui';
 import {readMacClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
+import {verificationMessage} from './features/startup-gate/logic';
 import {
   PromptAnchors,
   SearchAnchors,
@@ -41,9 +44,12 @@ import {
   buildSearchIndexAsync,
   findMatchesAsync,
   searchStatus,
+  searchExcerpt,
   type SearchIndex,
   type SearchMatch,
 } from './features/transcript/search';
+import {ActivityNavigation, type ActivityAnchor} from './features/transcript/activity';
+import {useTranscriptViewport} from './features/transcript/viewport';
 import {TranscriptLegend} from './features/transcript/legend';
 import {SearchBar} from './features/transcript/search-bar';
 import {DetailedFooter} from './features/transcript/detailed-footer';
@@ -51,8 +57,6 @@ import {DETAILED_RECENT_LIMIT} from './features/transcript/show-all';
 import {ComposerView, useComposer, editorName} from './features/composer';
 import {Plan, usePlan} from './features/plan';
 import {Notices, useNotices} from './features/notices';
-import {Subagents, useSubagents} from './features/subagents';
-import {useStatusLine} from './features/status';
 import {PermissionRequestDialog, PermissionRulesDialog, usePermissions} from './features/permissions';
 import {QuestionRequestDialog} from './features/question';
 import {ConnectDialog} from './features/connect';
@@ -183,6 +187,34 @@ export function IntegratedShell({
   const width = Math.max(1, requestedWidth ?? columns);
   const transcript = useTranscript();
   const detail = useDetailedTranscript();
+  const activityAnchors = useRef(new Map<string, ActivityAnchor>());
+  const [focusedActivity, setFocusedActivity] = useState<string>();
+  const [expandedByItem, setExpandedByItem] = useState(new Map<string, ReadonlySet<string>>());
+  const revealOnToggle = useRef<string | undefined>(undefined);
+  const toggleActivity = useCallback((itemId: string, id: string) => {
+    revealOnToggle.current = id;
+    setExpandedByItem(previous => {
+      const next = new Map(previous);
+      const expanded = new Set(next.get(itemId));
+      if (expanded.has(id)) expanded.delete(id);
+      else expanded.add(id);
+      if (expanded.size) next.set(itemId, expanded);
+      else next.delete(itemId);
+      return next;
+    });
+  }, []);
+  const verboseKey = useBindingLabel('Global', 'app:toggleTranscript');
+  const previousActivityKey = useBindingLabel('Transcript', 'transcript:focusPrevious');
+  const nextActivityKey = useBindingLabel('Transcript', 'transcript:focusNext');
+  const toggleActivityKey = useBindingLabel('Transcript', 'transcript:toggleItem');
+  const activityNavigation = useMemo(
+    () => ({
+      anchors: activityAnchors.current,
+      toggle: toggleActivity,
+      expandHint: verboseKey === 'unbound' ? '(click to expand)' : `(click or ${verboseKey} to expand)`,
+    }),
+    [toggleActivity, verboseKey],
+  );
   const [showAll, setShowAll] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
   const [viewerStatus, setViewerStatus] = useState<string>();
@@ -196,27 +228,28 @@ export function IntegratedShell({
   // Fullscreen owns a paged history window; use upstream's virtual-scroll branch (B4/B7).
   // Equivalence to upstream's render-range virtualizer: Needs verification.
   const virtualScrollActive = fullscreen;
-  const diff = useDiff();
   const [diffOpen, setDiffOpen] = useState(false);
+  const [diffFocused, setDiffFocused] = useState(false);
+  const diff = useDiff(diffOpen);
   const diffLayout = diffPanelLayout(width, diffOpen);
   const contentWidth = diffLayout.mainWidth;
+  const diffHasFocus = diffFocused && diffLayout.visible && !overlay.active && !detail.detailed;
+  useEffect(() => {
+    if (!diffOpen || !diffLayout.visible) setDiffFocused(false);
+  }, [diffOpen, diffLayout.visible]);
   const autoDiffOpened = useRef(false);
   const notices = useNotices();
   const plan = usePlan();
-  const agents = useSubagents();
   const permissions = usePermissions();
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [olderPages, setOlderPages] = useState(0);
-  const scroll = useScrollback(() => setOlderPages(n => n + 1));
+  const scroll = useScrollback();
   useTerminalWheel(
     event => {
-      const delta = -event.direction * 3;
-      scroll.scrollBy(delta);
-      if (delta > 0 && scroll.back + delta >= scroll.maxBack && transcript.items.length > 60 + olderPages * 40)
-        setOlderPages(n => n + 1);
+      if (diffLayout.visible && event.column > contentWidth) return;
+      scroll.scrollBy(-event.direction * 3);
     },
-    fullscreen && ready && !overlay.active,
+    fullscreen && ready && !overlay.active && !diffHasFocus,
   );
   const [section, setSection] = useState<SettingsSection>('General');
   const turn = useRef<AbortController | null>(null);
@@ -229,19 +262,22 @@ export function IntegratedShell({
   const closePanel = useRef(() => {});
   const sendNow = useRef(false);
   const editing = useRef(false);
-  const commands = useRef(new Map<AbortController, Promise<void>>());
+  const commands = useRef(new Map<AbortController, Promise<boolean | void>>());
   const mounted = useRef(true);
   const started = useRef(false);
-  const session = useRef(client.activeSession()?.id);
+  const [initialSessionId] = useState(() => client.status().activeSessionId ?? undefined);
+  const session = useRef(initialSessionId);
   const shellCall = useRef<ToolCall | null>(null);
   const controls = useRef<{interrupt(): boolean; shutdown(): Promise<void>} | null>(null);
-  const current = useRef<{shutdown(): Promise<void>; command(raw: string): Promise<void>} | null>(null);
+  const current = useRef<{shutdown(): Promise<void>; command(raw: string): Promise<boolean | void>} | null>(null);
   const reset = () => {
     transcript.reset();
+    setExpandedByItem(new Map());
+    setFocusedActivity(undefined);
+    revealOnToggle.current = undefined;
     setDiffOpen(false);
     autoDiffOpened.current = false;
-    session.current = client.activeSession()?.id;
-    setOlderPages(0);
+    session.current = client.status().activeSessionId ?? undefined;
     scroll.toBottom();
     notices.clearNotices();
   };
@@ -316,11 +352,14 @@ export function IntegratedShell({
           />,
         );
         break;
+      case 'sandbox':
+        show('sandbox', <SandboxDialog width={width} />);
+        break;
       case 'permissions':
         show('permissions', <PermissionRulesDialog width={width} />);
         break;
       case 'background-tasks':
-        show(route, <BackgroundTasksDialog width={width} />);
+        show(route, <BackgroundTasksDialog width={width} initialTaskId={args} />);
         break;
       case 'agents':
         show(route, <AgentsDialog width={width} />);
@@ -343,6 +382,7 @@ export function IntegratedShell({
       case 'context':
         // Claude Code prints the grid into the transcript; mid-turn it would land inside the running answer.
         if (!turn.current && !shellCall.current) {
+          scroll.toBottom();
           transcript.addContext(routing.current ?? '/context', contextBlock(client));
           break;
         }
@@ -371,7 +411,6 @@ export function IntegratedShell({
           commandNotice('Diff panel hidden');
         } else {
           setDiffOpen(true);
-          void diff.refresh();
         }
         break;
       case 'keybindings':
@@ -382,8 +421,6 @@ export function IntegratedShell({
     }
   };
   const gate = useStartupGate({
-    overlayOpen: Boolean(overlay.active),
-    openOverlay: open,
     onExit: requestExit,
     onReady: () => {
       setReady(true);
@@ -399,7 +436,6 @@ export function IntegratedShell({
     client.revokeToolGrants();
     for (const req of client.listPendingPermissions()) client.dismissPermissionDialog(req.approvalId);
     for (const req of client.listPendingQuestions()) client.dismissQuestion(req.questionId);
-    await gate.shutdown();
     await pending.current;
     await controls.current?.shutdown();
     await Promise.allSettled(commands.current.values());
@@ -407,11 +443,32 @@ export function IntegratedShell({
     client.setToolsEnabled(false);
     if (engine.isPreviewing()) engine.cancelPreview();
   };
-  const submit = (text: string): boolean => {
+  const submit = async (text: string): Promise<boolean> => {
     if (!ready || closing.current || turn.current || !client.toolsEnabled()) return false;
     const abort = new AbortController();
     turn.current = abort;
     scroll.toBottom();
+    const verification = client.verifyAccount(abort.signal);
+    pending.current = verification.then(
+      () => {},
+      () => {},
+    );
+    try {
+      const result = await verification;
+      if (closing.current || abort.signal.aborted || !mounted.current) return false;
+      if (!result.ok) {
+        notices.addNotice(
+          result.reason === 'billing'
+            ? verificationMessage(result.reason, status.activeAccount?.alias, result.providerHint)
+            : verificationMessage(result.reason),
+        );
+        open(result.reason === 'no-account' ? 'connect' : 'accounts');
+        return false;
+      }
+    } finally {
+      turn.current = null;
+    }
+    turn.current = abort;
     setBusy(true);
     pending.current = (async () => {
       let prompt: string | undefined = text;
@@ -424,7 +481,7 @@ export function IntegratedShell({
         const displayPrompt = [prompt, ...client.imageAttachments().map(image => image.label)]
           .filter(Boolean)
           .join('\n');
-        transcript.begin(displayPrompt, undefined, status.status.selection?.modelId);
+        transcript.begin(displayPrompt, undefined, status.selection?.modelId);
         try {
           for await (const event of client.sendMessage(prompt, {signal: abort.signal})) {
             if (mounted.current) {
@@ -444,7 +501,7 @@ export function IntegratedShell({
             abort.signal.aborted || sendNow.current ? {cancelled: true} : {error: requestFailure(error)},
           );
         }
-        session.current = client.activeSession()?.id;
+        session.current = client.status().activeSessionId ?? undefined;
         prompt = abort.signal.aborted ? undefined : client.takeQueuedMessage();
       }
     })().finally(() => {
@@ -595,7 +652,12 @@ export function IntegratedShell({
       notices.addNotice('Not implemented: prompt jumps need the fullscreen transcript.');
       return;
     }
-    const tops = [...anchors.current.values()].map(el => rowWithin(el, content)).sort((a, b) => a - b);
+    const tops = transcript.items.flatMap((item, index) => {
+      if (item.role !== 'user') return [];
+      const node = anchors.current.get(item.id);
+      const row = node ? rowWithin(node, content) : window.offsets[index];
+      return row === undefined ? [] : [row];
+    });
     const here = scroll.topRow;
     const target = direction < 0 ? tops.findLast(top => top < here) : tops.find(top => top > here);
     if (target === undefined) notices.addNotice(direction < 0 ? 'No earlier prompt.' : 'No later prompt.');
@@ -628,6 +690,7 @@ export function IntegratedShell({
     notice: commandNotice,
     reset,
     submit,
+    setTheme: id => engine.setTheme(id),
     exit: () => gate.exit(),
   };
   const command = async (raw: string) => {
@@ -639,19 +702,24 @@ export function IntegratedShell({
     if (closing.current) return;
     commands.current.set(abort, task);
     try {
-      await task;
+      return await task;
     } finally {
       commands.current.delete(abort);
       if (routing.current === raw.trim()) routing.current = undefined;
     }
   };
   current.current = {shutdown, command};
+  const hasActivities = useMemo(
+    () => transcript.items.some(item => item.toolCalls?.length || item.parts?.some(part => part.kind === 'reasoning')),
+    [transcript.items],
+  );
   const composer = useComposer({
+    transcriptItems: hasActivities,
     onSubmit: submit,
     onCommand: command,
     busy,
     workspaceAccess: ready,
-    isActive: ready && !overlay.active && !detail.detailed,
+    isActive: ready && !overlay.active && !detail.detailed && !diffHasFocus,
     inputWidth: Math.max(1, width - 3),
     onToggleTasks: plan.toggleTodos,
     onRewind: () => open('rewind'),
@@ -659,8 +727,8 @@ export function IntegratedShell({
     onSuspend: suspendProcess,
     onSendQueuedNow: sendQueuedNow,
     onRedraw: () => void suspendTerminal(() => {}),
-    onOpenAgents: () => open('background-tasks'),
-    onOpenBackgroundTasks: () => open('background-tasks'),
+    onOpenAgents: id => open('background-tasks', id),
+    onOpenBackgroundTasks: id => open('background-tasks', id),
     onReadClipboardImage: () => readMacClipboardImage(),
     onNotice: notices.addNotice,
     onEmptyHomeEnd: edge =>
@@ -727,7 +795,7 @@ export function IntegratedShell({
           `Shell session ${result.sessionId} is still running. Ask the agent to collect its final result with write_stdin.`,
         );
       shellCall.current = null;
-      session.current = client.activeSession()?.id;
+      session.current = client.status().activeSessionId ?? undefined;
     },
   });
   controls.current = composer;
@@ -737,7 +805,7 @@ export function IntegratedShell({
       if (initialCommand) void current.current?.command(initialCommand);
     }
   }, [ready, initialCommand]);
-  const status = useStatusLine(composer.content, ready);
+  const status = composer.status;
   useEffect(() => {
     mounted.current = true;
     registerShutdown?.(() => current.current!.shutdown());
@@ -753,11 +821,11 @@ export function IntegratedShell({
     interaction: () => setInteraction(n => n + 1),
     plan: () => setInteraction(n => n + 1),
     background: event => {
-      if (event.parentSessionId && event.parentSessionId !== client.activeSession()?.id) return;
+      if (event.parentSessionId && event.parentSessionId !== (client.status().activeSessionId ?? undefined)) return;
       if (event.type === 'task.finished' && event.task.kind === 'shell' && event.delivery) {
         const task = event.task;
         transcript.addNotification(
-          `background:${client.activeSession()?.id}:${task.id}`,
+          `background:${client.status().activeSessionId ?? undefined}:${task.id}`,
           `Background command "${task.description}" ${task.status === 'done' ? 'completed' : task.status}${task.exitCode === undefined ? '' : ` (exit code ${task.exitCode})`}`,
         );
       }
@@ -765,14 +833,14 @@ export function IntegratedShell({
     // Idle parent: a queued <subagent> result becomes the next turn so the model can act on it (Codex wakes the parent).
     subagent: notice => {
       if (notice.delivery !== 'queued' || !ready || closing.current || turn.current || shellCall.current) return;
-      if (client.activeSession()?.id !== notice.parentSessionId) return;
+      if ((client.status().activeSessionId ?? undefined) !== notice.parentSessionId) return;
       const next = client.takeQueuedMessage();
       if (next !== undefined) submit(next);
     },
     reactive: event => {
       setInteraction(n => n + 1); // permissions resolved through the SDK elsewhere must close their dialog
       if (event.kind === 'idle' && !turn.current && !shellCall.current) {
-        const id = client.activeSession()?.id;
+        const id = client.status().activeSessionId ?? undefined;
         if (id !== session.current) reset();
       }
     },
@@ -848,6 +916,10 @@ export function IntegratedShell({
     notices.addNotice(`Press ${label} again to close`);
   };
   const stopWork = () => {
+    if (turn.current && !busy) {
+      turn.current.abort();
+      return;
+    }
     if (!composer.interrupt()) {
       turn.current?.abort();
       for (const abort of commands.current.keys()) abort.abort();
@@ -912,31 +984,117 @@ export function IntegratedShell({
   const currentItem = currentMatch ? transcript.items[currentMatch.itemIndex] : undefined;
   const matchBadge = matches.length ? `${(matchAt % matches.length) + 1} of ${matches.length}` : undefined;
   const searchAnchors = useRef(new Map<string, DOMElement>());
+  const highlight = useMemo(
+    () =>
+      detail.detailed && currentItem && currentMatch
+        ? {
+            id: currentItem.id,
+            ...searchExcerpt(searchIndex?.[currentMatch.itemIndex] ?? '', currentMatch, contentWidth),
+          }
+        : undefined,
+    [detail.detailed, currentItem, currentMatch, searchIndex, contentWidth],
+  );
+  const window = useTranscriptViewport(
+    transcript.items,
+    contentWidth,
+    detail.detailed,
+    screenRows === undefined ? undefined : scroll.viewRows || screenRows,
+    scroll.back,
+    searchAnchors.current,
+    highlight?.id,
+  );
+  const revealedMatch = useRef<typeof highlight>(undefined);
   useEffect(() => {
-    if (!currentMatch || !currentItem || !detail.detailed) return;
+    if (!highlight || !fullscreen) {
+      revealedMatch.current = undefined;
+      return;
+    }
+    if (revealedMatch.current === highlight) return;
     const timer = setImmediate(() => {
-      const element = searchAnchors.current.get(currentItem.id);
+      const element = searchAnchors.current.get(highlight.id);
       const root = scroll.content.current;
-      if (element && root)
+      if (element && root) {
+        revealedMatch.current = highlight;
         scroll.showRow(
           rowWithin(element, root) +
             renderToString(
               <Box width={contentWidth}>
-                <Text>{(searchIndex?.[currentMatch.itemIndex] ?? '').slice(0, currentMatch.end)}</Text>
+                <Text>{highlight.text.slice(0, highlight.end)}</Text>
               </Box>,
             ).split('\n').length -
             1,
         );
+      } else if (window.enabled) {
+        scroll.showRow(window.offsets[highlight.itemIndex] ?? 0);
+      }
     });
     return () => clearImmediate(timer);
-  }, [currentMatch, currentItem, detail.detailed, olderPages]);
+  }, [highlight, fullscreen, window.shown.includes(currentItem!), contentWidth, scroll.maxBack]);
   const cycleMatch = (delta: number) => {
     if (!transcriptKeysActive) return false;
     if (matches.length) setMatchAt(at => (at + delta + matches.length) % matches.length);
   };
   const transcriptKeysActive = viewing && !searchOpen;
-  const scrolling = fullscreen && ready && !overlay.active && !searchOpen;
+  const scrolling = fullscreen && ready && !overlay.active && !searchOpen && !diffHasFocus;
+  const activityKeys =
+    ready &&
+    !overlay.active &&
+    !searchOpen &&
+    !diffHasFocus &&
+    (detail.detailed || (!composer.content && !composer.shortcuts && !composer.search));
+  const revealActivity = (id: string) => {
+    const row = activityAnchors.current.get(id)?.node;
+    const root = scroll.content.current;
+    if (!row || !root) return;
+    const top = rowWithin(row, root);
+    const bottom = top + (row.yogaNode?.getComputedHeight() ?? 1);
+    if (top < scroll.topRow) scroll.showRow(top);
+    else if (bottom > scroll.topRow + scroll.viewRows) scroll.showRow(Math.max(top - scroll.viewRows + 2, 0));
+  };
+  useEffect(() => {
+    if (!revealOnToggle.current) return;
+    const timer = setImmediate(() => {
+      const id = revealOnToggle.current;
+      revealOnToggle.current = undefined;
+      if (id) revealActivity(id);
+    });
+    return () => clearImmediate(timer);
+  }, [expandedByItem, scroll.maxBack]);
+  const focusActivity = (delta: -1 | 1) => {
+    if (!activityKeys) return false;
+    const root = scroll.content.current;
+    const order = [...activityAnchors.current]
+      .map(([id, {node}]) => ({
+        id,
+        row: root ? rowWithin(node, root) : 0,
+      }))
+      .sort((a, b) => a.row - b.row);
+    if (!order.length) return false;
+    const index = order.findIndex(entry => entry.id === focusedActivity);
+    const current = order[index];
+    const inView = (row: number) => !root || (row >= scroll.topRow && row < scroll.topRow + scroll.viewRows);
+    const target =
+      current && inView(current.row)
+        ? order[index + delta]
+        : delta < 0
+          ? order.findLast(entry => inView(entry.row))
+          : order.find(entry => inView(entry.row));
+    if (target) {
+      setFocusedActivity(target.id);
+      revealActivity(target.id);
+    }
+  };
   useKeybindings({
+    DiffPanel: {
+      'diff:blur': () => {
+        if (!diffHasFocus) return false;
+        setDiffFocused(false);
+      },
+      'diff:focus': () => {
+        if (!ready || !diffLayout.visible || overlay.active || detail.detailed) return false;
+        setDiffFocused(true);
+      },
+    },
     Global: {
       'app:interrupt': () => {
         if (!ready) {
@@ -963,6 +1121,7 @@ export function IntegratedShell({
         }
         if (ready) {
           if (!detail.detailed) setShowAll(false);
+          scroll.toBottom();
           detail.toggleDetailed();
         }
       },
@@ -1001,6 +1160,14 @@ export function IntegratedShell({
       'scroll:lineDown': () => (transcriptKeysActive ? scroll.scrollBy(-1) : false),
     },
     Transcript: {
+      'transcript:focusPrevious': () => focusActivity(-1),
+      'transcript:focusNext': () => focusActivity(1),
+      'transcript:toggleItem': () => {
+        if (!activityKeys || !focusedActivity) return false;
+        const anchor = activityAnchors.current.get(focusedActivity);
+        if (!anchor) return false;
+        toggleActivity(anchor.itemId, focusedActivity);
+      },
       'transcript:search': () => {
         if (!transcriptKeysActive) return false;
         setSearchOpen(true);
@@ -1056,20 +1223,20 @@ export function IntegratedShell({
     return keymapStore.subscribe(show);
   }, []);
   const activity = transcript.items.findLast(item => item.streaming);
-  // The tail window keeps frame cost bounded in long sessions; paging to the top pulls older items in.
-  const windowSize = 60 + olderPages * 40;
-  const matchWindowStart = currentMatch ? Math.max(0, currentMatch.itemIndex - 30) : undefined;
-  const shownItems = fullscreen
-    ? matchWindowStart !== undefined
-      ? transcript.items.slice(matchWindowStart, matchWindowStart + 60)
-      : transcript.items.slice(-windowSize)
-    : transcript.items;
-  const showBanner = ready && shownItems.length === transcript.items.length;
-  const tip = spinnerTip(transcript.items.filter(item => item.role === 'user').length);
+  const showBanner = ready && (!fullscreen || transcript.items.length <= 60);
+  const tip = useMemo(
+    () => spinnerTip(transcript.items.filter(item => item.role === 'user').length),
+    [transcript.items],
+  );
   const warning = composer.status.permissionMode === 'bypassPermissions' ? BYPASS_PERMISSIONS_WARNING : undefined;
   const dialogWaiting = !!client.listPendingPermissions().length || !!client.listPendingQuestions().length;
   // A dialog replaces the composer; the transcript clips first so choices never leave the screen.
-  const dialogRows = screenRows ? Math.max(1, screenRows - 1 - (ready && detail.detailed ? 2 : 0)) : undefined;
+  const fullOverlay = !!overlay.active?.fullScreen;
+  const dialogRows = screenRows
+    ? fullOverlay
+      ? screenRows
+      : Math.max(1, screenRows - 1 - (ready && detail.detailed ? 2 : 0))
+    : undefined;
   const body = (
     <>
       {!ready ? (
@@ -1080,30 +1247,31 @@ export function IntegratedShell({
         <>
           {showBanner ? (
             <Box marginTop={fullscreen ? 1 : 0} flexDirection="column">
-              <Welcome status={status.status} width={contentWidth} />
+              <Welcome status={status} width={contentWidth} />
             </Box>
           ) : null}
+          {window.before > 0 ? <Box height={window.before} flexShrink={0} /> : null}
           <PromptAnchors.Provider value={anchors.current}>
             <SearchAnchors.Provider value={searchAnchors.current}>
-              <Transcript
-                items={shownItems}
-                bounded
-                showSpinner={false}
-                width={contentWidth}
-                liveRows={Math.max(1, (screenRows ?? 24) - 6)}
-                detailed={detail.detailed}
-                showAll={showAll || !!currentMatch}
-                searchMatch={
-                  currentItem && currentMatch
-                    ? {id: currentItem.id, ...currentMatch, text: searchIndex?.[currentMatch.itemIndex] ?? ''}
-                    : undefined
-                }
-                virtualScroll={virtualScrollActive}
-                model={status.status.selection?.modelId}
-              />
+              <ActivityNavigation.Provider value={activityNavigation}>
+                <Transcript
+                  items={window.shown}
+                  focusedId={focusedActivity}
+                  expandedByItem={expandedByItem}
+                  bounded
+                  showSpinner={false}
+                  width={contentWidth}
+                  liveRows={Math.max(1, (screenRows ?? 24) - 6)}
+                  detailed={detail.detailed}
+                  showAll={showAll || !!currentMatch}
+                  searchMatch={highlight}
+                  virtualScroll={virtualScrollActive}
+                  model={status.selection?.modelId}
+                />
+              </ActivityNavigation.Provider>
             </SearchAnchors.Provider>
           </PromptAnchors.Provider>
-          <Subagents agents={agents.agents} width={contentWidth} />
+          {window.after > 0 ? <Box height={window.after} flexShrink={0} /> : null}
           <Notices notices={notices.notices} width={contentWidth} />
         </>
       )}
@@ -1118,7 +1286,14 @@ export function IntegratedShell({
       overflow={fullscreen ? 'hidden' : undefined}
     >
       <InputScope active={!overlay.active}>
-        <Box flexDirection="row" flexGrow={fullscreen ? 1 : 0} flexShrink={1} minHeight={1} overflow="hidden">
+        <Box
+          display={fullOverlay ? 'none' : 'flex'}
+          flexDirection="row"
+          flexGrow={fullscreen ? 1 : 0}
+          flexShrink={1}
+          minHeight={1}
+          overflow="hidden"
+        >
           <Box width={contentWidth} minWidth={0} flexDirection="column" flexGrow={1} flexShrink={1}>
             {fullscreen && ready ? (
               <ScrollViewport scroll={scroll}>{body}</ScrollViewport>
@@ -1131,6 +1306,9 @@ export function IntegratedShell({
           {ready && diffLayout.visible && !overlay.active ? (
             <DiffSidePanel
               report={diff.report}
+              focused={diffHasFocus}
+              onFocus={() => setDiffFocused(true)}
+              onBlur={() => setDiffFocused(false)}
               onChangeBase={base => {
                 void diff.refresh(base);
               }}
@@ -1139,6 +1317,7 @@ export function IntegratedShell({
               isActive={!overlay.active && !detail.detailed}
               onClose={() => {
                 setDiffOpen(false);
+                setDiffFocused(false);
               }}
               onNotice={notices.addNotice}
             />
@@ -1153,6 +1332,11 @@ export function IntegratedShell({
               showHints={!screenRows || screenRows >= 12}
               fullscreen={fullscreen}
               warning={warning}
+              transcriptHint={
+                activityKeys && hasActivities && (focusedActivity || !scroll.atBottom)
+                  ? `${previousActivityKey}/${nextActivityKey} focus · ${toggleActivityKey} toggle`
+                  : undefined
+              }
               activity={
                 activity ? (
                   <Box flexDirection="column">

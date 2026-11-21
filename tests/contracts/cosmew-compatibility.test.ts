@@ -43,8 +43,8 @@ test('CosmewError and legacy error names are the same constructor', () => {
   expect(error.name).toBe('CosmewError');
 });
 
-test('headless contract version is 1.40', () => {
-  expect(CONTRACT_VERSION).toBe('1.40');
+test('headless contract version is 1.42', () => {
+  expect(CONTRACT_VERSION).toBe('1.42');
 });
 
 test('project permission settings prefer Cosmew root and fall back to legacy roots', () => {

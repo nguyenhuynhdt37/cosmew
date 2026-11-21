@@ -1007,3 +1007,52 @@ for (const Panel of [EffortDialog, ModelsDialog]) {
     });
   }
 }
+
+test('permission diff pages and wheels without moving or approving its decision', async () => {
+  const {TerminalMouseProvider} = await import('../../hooks/use-terminal-wheel');
+  type MouseEvent = import('../../../input/mouse-input').TerminalMouseEvent;
+  type MouseSource = import('../../../input/mouse-input').TerminalMouseInput;
+  const listeners = new Set<(event: MouseEvent) => void>();
+  const mouse: MouseSource = {
+    stdin: {} as MouseSource['stdin'],
+    subscribe: () => () => {},
+    subscribeMouse: listener => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose() {
+      listeners.clear();
+    },
+  };
+  const fixture = dialogFixture();
+  fixture.client.enqueuePermissionRequest({
+    capability: 'fs.write',
+    action: 'apply_patch',
+    target: 'a.ts',
+    reason: 'Write',
+    diffPreview: '@@ -0,0 +1,30 @@\n' + Array.from({length: 30}, (_, at) => `+preview-${at + 1}`).join('\n'),
+  });
+  const view = routed(
+    <TerminalMouseProvider value={mouse}>
+      <PermissionsDialog visibleRows={4} />
+    </TerminalMouseProvider>,
+    fixture,
+  );
+  await settle();
+  expect(view.lastFrame()).toContain('preview-1');
+  await key(view, '\x1b[6~');
+  expect(view.lastFrame()).toContain('preview-5');
+  const row =
+    view
+      .lastFrame()!
+      .split('\n')
+      .findIndex(line => line.includes('preview-5')) + 1;
+  for (const listener of [...listeners]) listener({direction: 1, column: 5, row});
+  await settle();
+  expect(view.lastFrame()).toContain('preview-8');
+  expect(fixture.client.listPendingPermissions()).toHaveLength(1);
+  await key(view, '\x1b[5~');
+  expect(view.lastFrame()).toContain('preview-4');
+});

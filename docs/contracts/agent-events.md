@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.40** (Cosmew rename and optional user-declared provider reasoning metadata; [ADR 0076](../adr/0076-cosmew-project-rename.md), [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md)). Previous shared contract: **1.39** (P3: diff bases, editable plan approval, summarize rewind, selective retract and session/history scopes; [ADR 0074](../adr/0074-p3-review-and-session-controls.md); SQLite 10). Previous contract: **1.38** (P1: background tasks, queued input, plan approval, images, checkpoints and hook/MCP status; [delivery](../delivery/tui-v4/p1-backend.md); SQLite 9). Historical versions: **1.37** (1.37: bounded session-scoped tool-output archive and mediated retrieval; [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md)). **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.42** (background task command overlay; [ADR 0088](../adr/0088-background-task-display.md)). Previous shared contract: **1.41** (provider-bound opaque reasoning replay and host evidence digests; [ADR 0082](../adr/0082-provider-reasoning-replay.md), [ADR 0083](../adr/0083-context-evidence-dedup.md), [ADR 0084](../adr/0084-mcp-tool-execution-correctness.md)). Previous shared contract: **1.40** (Cosmew rename and optional user-declared provider reasoning metadata; [ADR 0076](../adr/0076-cosmew-project-rename.md), [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md)). Previous shared contract: **1.39** (P3: diff bases, editable plan approval, summarize rewind, selective retract and session/history scopes; [ADR 0074](../adr/0074-p3-review-and-session-controls.md); SQLite 10). Previous contract: **1.38** (P1: background tasks, queued input, plan approval, images, checkpoints and hook/MCP status; [delivery](../delivery/tui-v4/p1-backend.md); SQLite 9). Historical versions: **1.37** (1.37: bounded session-scoped tool-output archive and mediated retrieval; [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md)). **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -296,3 +296,27 @@ trả id/type/content; no-argument `retractQueuedInput` cũ vẫn giữ. `Prompt
 scopes session/project/everywhere; model/effort session scope không persist user preference.
 Không có producer event mới; observer state update và JSONL hiện dùng version 1.40. SQLite 10 thêm nullable canonical
 workspace và timestamp metadata cùng bounded prompt_history projection của actual submissions/steering. Migration từ 9 giữ unknown là NULL; copied context/handoff không tạo prompt mới; binary cũ từ chối schema mới.
+
+### Sandbox controls (additive contract 1.40, ADR 0081)
+
+Optional `PermissionSettingsPort.updateSandbox(patch)` writes user settings via
+composition; SDK `updateSandbox` revokes grants and pending prompts after saving.
+Optional backend/SDK `sandboxDependencies()` returns `SandboxDependenciesReport`
+(platform and named ok/detail items), without claiming backend health acceptance.
+SDK status adds `sandboxBlockedOperations`, counting distinct current-turn command
+`SANDBOX_DENIED` outcomes. No new durable or provider event; no schema migration.
+
+### First-run onboarding (additive contract 1.40, ADR 0086)
+
+An optional user settings store supplies onboarding state and saves each completed step.
+The SDK exposes these operations to the TUI. No new provider, journal or headless events.
+
+`client.verifyAccount(signal?)` returns `{ok: true}` or `{ok: false, reason}`
+with reason `no-account | auth | network | model | billing`. The `billing` result may include
+a safe `providerHint`. The SDK client caches verification by account, credential generation
+and model. This call does not add a turn or an event.
+
+`PROVIDER_BILLING` is an additive error code. If verification fails for billing, `fyn exec`
+exits with status 3 and, in JSON mode, emits the existing `turn.failed` event with
+`error.code: "PROVIDER_BILLING"` and the safe diagnostic in `error.message`.
+The error and event envelopes retain their existing fields.

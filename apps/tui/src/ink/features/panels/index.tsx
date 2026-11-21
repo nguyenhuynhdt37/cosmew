@@ -1,6 +1,8 @@
 /** @jsxImportSource react */
 import {useState} from 'react';
 import {Box, Text} from 'ink';
+import {MouseRow} from '../../ui/mouse-row';
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
 import type {RewindScope} from '@cosmew/sdk';
 import {useFutrynClient, useKeybindings, useKeymap, useTextInput} from '../../hooks';
 import {useOverlay} from '../../core';
@@ -35,6 +37,12 @@ export function McpDialog(props: DialogProps) {
     },
     submit: () => setDetail(v => !v),
   });
+  const listMouseRef = useMouseTarget(event => {
+    if ('direction' in event) {
+      setCursor(n => Math.max(0, Math.min(servers.length - 1, n + event.direction)));
+      setDetail(false);
+    }
+  }, servers.length > 0);
   const muted = color('foregroundMuted');
   const first = Math.max(0, cursor - listRows + 1);
   const selected = servers[cursor];
@@ -45,24 +53,33 @@ export function McpDialog(props: DialogProps) {
       </Text>
       <TextLine>{`${report.servers.length} servers`}</TextLine>
       {report.servers.length === 0 ? <TextLine>No servers configured.</TextLine> : null}
-      {servers.slice(first, first + listRows).map((server, index) => (
-        <Box key={`${server.source}:${server.name}`} flexDirection="column">
-          {index === 0 || servers[first + index - 1]?.source !== server.source ? (
-            <TextLine color={muted}>{server.source || 'Unknown source'}</TextLine>
-          ) : null}
-          <OptionList
-            width={size.width - 4}
-            cursor={cursor === first + index ? 0 : -1}
-            items={[
-              {
-                id: server.name,
-                label: mcpRowText({name: server.name, state: server.status, tools: server.toolCount}),
-                numbered: false,
-              },
-            ]}
-          />
-        </Box>
-      ))}
+      <Box ref={listMouseRef} flexDirection="column">
+        {servers.slice(first, first + listRows).map((server, index) => (
+          <MouseRow
+            key={`${server.source}:${server.name}`}
+            flexDirection="column"
+            onHighlight={() => {
+              setCursor(first + index);
+              setDetail(false);
+            }}
+          >
+            {index === 0 || servers[first + index - 1]?.source !== server.source ? (
+              <TextLine color={muted}>{server.source || 'Unknown source'}</TextLine>
+            ) : null}
+            <OptionList
+              width={size.width - 4}
+              cursor={cursor === first + index ? 0 : -1}
+              items={[
+                {
+                  id: server.name,
+                  label: mcpRowText({name: server.name, state: server.status, tools: server.toolCount}),
+                  numbered: false,
+                },
+              ]}
+            />
+          </MouseRow>
+        ))}
+      </Box>
       {detail && selected ? <TextLine color={muted}>{`Source: ${selected.source}`}</TextLine> : null}
       <TextLine color={muted}>Project files are not started.</TextLine>
       {!report.supported.stdioManagement ? <TextLine color={muted}>Stdio management: Not implemented</TextLine> : null}
@@ -108,6 +125,12 @@ export function RewindDialog({onCancel, ...props}: DialogProps & {onCancel?: () 
   const [scopeCursor, setScopeCursor] = useState(0);
   const [summaryFocus, setSummaryFocus] = useState(false);
   const [instructions, setInstructions] = useState('');
+  const checkpointMouseRef = useMouseTarget(
+    event => {
+      if ('direction' in event) setCursor(n => Math.max(0, Math.min(rows.length, n + event.direction)));
+    },
+    !task.busy && !confirm && !summaryFocus,
+  );
   const max = rows.length;
   const at = Math.min(cursor, max);
   const checkpoint = checkpoints[at];
@@ -228,25 +251,36 @@ export function RewindDialog({onCancel, ...props}: DialogProps & {onCancel?: () 
           <OptionList
             width={size.width - 4}
             cursor={scopeCursor}
+            onCursorChange={setScopeCursor}
+            isActive={!task.busy}
             items={scopes.map(item => ({id: item.scope, label: item.label, muted: item.disabled}))}
           />
         </>
       ) : (
         <>
-          {rows.slice(first, first + room).map((row, index) => (
-            <Box key={row.id} flexDirection="column">
-              <Text
-                wrap="truncate-end"
-                color={first + index === at ? ui.color('selected') : undefined}
-              >{`${first + index === at ? '❯' : ' '} ${row.prompt}`}</Text>
-              <Text wrap="truncate-end" color={muted}>{`    ${row.detail}`}</Text>
-            </Box>
-          ))}
-          <OptionList
-            width={size.width - 4}
-            cursor={at === max ? 0 : -1}
-            items={[{id: 'current', label: '(current)', numbered: false}]}
-          />
+          <Box ref={checkpointMouseRef} flexDirection="column">
+            {rows.slice(first, first + room).map((row, index) => (
+              <MouseRow
+                key={row.id}
+                flexDirection="column"
+                onHighlight={() => setCursor(first + index)}
+                isActive={!task.busy}
+              >
+                <Text
+                  wrap="truncate-end"
+                  color={first + index === at ? ui.color('selected') : undefined}
+                >{`${first + index === at ? '❯' : ' '} ${row.prompt}`}</Text>
+                <Text wrap="truncate-end" color={muted}>{`    ${row.detail}`}</Text>
+              </MouseRow>
+            ))}
+            <MouseRow onHighlight={() => setCursor(max)} isActive={!task.busy}>
+              <OptionList
+                width={size.width - 4}
+                cursor={at === max ? 0 : -1}
+                items={[{id: 'current', label: '(current)', numbered: false}]}
+              />
+            </MouseRow>
+          </Box>
         </>
       )}
       {task.message ? <TextLine color={color('warning')}>{task.message}</TextLine> : null}

@@ -173,6 +173,8 @@ test.skipIf(process.platform === 'win32')(
   'actual PTY: open approved project, deliver architecture rule once, edit and refresh next request',
   async () => {
     const c = await setup();
+    // This case covers project consent/context; dedicated onboarding tests exercise first-run steps.
+    for (const step of ['theme', 'auth', 'security']) c.client.completeOnboardingStep(step);
     writeFileSync(join(c.ws, 'AGENTS.md'), 'Architecture: TASK01_PTY_V1 Use injected ports.');
     let output = '';
     const terminal = new Bun.Terminal({

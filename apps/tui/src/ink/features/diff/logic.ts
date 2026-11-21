@@ -1,4 +1,5 @@
 import type {ToolResult, WorkspaceDiffFile} from '@cosmew/sdk';
+import type {DiffLine} from '../../ui/diff';
 export interface ChangeReceipt {
   changes: {path: string; action: string; diff: string}[];
   diagnostics: string[];
@@ -49,4 +50,80 @@ export function workspaceUnifiedDiff(file: WorkspaceDiffFile): string {
         (line.type === 'add' ? '+' : line.type === 'del' ? '-' : line.type === 'context' ? ' ' : '') + line.content,
     )
     .join('\n');
+}
+
+/** Explicit language inference; unsupported extensions stay plain. */
+export function diffLanguage(path: string): string {
+  const extension = path.split('.').at(-1)?.toLowerCase() ?? '';
+  return (
+    (
+      {
+        ts: 'typescript',
+        tsx: 'typescript',
+        js: 'javascript',
+        jsx: 'javascript',
+        json: 'json',
+        py: 'python',
+        rs: 'rust',
+        go: 'go',
+        sh: 'bash',
+        css: 'css',
+        html: 'html',
+        md: 'markdown',
+        yaml: 'yaml',
+        yml: 'yaml',
+      } as Record<string, string>
+    )[extension] ?? ''
+  );
+}
+
+/** Preserve SDK numbering and real hunk headers. Session snapshots may have only numbered source rows. */
+export function workspaceViewRows(file: WorkspaceDiffFile): DiffLine[] {
+  const rows: DiffLine[] = [];
+  let first = 0;
+  let hasHeader = false;
+  let oldStart: number | undefined;
+  let newStart: number | undefined;
+  let oldCount = 0;
+  let newCount = 0;
+  const flush = () => {
+    if (first < rows.length && !hasHeader) {
+      rows.splice(first, 0, {kind: 'hunk', text: `@@ -${oldStart ?? 0},${oldCount} +${newStart ?? 0},${newCount} @@`});
+    }
+    first = rows.length;
+    hasHeader = false;
+    oldStart = newStart = undefined;
+    oldCount = newCount = 0;
+  };
+  for (const line of file.lines) {
+    if (line.type === 'hunk') {
+      flush();
+      if (line.content.startsWith('@@ ')) {
+        hasHeader = true;
+        rows.push({kind: 'hunk', text: line.content});
+      } else rows.push({kind: 'meta', text: line.content});
+      first = rows.length;
+      continue;
+    }
+    const oldLine = line.oldLine ?? undefined;
+    const newLine = line.newLine ?? undefined;
+    if (
+      (oldLine !== undefined && oldStart !== undefined && oldLine !== oldStart + oldCount) ||
+      (newLine !== undefined && newStart !== undefined && newLine !== newStart + newCount)
+    )
+      flush();
+    if (oldLine !== undefined) {
+      oldStart ??= oldLine;
+      oldCount++;
+    }
+    if (newLine !== undefined) {
+      newStart ??= newLine;
+      newCount++;
+    }
+    const kind = line.type === 'add' ? 'added' : line.type === 'del' ? 'removed' : 'context';
+    const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+    rows.push({kind, oldLine, newLine, text: sign + line.content});
+  }
+  flush();
+  return rows;
 }

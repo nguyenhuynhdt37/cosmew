@@ -1,11 +1,15 @@
 /** @jsxImportSource react */
-import {useState} from 'react';
+import {useMemo, useState} from 'react';
 import {Box, Text} from 'ink';
-import type {WorkspaceDiffFile, WorkspaceDiffReport, WorkspaceDiffBase} from '@cosmew/sdk';
+import type {WorkspaceDiffReport, WorkspaceDiffBase} from '@cosmew/sdk';
 import {useKeybindings} from '../../hooks';
+import {useBindingLabel} from '../../hooks/keymap';
+import {useMouseTarget} from '../../hooks/use-terminal-wheel';
+import {MouseRow} from '../../ui/mouse-row';
 import {DiffView, TextLine} from '../../ui';
-import {safeText, stringCells, wrapText} from '../../ui/text-line';
-import {parseUnifiedDiff} from '../../ui/diff';
+import {graphemes, safeText, stringCells} from '../../ui/text-line';
+import {DiffFileList, useDiffFiles} from './file-list';
+import {diffLanguage, workspaceViewRows} from './logic';
 import {useUiTheme} from '../../ui/ui-theme';
 
 export const DIFF_PANEL_MIN_COLUMNS = 110;
@@ -23,44 +27,6 @@ export function diffPanelLayout(columns: number, open: boolean) {
   };
 }
 
-/** Reconstruct hunk ranges from the SDK's numbered rows, including snapshots with no hunk header. */
-export function workspaceViewDiff(file: WorkspaceDiffFile): string {
-  const chunks: WorkspaceDiffFile['lines'][] = [];
-  let chunk: WorkspaceDiffFile['lines'] = [];
-  let oldNext: number | undefined;
-  let newNext: number | undefined;
-  const flush = () => {
-    if (chunk.length) chunks.push(chunk);
-    chunk = [];
-    oldNext = newNext = undefined;
-  };
-  for (const line of file.lines) {
-    if (line.type === 'hunk') {
-      flush();
-      continue;
-    }
-    if (
-      (line.oldLine !== null && oldNext !== undefined && line.oldLine !== oldNext) ||
-      (line.newLine !== null && newNext !== undefined && line.newLine !== newNext)
-    )
-      flush();
-    chunk.push(line);
-    if (line.oldLine !== null) oldNext = line.oldLine + 1;
-    if (line.newLine !== null) newNext = line.newLine + 1;
-  }
-  flush();
-  return chunks
-    .map(lines => {
-      const oldStart = lines.find(line => line.oldLine !== null)?.oldLine ?? 0;
-      const newStart = lines.find(line => line.newLine !== null)?.newLine ?? 0;
-      return [
-        `@@ -${oldStart},${lines.filter(line => line.type !== 'add').length} +${newStart},${lines.filter(line => line.type !== 'del').length} @@`,
-        ...lines.map(line => `${line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' '}${line.content}`),
-      ].join('\n');
-    })
-    .join('\n');
-}
-
 export interface DiffSidePanelProps {
   report: WorkspaceDiffReport;
   width?: number;
@@ -69,6 +35,8 @@ export interface DiffSidePanelProps {
   /** Dialog keys only when deliberately focused; modified panel keys work beside the composer. */
   focused?: boolean;
   onClose?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   onNotice?: (message: string) => void;
   onChangeBase?: (base: WorkspaceDiffBase) => void;
 }
@@ -80,7 +48,8 @@ export function DiffSidePanel({
   isActive = true,
   focused = false,
   onClose,
-  onNotice,
+  onFocus,
+  onBlur,
   onChangeBase,
 }: DiffSidePanelProps) {
   const ui = useUiTheme();
@@ -90,56 +59,57 @@ export function DiffSidePanel({
   const [offset, setOffset] = useState(0);
   const [baseNotice, setBaseNotice] = useState<string>();
   const [expanded, setExpanded] = useState(false);
-  const selected = Math.min(index, Math.max(0, report.files.length - 1));
-  const file = report.files[selected];
-  const listRows = expanded ? 0 : Math.min(4, report.files.length, Math.max(1, rows - 12));
-  const listStart = Math.max(0, selected - listRows + 1);
-  const unified = file ? workspaceViewDiff(file) : '';
-  const metadata = file?.lines.filter(line => line.type === 'hunk' && !line.content.startsWith('@@ ')) ?? [];
-  const diffRows = parseUnifiedDiff(unified).filter(row => row.kind !== 'meta' && row.kind !== 'hunk');
-  const digits = Math.max(1, ...diffRows.map(row => String(row.oldLine ?? row.newLine ?? '').length));
-  const bodyRows = Math.max(1, rows - listRows - 8 - (baseNotice ? 1 : 0));
-  const physicalRows =
-    metadata.length +
-    diffRows.reduce((sum, row) => sum + wrapText(row.text.slice(1), Math.max(1, inner - digits - 3)).length, 0) +
-    Math.max(0, unified.split('\n').filter(row => row.startsWith('@@ ')).length - 1);
-  const maxOffset = Math.max(0, physicalRows - bodyRows);
-  const move = (step: number) => {
-    setIndex(Math.max(0, Math.min(report.files.length - 1, selected + step)));
+  const {files, group, toggle} = useDiffFiles(report.files);
+  const toggleGroup = () => {
+    toggle();
+    setIndex(0);
     setOffset(0);
   };
-  const changeBase = () => {
+  const selected = Math.min(index, Math.max(0, files.length - 1));
+  const file = files[selected];
+  const listRows = expanded ? 0 : Math.min(8, files.length, Math.max(1, rows - 14));
+  const diffRows = useMemo(() => (file ? workspaceViewRows(file) : []), [file]);
+  const [physicalRows, setPhysicalRows] = useState(0);
+  const listControls = files.length > listRows && !expanded ? 2 : 0;
+  const bodyRows = Math.max(
+    1,
+    rows - listRows - listControls - (group.count && !expanded ? 1 : 0) - 9 - (baseNotice ? 1 : 0),
+  );
+  const maxOffset = Math.max(0, physicalRows - bodyRows);
+  const move = (step: number) => {
+    setIndex(value => Math.max(0, Math.min(files.length - 1, Math.min(value, files.length - 1) + step)));
+    setOffset(0);
+  };
+  const changeBase = (direction = 1) => {
     if (!report.capabilities || !onChangeBase) {
-      setBaseNotice('Session/branch bases unavailable in SDK · Current');
-      onNotice?.(DIFF_BASE_UNSUPPORTED);
+      setBaseNotice(report.message ?? DIFF_BASE_UNSUPPORTED);
       return;
     }
     const bases: WorkspaceDiffBase[] = ['session', 'uncommitted', 'branch'];
     const start = bases.indexOf(report.base ?? 'session');
     const skipped: string[] = [];
     for (let step = 1; step <= bases.length; step++) {
-      const next = bases[(start + step) % bases.length]!;
+      const next = bases[(start + direction * step + bases.length) % bases.length]!;
       const capability = report.capabilities[next];
       if (capability.available) {
         setIndex(0);
         setOffset(0);
         const message = skipped.length ? skipped.join('; ') : undefined;
         setBaseNotice(message);
-        if (message) onNotice?.(message);
         onChangeBase(next);
         return;
       }
       skipped.push(`${DIFF_BASE_LABELS[next]} unavailable: ${capability.reason ?? 'Unsupported'}`);
     }
-    const message = skipped.join('; ');
+    const reasons = [...new Set(bases.map(base => report.capabilities![base].reason ?? 'Unsupported'))];
+    const message = reasons.length === 1 ? reasons[0]! : skipped.join('; ');
     setBaseNotice(message);
-    onNotice?.(message);
   };
   useKeybindings(
     {
       DiffPanel: {
-        'app:cycleDiffBase': changeBase,
-        'diff:changeBase': changeBase,
+        'app:cycleDiffBase': () => changeBase(),
+        'diff:changeBase': () => changeBase(),
         'diff:scrollUp': () => move(-1),
         'diff:scrollDown': () => move(1),
       },
@@ -149,10 +119,11 @@ export function DiffSidePanel({
   useKeybindings(
     {
       DiffDialog: {
-        'diff:previousFile': () => move(-1),
-        'diff:nextFile': () => move(1),
-        'diff:previousSource': changeBase,
-        'diff:nextSource': changeBase,
+        'diff:toggleGenerated': toggleGroup,
+        'diff:previousFile': () => (expanded ? setOffset(value => Math.max(0, value - 1)) : move(-1)),
+        'diff:nextFile': () => (expanded ? setOffset(value => Math.min(maxOffset, value + 1)) : move(1)),
+        'diff:previousSource': () => changeBase(-1),
+        'diff:nextSource': () => changeBase(),
         'diff:open': () => {
           setExpanded(value => !value);
           setOffset(0);
@@ -161,24 +132,49 @@ export function DiffSidePanel({
           if (expanded) {
             setExpanded(false);
             setOffset(0);
-          } else onClose?.();
+          } else (onBlur ?? onClose)?.();
         },
-        'diff:pageUp': () => setOffset(value => Math.max(0, value - bodyRows)),
-        'diff:pageDown': () => setOffset(value => Math.min(maxOffset, value + bodyRows)),
-        'diff:top': () => setOffset(0),
-        'diff:bottom': () => setOffset(maxOffset),
+        'diff:pageUp': () =>
+          expanded ? setOffset(value => Math.max(0, value - Math.max(1, Math.floor(bodyRows / 2)))) : move(-listRows),
+        'diff:fullPageUp': () => (expanded ? setOffset(value => Math.max(0, value - bodyRows)) : move(-listRows)),
+        'diff:pageDown': () =>
+          expanded
+            ? setOffset(value => Math.min(maxOffset, value + Math.max(1, Math.floor(bodyRows / 2))))
+            : move(listRows),
+        'diff:fullPageDown': () =>
+          expanded ? setOffset(value => Math.min(maxOffset, value + bodyRows)) : move(listRows),
+        'diff:top': () => (expanded ? setOffset(0) : move(-files.length)),
+        'diff:bottom': () => (expanded ? setOffset(maxOffset) : move(files.length)),
       },
     },
     {isActive: isActive && focused},
   );
+  const mouse = useMouseTarget(event => {
+    if ('direction' in event) {
+      onFocus?.();
+      setOffset(value => Math.max(0, Math.min(maxOffset, value + event.direction * 3)));
+    } else onFocus?.();
+  }, isActive);
+  const focusKey = useBindingLabel('DiffPanel', 'diff:focus');
+  const fileKey = useBindingLabel('DiffDialog', 'diff:nextFile');
+  const openKey = useBindingLabel('DiffDialog', 'diff:open');
+  const backKey = useBindingLabel('DiffDialog', 'diff:back');
+  const blurKey = useBindingLabel('DiffPanel', 'diff:blur');
+  const sourceKey = useBindingLabel('DiffPanel', 'app:cycleDiffBase');
+  const pageKey = useBindingLabel('DiffDialog', 'diff:pageDown');
   const pair = (left: string, right: string) => {
     const clean = safeText(left).replace(/\n/g, ' ');
     const available = Math.max(0, inner - stringCells(right) - 1);
+    if (stringCells(clean) <= available)
+      return clean + ' '.repeat(inner - stringCells(clean) - stringCells(right)) + right;
     let clipped = '';
-    for (const ch of clean) {
-      if (stringCells(clipped + ch) > available) break;
-      clipped += ch;
+    let remaining = Math.max(0, available - 1);
+    for (const {segment} of graphemes.segment(clean)) {
+      remaining -= stringCells(segment);
+      if (remaining < 0) break;
+      clipped += segment;
     }
+    if (available > 0) clipped += '…';
     return clipped + ' '.repeat(Math.max(1, inner - stringCells(clipped) - stringCells(right))) + right;
   };
   return (
@@ -187,49 +183,68 @@ export function DiffSidePanel({
         <Text>{Array(rows).fill('│').join('\n')}</Text>
       </Box>
       <Box width={inner} flexDirection="column" flexShrink={0}>
-        <Text color={ui.color('dim')}>{pair('', '✕')}</Text>
-        <TextLine width={inner} wrap="truncate-end">
-          {pair(
-            `${report.files.length} ${report.files.length === 1 ? 'file' : 'files'} changed +${report.totalAdditions} -${report.totalDeletions}`,
-            `source: ${DIFF_BASE_LABELS[report.base ?? 'session']} ▾`,
-          )}
-        </TextLine>
-        <Text> </Text>
-        {report.files.slice(listStart, listStart + listRows).map((item, at) => (
-          <TextLine
-            key={`${item.path}:${at}`}
-            width={inner}
-            color={listStart + at === selected ? ui.color('selected') : ui.color('dim')}
-            wrap="truncate-end"
-          >
-            {pair(item.path, `+${item.additions} -${item.deletions}`)}
+        <Box justifyContent="flex-end" width={inner} flexShrink={0}>
+          <MouseRow isActive={isActive} onHighlight={onClose}>
+            <Text color={ui.color('dim')}>✕</Text>
+          </MouseRow>
+        </Box>
+        <MouseRow isActive={isActive} onHighlight={() => changeBase()}>
+          <TextLine width={inner} wrap="truncate-end">
+            {pair(
+              `${report.files.length} ${report.files.length === 1 ? 'file' : 'files'} changed +${report.totalAdditions} -${report.totalDeletions}`,
+              `source: ${DIFF_BASE_LABELS[report.base ?? 'session']} ▾`,
+            )}
           </TextLine>
-        ))}
+        </MouseRow>
+        <Text> </Text>
+        {!expanded ? (
+          <DiffFileList
+            group={{...group, onToggle: toggleGroup}}
+            files={files}
+            selected={selected}
+            rows={listRows}
+            width={inner}
+            isActive={isActive}
+            onMove={step => {
+              move(step);
+              onFocus?.();
+            }}
+            onSelect={at => {
+              setIndex(at);
+              setOffset(0);
+              onFocus?.();
+            }}
+          />
+        ) : null}
         <Text> </Text>
         <Text color={ui.color('dim')}>{'─'.repeat(inner)}</Text>
         <TextLine width={inner} wrap="truncate-end">
-          {pair(file?.path ?? 'Workspace diff', '[ ask ]')}
+          {pair(`${files.length ? selected + 1 : 0}/${files.length} ${file?.path ?? 'Workspace diff'}`, '[ ask ]')}
         </TextLine>
         <Text color={ui.color('dim')}>{'─'.repeat(inner)}</Text>
         <Box
           flexDirection="column"
           flexGrow={1}
+          flexBasis={0}
           flexShrink={1}
           minHeight={0}
           overflow="hidden"
-          contentOffsetY={Math.min(offset, maxOffset)}
+          ref={mouse}
         >
           <Box flexDirection="column" flexShrink={0}>
-            {metadata.map((line, index) => (
-              <TextLine key={index} width={inner}>
-                {line.content}
-              </TextLine>
-            ))}
             {file ? (
               file.binary ? (
                 <TextLine width={inner}>Binary diff unavailable</TextLine>
               ) : file.lines.length ? (
-                <DiffView diff={unified} width={inner} />
+                <DiffView
+                  lines={diffRows}
+                  width={inner}
+                  offset={offset}
+                  viewportRows={bodyRows}
+                  onRowCount={setPhysicalRows}
+                  showHunks
+                  language={diffLanguage(file.path)}
+                />
               ) : (
                 <TextLine width={inner}>Empty diff</TextLine>
               )
@@ -250,9 +265,14 @@ export function DiffSidePanel({
         ) : null}
         <TextLine width={inner} color={ui.color('dim')} wrap="truncate-end">
           {focused
-            ? `↑/↓ files · Enter ${expanded ? 'list' : 'open'} · Esc ${expanded ? 'back' : 'close'}`
-            : 'opt+↑/↓ files · ctrl+x b source'}
+            ? `${fileKey} ${expanded ? 'scroll' : 'files'} · ${openKey} ${expanded ? 'list' : 'open'} · ${expanded ? backKey : blurKey} ${expanded ? 'back' : 'prompt'}`
+            : `${focusKey} focus · ↓/j files · PgDn`}
         </TextLine>
+        <TextLine
+          width={inner}
+          color={ui.color('dim')}
+          wrap="truncate-end"
+        >{`${sourceKey} source · ${pageKey} scroll`}</TextLine>
       </Box>
     </Box>
   );

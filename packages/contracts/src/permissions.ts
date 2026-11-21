@@ -583,7 +583,13 @@ export interface PermissionSettingsSnapshot {
  * The settings port the SDK reads (implemented by the composition root, which owns the files).
  * Writes are user actions (`/permissions`, an `always` answer) and are trusted immediately.
  */
+export type SandboxSettingsPatch = Partial<
+  Pick<PermissionSettingsSnapshot['sandbox'], 'enabled' | 'autoAllowBashIfSandboxed' | 'allowUnsandboxedCommands'>
+> & {excludeCommand?: string};
+
 export interface PermissionSettingsPort {
+  /** Explicit user action; writes user settings only. */
+  updateSandbox?(patch: SandboxSettingsPatch): void;
   snapshot(): PermissionSettingsSnapshot;
   addRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;
   removeRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;

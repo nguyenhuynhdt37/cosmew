@@ -27,6 +27,7 @@ for (const failure of ['missing backend', 'failed self-test']) {
         sandbox: () => ({
           ...DEFAULT_SANDBOX_CONFIG,
           readOnly: false,
+          autoAllowBash: false,
           allowUnsandboxed: true,
           enabled: mode !== 'disabled',
           excludedCommands: mode === 'excluded' ? ['printf'] : [],
@@ -52,6 +53,7 @@ for (const failure of ['missing backend', 'failed self-test']) {
         if (mode === 'required') {
           expect(result.status).toBe('error');
           expect(result.code).toBe('SANDBOX_UNAVAILABLE');
+          expect(approvals).toBe(0);
           expect(launches).not.toHaveBeenCalled();
           expect(result.content).toContain('Nothing was run.');
         } else {

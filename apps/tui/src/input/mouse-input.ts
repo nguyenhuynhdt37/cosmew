@@ -5,6 +5,13 @@ export interface TerminalWheel {
   row: number;
 }
 
+export interface TerminalClick {
+  kind: 'click';
+  column: number;
+  row: number;
+}
+export type TerminalMouseEvent = TerminalWheel | TerminalClick;
+
 export const ENABLE_TERMINAL_MOUSE = '\x1b[?1000h\x1b[?1006h';
 export const DISABLE_TERMINAL_MOUSE = '\x1b[?1006l\x1b[?1000l';
 
@@ -30,7 +37,7 @@ export class MouseInputFilter {
     this.pending = '';
     this.paste = this.string = this.stringEscape = false;
   }
-  feed(chunk: string, onWheel: (event: TerminalWheel) => void): string {
+  feed(chunk: string, onWheel: (event: TerminalWheel) => void, onClick?: (event: TerminalClick) => void): string {
     const text = this.pending + chunk;
     this.pending = '';
     let output = '';
@@ -83,7 +90,11 @@ export class MouseInputFilter {
           this.pending = text.slice(at);
           break;
         }
-        this.wheel(text.charCodeAt(at + 3) - 32, text.charCodeAt(at + 4) - 32, text.charCodeAt(at + 5) - 32, onWheel);
+        const button = text.charCodeAt(at + 3) - 32;
+        const column = text.charCodeAt(at + 4) - 32;
+        const row = text.charCodeAt(at + 5) - 32;
+        this.wheel(button, column, row, onWheel);
+        if (button === 0 && column > 0 && row > 0) onClick?.({kind: 'click', column, row});
         at += 6;
         continue;
       }
@@ -96,7 +107,14 @@ export class MouseInputFilter {
       const sequence = text.slice(at, end + 1);
       const mouse = /^\x1b\[<(\d{1,6});(\d{1,6});(\d{1,6})([Mm])$/.exec(sequence);
       if (mouse) {
-        if (mouse[4] === 'M') this.wheel(Number(mouse[1]), Number(mouse[2]), Number(mouse[3]), onWheel);
+        if (mouse[4] === 'M') {
+          const button = Number(mouse[1]),
+            column = Number(mouse[2]),
+            row = Number(mouse[3]);
+          this.wheel(button, column, row, onWheel);
+          // Only plain left-button presses activate controls; never motion or selection modifiers.
+          if (button === 0 && column > 0 && row > 0) onClick?.({kind: 'click', column, row});
+        }
       } else {
         output += sequence;
         if (sequence === '\x1b[200~') this.paste = true;
@@ -115,6 +133,7 @@ type MouseStdin = NodeJS.ReadableStream & {isTTY?: boolean; setRawMode?: (mode: 
 export interface TerminalMouseInput {
   stdin: MouseStdin;
   subscribe(listener: (event: TerminalWheel) => void): () => void;
+  subscribeMouse?(listener: (event: TerminalMouseEvent) => void): () => void;
   dispose(): void;
 }
 
@@ -125,6 +144,7 @@ export interface TerminalMouseInput {
 export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.WritableStream): TerminalMouseInput {
   const filter = new MouseInputFilter();
   const listeners = new Set<(event: TerminalWheel) => void>();
+  const mouseListeners = new Set<(event: TerminalMouseEvent) => void>();
   let active = false;
   let disposed = false;
   let ready = '';
@@ -137,6 +157,7 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
   };
   const emit = (event: TerminalWheel) => {
     for (const listener of listeners) listener(event);
+    for (const listener of mouseListeners) listener(event);
   };
   const read = () => {
     if (ready) {
@@ -148,7 +169,9 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
     while ((chunk = source.read()) !== null) {
       if (!active) return chunk;
       clearTimeout(timer);
-      const text = filter.feed(String(chunk), emit);
+      const text = filter.feed(String(chunk), emit, event => {
+        for (const listener of mouseListeners) listener(event);
+      });
       if (filter.hasPending && !filter.awaitingReport) {
         // Keep standalone Escape responsive while allowing split CSI/mouse reports to join.
         timer = setTimeout(() => {
@@ -186,12 +209,19 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
         listeners.delete(listener);
       };
     },
+    subscribeMouse(listener) {
+      mouseListeners.add(listener);
+      return () => {
+        mouseListeners.delete(listener);
+      };
+    },
     dispose() {
       disposed = true;
       if (active) stdout.write(DISABLE_TERMINAL_MOUSE);
       active = false;
       clear();
       listeners.clear();
+      mouseListeners.clear();
     },
   };
 }

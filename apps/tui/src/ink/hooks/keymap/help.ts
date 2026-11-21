@@ -7,12 +7,19 @@ export interface HelpCapabilities {
   efforts: boolean;
   /** Option key is printed `opt` (macOS) rather than `alt`. */
   mac: boolean;
+  transcriptItems?: boolean;
 }
 /**
  * Actions exposed by the shortcut source. Transcript parity entries register the legend here;
  * their shell behavior is wired separately by Tasks 3–6 of the transcript parity plan.
  */
 export const IMPLEMENTED_ACTIONS: ReadonlySet<string> = new Set([
+  'diff:focus',
+  'diff:blur',
+  'app:cycleDiffBase',
+  'diff:nextFile',
+  'diff:open',
+  'diff:pageDown',
   'chat:cycleMode',
   'chat:modelPicker',
   'chat:undo',
@@ -30,6 +37,9 @@ export const IMPLEMENTED_ACTIONS: ReadonlySet<string> = new Set([
   'app:toggleTodos',
   'history:search',
   'transcript:toggleShowAll',
+  'transcript:focusPrevious',
+  'transcript:focusNext',
+  'transcript:toggleItem',
   'transcript:search',
   'transcript:nextMatch',
   'transcript:previousMatch',
@@ -49,7 +59,7 @@ interface Line {
   context?: KeyContext;
   action?: string;
   text?: string;
-  needs?: 'efforts';
+  needs?: 'efforts' | 'transcriptItems';
   /** Help spelling of the default key when the terminal key differs from the doc (Ctrl+_ is typed with Shift). */
   alias?: Record<string, string>;
 }
@@ -57,6 +67,21 @@ const LINES: readonly Line[] = [
   {column: 0, fixed: '! for shell mode'},
   {column: 0, fixed: '/ for commands'},
   {column: 0, fixed: '@ for file paths'},
+  {
+    column: 0,
+    context: 'Transcript',
+    action: 'transcript:focusPrevious',
+    text: 'previous activity',
+    needs: 'transcriptItems',
+  },
+  {column: 0, context: 'Transcript', action: 'transcript:focusNext', text: 'next activity', needs: 'transcriptItems'},
+  {
+    column: 0,
+    context: 'Transcript',
+    action: 'transcript:toggleItem',
+    text: 'toggle activity',
+    needs: 'transcriptItems',
+  },
   {column: 1, fixed: 'esc esc to clear input'},
   {column: 1, context: 'Chat', action: 'chat:cycleMode', text: 'to cycle modes'},
   {column: 1, fixed: 'shift+↑/↓ to change effort', needs: 'efforts'},
@@ -76,7 +101,7 @@ const LINES: readonly Line[] = [
 export function shortcutColumns(keymap: Keymap, capabilities: HelpCapabilities): string[][] {
   const columns: string[][] = [[], [], []];
   for (const line of LINES) {
-    if (line.needs === 'efforts' && !capabilities.efforts) continue;
+    if (line.needs && !capabilities[line.needs]) continue;
     if (line.fixed) {
       columns[line.column]!.push(line.fixed);
       continue;

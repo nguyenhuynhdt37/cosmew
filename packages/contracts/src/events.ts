@@ -4,6 +4,7 @@ export type ErrorCode =
   | 'FORBIDDEN'
   | 'NOT_FOUND'
   | 'RATE_LIMIT'
+  | 'PROVIDER_BILLING'
   | 'TIMEOUT'
   | 'CANCELLED'
   | 'TRANSPORT'
@@ -21,6 +22,7 @@ const safeMessages: Record<ErrorCode, string> = {
   FORBIDDEN: 'Provider denied access. Check account permissions and API entitlements.',
   NOT_FOUND: 'Provider or model unavailable. Refresh models or check the configured URL/model ID.',
   RATE_LIMIT: 'Provider rate limit reached. Wait before retrying or explicitly choose another account.',
+  PROVIDER_BILLING: 'Provider account is out of credits or needs a subscription.',
   TIMEOUT: 'Request timed out. Remote processing may have occurred; retry explicitly.',
   CANCELLED: 'Request cancelled. Remote processing may have occurred.',
   TRANSPORT: 'Provider connection failed. Check endpoint, network and TLS settings.',
@@ -56,6 +58,14 @@ export class CosmewError extends Error {
   }
   toJSON() {
     return {code: this.code, message: this.message, retryable: this.retryable, retryAfterMs: this.retryAfterMs};
+  }
+}
+
+/** The transport may attach a bounded, redacted diagnostic for a provider billing failure. */
+export class ProviderBillingError extends CosmewError {
+  constructor(readonly providerHint?: string) {
+    super('PROVIDER_BILLING');
+    if (providerHint) this.message += ` Provider says: ${providerHint}`;
   }
 }
 

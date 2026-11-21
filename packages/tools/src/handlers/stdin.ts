@@ -52,7 +52,16 @@ const refuse = (code: string, content: string): ToolOutput => ({status: 'error',
 export function stdinHandler(options: ToolDispatcherOptions): ToolHandler {
   return {
     descriptor,
-    available: () => options.commands?.availability().ok === true && !!options.commands.writeStdin,
+    // Session transport uses its original launch sandbox, not the health of a new sandbox launch.
+    // prepare and dispatcher revalidation still require this runtime to own the live session.
+    available: () => {
+      const runtime = options.commands;
+      return (
+        !!runtime?.writeStdin &&
+        !!runtime.session &&
+        (runtime.availability().ok || runtime.capabilities?.().unsandboxed === true)
+      );
+    },
     unavailable: {status: 'error', code: 'UNSUPPORTED', content: 'No verified session runtime on this host.'},
 
     prepare(args) {

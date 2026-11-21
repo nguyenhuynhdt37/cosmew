@@ -27,7 +27,7 @@ const engine = new ThemeEngine({env: {FORCE_COLOR: '3'}});
 const frame = (node: React.ReactNode) =>
   renderToString(<InkApp client={client} themeEngine={engine} slots={{transcript: node}} />);
 function Gate() {
-  const state = useStartupGate({onReady() {}, onExit() {}, openOverlay() {}, overlayOpen: false});
+  const state = useStartupGate({onReady() {}, onExit() {}});
   return <StartupGate state={state} width={100} />;
 }
 process.stdout.write(

@@ -1,3 +1,6 @@
+import {useOverlay} from '../../core';
+import {ThemesDialog} from '../themes';
+import {SandboxDialog} from '../sandbox';
 /** @jsxImportSource react */
 import {useEffect, useState} from 'react';
 import {Box, Text} from 'ink';
@@ -36,6 +39,7 @@ export function SettingsDialog({
   ...props
 }: SettingsDialogProps) {
   const client = useFutrynClient();
+  const router = useOverlay();
   const {engine, mode, color} = useTheme();
   const ui = useUiTheme();
   const {rows: terminalRows} = useTerminalSize();
@@ -126,8 +130,12 @@ export function SettingsDialog({
       }
       const action = row.action;
       if (!action) return;
-      if (isStreaming && !action.startsWith('appearance-')) {
+      if (isStreaming && action !== 'sandbox' && !action.startsWith('appearance-')) {
         task.setMessage('Wait for the active turn before changing agent settings.');
+        return;
+      }
+      if (action === 'sandbox') {
+        router.push('sandbox', <SandboxDialog width={size.width} />);
         return;
       }
       if (action === 'mode') client.cycleMode();
@@ -151,8 +159,7 @@ export function SettingsDialog({
         const a = app.animations;
         switch (Number(action.slice(11))) {
           case 0: {
-            const values = ['auto', 'dark', 'light'];
-            await engine.setTheme(values[(values.indexOf(app.theme) + 1) % values.length]!, scope);
+            router.push('themes', <ThemesDialog {...props} scope={scope} />);
             break;
           }
           case 1: {
@@ -212,7 +219,17 @@ export function SettingsDialog({
   };
   return (
     <Panel width={size.width}>
-      <PanelTabs title="Settings" tabs={SETTINGS_TABS} selected={tab} />
+      <PanelTabs
+        title="Settings"
+        tabs={SETTINGS_TABS}
+        selected={tab}
+        onSelect={value => {
+          setTab(value as SettingsTab);
+          setFocus('tabs');
+          setDetails(false);
+          setOffset(0);
+        }}
+      />
       <Box height={1} />
       {tab === 'Config' ? (
         <>
@@ -235,7 +252,7 @@ export function SettingsDialog({
           <Box height={1} />
           <TextLine
             color={muted}
-          >{`↓ to navigate · ↑ to switch tabs · Esc to go back · Ctrl+G appearance scope: ${scope}`}</TextLine>
+          >{`↓ to navigate · ↑ to switch tabs · Esc to go back · Ctrl+G appearance scope: ${scope === 'project' ? 'project (session only)' : scope}`}</TextLine>
         </>
       ) : (
         <>

@@ -9,6 +9,8 @@ import {
   FutrynError,
   requestSchema,
   type Message,
+  type ProviderReplay,
+  providerReplaySchema,
   type ModelEvent,
   type ModelInfo,
   type ModelPort,
@@ -22,6 +24,8 @@ import {
 } from '@cosmew/contracts';
 
 export interface MediaOptions {
+  /** Private continuation state is replayed only to its exact originating endpoint/model. */
+  replayBinding?: Pick<ProviderReplay, 'providerId' | 'accountId' | 'protocol' | 'modelId' | 'endpointHash'>;
   /** Send assistant reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
   replayReasoning?: boolean;
   /** Wire protocol of the provider; decides where tool media goes (ADR 0041). */
@@ -111,11 +115,47 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
       });
       continue;
     }
+    if (m.role === 'assistant' && m.providerReplay && media.replayBinding) {
+      const replay = providerReplaySchema.parse(m.providerReplay);
+      const bound = media.replayBinding;
+      if (
+        (replay.protocol !== 'chat' || media.replayReasoning) &&
+        replay.providerId === bound.providerId &&
+        replay.accountId === bound.accountId &&
+        replay.protocol === bound.protocol &&
+        replay.modelId === bound.modelId &&
+        replay.endpointHash === bound.endpointHash
+      ) {
+        const namespace =
+          replay.protocol === 'responses' ? 'openai' : replay.protocol === 'gemini' ? 'google' : 'anthropic';
+        out.push({
+          role: 'assistant',
+          content: replay.parts.map(part => {
+            const providerOptions = part.metadata ? {[namespace]: part.metadata} : undefined;
+            if (part.type === 'tool-call') {
+              const call = m.toolCalls?.find(c => c.id === part.callId);
+              if (!call) throw new FutrynError('INVALID_INPUT');
+              return {
+                type: 'tool-call' as const,
+                toolCallId: call.id,
+                toolName: call.name,
+                input: call.input,
+                providerOptions,
+              };
+            }
+            return {type: part.type, text: part.text, providerOptions};
+          }),
+        });
+        continue;
+      }
+    }
     if (m.role === 'assistant' && m.toolCalls) {
       out.push({
         role: 'assistant',
         content: [
-          ...(media.replayReasoning && m.reasoning ? [{type: 'reasoning' as const, text: m.reasoning}] : []),
+          ...(media.replayReasoning && !m.providerReplay && m.reasoning
+            ? [{type: 'reasoning' as const, text: m.reasoning}]
+            : []),
           ...(m.content ? [{type: 'text' as const, text: m.content}] : []),
           ...m.toolCalls.map(c => ({type: 'tool-call' as const, toolCallId: c.id, toolName: c.name, input: c.input})),
         ],
@@ -296,6 +336,53 @@ export class ProviderAdapter implements ModelPort {
     private readonly modelId: string,
     private readonly info?: ModelInfo,
   ) {}
+  private replayBinding() {
+    const p = this.transport.provider;
+    return {
+      providerId: p.id,
+      accountId: this.transport.account.id,
+      protocol: p.protocol as ProviderReplay['protocol'],
+      modelId: this.modelId,
+      endpointHash: new Bun.CryptoHasher('sha256').update(p.baseURL).digest('hex'),
+    };
+  }
+  /** SDK content is authoritative for ordering and final signatures; deltas are display-only. */
+  private captureReplay(content: readonly unknown[]): ProviderReplay | undefined {
+    const protocol = this.transport.provider.protocol;
+    if (protocol === 'chat' && !this.transport.provider.replayReasoning) return;
+    const namespace = protocol === 'responses' ? 'openai' : protocol === 'gemini' ? 'google' : 'anthropic';
+    const keys =
+      protocol === 'responses'
+        ? ['itemId', 'reasoningEncryptedContent']
+        : protocol === 'gemini'
+          ? ['thoughtSignature']
+          : protocol === 'anthropic'
+            ? ['signature', 'redactedData', 'type']
+            : [];
+    let hasMetadata = false;
+    const parts: ProviderReplay['parts'] = [];
+    for (const value of content) {
+      const part = value as {
+        type: string;
+        text?: string;
+        toolCallId?: string;
+        providerMetadata?: Record<string, Record<string, unknown>>;
+      };
+      if (!['text', 'reasoning', 'tool-call'].includes(part.type)) continue;
+      const source = part.providerMetadata?.[namespace];
+      const metadata = Object.fromEntries(
+        keys.flatMap(key => (typeof source?.[key] === 'string' ? [[key, source[key]]] : [])),
+      );
+      hasMetadata ||= Object.keys(metadata).length > 0;
+      const extra = Object.keys(metadata).length ? {metadata} : {};
+      if (part.type === 'tool-call') parts.push({type: 'tool-call', callId: part.toolCallId!, ...extra});
+      else parts.push({type: part.type as 'text' | 'reasoning', text: part.text ?? '', ...extra});
+    }
+    if (!hasMetadata && !(protocol === 'chat' && parts.some(part => part.type === 'reasoning'))) return;
+    const parsed = providerReplaySchema.safeParse({version: 1, ...this.replayBinding(), parts});
+    if (!parsed.success) throw new FutrynError('PROTOCOL');
+    return parsed.data;
+  }
   private async options(input: ModelRequest, signal?: AbortSignal) {
     let request: ModelRequest;
     try {
@@ -407,7 +494,8 @@ export class ProviderAdapter implements ModelPort {
     const providerOptions =
       p.protocol === 'responses'
         ? {
-            ...(p.auth === 'oauth' ? {store: false} : {}),
+            store: false,
+            include: ['reasoning.encrypted_content'],
             ...(request.cacheKey ? {promptCacheKey: promptCacheKey(request.cacheKey)} : {}),
             ...(request.reasoningEffort
               ? {
@@ -435,6 +523,7 @@ export class ProviderAdapter implements ModelPort {
       ...(request.instructions ? {system: request.instructions} : {}),
       messages: toModelMessages(request.messages, {
         protocol: p.protocol,
+        replayBinding: this.replayBinding(),
         vision: this.info?.capabilities.vision,
         replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
       }),
@@ -525,6 +614,8 @@ export class ProviderAdapter implements ModelPort {
           // Codex Completed { end_turn: Some(false) }: the only such signal these transports expose is
           // Anthropic's `pause_turn` (the AI SDK folds it into "stop" but keeps the raw reason).
           const raw = (part as {rawFinishReason?: unknown}).rawFinishReason;
+          const providerReplay = this.captureReplay(await result.content);
+          if (providerReplay) yield {type: 'providerReplay', replay: providerReplay};
           complete = true;
           yield {
             type: 'completed',
@@ -544,19 +635,27 @@ export class ProviderAdapter implements ModelPort {
   async generate(
     request: ModelRequest,
     signal?: AbortSignal,
-  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string}> {
+  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {
     // ChatGPT plan inference requires stream=true and store=false, including validation probes.
     if (this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses') {
       let text = '';
       const calls: ToolCall[] = [];
+      let providerReplay: ProviderReplay | undefined;
       let completion: {usage: Usage; finishReason: string} | undefined;
       for await (const event of this.stream(request, signal)) {
         if (event.type === 'textDelta') text += event.text;
         else if (event.type === 'toolCallComplete') calls.push(event.call);
+        else if (event.type === 'providerReplay') providerReplay = event.replay;
         else if (event.type === 'completed') completion = event;
       }
       if (!completion) throw new FutrynError('PROTOCOL');
-      return {text, calls, usage: completion.usage, finishReason: completion.finishReason};
+      return {
+        text,
+        calls,
+        usage: completion.usage,
+        finishReason: completion.finishReason,
+        ...(providerReplay ? {providerReplay} : {}),
+      };
     }
     const options = await this.options(request, signal);
     try {
@@ -567,7 +666,9 @@ export class ProviderAdapter implements ModelPort {
         new Set(result.toolCalls.map(c => c.toolCallId)).size !== result.toolCalls.length
       )
         throw new FutrynError('PROTOCOL');
+      const providerReplay = this.captureReplay(result.content);
       return {
+        ...(providerReplay ? {providerReplay} : {}),
         text: result.text,
         calls: result.toolCalls.map(call => normalizeToolCall(call.toolCallId, call.toolName, call.input)),
         usage: usageSchema.parse(usage(result.totalUsage, this.info)),

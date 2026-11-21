@@ -1,13 +1,13 @@
 /** @jsxImportSource react */
 import type {ReactElement} from 'react';
-import {render} from 'ink-testing-library';
+import {render} from './wait';
 import {ThemeEngine} from '../../theme/theme';
 import {FutrynClientProvider, KeymapProvider} from '../hooks';
 import {ThemeProvider} from '../theme';
 import {OverlayProvider} from '../core/overlay';
 import {createClientFixture, type ClientFixture} from './client-fixture';
 export * from './client-fixture';
-export const settle = () => new Promise<void>(resolve => setTimeout(resolve, 30));
+export {render, settle, waitForFrame} from './wait';
 export function renderInk(tree: ReactElement, options: {fixture?: ClientFixture; themeEngine?: ThemeEngine} = {}) {
   const fixture = options.fixture ?? createClientFixture();
   const engine = options.themeEngine ?? new ThemeEngine({env: {NO_COLOR: '1'}, systemDarkPreference: true});

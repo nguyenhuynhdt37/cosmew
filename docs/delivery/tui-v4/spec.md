@@ -99,6 +99,15 @@ Ký hiệu: `⏺` là glyph thật (terminal vẽ thành `●`). "Ref" = file tr
 Phải, rộng ~52 cột ở 120 cột: dòng `✕` đóng; `1 file changed +1 -1      source: Current ▾`; danh sách file `a.txt   +1 -1`; rule; tiêu đề file +
 `[ ask ]` phải; rule; diff có số dòng, nền màu; nền panel khác nền chính (light `#f5f5f5`, dark `#262626`). `/diff` bật/tắt. Ref `live/L02-edit-done`.
 
+Default `/diff` source is **Uncommitted** (working tree against HEAD, including staged,
+unstaged and untracked files); SDK defaults and contract 1.40 fields are unchanged.
+`Current` labels the explicit session baseline; Ctrl+X B retains the session →
+uncommitted → branch cycle. Opening the panel refreshes its selected source. Consent
+and session changes invalidate in-flight reports and re-read the SDK snapshot, so a
+refresh captured before consent cannot overwrite the enabled report. Empty reports
+show `No changes`; denied/error reports show their reason, including unavailable
+branch merge bases. The 110-column threshold is unchanged.
+
 ## 9. Màu (đo từ `colors.json`; hai biến thể sáng/tối của theme user)
 
 | Vai trò | Sáng | Tối | Ví dụ |
@@ -137,7 +146,7 @@ hiện `⎿  <Name> says: …` và số PostToolUse ở detail mode.
 Panel diff chiếm 54 cột gồm separator và padding (52 cột body); transcript thu hẹp; composer vẫn đủ chiều rộng.
 Chỉ nguồn Current có SDK. Ctrl+X B và ←/→ khi focus báo lý do thiếu base session/branch, không đổi nguồn giả.
 `/diff` và auto-open sau receipt sửa file đầu tiên đều giữ focus ở composer: nhập/sửa/gửi prompt và cuộn transcript bên trái vẫn hoạt động.
-Panel dùng Ctrl+↑/↓ hoặc Meta+↑/↓ chọn file, Ctrl+X B đổi nguồn; `/diff` lần nữa đóng panel.
+Panel: Tab chuyển focus vào diff; ↑/↓, j/k chọn file, Enter detail (↑/↓, j/k cuộn), Esc về list rồi prompt; ←/→ đổi nguồn, PgUp/PgDn cuộn. Ctrl+↑/↓ hoặc Meta+↑/↓ và Ctrl+X B vẫn dùng từ prompt. Click file chọn, source đổi nguồn, ✕ đóng; wheel trong panel chỉ cuộn diff. Footer đọc keymap remap; `/diff` lần nữa đóng panel. Xem [interaction audit](diff-interaction-parity.md).
 Dưới 110 cột từ chối mở với đúng câu trong §2. Nền panel lấy token `panel` (#f5f5f5 / #262626).
 
 Kiểm tra giao diện: plan và rewind choices 80×12, auto diff 120×36, narrow 80/109; màu FORCE_COLOR=3 của plan so dark reference

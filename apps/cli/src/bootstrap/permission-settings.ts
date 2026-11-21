@@ -13,6 +13,7 @@ import {
   type PermissionSettingsScope,
   type PermissionSettingsSnapshot,
   type SettingsStore,
+  type SandboxSettingsPatch,
   DOMAIN_PATTERN,
 } from '@cosmew/contracts';
 import type {SandboxConfig} from '@cosmew/tools';
@@ -53,6 +54,8 @@ export interface FilePermissionSettingsOptions {
   stateDirectory: string;
   store: SettingsStore;
   home?: string;
+  /** Startup notice inspection must not migrate workspace rules. */
+  migrateLegacyRules?: boolean;
   /** `--allowedTools` / `--disallowedTools` of this launch: a trusted, unstored overlay. */
   launch?: {allow?: readonly string[]; ask?: readonly string[]; deny?: readonly string[]};
 }
@@ -86,7 +89,23 @@ export class FilePermissionSettings implements PermissionSettingsPort {
       project: join(projectDirectory, 'settings.json'),
       local: join(projectDirectory, 'settings.local.json'),
     };
-    this.migrateLegacyRules();
+    if (options.migrateLegacyRules !== false) this.migrateLegacyRules();
+  }
+
+  /** Record before displaying, so successful startup never repeats the upgrade notice. */
+  defaultsNotice(): string | undefined {
+    const loaded = this.load('user');
+    if (loaded.diagnostics.length) return undefined;
+    const raw = parseSettings(loaded.text).raw;
+    if (Object.hasOwn(raw, 'sandbox') || raw.sandboxDefaultsNoticeVersion === 1) return undefined;
+    try {
+      this.mutate('user', value => {
+        value.sandboxDefaultsNoticeVersion = 1;
+      });
+    } catch {
+      return undefined; // Do not claim a one-time notice was recorded when persistence failed.
+    }
+    return 'Sandbox is now off by default; shell commands use regular permissions. Run /sandbox to turn it on.';
   }
 
   pathOf(scope: PermissionSettingsScope): string {
@@ -233,6 +252,7 @@ export class FilePermissionSettings implements PermissionSettingsPort {
   private mutate(scope: PermissionSettingsScope, change: (raw: Record<string, unknown>) => void): void {
     const path = this.paths[scope];
     const before = this.load(scope);
+    if (before.exists && (lstatSync(path).mode & 0o222) === 0) throw new FutrynError('POLICY');
     let raw: Record<string, unknown> = {};
     if (before.exists) {
       if (before.diagnostics.some(line => /ignored/.test(line))) throw new FutrynError('INVALID_INPUT');
@@ -275,6 +295,26 @@ export class FilePermissionSettings implements PermissionSettingsPort {
     this.mutate(scope, raw => {
       const permissions = ensureObject(raw, 'permissions');
       permissions[effect] = ensureList(permissions, effect).filter(entry => entry !== rule);
+    });
+  }
+
+  updateSandbox(patch: SandboxSettingsPatch): void {
+    this.mutate('user', raw => {
+      const sandbox = ensureObject(raw, 'sandbox');
+      for (const key of ['enabled', 'autoAllowBashIfSandboxed', 'allowUnsandboxedCommands'] as const) {
+        if (patch[key] !== undefined) {
+          if (typeof patch[key] !== 'boolean') throw new FutrynError('INVALID_INPUT');
+          sandbox[key] = patch[key];
+        }
+      }
+      if (patch.excludeCommand !== undefined) {
+        const pattern = patch.excludeCommand.trim();
+        if (!pattern || pattern.length > 200 || /[\u0000-\u001f]/.test(pattern)) throw new FutrynError('INVALID_INPUT');
+        const list = ensureList(sandbox, 'excludedCommands');
+        if (!list.includes(pattern)) list.push(pattern);
+        if (list.length > 200) throw new FutrynError('INVALID_INPUT');
+        sandbox.excludedCommands = list;
+      }
     });
   }
 

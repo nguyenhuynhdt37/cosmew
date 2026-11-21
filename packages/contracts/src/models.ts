@@ -2,7 +2,7 @@ import {turnBudgetSchema} from './telemetry';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.40' as const;
+export const CONTRACT_VERSION = '1.42' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
@@ -223,6 +223,62 @@ export function isCodingModel(model: ModelInfo, selectedModelId?: string): boole
 export const selectionSchema = z.strictObject({accountId: z.string().uuid(), modelId: modelIdSchema});
 export type Selection = z.infer<typeof selectionSchema>;
 export const toolCallSchema = z.strictObject({id: z.string().min(1).max(200), name: idSchema, input: z.unknown()});
+/** Private provider continuation state (ADR 0082). Never display, log or treat as instructions. */
+const replayMetadataSchema = z.strictObject({
+  itemId: z.string().max(512).optional(),
+  reasoningEncryptedContent: z.string().max(524288).optional(),
+  thoughtSignature: z.string().max(524288).optional(),
+  signature: z.string().max(524288).optional(),
+  redactedData: z.string().max(524288).optional(),
+  type: z.literal('compaction').optional(),
+});
+export const providerReplaySchema = z
+  .strictObject({
+    version: z.literal(1),
+    providerId: idSchema,
+    accountId: z.string().uuid(),
+    protocol: protocolSchema,
+    modelId: modelIdSchema,
+    endpointHash: z.string().regex(/^[a-f0-9]{64}$/),
+    parts: z
+      .array(
+        z.discriminatedUnion('type', [
+          z.strictObject({
+            type: z.literal('reasoning'),
+            text: z.string().max(524288),
+            metadata: replayMetadataSchema.optional(),
+          }),
+          z.strictObject({
+            type: z.literal('text'),
+            text: z.string().max(524288),
+            metadata: replayMetadataSchema.optional(),
+          }),
+          z.strictObject({
+            type: z.literal('tool-call'),
+            callId: z.string().min(1).max(200),
+            metadata: replayMetadataSchema.optional(),
+          }),
+        ]),
+      )
+      .min(1)
+      .max(2048),
+  })
+  .superRefine((replay, ctx) => {
+    const allowed =
+      replay.protocol === 'responses'
+        ? ['itemId', 'reasoningEncryptedContent']
+        : replay.protocol === 'gemini'
+          ? ['thoughtSignature']
+          : replay.protocol === 'anthropic'
+            ? ['signature', 'redactedData', 'type']
+            : [];
+    if (replay.parts.some(part => part.metadata && Object.keys(part.metadata).some(key => !allowed.includes(key))))
+      ctx.addIssue({code: 'custom', message: 'invalid continuation metadata'});
+    // Bound encoded storage in bytes, including multibyte text and escaped JSON.
+    if (new TextEncoder().encode(JSON.stringify(replay)).byteLength > 1048576)
+      ctx.addIssue({code: 'custom', message: 'continuation state exceeds limit'});
+  });
+export type ProviderReplay = z.infer<typeof providerReplaySchema>;
 /**
  * Conversation message. `assistant` may carry `toolCalls` (then `content` may be empty);
  * `tool` carries one tool result for `toolCallId`. Plain user/assistant text messages are
@@ -238,6 +294,7 @@ export const messageSchema = z
     toolName: idSchema.optional(),
     /** Assistant messages with tool calls: the model's reasoning, sent back only to providers that require it (ADR 0048). */
     reasoning: z.string().optional(),
+    providerReplay: providerReplaySchema.optional(),
     /** User or tool media (ADRs 0041/0072). User image bytes are ephemeral; never journaled. */
     attachments: z.array(attachmentSchema).max(8).optional(),
   })
@@ -246,13 +303,20 @@ export const messageSchema = z
     if (m.attachments && m.role === 'assistant') issue('only user or tool messages carry attachments');
     if (m.role === 'user' && m.attachments?.some(a => a.mime === 'application/pdf'))
       issue('user attachments must be images');
+    if (m.providerReplay && m.role !== 'assistant') issue('only assistant messages carry provider replay');
+    if (m.providerReplay) {
+      const ids = m.providerReplay.parts.filter(p => p.type === 'tool-call').map(p => p.callId);
+      if (ids.length !== (m.toolCalls?.length ?? 0) || ids.some((id, i) => id !== m.toolCalls?.[i]?.id))
+        issue('continuation tool order must match assistant calls');
+    }
     if (m.reasoning !== undefined && m.role !== 'assistant') issue('only assistant messages carry reasoning');
     if (m.role === 'tool') {
       if (!m.toolCallId || !m.toolName || m.toolCalls) issue('tool message needs toolCallId and toolName only');
     } else {
       if (m.toolCallId || m.toolName) issue('only tool messages carry toolCallId/toolName');
       if (m.role === 'user' && (m.toolCalls || !m.content)) issue('user message needs text and no tool calls');
-      if (m.role === 'assistant' && !m.content && !m.toolCalls) issue('assistant message needs text or tool calls');
+      if (m.role === 'assistant' && !m.content && !m.toolCalls && !m.providerReplay)
+        issue('assistant message needs text or tool calls');
     }
   });
 export type Message = z.infer<typeof messageSchema>;
@@ -304,6 +368,8 @@ export type ModelEvent =
   | {type: 'started'; requestId: string}
   | {type: 'textDelta'; text: string}
   | {type: 'reasoningDelta'; text: string}
+  /** Private adapter-to-core state; consume internally, never forward as an agent/UI event. */
+  | {type: 'providerReplay'; replay: ProviderReplay}
   | {type: 'usage'; usage: Usage}
   | {type: 'context'; context: import('./telemetry').ContextMeasurement}
   | {type: 'toolCallComplete'; call: ToolCall}
@@ -331,7 +397,7 @@ export interface ModelPort {
   generate(
     request: ModelRequest,
     signal?: AbortSignal,
-  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string}>;
+  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}>;
 }
 export interface CredentialVault {
   get(ref: CredentialRef): Promise<string | undefined>;

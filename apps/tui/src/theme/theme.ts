@@ -37,7 +37,29 @@ export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all
 
 const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light']);
 const MODE_THEME_IDS: Record<ThemeMode, string> = {system: 'auto', dark: 'dark', light: 'light'};
-const THEME_MODES: Record<string, ThemeMode> = {auto: 'system', dark: 'dark', light: 'light'};
+const THEME_MODES: Record<string, ThemeMode> = {
+  auto: 'system',
+  dark: 'dark',
+  light: 'light',
+  'dark-daltonized': 'dark',
+  'light-daltonized': 'light',
+  'dark-ansi': 'dark',
+  'light-ansi': 'light',
+};
+
+/** Shared selection path for the picker and /config. */
+export function themeSelection(id: string): PartialAppearanceConfig {
+  const clean = id.trim().toLowerCase();
+  const theme =
+    (
+      {system: 'auto', 'futryn-default': 'auto', 'monochrome-dark': 'dark', 'monochrome-light': 'light'} as Record<
+        string,
+        string
+      >
+    )[clean] ?? clean;
+  if (!ALL_BUILTIN_THEMES.some(item => item.id === theme)) throw new FutrynError('NOT_FOUND');
+  return {theme, mode: THEME_MODES[theme] ?? 'system'};
+}
 
 export function detectTerminalColorCapability(
   env: Record<string, string | undefined> = process.env,
@@ -536,8 +558,7 @@ export class ThemeEngine {
         throw new FutrynError('NOT_FOUND');
       }
       if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
-      normalizedPatch.theme = manifest.id;
-      normalizedPatch.mode = THEME_MODES[manifest.id] ?? 'system';
+      Object.assign(normalizedPatch, themeSelection(manifest.id));
       if (manifest.wallpaper && normalizedPatch.wallpaper === undefined) {
         normalizedPatch.wallpaper = manifest.wallpaper;
         normalizedPatch.animations = {

@@ -3,6 +3,7 @@ import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fixtureServer} from '../fixtures';
+import {writeSandboxSettings} from '../sandbox-config';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => {
@@ -20,7 +21,7 @@ function context() {
   );
   const spawn = (args: string[], input = '', extraEnv: Record<string, string | undefined> = {}) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, FUTRYN_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret', ...extraEnv},
+      env: {...process.env, COSMEW_HOME: home, FUTRYN_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret', ...extraEnv},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -63,6 +64,42 @@ function context() {
   };
   return {home, root, server, cli, configure, spawn, collect};
 }
+
+test('exec --json keeps the one-time sandbox notice on stderr in an isolated state directory', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'fyn-exec-notice-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'fyn-exec-notice-project-'));
+  cleanup.push(
+    () => rmSync(home, {recursive: true, force: true}),
+    () => rmSync(workspace, {recursive: true, force: true}),
+  );
+  for (const first of [true, false]) {
+    const child = Bun.spawn(
+      [process.execPath, resolve('apps/cli/src/index.ts'), 'exec', 'work', '--cd', workspace, '--json'],
+      {
+        env: {...process.env, COSMEW_HOME: home},
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    expect(code).toBe(2); // No account: no provider or command process is required for this regression.
+    expect(
+      stdout
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line)),
+    ).toEqual([expect.objectContaining({type: 'turn.failed', error: expect.objectContaining({code: 'AUTH'})})]);
+    expect(stderr.includes('Notice: Sandbox is now off by default')).toBe(first);
+  }
+  const settings = JSON.parse(readFileSync(join(home, 'settings.json'), 'utf8'));
+  expect(settings).toMatchObject({sandboxDefaultsNoticeVersion: 1});
+  expect(Object.hasOwn(settings, 'sandbox')).toBe(false);
+});
 
 test('exec validates arguments (64), stdin and missing tool account (2) without a provider', async () => {
   const home = mkdtempSync(join(tmpdir(), 'fyn-exec-args-'));
@@ -124,7 +161,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.40', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.42', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');
@@ -228,6 +265,8 @@ test.skipIf(process.platform !== 'darwin')(
   'exec permission flags: without a TTY whatever would ask is denied, flags select the mode, the sandbox always applies',
   async () => {
     const x = context();
+    // Sandbox flag acceptance opts in; ADR 0081 leaves ordinary launches off.
+    writeSandboxSettings(x.home);
     await x.configure();
     const outside = join(tmpdir(), `fyn-exec-outside-${crypto.randomUUID()}`);
     cleanup.push(() => rmSync(outside, {force: true}));
@@ -270,7 +309,7 @@ test.skipIf(process.platform !== 'darwin')(
     expect(bypass.results[1].code).toBe('SANDBOX_DENIED');
     expect(existsSync(outside)).toBe(false);
     expect(bypass.events.some(e => e.type === 'permission.requested')).toBe(false);
-    expect(bypass.events.at(-1)).toMatchObject({contractVersion: '1.40', type: 'turn.completed'});
+    expect(bypass.events.at(-1)).toMatchObject({contractVersion: '1.42', type: 'turn.completed'});
   },
   60_000,
 );

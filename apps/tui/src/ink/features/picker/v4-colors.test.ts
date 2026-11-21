@@ -27,9 +27,9 @@ test('FORCE_COLOR=3 dialogs and panels use the measured colour roles (spec 9, da
   expect(frames.permission).toContain(fg(MUTED) + '╌');
   expect(frames.permission).toContain(fg(SELECTED) + '❯ ');
   expect(frames.permission).toContain(fg(MUTED) + 'Esc to cancel · Tab to amend');
-  // Diff rows carry a tinted background across the line (added 3d423c, removed 7a2936).
-  expect(frames.permission).toContain('\x1b[48;2;61;66;60m');
-  expect(frames.permission).toContain('\x1b[48;2;122;41;54m');
+  // Diff rows carry a tinted background across the line (token-derived soft added/removed tints).
+  expect(frames.permission).toContain('\x1b[48;2;45;64;45m');
+  expect(frames.permission).toContain('\x1b[48;2;73;49;52m');
   // Question: the frame rule is muted (not the rule colour), the chip is reversed in the rule colour.
   expect(frames.question).toContain(fg(MUTED) + '─');
   expect(frames.question).toContain('\x1b[7m');

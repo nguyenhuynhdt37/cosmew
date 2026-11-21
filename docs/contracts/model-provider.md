@@ -1,6 +1,8 @@
 # Model provider port
 
-Current contract **1.40** includes optional `Provider.reasoning`: `{supported?: boolean, efforts?: string[], models?: Record<modelId, {supported?: boolean, efforts?: string[]}>}`. This is user-level host configuration only, resolved by ModelCatalog into `ModelInfo.capabilities.reasoning` and `reasoningEfforts`. Per-model config > provider defaults > discovered metadata > unknown; explicit unsupported clears efforts. Levels are unique, non-empty, bounded (20 levels, 40 characters each; no whitespace/control characters or reserved `default`); unknown keys and contradictory declarations are rejected. Auto reset needs no declared levels; only explicit effort needs capabilities. Chat sends `reasoning_effort`, Responses sends `reasoning.effort` without requesting summaries on compatible endpoints; native OpenAI Responses keeps `auto`. Anthropic/Gemini return fixed `UNSUPPORTED` diagnostics naming the protocol. See [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md), folded into the uncommitted 1.40 rename (no 1.41).
+Current contract is **1.42** (background task command overlay; model wire formats unchanged). Contract **1.41** added provider-bound, bounded opaque replay state. It is internal continuation data, not UI text or execution authority; see [ADR 0082](../adr/0082-provider-reasoning-replay.md). Existing 1.40 reasoning-effort controls remain unchanged.
+
+Contract **1.40** introduced optional `Provider.reasoning`: `{supported?: boolean, efforts?: string[], models?: Record<modelId, {supported?: boolean, efforts?: string[]}>}`. This is user-level host configuration only, resolved by ModelCatalog into `ModelInfo.capabilities.reasoning` and `reasoningEfforts`. Per-model config > provider defaults > discovered metadata > unknown; explicit unsupported clears efforts. Levels are unique, non-empty, bounded (20 levels, 40 characters each; no whitespace/control characters or reserved `default`); unknown keys and contradictory declarations are rejected. Auto reset needs no declared levels; only explicit effort needs capabilities. Chat sends `reasoning_effort`, Responses sends `reasoning.effort` without requesting summaries on compatible endpoints; native OpenAI Responses keeps `auto`. Anthropic/Gemini return fixed `UNSUPPORTED` diagnostics naming the protocol. See [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md); that slice was folded into the 1.40 rename.
 
 Contract 1.9 ([ADR 0023](../adr/0023-process-supervision.md)) carries optional runtime lifecycle observations; provider requests/adapters are unchanged. Missing historical observations remain unknown. No command exposure is enabled.
 
@@ -133,3 +135,15 @@ or new persisted preference is needed. Successful ChatGPT account discovery repl
 configured preset fallback IDs; user-added manual IDs remain available. Optional
 `manualOrigin` (`user` / `provider-config`) records that distinction. Legacy manual
 IDs matching configured fallbacks are omitted from that merge.
+
+## Provider billing errors (additive contract 1.40)
+
+`PROVIDER_BILLING` identifies HTTP 402, or HTTP 403 and 429 responses with explicit billing
+or credit-quota indicators. These errors are non-retryable and carry no retry delay.
+Ordinary HTTP 403 authorization failures and HTTP 429 rate limits keep their existing codes.
+
+A host with a redactor may surface an optional hint from a recognized JSON error message field.
+The transport inspects at most 8 KiB of the error response, strips URL query strings, fragments
+and credentials, and limits the sanitized hint to 200 characters. Request bodies and headers
+are excluded from diagnostics. Error serialization includes the hint in the existing
+`message` field when available. The host uses the same diagnostic for `fyn model doctor --generate`.

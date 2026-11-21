@@ -129,8 +129,17 @@ export interface ToolDispatcherOptions {
    * `mcp__server__tool`. The dispatcher authorizes each call before `call`.
    */
   mcp?: {
-    tools(): readonly {name: string; description: string; inputSchema: Record<string, unknown>}[];
-    call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string>;
+    tools(): readonly {
+      name: string;
+      description: string;
+      inputSchema: Record<string, unknown>;
+      readOnlyHint?: boolean;
+    }[];
+    call(
+      name: string,
+      args: Record<string, unknown>,
+      signal?: AbortSignal,
+    ): Promise<string | {text: string; isError?: boolean}>;
   };
   /**
    * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it

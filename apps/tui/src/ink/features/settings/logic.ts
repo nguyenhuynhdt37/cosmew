@@ -9,7 +9,7 @@ export interface SettingRow {
 export function settingsRows(appearance: AppearanceConfig, effectiveMode: 'dark' | 'light'): SettingRow[] {
   const a = appearance.animations;
   return [
-    {label: 'Active Theme', value: `${appearance.theme} (Enter cycles Auto / Dark / Light)`},
+    {label: 'Theme', value: `${appearance.theme} (Enter to choose)`},
     {
       label: 'Color Mode',
       value: `${appearance.mode === 'system' ? 'AUTO' : appearance.mode.toUpperCase()} (resolved: ${effectiveMode})`,
@@ -44,6 +44,7 @@ export type ConfigurationAction =
   | 'models'
   | 'accounts'
   | 'effort'
+  | 'sandbox'
   | 'permissions'
   | 'sessions'
   | 'context'
@@ -205,10 +206,9 @@ export function configurationRows(
         action: 'permissions',
       },
       {
-        label: 'Sandbox policy',
-        value: 'Enforced by the selected execution runtime',
-        disabled:
-          'Sandbox backend and policy are selected at launch. A UI preference cannot increase execution authority.',
+        label: 'Sandbox',
+        value: client.permissionSettings().sandbox.enabled ? 'Enabled' : 'No sandbox',
+        action: 'sandbox',
       },
       {
         label: 'Native limitations',

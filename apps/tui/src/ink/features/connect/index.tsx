@@ -15,6 +15,7 @@ export interface ConnectDialogProps extends DialogProps {
   action?: 'switch' | 'logout';
   initialQuery?: string;
   onChanged?: () => void;
+  onOnboardingDone?: () => void;
   isStreaming?: boolean;
 }
 export function ConnectDialog({
@@ -23,6 +24,7 @@ export function ConnectDialog({
   action,
   initialQuery = '',
   onChanged,
+  onOnboardingDone,
   isStreaming = false,
   ...props
 }: ConnectDialogProps) {
@@ -93,7 +95,8 @@ export function ConnectDialog({
       );
       challengeRef.current = null;
       if (signal.aborted || !live.current) return;
-      if (s.pendingAction === 'switch') {
+      if (onOnboardingDone) onOnboardingDone();
+      else if (s.pendingAction === 'switch') {
         await client.switchAccount(account.id, true, undefined, signal);
         if (signal.aborted) return;
         onChanged?.();
@@ -165,7 +168,8 @@ export function ConnectDialog({
     execute(async signal => {
       const st = state;
       if (st.step === 'provider') {
-        if (id === '__custom') next('custom-id', {custom: {}, accountId: undefined});
+        if (id === '__skip-onboarding' && onOnboardingDone) onOnboardingDone();
+        else if (id === '__custom') next('custom-id', {custom: {}, accountId: undefined});
         else
           next('method', {
             providerId: id,
@@ -349,6 +353,7 @@ export function ConnectDialog({
     client.listAccounts(),
     client.status().activeAccount?.id,
   );
+  if (onOnboardingDone && state.step === 'provider') choices.unshift({id: '__skip-onboarding', label: 'Skip for now'});
   const labels: Partial<Record<ConnectStep, string>> = {
     'custom-id': 'Custom provider ID',
     url: 'Base URL',

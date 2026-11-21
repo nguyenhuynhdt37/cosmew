@@ -154,3 +154,19 @@ Spec: `docs/delivery/tui-v4/spec.md` sections 5-7 and the reference frames.
 - `features/panels`: `/mcp`, `/hooks` (both "Not implemented"), `/rewind` (prompt list; restoring is not implemented) and the transcript
   helpers `commandResult` / `cancelledResult` / `notImplementedResult` for `❯ /cmd` + `  ⎿  result` lines.
 - Colour test: `v4-colors.test.ts` (subprocess with `FORCE_COLOR=3`, dark variant of spec 9).
+
+
+### Pointer input in shared controls
+
+`ListPicker` uses wheel input over its measured list to move the bounded highlight.
+Clicks highlight rows, including disabled entries; Enter or the existing keyboard action
+remains necessary to activate them. `OptionList` accepts `onCursorChange` and `isActive`
+for the same focus-only behavior, measuring the full wrapped label and description.
+Split question lists pass `onWheel` to navigate across their sections. These controls
+respect `InputScope`, so background panels cannot receive pointer actions.
+
+`PanelTabs` accepts `onSelect` and `isActive`; only measured tab boxes respond to clicks.
+Tab keyboard shortcuts remain owned by each feature. `Detail` scrolls output with the
+wheel only over its output area. The same shared behavior applies to background task
+lists and output views. Rewind and plan approval keep execution behind explicit Enter
+confirmation after pointer highlighting; the plan body has its own wheel region.

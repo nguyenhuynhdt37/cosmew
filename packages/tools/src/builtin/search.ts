@@ -248,7 +248,7 @@ function newestFirst(root: string, paths: string[]): string[] {
   const modified = new Map<string, number>();
   for (const path of paths) {
     try {
-      modified.set(path, lstatSync(join(root, path)).mtimeMs);
+      modified.set(path, lstatSync(isAbsolute(path) ? path : join(root, path)).mtimeMs);
     } catch {
       modified.set(path, 0);
     }

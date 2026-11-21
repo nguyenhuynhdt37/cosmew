@@ -23,7 +23,7 @@ test('FORCE_COLOR=3 frames carry semantic foregrounds and diff/prompt background
   // The title is the rule colour (not the path colour).
   expect(frames.permission).toContain('\x1b[1m' + fg('129;162;190') + 'Read file');
   expect(frames.permission).toContain(fg('129;162;190') + '─');
-  expect(frames.diff).toContain(bg('61;66;60'));
-  expect(frames.diff).toContain(bg('122;41;54'));
+  expect(frames.diff).toContain(bg('45;64;45'));
+  expect(frames.diff).toContain(bg('73;49;52'));
   expect(frames.user).toContain(bg('53;57;64'));
 });

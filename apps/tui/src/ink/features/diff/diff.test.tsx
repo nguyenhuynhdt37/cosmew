@@ -126,7 +126,8 @@ test('unavailable backend is explicit and hook refresh errors stay visible', asy
   expect(view.lastFrame()).toContain('Workspace diff unavailable');
   await state!.refresh();
   await settle();
-  expect(view.lastFrame()).toContain('refresh failed');
+  expect(view.lastFrame()).toContain(state!.error!);
+  expect(state!.error).toBeTruthy();
 });
 
 test('diff gutters track independent old/new line numbers and source resembling headers', async () => {
@@ -208,4 +209,236 @@ test('late refresh of an old base cannot replace the selected comparison', async
   await settle();
   expect(view.lastFrame()).toContain('branch');
   expect(view.lastFrame()).not.toContain('uncommitted');
+});
+
+test('mount before consent, enable tools, and open the panel reads the current SDK report', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  const fixture = createClientFixture({getWorkspaceDiff: () => ({...report, state: 'ready', base: 'session'})});
+  function Harness({open = false}: {open?: boolean}) {
+    state = useDiff();
+    return open ? <Diff report={state.report} width={120} /> : <Text>{state.report.message}</Text>;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('Folder consent required.');
+  // Opening before the startup effect runs captures the SDK consent report.
+  const opening = state.refresh();
+  fixture.client.setToolsEnabled(true);
+  await opening;
+  view.rerender(<Harness open />);
+  await settle();
+  expect(view.lastFrame()).toContain('a.ts');
+  expect(view.lastFrame()).not.toContain('Folder consent required.');
+});
+
+test('default source shows uncommitted changes when the session baseline is empty', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  const fixture = createClientFixture({
+    getWorkspaceDiff: options => ({
+      ...report,
+      base: options?.base,
+      files: options?.base === 'session' ? [] : report.files,
+    }),
+  });
+  fixture.client.setToolsEnabled(true);
+  function Harness() {
+    state = useDiff();
+    return <Diff report={state.report} width={120} />;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  await state.refresh();
+  await settle();
+  expect(state.report.base).toBe('uncommitted');
+  expect(view.lastFrame()).toContain('a.ts');
+});
+
+test('consent revocation hides files and re-enabling refreshes without reopening', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  let current = {...report, base: 'uncommitted' as const};
+  const fixture = createClientFixture({getWorkspaceDiff: () => current});
+  function Harness() {
+    state = useDiff(true);
+    return <Diff report={state.report} width={120} />;
+  }
+  fixture.client.setToolsEnabled(true);
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('a.ts');
+  fixture.client.setToolsEnabled(false);
+  await settle();
+  expect(view.lastFrame()).toContain('Folder consent required.');
+  expect(view.lastFrame()).not.toContain('a.ts');
+  current = {...current, files: [], totalAdditions: 0, totalDeletions: 0};
+  fixture.client.setToolsEnabled(true);
+  await settle();
+  expect(view.lastFrame()).toContain('No changes');
+  expect(view.lastFrame()).not.toContain('Folder consent required.');
+});
+
+test('opening refreshes even when mounted while tools were disabled', async () => {
+  let cached: WorkspaceDiffReport = {...report, files: [], message: 'Not inspected.'};
+  const fixture = createClientFixture({
+    getWorkspaceDiff: () => cached,
+    refreshWorkspaceDiff: async options => (cached = {...report, base: options?.base}),
+  });
+  function Harness({open = false}: {open?: boolean}) {
+    const state = useDiff(open);
+    return open ? <Diff report={state.report} width={120} /> : <Text>{state.report.message}</Text>;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('Folder consent required.');
+  fixture.client.setToolsEnabled(true);
+  view.rerender(<Harness open />);
+  await settle();
+  expect(view.lastFrame()).toContain('a.ts');
+  // A subsequent open must inspect again, including external working-tree edits.
+  view.rerender(<Harness />);
+  await settle();
+  cached = {...report, files: [], message: 'No changes', totalAdditions: 0, totalDeletions: 0};
+  fixture.ports.refreshWorkspaceDiff = async options => ({...cached, base: options?.base});
+  view.rerender(<Harness open />);
+  await settle();
+  expect(view.lastFrame()).toContain('No changes');
+  expect(view.lastFrame()).not.toContain('a.ts');
+});
+
+test('session changes reset the source, re-read the baseline, and discard the previous session refresh', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  let baseline = report;
+  let finish!: (value: WorkspaceDiffReport) => void;
+  const selection = {accountId: '11111111-1111-4111-8111-111111111111', modelId: 'fixture'};
+  const fixture = createClientFixture({
+    resolveSelection: () => selection,
+    startSession: () => ({id: 'new-session', selection, messages: []}),
+    getWorkspaceDiff: options => ({...baseline, base: options?.base}),
+    refreshWorkspaceDiff: options =>
+      options?.base === 'branch'
+        ? new Promise(resolve => {
+            finish = resolve;
+          })
+        : Promise.resolve({...baseline, base: options?.base}),
+  });
+  fixture.client.setToolsEnabled(true);
+  function Harness() {
+    state = useDiff();
+    return <Diff report={state.report} width={120} />;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  const old = state.refresh('branch');
+  baseline = {...report, files: [], totalAdditions: 0, totalDeletions: 0};
+  fixture.client.createSession();
+  await settle();
+  expect(state.report.base).toBe('uncommitted');
+  expect(view.lastFrame()).toContain('No changes');
+  finish({...report, base: 'branch'});
+  await old;
+  await settle();
+  expect(view.lastFrame()).not.toContain('a.ts');
+  expect(state.report.base).toBe('uncommitted');
+});
+
+test('a failed open refresh shows a reason in the panel body', async () => {
+  const fixture = createClientFixture({
+    getWorkspaceDiff: () => ({...report, files: []}),
+    refreshWorkspaceDiff: async () => {
+      throw new Error('unavailable');
+    },
+  });
+  fixture.client.setToolsEnabled(true);
+  function Harness() {
+    const state = useDiff(true);
+    return <Diff report={state.report} width={120} />;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('unavailable');
+});
+
+test('hidden diff invalidates a session change without starting a competing review refresh', async () => {
+  let refreshes = 0;
+  const fixture = createClientFixture({
+    resumeSession: () => ({id: 'old-session', selection: {accountId: 'account', modelId: 'model'}, messages: []}),
+    getWorkspaceDiff: () => report,
+    refreshWorkspaceDiff: async () => {
+      refreshes++;
+      return report;
+    },
+  });
+  fixture.client.setToolsEnabled(true);
+  fixture.client.resumeSession('old-session');
+  function Harness() {
+    const state = useDiff(false);
+    return <Text>{state.report.files.length}</Text>;
+  }
+  renderInk(<Harness />, {fixture});
+  await settle();
+  fixture.client.clearSessionView();
+  await settle();
+  expect(refreshes).toBe(0);
+});
+
+test('source refresh retains inspected capabilities and source until the next source is ready', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  let finish!: (value: WorkspaceDiffReport) => void;
+  const inspected: WorkspaceDiffReport = {
+    ...report,
+    base: 'uncommitted',
+    capabilities: {
+      session: {available: false, reason: 'No session'},
+      uncommitted: {available: true},
+      branch: {available: true},
+    },
+  };
+  const fixture = createClientFixture({
+    getWorkspaceDiff: options =>
+      options?.base === 'branch' ? {...report, base: 'branch', files: [], message: 'Diff not loaded.'} : inspected,
+    refreshWorkspaceDiff: () =>
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+  });
+  fixture.client.setToolsEnabled(true);
+  function Harness() {
+    state = useDiff();
+    return <Diff report={state.report} width={120} />;
+  }
+  renderInk(<Harness />, {fixture});
+  await settle();
+  const pending = state.refresh('branch');
+  fixture.client.updateAppearance({animations: {enabled: false}});
+  await settle();
+  expect(state.report.base).toBe('uncommitted');
+  expect(state.report.capabilities).toEqual(inspected.capabilities);
+  finish({...inspected, base: 'branch'});
+  await pending;
+  await settle();
+  expect(state.report.base).toBe('branch');
+});
+
+test('an uncached source shows loading during inspection and retains the uncommitted default', async () => {
+  let state!: ReturnType<typeof useDiff>;
+  let finish!: (value: WorkspaceDiffReport) => void;
+  const fixture = createClientFixture({
+    getWorkspaceDiff: options => ({...report, files: [], base: options?.base, message: 'Diff not loaded.'}),
+    refreshWorkspaceDiff: () =>
+      new Promise(resolve => {
+        finish = resolve;
+      }),
+  });
+  fixture.client.setToolsEnabled(true);
+  function Harness() {
+    state = useDiff();
+    return <Diff report={state.report} width={120} />;
+  }
+  const view = renderInk(<Harness />, {fixture});
+  await settle();
+  const pending = state.refresh();
+  await settle();
+  expect(view.lastFrame()).toContain('Loading diff…');
+  expect(state.report.base).toBe('uncommitted');
+  finish({...report, base: 'uncommitted'});
+  await pending;
 });

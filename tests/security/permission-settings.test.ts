@@ -229,7 +229,7 @@ describe('merging and precedence', () => {
     expect(merged.rules.deny).toEqual(['Bash(rm:*)']);
     expect(merged.additionalDirectories).toEqual(['/shared', '/abs/dir', '/home/u/cache']);
     expect(merged.sandbox.allowedDomains).toEqual(['github.com']);
-    expect(merged.sandbox.enabled).toBe(true);
+    expect(merged.sandbox.enabled).toBe(false);
     expect(merged.sandbox.allowUnsandboxedCommands).toBe(true);
   });
 
@@ -337,7 +337,7 @@ describe('trust gating of repository settings (files)', () => {
   test('a repository allow rule is ignored until approved; deny and ask always apply; a changed file asks again', () => {
     const p = project();
     const projectPath = p.write('project', loosening);
-    p.write('user', {permissions: {ask: ['Bash(git push:*)']}});
+    p.write('user', {permissions: {ask: ['Bash(git push:*)']}, sandbox: {enabled: true}});
     const settings = new FilePermissionSettings({workspace: p.root, stateDirectory: p.home, store: p.store});
     const before = settings.snapshot();
     expect(before.rules.allow).toEqual([]);

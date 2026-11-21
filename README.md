@@ -4,6 +4,16 @@ Cosmew is a TypeScript/Bun coding-agent harness under development. The **Provide
 
 Repository: [nguyenhuynhdt37/cosmew](https://github.com/nguyenhuynhdt37/cosmew).
 
+Background work: press **Ctrl+B** to move a supported running command into the
+background. Open **`/tasks`** (alias **`/bashes`**) to see background shells and
+agents, including retained finished tasks. **Enter** opens output, **↑/↓** scroll,
+**End** follows new output, **x** stops a running task, and **Esc** returns. The
+footer's **↓ to manage** shortcut opens the same panel. Tasks belong to the active
+session and do not continue after Cosmew exits.
+Agent inspection opens a full-screen conversation using the main chat renderer;
+**Ctrl+O** expands tool details, and **Esc** returns to the task list. It reads the
+recorded child history without switching away from the parent session.
+
 Requires Bun **1.4.4**. No application build is required; Bun runs the TypeScript workspace.
 
 ```sh
@@ -15,7 +25,7 @@ cosmew
 
 The package registers `cosmew` and compatibility aliases `fyn`, `futryn`, and `hannes` in Bun's global bin directory (normally `~/.bun/bin`, which must be on PATH). None changes your working directory: `cd /path/to/project` then run `cosmew`.
 
-Start the full-screen Cosmew interface with `cosmew` in any project folder. From this checkout, use `bun run cosmew`. Approve the current folder for this session, then the app checks the selected account/model with a small request (which may incur cost); select another account or sign in if the check fails. Use `/theme` to select Auto, Dark, or Light; dark/light surfaces retain color for status and syntax. Enter **`/login`** for searchable providers and supported authentication methods, then choose a model and chat. OpenRouter additionally supports its official browser/headless **OAuth PKCE** flow. `/logout` opens account management with Add, Switch, Rename, Reconnect, Remove and sign-out. `/config`, `/theme`, `/model`, `/resume`, `/status`, `/doctor` and `/help` open the corresponding real flows; unsupported backend commands explain their limits. Existing command names remain aliases.
+Start the full-screen Cosmew interface with `cosmew` in any project folder. From this checkout, use `bun run cosmew`. Approve the current folder for this session, then the app checks the selected account/model with a small request (which may incur cost); select another account or sign in if the check fails. Use `/theme` or the Theme row in `/config` to select Auto, Dark, Light, or a colorblind-friendly/ANSI palette; dark/light surfaces retain color for status and syntax. Enter **`/login`** for searchable providers and supported authentication methods, then choose a model and chat. OpenRouter additionally supports its official browser/headless **OAuth PKCE** flow. `/logout` opens account management with Add, Switch, Rename, Reconnect, Remove and sign-out. `/config`, `/theme`, `/model`, `/resume`, `/status`, `/doctor` and `/help` open the corresponding real flows; unsupported backend commands explain their limits. Existing command names remain aliases.
 
 The account/model selection and custom endpoints persist across restart. API keys use the OS keyring or explicit environment references. Failed/cancelled new connections remove their stored credentials. Live authenticated provider acceptance is pending the user's local configuration; fixture, actual PTY and native-keyring evidence is in [Provider Connect acceptance](docs/delivery/provider-connect-acceptance.md), with the [contract/migration decision](docs/adr/0007-provider-connect-and-commands.md).
 
@@ -31,6 +41,8 @@ cosmew> /logout
 ```
 
 Các lệnh dài bên dưới vẫn có cho scripts; không cần dùng chúng để thiết lập tương tác. `bun run cosmew --help` hiển thị toàn bộ lệnh.
+
+On the first interactive launch, Cosmew asks you to choose a theme, offers sign-in, and shows security notes before folder consent. You can skip sign-in and open the TUI.
 
 Login prompts for an API key without echo and validates discovery against the provider. A successful model list establishes catalog access, not generation entitlement. `bun run cosmew model doctor --generate` makes a small billable generation check with the selected/default model. Supply valid API credentials; ChatGPT/Claude/Gemini consumer plans do not automatically grant API access.
 
@@ -73,7 +85,7 @@ bun run cosmew models select <model-id-from-list>
 printf 'Explain dependency injection.\n' | bun run cosmew run --json
 ```
 
-Never put key values in command arguments or repository settings. New installations store state in `~/.cosmew/provider-auth.sqlite`; existing `~/.hannes` state is reused in place. `COSMEW_HOME` overrides the directory (`FUTRYN_HOME` and `HANNES_HOME` remain supported). Credentials keep their legacy keyring identity; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic provider fallback. Workspace reads and approved apply_patch writes are mediated by Cosmew. Shell commands run in the OS sandbox (macOS Seatbelt, Linux bubblewrap).
+Never put key values in command arguments or repository settings. New installations store state in `~/.cosmew/provider-auth.sqlite`; existing `~/.hannes` state is reused in place. `COSMEW_HOME` overrides the directory (`FUTRYN_HOME` and `HANNES_HOME` remain supported). Credentials keep their legacy keyring identity; credentials are separate OS keyring entries, or environment references only. No plaintext credential fallback. Conversation content is stored locally without database encryption; protect the state directory and disk. Account/provider switching starts fresh context. There is no automatic provider fallback. Workspace reads and approved apply_patch writes are mediated by Cosmew. Shell commands use regular permissions by default; /sandbox enables the OS sandbox (macOS Seatbelt, Linux bubblewrap).
 
 ```sh
 bun run typecheck
@@ -103,4 +115,12 @@ Rename compatibility: private workspace imports now use `@cosmew/*`; `CosmewErro
 
 ## Command sandbox
 
-`exec_command` runs in the OS sandbox. `COSMEW_COMMAND_BACKEND=none` turns commands off. The old `docker` value does the same and reports that the container backend was removed ([ADR 0062](docs/adr/0062-remove-docker-command-backend.md)).
+`exec_command` uses regular permissions by default: sandbox.enabled=false, autoAllowBashIfSandboxed=false, allowUnsandboxedCommands=true. Turning the sandbox off never skips permission checks. Existing explicit sandbox settings are kept; otherwise a recorded one-time notice explains that `/sandbox` turns it on (ADR 0081). `COSMEW_COMMAND_BACKEND=none` turns commands off. The old `docker` value does the same and reports that the container backend was removed ([ADR 0062](docs/adr/0062-remove-docker-command-backend.md)).
+
+Appearance is saved in user `~/.cosmew/settings.json` (`theme`, `themeMode`,
+`reducedMotion`, `syntaxHighlighting` and the remaining appearance options).
+Existing global SQLite appearance imports once; the SQLite value stays in place.
+Repository appearance settings are ignored; project appearance edits last for the
+current session. Failed saves keep the appearance in memory and show a notice.
+See [ADR 0080](docs/adr/0080-user-settings-appearance.md) for recovery and palette
+verification limits.

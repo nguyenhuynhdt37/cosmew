@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {memo, useCallback, useEffect, useRef, useState} from 'react';
 import {useFutrynClient, useStatus, useKeymap, useTextInput} from '../../hooks';
 import {Box, Text} from 'ink';
 import {useTheme} from '../../theme';
@@ -95,7 +95,7 @@ export function Usage({state, width}: UsageProps) {
   return <ContextBlockView block={contextBlock(client)} width={width} />;
 }
 /** The `/context` grid and legend; also drawn inside the transcript, as Claude Code does. */
-export function ContextBlockView({block, width}: {block: ContextBlock; width?: number}) {
+export const ContextBlockView = memo(function ContextBlockView({block, width}: {block: ContextBlock; width?: number}) {
   const {color, uiColor} = useContextColors();
   const muted = color('foregroundMuted');
   const legend = block.categories;
@@ -105,11 +105,19 @@ export function ContextBlockView({block, width}: {block: ContextBlock; width?: n
         const side = at === 0 ? undefined : at === 1 ? 'header' : legend[at - 2];
         return (
           <Text key={at} wrap="truncate-end">
-            {row.map((kind, i) => (
-              <Text key={i} color={cellColor(kind)}>
-                {`${CONTEXT_GLYPH[kind]}${i < row.length - 1 ? ' ' : ''}`}
-              </Text>
-            ))}
+            {row
+              .reduce<{kind: ContextCellKind; text: string}[]>((runs, kind, i) => {
+                const glyph = `${CONTEXT_GLYPH[kind]}${i < row.length - 1 ? ' ' : ''}`;
+                const last = runs.at(-1);
+                if (last?.kind === kind) last.text += glyph;
+                else runs.push({kind, text: glyph});
+                return runs;
+              }, [])
+              .map(({kind, text}, index) => (
+                <Text key={index} color={cellColor(kind)}>
+                  {text}
+                </Text>
+              ))}
             {side === 'header' ? <Text>{'   Estimated usage by category'}</Text> : null}
             {side && side !== 'header' ? (
               <Text>
@@ -152,7 +160,7 @@ export function ContextBlockView({block, width}: {block: ContextBlock; width?: n
   function cellColor(kind: ContextCellKind) {
     return kind === 'free' || kind === 'buffer' ? muted : kind === 'instructions' ? color('info') : uiColor('rule');
   }
-}
+});
 function useContextColors() {
   const {color} = useTheme();
   const ui = useUiTheme();

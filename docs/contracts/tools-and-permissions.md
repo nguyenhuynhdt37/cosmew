@@ -1,5 +1,16 @@
 # Tools và permission contracts
 
+Contract **1.41** adds host-owned optional `ToolResult.evidenceDigest` and
+`evidenceOutputId` for canonical redacted evidence and its current archive handle
+([ADR 0083](../adr/0083-context-evidence-dedup.md)). They never grant permission or
+skip producer execution. Output archive sources also support `mcp`; retrieval
+reauthorizes MCP access under the current session/workspace/policy/grants without
+replaying remote calls ([ADR 0084](../adr/0084-mcp-tool-execution-correctness.md)).
+The MCP validator supports the explicitly bounded subset documented in that ADR;
+unsupported tools are hidden from model descriptors and direct calls explain the
+refusal. Coding-tool fixes are in [ADR 0085](../adr/0085-coding-tool-correctness.md);
+task-appropriate verification is in [ADR 0087](../adr/0087-task-aware-verification.md).
+
 Contract **1.10** adds approval-gated `apply_patch` with `fs.write`, JSON `{patch:string}` input and actual-change/partial-failure text receipts. ToolPort, ToolResult and persisted schemas remain compatible. [ADR 0025](../adr/0025-apply-patch.md) defines exact-plan grants, workspace-owned writes and transport/OS limits.
 
 Task 03B contract **1.9** ([ADR 0023](../adr/0023-process-supervision.md)) adds optional CommandOutcome.lifecycle observations and optional CommandRuntime.shutdown(). Absent lifecycle fields mean unconfirmed. Existing injected runtimes remain source-compatible. No request, ToolResult or database schema migration; stored model-facing text preserves lifecycle observations. Exit code 0 certifies only the leader exit status.
@@ -94,7 +105,7 @@ per-file OS sandbox for arbitrary third-party language servers.
 
 ## Working directories (ADR 0067, no contract bump)
 
-Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither stays refused. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` still defaults to on. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
+Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither stays refused. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` defaults to off (ADR 0081); autoAllowBashIfSandboxed defaults to false and allowUnsandboxedCommands to true. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
 
 ## User MCP (ADR 0068, no contract bump)
 

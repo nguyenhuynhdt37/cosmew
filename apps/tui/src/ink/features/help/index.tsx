@@ -25,7 +25,7 @@ export function HelpDialog({onCommand, ...props}: HelpDialogProps) {
   const skills = client.skills().skills;
   return (
     <Panel width={size.width}>
-      <PanelTabs title="Help" tabs={TABS} selected={tab} />
+      <PanelTabs title="Help" tabs={TABS} selected={tab} onSelect={value => setTab(value as (typeof TABS)[number])} />
       <Box height={1} />
       {tab === 'General' ? (
         <>

@@ -1,3 +1,6 @@
+import {sandboxDependencies} from '@cosmew/tools';
+import {FileAppearanceStore} from './user-settings';
+import {importLegacyAppearance} from '@cosmew/persistence';
 import {needsEffortMetadata, sharedModelMetadata} from './model-metadata';
 import {fetchModelsDev} from '@cosmew/security';
 import {BackgroundTasks} from './background-tasks';
@@ -232,6 +235,10 @@ export function startup(
   process.umask(0o077);
   const db = openPrivateDatabase(directory);
   const settings = new SqliteSettings(db);
+  const appearanceStore = new FileAppearanceStore({
+    stateDirectory: directory,
+    importLegacy: () => importLegacyAppearance(settings),
+  });
   const redactor = new Redactor();
   const webKeys: SearchKeys = Object.fromEntries(
     ['EXA_API_KEY', 'TAVILY_API_KEY', 'FIRECRAWL_API_KEY', 'PARALLEL_API_KEY'].map(name => [name, process.env[name]]),
@@ -381,6 +388,7 @@ export function startup(
       services.fetch,
       (provider, account, signal) =>
         provider.auth === 'oauth' ? chatgpt.accessToken(account, vault, signal) : tokens.token(provider, signal),
+      text => terminalText(redactor.text(text)),
     );
 
   const metadataAbort = new AbortController();
@@ -620,12 +628,7 @@ export function startup(
       workspace: resolve(workspaceRoot),
       gitAvailable: false,
       state: 'error',
-      message: 'Not inspected. Press R to refresh.',
-      capabilities: {
-        session: {available: false, reason: 'Not inspected.'},
-        uncommitted: {available: false, reason: 'Not inspected.'},
-        branch: {available: false, reason: 'Not inspected.'},
-      },
+      message: 'Diff not loaded. Open /diff to load it.',
       files: [],
       totalAdditions: 0,
       totalDeletions: 0,
@@ -1485,6 +1488,7 @@ export function startup(
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
       ...(services.permissions?.mode ? {permissionMode: services.permissions.mode} : {}),
       permissionSettings,
+      sandboxDependencies: () => sandboxDependencies(),
       savePlanProposal: (id, proposal) => conversations.savePlanProposal(id, proposal),
       getPlanProposal: id => conversations.loadPlanProposal(id),
       getPlan: id => {
@@ -1847,6 +1851,7 @@ export function startup(
         })),
 
       // Appearance
+      appearanceStore,
       loadCustomThemes: () => customThemes.loadAll(),
       saveCustomTheme: manifest => customThemes.save(manifest),
       removeCustomTheme: id => customThemes.remove(id),
@@ -1879,7 +1884,15 @@ export function startup(
     hostConfigDiagnostics: () => hostLoaded.diagnostics,
     /** Resolves when credentials of migrated-away accounts are deleted. */
     migrationCleanup,
-    takeStartupNotices: () => outbox.takeNotices(),
+    takeStartupNotices: () => {
+      const notice = new FilePermissionSettings({
+        workspace: resolve('.'),
+        stateDirectory: directory,
+        store: settings,
+        migrateLegacyRules: false,
+      }).defaultsNotice();
+      return [...outbox.takeNotices(), ...(notice ? [notice] : [])];
+    },
     /** Idempotent. Spawns user MCP servers. Callers other than status/doctor await this before a turn. */
     connectMcp: (signal?: AbortSignal) => mcpHub.connect(signal),
     shutdownCommands: async () => {

@@ -5,16 +5,19 @@ export type CommandOverlay =
   | 'themes'
   | 'models'
   | 'sessions'
+  | 'sandbox'
   | 'permissions'
   | 'diff'
   | 'settings'
   | 'status'
   | 'help'
   | 'agents'
+  | 'background-tasks'
   | 'connect';
 export type CommandHandler =
   | 'overlay'
   | 'effort'
+  | 'sandbox'
   | 'permissions'
   | 'backend'
   | 'switch'
@@ -151,7 +154,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/stop'),
   unavailableClaudeCommand('/subtask', [], 'required'),
   unavailableClaudeCommand('/team-onboarding'),
-  unavailableClaudeCommand('/tasks', ['/bashes']),
   unavailableClaudeCommand('/teleport', ['/tp']),
   unavailableClaudeCommand('/terminal-setup'),
   unavailableClaudeCommand('/tui', [], 'optional'),
@@ -167,6 +169,19 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
 ];
 
 export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
+  {
+    command: '/sandbox',
+    handler: 'sandbox',
+    overlay: 'sandbox',
+    aliases: [],
+    arguments: 'optional',
+    duringRequest: true,
+    argumentsDuringRequest: true,
+    title: 'Sandbox',
+    description:
+      'Configure sandbox Mode, Dependencies, Overrides and Config; /sandbox exclude "<pattern>" adds an exclusion',
+    category: 'Workspace & Security',
+  },
   {
     command: '/usage',
     handler: 'overlay',
@@ -298,6 +313,16 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     description: 'List, read or delete memories; /memory open opens the user memory folder',
     category: 'Workspace & Security',
     arguments: 'optional',
+  },
+  {
+    command: '/tasks',
+    handler: 'overlay',
+    overlay: 'background-tasks',
+    aliases: ['/bashes'],
+    title: 'Background Tasks',
+    description: 'Show background shells and agents, inspect live output, or stop a running task',
+    category: 'Workspace & Security',
+    duringRequest: true,
   },
   {
     command: '/agents',

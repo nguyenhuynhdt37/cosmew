@@ -1,6 +1,6 @@
 /** @jsxImportSource react */
 import {afterEach, expect, test} from 'bun:test';
-import {cleanup, render} from 'ink-testing-library';
+import {cleanup} from 'ink-testing-library';
 import {Text} from 'ink';
 import {useState} from 'react';
 import type {ModelEvent, WorkspaceDiffReport} from '@cosmew/contracts';
@@ -13,7 +13,7 @@ import {EffortDialog} from '../features/models';
 import {RewindDialog} from '../features/panels';
 import {PermissionsDialog} from '../features/permissions';
 import {Diff} from '../features/diff';
-import {renderInk, settle} from './index';
+import {render, renderInk, settle} from './index';
 
 afterEach(() => {
   cleanup();
@@ -39,8 +39,8 @@ async function readyApp(overrides: Parameters<typeof dialogFixture>[0] = {}, wid
 const down = '\x1b[B';
 const up = '\x1b[A';
 
-test('Transcript defaults equal the Claude 2.1.330 evidence table and controller keys', () => {
-  // B1 keymap plus B4 controller keys, centralized for user remapping.
+test('Transcript defaults cover 2.1.330 viewer keys and Cosmew activity controls', () => {
+  // B1 and B4 are the viewer controls. The Alt bindings are Cosmew per-item actions.
   expect(Object.fromEntries(defaultKeymap().bindings.get('Transcript')!)).toEqual({
     'ctrl+e': 'transcript:toggleShowAll',
     'ctrl+c': 'transcript:exit',
@@ -70,6 +70,9 @@ test('Transcript defaults equal the Claude 2.1.330 evidence table and controller
     '[': 'transcript:dumpScrollback',
     v: 'transcript:openEditor',
     '?': 'transcript:help',
+    'alt+up': 'transcript:focusPrevious',
+    'alt+down': 'transcript:focusNext',
+    'alt+enter': 'transcript:toggleItem',
   });
 });
 test('keybindings.json can remap transcript:toggleShowAll to ctrl+k', () => {
@@ -401,6 +404,7 @@ test('diff dialog keys: J/K pick the file, ←/→ the source, Space and B page,
   expect(view.lastFrame()).toContain('2/2 b.ts');
   await key(view, 'k');
   expect(view.lastFrame()).toContain('1/2 a.ts');
+  await key(view, '\r'); // Open detail before body paging; list paging selects files.
   await key(view, ' ');
   expect(view.lastFrame()).toContain('row 5');
   await key(view, 'b');

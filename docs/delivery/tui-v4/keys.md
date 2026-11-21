@@ -82,7 +82,9 @@ Ctrl+R mở dialog; gõ để lọc; ↑/↓ chọn; **Enter hoặc Tab** đặt
 ## 7. Footer / panel nền / diff
 
 Footer: ←/→ chọn mục, ↑/↓ (Ctrl+P/Ctrl+N) di chuyển/bỏ chọn ở trên cùng, Enter mở mục, Esc bỏ chọn, `x` dừng agent/workflow đang chọn. (↓ trong footer `· 1 shell · ← 1 agent · ↓ to manage` mở panel quản lý.)
-Diff panel (`/diff`, ≥110 cột): giữ focus ở ô nhập, PageUp/Down vẫn cuộn transcript bên trái; Ctrl+X B đổi cơ sở so sánh (session → uncommitted → branch), Ctrl+↑/↓ hoặc Meta+↑/↓ cuộn danh sách file. `/diff` lần nữa đóng panel. Diff dialog riêng: ↑/↓ J/K file, ←/→ nguồn, Enter mở file, Esc về danh sách/đóng, PageUp/Down, Space/B, G/Shift+G.
+Diff panel (`/diff`, ≥110 cột): mở ở ô nhập; **Tab** (`DiffPanel.diff:focus`) chuyển focus vào panel, Esc (`diff:blur`) trả về prompt và giữ nháp. Khi focus: ↑/↓ J/K chọn file; Enter mở detail, ↑/↓ J/K cuộn detail; Esc về list trước khi trả về prompt. ←/→ đổi nguồn theo hai hướng; PageUp/Down, Space/B, G/Shift+G cuộn. Ctrl+X B đổi cơ sở so sánh (session → uncommitted → branch); Ctrl+↑/↓ hoặc Meta+↑/↓ vẫn chọn file khi prompt nhận chữ. `/diff` lần nữa hoặc click ✕ đóng panel. Footer dùng keymap hiện tại, không yêu cầu Option as Meta. Diff component riêng dùng cùng list/detail keymap.
+
+Wheel trên diff cuộn diff (không cuộn transcript); click file chọn file, click source đổi nguồn. Shared list-picker/option-list click chỉ highlight, Enter mới kích hoạt/xác nhận; wheel đổi highlight. Click tab đổi tab. Permission/plan/rewind không tự duyệt qua click. Mouse không được terminal gửi thì keyboard vẫn hoạt động; Shift+drag/native selection giữ do terminal quản lý. Bằng chứng upstream và giới hạn: [diff interaction parity](diff-interaction-parity.md).
 Rewind (Esc Esc): ↑/↓ chọn, Home/End, Enter tiếp tục, Esc huỷ.
 
 ## 8. Phím cố định (không remap), xung đột terminal

@@ -75,9 +75,7 @@ export function FoundationNotice({initialCommand, warning}: {initialCommand?: st
       <Text>Cosmew · Ink preview</Text>
       <Text>Non-TTY preview · workspace access and interactive input are disabled.</Text>
       {warning ? <Text>{warning}</Text> : null}
-      {initialCommand ? (
-        <Text>Initial command skipped: folder consent and account verification require a TTY.</Text>
-      ) : null}
+      {initialCommand ? <Text>Initial command skipped: the interactive command requires a TTY.</Text> : null}
     </Box>
   );
 }

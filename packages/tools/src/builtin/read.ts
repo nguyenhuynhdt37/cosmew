@@ -126,14 +126,26 @@ function pageLines(text: string, input: z.infer<typeof readInput>): {ok: true; c
     };
   const width = String(Math.min(lines.length, start + count)).length;
   const shown = lines.slice(start, start + count).map((line, i) => {
-    const text = line.length > LIMITS.lineChars ? line.slice(0, LIMITS.lineChars) + '… [line truncated]' : line;
+    const text =
+      line.length > LIMITS.lineChars
+        ? line.slice(0, LIMITS.lineChars).replace(/[\uD800-\uDBFF]$/, '') + '… [line truncated]'
+        : line;
     return `${String(start + i + 1).padStart(width)}\t${text}`;
   });
-  const clipped = clipBytes(shown.join('\n'), LIMITS.readOutputBytes);
-  const nextLine = start + clipped.text.split('\n').length + 1;
-  const more = clipped.clipped || start + count < lines.length;
+  // Page on whole numbered lines: a partial last line cannot be resumed by a line offset.
+  // Individual lines are already bounded above, including their explicit truncation marker.
+  const page: string[] = [];
+  let bytes = 0;
+  for (const line of shown) {
+    const cost = Buffer.byteLength(line, 'utf8') + (page.length ? 1 : 0);
+    if (bytes + cost > LIMITS.readOutputBytes) break;
+    page.push(line);
+    bytes += cost;
+  }
+  const nextLine = start + page.length + 1;
+  const more = start + page.length < lines.length;
   const footer = more ? `\n\n[${lines.length} lines total; continue with offset ${nextLine}]` : '';
-  return {ok: true, content: clipped.text + footer, truncated: more};
+  return {ok: true, content: page.join('\n') + footer, truncated: more};
 }
 
 /**

@@ -214,3 +214,9 @@ semantic tokens and is disabled for no-color capability. Ink owns raw input and
 terminal repaint while mounted; it never receives tool/security authority.
 Bun 1.4.4 on Darwin arm64 verified by real renderer fixtures and non-TTY child
 processes; live TTY/other OS/provider parity remains **Needs verification**.
+
+ADR 0084 (2026-11-21) adds `@cosmew/tools` as a direct consumer of the already selected
+`ajv` **8.20.0**, MIT (same upstream/revision provenance above). Remote MCP schema
+compilation is now explicitly bounded to 8 KiB/512 nodes/depth 16, with references,
+async schemas, regex/patterns, format, contains and uniqueItems refused; no external
+loading, coercion, default insertion or field removal. No new transitive dependency.

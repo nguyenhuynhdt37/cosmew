@@ -67,6 +67,11 @@ export class SqliteSettings implements SettingsStore {
   }
 }
 
+/** Read-only compatibility import. SQLite appearance/project rows are left in place. */
+export function importLegacyAppearance(store: SettingsStore): import('@cosmew/contracts').PartialAppearanceConfig {
+  return structuredClone(store.read().appearance ?? {});
+}
+
 export interface CustomThemeStoreResult {
   themes: ThemeManifest[];
   errors: {file: string; message: string}[];

@@ -1,4 +1,11 @@
-import {FutrynError, type Account, type CredentialVault, type NetworkPolicy, type Provider} from '@cosmew/contracts';
+import {
+  FutrynError,
+  ProviderBillingError,
+  type Account,
+  type CredentialVault,
+  type NetworkPolicy,
+  type Provider,
+} from '@cosmew/contracts';
 
 export function normalizeError(error: unknown, signal?: AbortSignal): FutrynError {
   if (signal?.aborted) return new FutrynError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
@@ -26,11 +33,58 @@ export function retryAfter(value: string | null, now = Date.now()): number | nul
 }
 export function statusError(status: number, retry: string | null): FutrynError {
   if (status === 401) return new FutrynError('AUTH');
+  if (status === 402) return new ProviderBillingError();
   if (status === 403) return new FutrynError('FORBIDDEN');
   if (status === 404) return new FutrynError('NOT_FOUND');
   if (status === 429) return new FutrynError('RATE_LIMIT', true, retryAfter(retry));
   if (status >= 500) return new FutrynError('TRANSPORT', true, retryAfter(retry));
   return new FutrynError('INVALID_INPUT');
+}
+
+const billingMarker =
+  /\b(?:insufficient[ -](?:quota|credits|balance)|credit[ -]balance|out of credits|spending[ -]limit|billing|payment[ -]required|subscription (?:is )?required|needs? a [\w -]*subscription)\b/i;
+
+function errorFields(value: unknown) {
+  const text = (value: unknown) => (typeof value === 'string' ? value : '');
+  const envelope = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  const error = envelope.error && typeof envelope.error === 'object' ? (envelope.error as Record<string, unknown>) : {};
+  return {
+    message: text(error.message) || text(envelope.message) || text(envelope.error),
+    markers: [text(error.code), text(error.type), text(envelope.code), text(envelope.type), text(envelope.error)],
+  };
+}
+
+/** Inspect small error bodies only. Cancel oversized bodies without buffering the rest. */
+async function readErrorFields(response: Response, onActivity?: () => void) {
+  const reader = response.body?.getReader();
+  if (!reader) return errorFields(null);
+  let size = 0;
+  let body = '';
+  const decoder = new TextDecoder();
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      onActivity?.();
+      if (chunk.done) return errorFields(JSON.parse(body + decoder.decode()));
+      size += chunk.value.byteLength;
+      if (size > 8192) return errorFields(null);
+      body += decoder.decode(chunk.value, {stream: true});
+    }
+  } catch {
+    return errorFields(null);
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+}
+
+function billingHint(message: string, sanitize: (text: string) => string): string | undefined {
+  // Omit embedded diagnostic dumps. Only publish the single human-readable error line.
+  if (/[{}]|\b(?:headers?|authorization|api[ -]key|cookie|request body|payload)\s*:/i.test(message)) return;
+  const safe = sanitize(message.split(/[\r\n]/, 1)[0] ?? '')
+    .replace(/https?:\/\/[^\s<>"'`]+/gi, url => url.replace(/[?#].*$/, '').replace(/^(https?:\/\/)[^/]*@/i, '$1'))
+    .replace(/\s+/g, ' ')
+    .trim();
+  return safe.length > 200 ? `${safe.slice(0, 199).trimEnd()}…` : safe || undefined;
 }
 export async function wait(ms: number, signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted();
@@ -83,6 +137,7 @@ export class ProviderTransport {
     private readonly policy: NetworkPolicy,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly tokenSource?: TokenSource,
+    private readonly sanitizeErrorText?: (text: string) => string,
   ) {}
   async credential(signal?: AbortSignal): Promise<string | undefined> {
     this.policy.authorize(this.provider, this.account);
@@ -137,7 +192,19 @@ export class ProviderTransport {
     }
     onActivity?.();
     if (!response.ok) {
-      await response.body?.cancel();
+      if ([402, 403, 429].includes(response.status)) {
+        const {message, markers} = await readErrorFields(response, onActivity);
+        if (init.signal?.aborted) throw normalizeError(null, init.signal);
+        if (
+          response.status === 402 ||
+          [...markers, message].some(text => billingMarker.test(text.replaceAll('_', ' ')))
+        ) {
+          this.policy.authorize(this.provider, this.account);
+          throw new ProviderBillingError(this.sanitizeErrorText && billingHint(message, this.sanitizeErrorText));
+        }
+      } else {
+        await response.body?.cancel();
+      }
       throw statusError(response.status, response.headers.get('retry-after'));
     }
     if (!response.body) throw new FutrynError('PROTOCOL');

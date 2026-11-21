@@ -14,7 +14,13 @@ export class ToolRouter {
     const dynamic = this.mcp?.resolve(name);
     if (dynamic) {
       if (!dynamic.available())
-        return {status: 'error', code: 'TOOL_UNAVAILABLE', content: 'The MCP tool is no longer connected.'};
+        return (
+          dynamic.unavailable ?? {
+            status: 'error',
+            code: 'TOOL_UNAVAILABLE',
+            content: 'The MCP tool is no longer connected.',
+          }
+        );
       return {handler: dynamic};
     }
     const entry = this.registry.get(name);
