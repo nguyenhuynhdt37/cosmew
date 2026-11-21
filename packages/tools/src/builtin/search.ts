@@ -22,7 +22,7 @@ export const globDescriptor = {
       path: {
         type: 'string',
         description:
-          'Directory to search, relative to the workspace or an absolute path inside permissions.additionalDirectories (default ".").',
+          'Directory to search, relative to the workspace or an absolute path outside the working directories (requires permission) (default ".").',
       },
     },
     additionalProperties: false,
@@ -60,7 +60,7 @@ export const grepDescriptor = {
       path: {
         type: 'string',
         description:
-          'Directory to search, relative to the workspace or an absolute path inside permissions.additionalDirectories (default ".").',
+          'Directory to search, relative to the workspace or an absolute path outside the working directories (requires permission) (default ".").',
       },
       glob: {type: 'string', description: 'Only search files matching this glob, e.g. "**/*.ts" or "*.{ts,tsx}".'},
       type: {type: 'string', description: 'ripgrep file type, e.g. "ts", "js", "py", "rust", "go".'},

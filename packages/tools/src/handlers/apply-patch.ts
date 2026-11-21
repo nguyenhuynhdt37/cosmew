@@ -8,7 +8,7 @@ import type {ToolHandler, PreparedTool} from './types';
 export const applyPatchDescriptor = {
   name: 'apply_patch',
   description:
-    'Apply a Codex-format patch to UTF-8 workspace files after approval. Provide the entire *** Begin Patch / *** End Patch text in patch. Supports Add File, Update File with @@ contextual hunks, Delete File and Update File with Move to. Protected paths are denied; stale files are not overwritten. Results report actual changes and any partial failure. No shell or native runtime writes.',
+    'Apply a Codex-format patch to UTF-8 files after approval. Provide the entire *** Begin Patch / *** End Patch text in patch. Supports Add File, Update File with @@ contextual hunks, Delete File and Update File with Move to. Protected paths are denied; stale files are not overwritten. Results report actual changes and any partial failure. No shell or native runtime writes.',
   capability: 'fs.write' as const,
   inputSchema: {
     type: 'object',

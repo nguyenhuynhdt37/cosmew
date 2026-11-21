@@ -1,4 +1,4 @@
-import {FutrynError, type CompactionOutcome} from '@cosmew/contracts';
+import {attributeUsage, FutrynError, type CompactionOutcome} from '@cosmew/contracts';
 import {estimateContextTokens, normalizeHistory} from '../context/builder';
 import {compactHistory, useContextSnapshot} from '../context/compaction';
 import {
@@ -52,7 +52,10 @@ export async function compactConversation(
       signal,
     });
     // The call was billed whether or not it helps: count it in the session's usage.
-    if (summary.usage) store.addUsage?.(host.id, summary.usage);
+    if (summary.usage) {
+      summary.usage = attributeUsage(summary.usage, {sessionId: host.id});
+      store.addUsage?.(host.id, summary.usage);
+    }
     const handoff = assembleHandoff(summary.text, visible, store.loadPlan?.(host.id));
     const snapshot = modelSnapshot(normalized, handoff, retainRecentUserMessages(normalized));
     const tokensAfter = estimateContextTokens(modelSnapshotMessages(snapshot));

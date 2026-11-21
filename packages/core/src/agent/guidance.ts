@@ -13,7 +13,7 @@ export function explorationGuidance(
   const has = (name: string) => toolNames.includes(name);
   const search = [has('grep') ? 'grep' : '', has('glob') ? 'glob' : ''].filter(Boolean).join('/');
   return [
-    `Available project tools: ${toolNames.join(', ')}. Paths are relative to the project root. ${writeGuidance(has)} ${has('web_search') || has('web_fetch') ? 'Public network reads are available only through the offered web tools and their policies.' : 'No public web tools are offered.'}${has('exec_command') ? ' Command network access follows the configured sandbox and network policy.' : ' No command tool is offered.'}`,
+    `Available project tools: ${toolNames.join(', ')}. Relative paths start at the project root; absolute paths outside working directories require permission. ${writeGuidance(has)} ${has('web_search') || has('web_fetch') ? 'Public network reads are available only through the offered web tools and their policies.' : 'No public web tools are offered.'}${has('exec_command') ? ' Command network access follows the configured sandbox and network policy.' : ' No command tool is offered.'}`,
     ...(has('grep')
       ? [
           'grep is ripgrep: locate first with output_mode "files_with_matches" or a narrow glob/type, then fetch matching lines with "content" and a few context lines instead of reading whole files; page long results with head_limit/offset.',
@@ -95,7 +95,7 @@ function writeGuidance(has: (name: string) => boolean): string {
     has('apply_patch') ? 'apply_patch applies one Codex-format patch across several files' : '',
   ].filter(Boolean);
   if (!tools.length) return 'You cannot write files.';
-  return `Prefer the structured write tools: ${tools.join('; ')}. Writes follow the configured sandbox and project policy; workspace edits are preapproved in acceptEdits; default asks unless a rule permits the edit, and plan mode refuses edits. Never bypass a denial.`;
+  return `Prefer the structured write tools: ${tools.join('; ')}. File writes follow permission rules; external file access asks unless explicitly allowed; shell commands separately follow the OS sandbox; workspace edits are preapproved in acceptEdits; default asks unless a rule permits the edit, and plan mode refuses edits. Never bypass a denial.`;
 }
 
 const STOP_TEXT: Record<string, string> = {

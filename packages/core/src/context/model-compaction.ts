@@ -1,5 +1,6 @@
 import {
   FutrynError,
+  CONTEXT_COMPACTION_FRACTION,
   isFileChangeTool,
   type ContextSnapshot,
   type Message,
@@ -23,7 +24,7 @@ export const COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000;
  * Compact at the tool-withdrawal threshold, before deciding whether tools still fit. Applied to
  * the usable window (context window minus any caller-requested output reservation).
  */
-export const AUTO_COMPACT_FRACTION = 0.85;
+export const AUTO_COMPACT_FRACTION = CONTEXT_COMPACTION_FRACTION;
 /** Longest summary accepted; a model that rambles past it is cut rather than refused. */
 const SUMMARY_MAX_CHARS = 60_000;
 /** Per tool-result byte cap when feeding history to the summarizer (progressively tightened). */

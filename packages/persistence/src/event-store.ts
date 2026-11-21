@@ -124,6 +124,7 @@ export class ExecutionJournal {
           data.outcome = 'interrupted';
           data.finishedAt = new Date().toISOString();
           data.stopReason = 'failed';
+          data.errorCode = 'PROCESS_EXIT';
           this.db
             .query('UPDATE turn_receipts SET data=? WHERE conversation=? AND revision=?')
             .run(JSON.stringify(data), id, row.user_revision);

@@ -177,3 +177,5 @@ export {FileMemories} from './memories';
 export {SqliteToolOutputArchive} from './output-archive';
 
 export {CheckpointStore} from './checkpoint-store';
+
+export {SqliteBackgroundTaskHistory, type BackgroundTaskHistory} from './background-task-history';

@@ -1,4 +1,5 @@
 import {
+  attributeUsage,
   AGENT_WAIT_DEFAULT_MS,
   AGENT_WAIT_MAX_MS,
   AGENT_WAIT_MIN_MS,
@@ -683,9 +684,6 @@ export class SubagentManager implements SubagentExecutionPort {
       const finishedAt = new Date().toISOString();
       const durationMs = Math.max(0, Date.now() - startedAt);
       const summary = this.deps.redact([finalText.trim(), worktreeNote].filter(Boolean).join('\n\n'));
-      if (summary) {
-        task.steps.push({kind: 'text', text: summary.slice(0, 4000)});
-      }
       task.status = 'completed';
       task.finishedAt = Date.now();
       task.currentTool = undefined;
@@ -788,7 +786,7 @@ export class SubagentManager implements SubagentExecutionPort {
 
   /** Folds a finished turn's usage into the parent, releases its reservation and stops siblings if the aggregate overran. */
   private foldChildUsage(task: ActiveSubagentTask | undefined, usage: Usage, release: boolean): void {
-    this.deps.addParentUsage(usage);
+    this.deps.addParentUsage(task ? attributeUsage(usage, {agentId: task.agentId, sessionId: task.agentId}) : usage);
     if (task && release) task.reservation = undefined;
     const parent = this.deps.getParentState();
     if (!parent.limits || !parentCapsExceeded(parent.limits)) return;
@@ -853,6 +851,30 @@ export class SubagentManager implements SubagentExecutionPort {
     let finalText = '';
     let responseStart = 0;
     const runningTools = new Map<string, string>();
+    let textStep: SubagentTranscriptStep | undefined;
+    let textDirty = false;
+    let textTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTextTimer = () => {
+      if (textTimer !== undefined) clearTimeout(textTimer);
+      textTimer = undefined;
+    };
+    // Redact the complete response before truncating: secrets can span provider deltas.
+    // Coalesce token bursts rather than broadcasting a full transcript per token.
+    const flushText = () => {
+      clearTextTimer();
+      if (!textDirty || childSignal.aborted) return;
+      textDirty = false;
+      const text = this.deps.redact(finalText.slice(responseStart)).slice(0, 4000);
+      if (!textStep && text) {
+        textStep = {kind: 'text', text};
+        task.steps.push(textStep);
+        if (task.steps.length > 64) task.steps.splice(0, task.steps.length - 64);
+      } else if (textStep) {
+        if (textStep.text === text) return;
+        textStep.text = text;
+      } else return;
+      progress();
+    };
     const progress = (extra: Partial<Extract<SubagentEvent, {type: 'subagent.progress'}>> = {}) =>
       emit({
         type: 'subagent.progress',
@@ -868,49 +890,69 @@ export class SubagentManager implements SubagentExecutionPort {
         ...extra,
       });
 
-    for await (const event of this.deps.runChildTurn(runContext, childSignal)) {
-      if (event.type === 'started') {
-        responseStart = finalText.length;
-      } else if (event.type === 'textDelta') {
-        finalText += event.text;
-      } else if (event.type === 'responseDiscarded') {
-        finalText = finalText.slice(0, responseStart);
-      } else if (event.type === 'usage') {
-        latestUsage = event.usage;
-        task.usage = event.usage;
-        onUsage(event.usage);
-        progress();
-      } else if (event.type === 'toolCallComplete') {
-        task.toolCount++;
-        const target = this.deps.redact(formatSubagentToolCallTarget(event.call)).slice(0, 200);
-        const label = target ? `${event.call.name} ${target}` : event.call.name;
-        runningTools.set(event.call.id, label);
-        task.currentTool = label;
-        task.steps.push({
-          kind: 'tool',
-          callId: event.call.id,
-          toolName: event.call.name,
-          ...(target ? {target} : {}),
-          status: 'running',
-        });
-        if (task.steps.length > 64) task.steps.splice(0, task.steps.length - 64);
-        progress({currentTool: task.currentTool});
-      } else if (event.type === 'toolResult') {
-        runningTools.delete(event.result.callId);
-        task.currentTool = [...runningTools.values()].at(-1);
-        const step = task.steps.findLast(s => s.kind === 'tool' && s.callId === event.result.callId);
-        if (step) {
-          step.status = event.result.status;
-          step.output = this.deps.redact(event.result.content).slice(0, 500);
+    try {
+      for await (const event of this.deps.runChildTurn(runContext, childSignal)) {
+        childSignal.throwIfAborted();
+        if (event.type === 'started') {
+          flushText();
+          responseStart = finalText.length;
+          textStep = undefined;
+        } else if (event.type === 'textDelta') {
+          finalText += event.text;
+          textDirty = true;
+          textTimer ??= setTimeout(flushText, 100);
+        } else if (event.type === 'responseDiscarded') {
+          clearTextTimer();
+          textDirty = false;
+          finalText = finalText.slice(0, responseStart);
+          if (textStep) {
+            const index = task.steps.indexOf(textStep);
+            if (index >= 0) task.steps.splice(index, 1);
+            textStep = undefined;
+            progress();
+          }
+        } else if (event.type === 'usage') {
+          latestUsage = event.usage;
+          task.usage = event.usage;
+          onUsage(event.usage);
+          progress();
+        } else if (event.type === 'toolCallComplete') {
+          flushText();
+          task.toolCount++;
+          const target = this.deps.redact(formatSubagentToolCallTarget(event.call)).slice(0, 200);
+          const label = target ? `${event.call.name} ${target}` : event.call.name;
+          runningTools.set(event.call.id, label);
+          task.currentTool = label;
+          task.steps.push({
+            kind: 'tool',
+            callId: event.call.id,
+            toolName: event.call.name,
+            ...(target ? {target} : {}),
+            status: 'running',
+          });
+          if (task.steps.length > 64) task.steps.splice(0, task.steps.length - 64);
+          progress({currentTool: task.currentTool});
+        } else if (event.type === 'toolResult') {
+          runningTools.delete(event.result.callId);
+          task.currentTool = [...runningTools.values()].at(-1);
+          const step = task.steps.findLast(s => s.kind === 'tool' && s.callId === event.result.callId);
+          if (step) {
+            step.status = event.result.status;
+            step.output = this.deps.redact(event.result.content).slice(0, 500);
+          }
+          progress();
+        } else if (event.type === 'completed') {
+          flushText();
+          latestUsage = event.usage;
+          task.usage = event.usage;
+          onUsage(event.usage);
         }
-        progress();
-      } else if (event.type === 'completed') {
-        latestUsage = event.usage;
-        task.usage = event.usage;
-        onUsage(event.usage);
       }
+      flushText();
+      return finalText;
+    } finally {
+      clearTextTimer();
     }
-    return finalText;
   }
 
   private notifyListeners(task: ActiveSubagentTask): void {
@@ -971,7 +1013,6 @@ export class SubagentManager implements SubagentExecutionPort {
             task.usage = finalUsage;
             this.foldChildUsage(task, finalUsage, !continues);
           } else if (!continues) task.reservation = undefined;
-          if (summary && status === 'completed') task.steps.push({kind: 'text', text: summary.slice(0, 4000)});
           task.status = status;
           task.finishedAt = Date.now();
           task.currentTool = undefined;
@@ -1263,7 +1304,7 @@ export class SubagentManager implements SubagentExecutionPort {
             };
       }
       const record = owned.record;
-      if (record.status === 'running') return {status: 'running'};
+      if (record.status === 'running') return {status: 'interrupted', error: 'PROCESS_EXIT'};
       const inspected = this.inspectSubagent(id);
       return {
         status: record.status,
@@ -1321,7 +1362,10 @@ export class SubagentManager implements SubagentExecutionPort {
     const owned = this.ownedRecord(id);
     if (!owned) return {status: 'error', code: 'NOT_FOUND', content: `No subagent with id "${this.deps.redact(id)}".`};
     const task = this.scheduler.getTask(id);
-    const previous = task?.cancelReason === 'close' ? 'closed' : (task?.status ?? owned.record.status);
+    const previous =
+      task?.cancelReason === 'close'
+        ? 'closed'
+        : (task?.status ?? (owned.record.status === 'running' ? 'interrupted' : owned.record.status));
     if (task) {
       task.cancelReason = 'close';
       task.abortController.abort();
@@ -1398,6 +1442,7 @@ export class SubagentManager implements SubagentExecutionPort {
       steps.push({kind: 'text', text: lastAssistantText.slice(0, 4000)});
     }
     const usage = session?.turns?.at(-1)?.usage ?? null;
+    const live = this.scheduler.getTask(agentId);
     return {
       id: meta.id,
       parentConversationId: meta.parentConversationId,
@@ -1409,14 +1454,24 @@ export class SubagentManager implements SubagentExecutionPort {
       selection: session?.selection ?? meta.selection ?? {accountId: '', modelId: ''},
       forkContext: meta.forkContext,
       background: meta.background,
-      status: meta.status,
-      toolCount,
-      usage,
+      status: live?.status ?? (meta.status === 'running' ? 'interrupted' : meta.status),
+      toolCount: live?.toolCount ?? toolCount,
+      usage: live?.usage ?? usage,
       createdAt: meta.createdAt,
       finishedAt: meta.finishedAt,
-      ...(meta.errorCode ? {errorCode: meta.errorCode} : {}),
-      steps,
-      summary: lastAssistantText,
+      ...(meta.errorCode
+        ? {errorCode: meta.errorCode}
+        : !live && meta.status === 'running'
+          ? {errorCode: 'PROCESS_EXIT'}
+          : {}),
+      steps: live
+        ? cloneSteps(live.steps)
+        : steps
+            .slice(-200)
+            .map(step =>
+              step.kind === 'tool' && step.status === 'running' ? {...step, status: 'error' as const} : step,
+            ),
+      summary: live?.finalSummary ?? lastAssistantText.slice(0, 4000),
     };
   }
 

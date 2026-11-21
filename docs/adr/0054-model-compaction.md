@@ -2,6 +2,8 @@
 
 Date: 2026-11-17. Status: accepted (Wave 2 step S2 = W8, `docs/delivery/wave-2/plan.md`).
 
+The current runtime and displays share an 85% threshold. See [ADR 0093](0093-request-context-telemetry.md) for the current request estimate and journal.
+
 ## Context
 
 A real UAT run sent up to 654k input tokens per request (4.3M in five turns) because the agent read many documents. Futryn only had extractive compaction (ADR 0030): user requests and truncated tool evidence kept verbatim, no model summary, no manual command, and it only touched earlier turns, never the tool rounds of the running turn.

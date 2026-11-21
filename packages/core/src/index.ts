@@ -7,6 +7,7 @@ export {
 } from './agent/engine';
 export {explorationGuidance, budgetExhaustedNotice} from './agent/guidance';
 export {ExecutionGate} from './agent/tool-runtime';
+export {estimateInitialContext, requestInstructions} from './agent/request-context';
 
 export {normalizeHistory, estimateContextTokens} from './context/builder';
 export {compactHistory, useContextSnapshot, DeterministicCompactor, type ContextCompactor} from './context/compaction';

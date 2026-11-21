@@ -36,7 +36,7 @@ export const readDescriptor = {
       path: {
         type: 'string',
         description:
-          'File or directory path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+          'File or directory path relative to the workspace, or an absolute path outside the working directories (requires permission).',
       },
       offset: {
         type: 'integer',

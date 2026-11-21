@@ -3,6 +3,13 @@ import type {Usage} from '@cosmew/contracts';
 /** One limit shown to the user. Percent-based (subscription plans) or amount-based (API credit). */
 export interface LimitItem {
   label: string;
+  /** Legacy snapshots without provenance remain unknown. Authentication is not quota evidence. */
+  kind?: 'rate-limit' | 'subscription-quota' | 'api-credits' | 'unknown';
+  windowMinutes?: number;
+  observedAt?: string;
+  source?: 'live' | 'last-turn';
+  /** Request model scope for response rate-limit headers, when known. */
+  modelId?: string;
   usedPercent?: number | null;
   used?: number | null;
   limit?: number | null;
@@ -23,7 +30,10 @@ export interface AccountLimits {
   alias: string;
   providerId: string;
   providerName: string;
-  source: 'live' | 'last-turn' | 'unavailable';
+  source: 'live' | 'last-turn' | 'mixed' | 'unavailable';
+  status?: 'available' | 'unsupported' | 'unavailable' | 'error';
+  /** Snapshot predates its reported reset, or a refresh failed. Never implies zero usage. */
+  stale?: boolean;
   observedAt: string | null;
   items: LimitItem[];
   note?: string;
@@ -46,6 +56,10 @@ export type FetchAccountLimits = (
 export function quotaItems(quota: NonNullable<Usage['quota']>): LimitItem[] {
   return quota.map(q => ({
     label: q.name,
+    kind: q.kind ?? 'unknown',
+    source: 'last-turn' as const,
+    observedAt: q.observedAt,
+    ...(q.windowMinutes === undefined ? {} : {windowMinutes: q.windowMinutes}),
     usedPercent: q.usedPercent,
     resetAt: q.resetAt,
     unlimited: q.unlimited ?? false,

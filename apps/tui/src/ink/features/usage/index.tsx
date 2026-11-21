@@ -132,7 +132,7 @@ export const ContextBlockView = memo(function ContextBlockView({block, width}: {
       })}
       <Text> </Text>
       <Text>
-        <Text bold>Auto-compact window:</Text>
+        <Text bold>Context window:</Text>
         {`  ${block.limitTokens ? `${contextTokens(block.limitTokens)} tokens` : 'Not reported'}`}
       </Text>
       <Text> </Text>

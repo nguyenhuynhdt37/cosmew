@@ -7,7 +7,7 @@ export const contextHash = (value: unknown) => createHash('sha256').update(JSON.
  * their base64 size: an image is about 1 600 tokens (Anthropic's documented cap for a resized
  * image); a PDF about one token per 30 bytes, at least 1 600.
  */
-export const estimateContextTokens = (value: unknown) => {
+export function contextSize(value: unknown): {bytes: number; media: number} {
   let media = 0;
   const text = JSON.stringify(value, (_key, item: unknown) => {
     if (item && typeof item === 'object' && 'mime' in item && 'data' in item && typeof item.data === 'string') {
@@ -17,7 +17,12 @@ export const estimateContextTokens = (value: unknown) => {
     }
     return item;
   });
-  return Math.ceil(Buffer.byteLength(text ?? '') / 3) + media;
+  return {bytes: Buffer.byteLength(text ?? ''), media};
+}
+
+export const estimateContextTokens = (value: unknown) => {
+  const {bytes, media} = contextSize(value);
+  return Math.ceil(bytes / 3) + media;
 };
 
 /** Repair only the protocol envelope, never execution. Missing results explicitly mean unknown. */

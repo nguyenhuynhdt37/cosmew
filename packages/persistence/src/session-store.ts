@@ -733,6 +733,7 @@ export class SqliteConversations implements ConversationStore {
               : receipt?.outcome === 'interrupted'
                 ? 'interrupted'
                 : 'failed',
+            receipt?.errorCode,
           );
         })
         .immediate();
@@ -883,6 +884,7 @@ export class SqliteConversations implements ConversationStore {
             this.db.query('DELETE FROM subagent_sessions WHERE id=? OR parent_conversation=?').run(targetId, targetId);
             this.db.query('DELETE FROM next_turn_input WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM prompt_history WHERE conversation=?').run(targetId);
+            this.db.query('DELETE FROM background_task_history WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM turn_checkpoints WHERE session_id=?').run(targetId);
             this.db.query('DELETE FROM input_retractions WHERE conversation=?').run(targetId);
             this.db.query('DELETE FROM tool_attachments WHERE conversation=?').run(targetId);

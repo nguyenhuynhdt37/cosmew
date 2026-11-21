@@ -103,7 +103,8 @@ export function evaluateRead(
   if (state && (absolute === state || absolute.startsWith(state + '/'))) {
     return {effect: 'deny', reason: 'hannes-state'};
   }
-  if (segments.includes('.git')) return {effect: 'deny', reason: 'git-internals'};
+  if (segments.includes('.git') || absolute.split('/').includes('.git'))
+    return {effect: 'deny', reason: 'git-internals'};
   // ask
   if (SECRET_NAMES.some(pattern => pattern.test(name)) && !SECRET_EXCEPTIONS.some(pattern => pattern.test(name))) {
     return {effect: 'ask', reason: 'secret-file'};
@@ -280,7 +281,7 @@ export function evaluateWrite(
   const read = evaluateRead(relativePath, absolutePath, context);
   if (read.effect !== 'allow') return {effect: 'deny', reason: read.reason};
   if (
-    relativePath
+    (relativePath + '/' + absolutePath.replace(/\\/g, '/'))
       .toLowerCase()
       .split('/')
       .some(

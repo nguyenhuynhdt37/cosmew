@@ -1,6 +1,7 @@
 import {z} from 'zod';
-import {locateWriteTarget, WorkspaceDenied, WriteBoundaryError, contentHash, type WriteTarget} from '@cosmew/workspace';
-import {sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {WorkspaceDenied, WriteBoundaryError, contentHash, type WriteTarget} from '@cosmew/workspace';
+import {type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {locateWorkspaceWriteTarget} from '../working-roots';
 import {PatchError} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {ReadLedger} from '../runtimes/read-ledger';
@@ -18,7 +19,7 @@ const path = z.string().min(1).max(1024);
 export const editDescriptor = {
   name: 'edit',
   description:
-    'Replace exact text in an existing UTF-8 workspace file after user approval. Read the file first; the edit is refused if the file changed since you read it. old_string must match the file exactly (including indentation and line breaks) and be unique, unless replace_all is true. Copy old_string from the read output without the line-number prefix. Prefer edit for focused changes; use write to create a file or replace all of its content.',
+    'Replace exact text in an existing UTF-8 file after user approval. Read the file first; the edit is refused if the file changed since you read it. old_string must match the file exactly (including indentation and line breaks) and be unique, unless replace_all is true. Copy old_string from the read output without the line-number prefix. Prefer edit for focused changes; use write to create a file or replace all of its content.',
   capability: 'fs.write' as const,
   inputSchema: {
     type: 'object',
@@ -26,7 +27,7 @@ export const editDescriptor = {
       path: {
         type: 'string',
         description:
-          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+          'File path relative to the workspace, or an absolute path outside the working directories (requires permission).',
       },
       old_string: {type: 'string', description: 'Exact text to replace.'},
       new_string: {type: 'string', description: 'Replacement text (must differ from old_string).'},
@@ -40,7 +41,7 @@ export const editDescriptor = {
 export const writeDescriptor = {
   name: 'write',
   description:
-    'Create a UTF-8 workspace file, or replace the whole content of one, after user approval. Missing parent directories are created. To overwrite an existing file you must have read its current content first. Prefer edit for changes to part of a file.',
+    'Create a UTF-8 file, or replace the whole content of one, after user approval. Missing parent directories are created. To overwrite an existing file you must have read its current content first. Prefer edit for changes to part of a file.',
   capability: 'fs.write' as const,
   inputSchema: {
     type: 'object',
@@ -48,7 +49,7 @@ export const writeDescriptor = {
       path: {
         type: 'string',
         description:
-          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+          'File path relative to the workspace, or an absolute path outside the working directories (requires permission).',
       },
       content: {type: 'string', description: 'The complete new file content.'},
     },
@@ -144,7 +145,7 @@ abstract class FileChangeHandler implements ToolHandler {
   /** Ledger key for this path. A granted-directory file is keyed by its canonical absolute path. */
   protected targetOf(input: string): WriteTarget | ToolOutput {
     try {
-      return locateWriteTarget(this.options.workspace, input, sandboxConfig(this.options).additionalDirectories);
+      return locateWorkspaceWriteTarget(this.options, input);
     } catch (error) {
       if (error instanceof WorkspaceDenied)
         return {

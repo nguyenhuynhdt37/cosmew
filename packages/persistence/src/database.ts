@@ -23,7 +23,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 10) {
+    if (version > 11) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -130,7 +130,12 @@ export function openPrivateDatabase(directory: string): Database {
       db.exec(
         'DELETE FROM prompt_history WHERE rowid IN (SELECT rowid FROM prompt_history ORDER BY at DESC,rowid DESC LIMIT -1 OFFSET 5000)',
       );
-      db.exec('PRAGMA user_version=10;');
+      // v11 (ADR 0089): inspectable shell snapshots; execution is never reconstructed.
+      db.exec(`CREATE TABLE IF NOT EXISTS background_task_history (
+        conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL,
+        updated_at TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(conversation,id));
+        CREATE INDEX IF NOT EXISTS background_task_history_recent ON background_task_history(updated_at DESC);`);
+      db.exec('PRAGMA user_version=11;');
     })();
     return db;
   } catch {

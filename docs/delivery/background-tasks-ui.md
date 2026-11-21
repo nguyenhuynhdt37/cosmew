@@ -113,6 +113,12 @@ contract changes. Real-provider acceptance remains Needs verification.
 
 The `/agents` menu's `View transcript` action also uses the shared full-screen
 conversation. Its selection is checked against the active parent's children
-before reading details. This final entry-point wiring was verified with the task
-and conversation suites plus the complete picker-dialog suite: **69 pass,
+before reading details. The entry-point wiring was verified with the task and
+conversation suites plus the complete picker-dialog suite: **69 pass,
 0 fail**, 383 assertions across seven files. Repository lint passed afterward.
+
+The `/agents` end-to-end fixture checks the full conversation header, prompt and
+footer. It also verifies that Esc returns to the child menu with the agent still
+running, and that Stop agent cancels the child and delivers the cancellation to
+the parent. The shell yields its higher-priority dialog cancel bindings on this
+route so that the conversation can handle Esc.

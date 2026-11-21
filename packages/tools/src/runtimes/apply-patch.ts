@@ -1,7 +1,6 @@
 import {join} from 'node:path';
 import type {CheckpointFile} from '@cosmew/contracts';
 import {
-  locateWriteTarget,
   SecureFiles,
   WorkspaceDenied,
   WriteBoundaryError,
@@ -11,7 +10,8 @@ import {
   type WriteTarget,
 } from '@cosmew/workspace';
 import {evaluateWrite} from '@cosmew/security';
-import {sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {locateWorkspaceWriteTarget} from '../working-roots';
 import {PatchError, unifiedDiff, updateFile, type PatchOperation} from '../patch/parser';
 export interface PatchChange {
   snapshot: FileSnapshot;
@@ -162,10 +162,10 @@ export class ApplyPatchRuntime {
     return this.plan(files, changes);
   }
 
-  /** A model path in the project or a granted directory. Anything else is a write-boundary denial. */
+  /** Normalize a write target; external targets still require dispatcher authorization. */
   private locate(path: string): WriteTarget {
     try {
-      return locateWriteTarget(this.options.workspace, path, sandboxConfig(this.options).additionalDirectories);
+      return locateWorkspaceWriteTarget(this.options, path);
     } catch (error) {
       if (error instanceof WorkspaceDenied)
         throw new WriteBoundaryError(error.reason === 'outside-workspace' ? 'OUTSIDE_WORKSPACE' : 'UNSAFE_PATH');
@@ -199,7 +199,9 @@ export class ApplyPatchRuntime {
       if (touched.has(collision)) throw new PatchError('INVALID_PATCH', 'Patch paths overlap or collide.');
       touched.add(collision);
       if (
-        evaluateWrite(target.relative, target.absolute, {stateDirectory: this.options.stateDirectory}).effect === 'deny'
+        evaluateWrite(target.relative, target.absolute, {stateDirectory: this.options.stateDirectory}).effect ===
+          'deny' ||
+        this.options.writePolicy?.(target.key, target.absolute) === 'deny'
       )
         throw new WriteBoundaryError('PROTECTED_PATH');
     }
@@ -224,6 +226,8 @@ export class ApplyPatchRuntime {
       const path = change.snapshot.path;
       const base = change.snapshot.base ?? this.options.workspace.root;
       if (evaluateWrite(path, join(base, path), {stateDirectory: this.options.stateDirectory}).effect === 'deny')
+        throw new WriteBoundaryError('PROTECTED_PATH');
+      if (this.options.writePolicy?.(change.snapshot.identity ?? path, join(base, path)) === 'deny')
         throw new WriteBoundaryError('PROTECTED_PATH');
       plan.files.revalidate(change.snapshot);
     }

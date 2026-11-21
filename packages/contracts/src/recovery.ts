@@ -1,6 +1,7 @@
 import {z} from 'zod';
 import {messageSchema, toolCallSchema} from './models';
 import {toolResultSchema} from './tools';
+import {requestContextSchema} from './telemetry';
 
 export const turnStateSchema = z.enum(['pending', 'running', 'interrupted', 'completed', 'failed', 'cancelled']);
 export type TurnState = z.infer<typeof turnStateSchema>;
@@ -14,9 +15,26 @@ export const executionEventDataSchema = z.discriminatedUnion('type', [
   /** User input accepted into the active turn (Codex steer_input). Model-visible at the next request boundary. */
   z.object({type: z.literal('user.steered'), steerId: z.string().uuid(), message: messageSchema}),
   /** `protocol: 2` marks a request whose streamed text is provisional until `model.completed` (ADR 0033). */
-  z.object({type: z.literal('model.requested'), stepId: z.string().uuid(), protocol: z.literal(2).optional()}),
+  z.object({
+    type: z.literal('model.requested'),
+    stepId: z.string().uuid(),
+    protocol: z.literal(2).optional(),
+    context: requestContextSchema.optional(),
+  }),
   /** The provider completed this request's response (Codex ResponseEvent::Completed); its text is committed. */
   z.object({type: z.literal('model.completed'), stepId: z.string().uuid()}),
+  z.object({
+    type: z.literal('model.finished'),
+    stepId: z.string().uuid(),
+    outcome: z.enum(['completed', 'failed', 'cancelled', 'preempted']),
+    errorCode: z
+      .string()
+      .max(64)
+      .regex(/^[A-Z_]+$/)
+      .optional(),
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+  }),
   z.object({type: z.literal('assistant.text'), text: z.string()}),
   z.object({type: z.literal('tool.call'), call: toolCallSchema}),
   z.object({

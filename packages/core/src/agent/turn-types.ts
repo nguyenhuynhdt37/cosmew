@@ -5,6 +5,7 @@ import type {
   Message,
   ModelPort,
   ProjectContextPort,
+  RequestContext,
   Selection,
   ToolPort,
   TurnBudget,
@@ -45,6 +46,8 @@ export interface ConversationOptions {
    * repository-context trust boundary: user-role data, never `ModelRequest.instructions`.
    */
   contextNotes?: () => string[];
+  /** Host instructions appended by the model adapter, included in context estimates. */
+  additionalInstructions?: () => string;
   /** Optional user work budget, read at the start of every turn. */
   budget?: () => TurnBudget | undefined;
   /** Optional override for concurrent shared-slot tool executions. */
@@ -55,6 +58,8 @@ export interface ConversationOptions {
   /** The provider's `stream_max_retries` (host config); absent means the Codex default. */
   streamMaxRetries?: () => number | undefined;
   compactor?: ContextCompactor;
+  /** User preference for automatic checkpoints. Manual compaction is independent. */
+  autoCompact?: () => boolean;
   /** Model-written compaction (ADR 0054). Default on; `false` keeps only the extractive checkpoint. */
   modelCompaction?: boolean;
   /** Explicit analysis modes cannot be converted into mutating artifact recovery. */
@@ -76,6 +81,7 @@ export interface ActiveTurn {
   pending: PendingInput[];
   /** Set while a model response streams; arriving steering calls it to preempt the response. */
   wake?: () => void;
+  requestContext?: RequestContext;
   /** Fold subagent token/cost usage into this running turn's receipt (Wave 2 S5). */
   addUsage?: (usage: Usage) => void;
   /** Snapshot of committed + in-turn messages up to the current round for `fork_context` (Wave 2 S5). */

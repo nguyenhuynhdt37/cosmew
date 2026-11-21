@@ -1,5 +1,5 @@
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
-import {resolveWorkspacePath} from '../working-roots';
+import {resolveWorkspacePath, OUTSIDE_WORKING_DIRECTORIES_MESSAGE} from '../working-roots';
 import {WorkspaceDenied} from '@cosmew/workspace';
 import {readDescriptor, readInput, suggestReadPath} from '../builtin/read';
 import {globDescriptor, globInput, grepDescriptor, grepInput} from '../builtin/search';
@@ -44,7 +44,7 @@ export function fileHandlers(options: ToolDispatcherOptions, runtime: FileSystem
                 : {
                     status: 'denied',
                     code: 'DENIED',
-                    content: `Access denied: the path is outside the approved workspace. Did you mean ${suggestion} (inside the workspace)?`,
+                    content: `${OUTSIDE_WORKING_DIRECTORIES_MESSAGE} Did you mean ${suggestion} (inside the workspace)?`,
                   };
           }
           throw error;

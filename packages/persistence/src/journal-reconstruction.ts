@@ -122,6 +122,8 @@ export function validateTurn(turn: DurableTurn, row: TurnRow, pendingInput: Pend
   const steers = new Set<string>();
   const requested = new Set<string>();
   const completed = new Set<string>();
+  let requestId: string | undefined;
+  let requestFinished = false;
   let finished = false;
 
   for (const [position, event] of turn.events.entries()) {
@@ -140,10 +142,16 @@ export function validateTurn(turn: DurableTurn, row: TurnRow, pendingInput: Pend
       case 'model.requested':
         if (requested.has(e.stepId)) throw corrupt();
         requested.add(e.stepId);
+        requestId = e.stepId;
+        requestFinished = false;
         break;
       case 'model.completed':
         if (!requested.has(e.stepId) || completed.has(e.stepId)) throw corrupt();
         completed.add(e.stepId);
+        break;
+      case 'model.finished':
+        if (e.stepId !== requestId || requestFinished) throw corrupt();
+        requestFinished = true;
         break;
       case 'tool.call':
         if (calls.has(e.call.id)) throw corrupt();

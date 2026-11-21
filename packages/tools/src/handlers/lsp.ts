@@ -2,9 +2,14 @@ import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
 import {FutrynError, type ToolDescriptor} from '@cosmew/contracts';
 import {lspFailureMessage, offsetAt, toCodePointColumn, toUtf16Character, type LspManager} from '@cosmew/code-intel';
-import {locateWriteTarget, WorkspaceDenied, type ResolvedPath} from '@cosmew/workspace';
-import {readDecision, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
-import {resolveWorkspacePath} from '../working-roots';
+import {WorkspaceDenied, type ResolvedPath} from '@cosmew/workspace';
+import {type ToolDispatcherOptions, type ToolOutput} from '../context';
+import {
+  locateWorkspaceWriteTarget,
+  outsideWorkingDirectories,
+  readTargetDecision,
+  resolveWorkspacePath,
+} from '../working-roots';
 import {PatchError} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';
 import type {PreparedTool, ToolHandler} from './types';
@@ -50,7 +55,7 @@ export const lspDescriptor: ToolDescriptor = {
       path: {
         type: 'string',
         description:
-          'File path relative to the workspace, or an absolute path inside permissions.additionalDirectories.',
+          'File path relative to the workspace, or an absolute path outside the working directories (requires permission).',
       },
       line: {type: 'integer', minimum: 1, description: '1-based line.'},
       character: {type: 'integer', minimum: 1, description: '1-based column (characters, as in read output).'},
@@ -121,7 +126,7 @@ function locationLine(
       return `${absolute}:${line}${label ? `  ${label}` : ''} (outside the workspace)`;
     return null;
   }
-  const decision = readDecision(options, file.relative, file.absolute);
+  const decision = readTargetDecision(options, file);
   if (decision.effect === 'deny') return null;
   let code = '';
   let column = range.start.character + 1;
@@ -135,7 +140,7 @@ function locationLine(
       /* path and line only */
     }
   }
-  return `${file.relative}:${line}:${column}${label ? `  ${label}` : ''}${code ? `  ${code}` : ''}`;
+  return `${file.relative}:${line}:${column}${label ? `  ${label}` : ''}${code ? `  ${code}` : ''}${outsideWorkingDirectories(options, file.absolute) && decision.effect !== 'allow' ? ' (outside the workspace; read approval required)' : ''}`;
 }
 
 const SYMBOL_KINDS = [
@@ -515,7 +520,7 @@ export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
             }
             let target;
             try {
-              target = locateWriteTarget(options.workspace, absolute, sandboxConfig(options).additionalDirectories);
+              target = locateWorkspaceWriteTarget(options, absolute);
             } catch (error) {
               if (error instanceof WorkspaceDenied)
                 return {

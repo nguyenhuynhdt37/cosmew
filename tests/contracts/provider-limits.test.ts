@@ -25,7 +25,16 @@ test('OpenRouter key credit: capped, uncapped and free-tier keys', () => {
 });
 
 test('malformed key responses are protocol errors, never zero balances', () => {
-  for (const body of [null, {}, {data: null}, {data: {usage: 'lots'}}, {data: {usage: 1, limit: 'ten'}}]) {
+  for (const body of [
+    null,
+    {},
+    {data: null},
+    {data: {usage: 'lots'}},
+    {data: {usage: 1, limit: 'ten'}},
+    {data: {}},
+    {data: {usage: 1}},
+    {data: {usage: -1, limit: null}},
+  ]) {
     expect(() => parseOpenRouterKeyLimits(body)).toThrow(FutrynError);
   }
 });
@@ -49,8 +58,14 @@ test('OpenAI and Anthropic rate-limit headers become quota entries; bad values a
     now,
   );
   expect(openai).toEqual([
-    {name: 'requests', usedPercent: 3, resetAt: '2026-11-15T10:01:00.000Z', observedAt: now.toISOString()},
-    {name: 'tokens', usedPercent: 3.3, resetAt: null, observedAt: now.toISOString()},
+    {
+      kind: 'rate-limit',
+      name: 'requests',
+      usedPercent: 3,
+      resetAt: '2026-11-15T10:01:00.000Z',
+      observedAt: now.toISOString(),
+    },
+    {kind: 'rate-limit', name: 'tokens', usedPercent: 3.3, resetAt: null, observedAt: now.toISOString()},
   ]);
   const anthropic = parseRateLimitHeaders(
     new Headers({
@@ -63,7 +78,13 @@ test('OpenAI and Anthropic rate-limit headers become quota entries; bad values a
     now,
   );
   expect(anthropic).toEqual([
-    {name: 'requests', usedPercent: 2, resetAt: '2026-11-15T10:00:30.000Z', observedAt: now.toISOString()},
+    {
+      kind: 'rate-limit',
+      name: 'requests',
+      usedPercent: 2,
+      resetAt: '2026-11-15T10:00:30.000Z',
+      observedAt: now.toISOString(),
+    },
   ]);
   expect(
     parseRateLimitHeaders(new Headers({'x-ratelimit-limit-requests': 'x', 'x-ratelimit-remaining-requests': '1'}), now),
@@ -106,5 +127,9 @@ for (const protocol of ['chat', 'anthropic'] as const)
     client.clearSessionView(); // still attributed to the account after starting a new chat
     const limits = client.limits().find(entry => entry.accountId === account.id)!;
     expect(limits.source).toBe('last-turn');
-    expect(limits.items[0]).toMatchObject({label: 'requests', usedPercent: 25});
+    expect(limits.items[0]).toMatchObject({
+      label: 'requests (fixture-model)',
+      modelId: 'fixture-model',
+      usedPercent: 25,
+    });
   });

@@ -3,7 +3,7 @@
  * durability, usage. Deterministic in-process model; fixture evidence only.
  */
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
@@ -538,4 +538,109 @@ test('mid-turn handoff keeps a small newest evidence round paired and the curren
   expect(next.messages[result - 1]!.toolCalls?.map(c => c.id)).toContain('newest');
   expect(next.messages[result]!.content).toContain('BIGOUT-newest');
   expect(next.tools.map(t => t.name)).toContain('read');
+});
+
+test('SDK Auto-compact OFF skips automatic checkpoints under pressure and keeps manual /compact', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'cosmew-auto-compact-'));
+  const workspace = join(home, 'workspace');
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, 'note.txt'), 'fixture read');
+  const window = 16_000;
+  const pressure = window * 0.9;
+  let summaries = 0;
+  let reportPressure = false;
+  const app = startup(home, {
+    vault: memoryVault(),
+    offline: true,
+    fetch: (async (_url, init) => {
+      if (!init?.body) return Response.json({data: [{id: 'fixture-model'}]});
+      const body = JSON.parse(String(init.body)) as {messages: Message[]};
+      const summary = isSummary({messages: body.messages} as ModelRequest);
+      if (summary) summaries++;
+      const base = {id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture-model'};
+      const pressured = reportPressure && !summary;
+      if (pressured) reportPressure = false;
+      const delta = pressured
+        ? {
+            tool_calls: [
+              {
+                index: 0,
+                id: 'pressure',
+                type: 'function',
+                function: {name: 'read', arguments: JSON.stringify({path: 'note.txt'})},
+              },
+            ],
+          }
+        : {role: 'assistant', content: summary ? 'Fixture handoff' : BULK()};
+      const events = [
+        {...base, choices: [{index: 0, delta, finish_reason: null}]},
+        {
+          ...base,
+          choices: [{index: 0, delta: {}, finish_reason: pressured ? 'tool_calls' : 'stop'}],
+          usage: {
+            prompt_tokens: pressured ? pressure : 1000,
+            completion_tokens: pressured ? 0 : 10,
+            total_tokens: pressured ? pressure : 1010,
+          },
+        },
+      ];
+      return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n', {
+        headers: {'content-type': 'text/event-stream'},
+      });
+    }) as typeof fetch,
+  });
+  cleanup.push(() => {
+    app.db.close();
+    rmSync(home, {recursive: true, force: true});
+  });
+  app.registry.add({
+    id: 'compaction-fixture',
+    name: 'Compaction fixture',
+    baseURL: 'https://api.example.test/v1',
+    protocol: 'chat',
+    auth: 'none',
+    catalog: 'openai',
+    metadataVersion: 1,
+    streamUsage: true,
+  });
+  const account = await app.accounts.add('compaction-fixture', 'Fixture', {kind: 'none'});
+  const client = app.createFutrynClient(workspace);
+  await client.discoverModels();
+  app.catalog(account).enrichModelsDev({'compaction-fixture': {models: {'fixture-model': {limit: {context: window}}}}});
+  client.selectModel('fixture-model');
+  const liveEstimates: number[] = [];
+  const send = async (input: string) => {
+    const events: ModelEvent[] = [];
+    for await (const event of client.sendMessage(input)) {
+      events.push(event);
+      if (event.type === 'started') {
+        const context = client.context();
+        expect(context.estimateSource).toBe('prepared');
+        liveEstimates.push(context.estimateTokens);
+      }
+    }
+    return events;
+  };
+  client.setToolsEnabled(true);
+  await send('First request');
+  await send('Continue the fixture');
+  client.updateUserPreferences({autoCompact: false});
+  reportPressure = true;
+  const events = await send('Read the fixture before answering');
+  expect(events.some(event => event.type === 'toolResult')).toBe(true);
+  expect(compacted(events)).toHaveLength(0);
+  expect(summaries).toBe(0);
+  const before = client.context('Continue from the handoff');
+  expect(await client.compact()).toMatchObject({compacted: true, strategy: 'model'});
+  expect(client.context('Continue from the handoff').estimateTokens).toBeLessThan(before.estimateTokens);
+  expect(summaries).toBe(1);
+
+  client.updateUserPreferences({autoCompact: true});
+  reportPressure = true;
+  const reenabled = await send('Read again with auto-compaction enabled');
+  expect(compacted(reenabled)[0]).toMatchObject({trigger: 'auto', tokensBefore: pressure});
+  const journal = app.conversations.get(client.activeSession()!.id)?.recovery?.turns.at(-1)?.events ?? [];
+  const requests = journal.flatMap(({data}) => (data.type === 'model.requested' ? [data.context?.estimateTokens] : []));
+  expect(requests).toEqual(liveEstimates.slice(-2));
+  expect(summaries).toBe(2);
 });

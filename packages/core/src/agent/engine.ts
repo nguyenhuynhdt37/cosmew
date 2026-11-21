@@ -2,6 +2,7 @@ import {
   FutrynError,
   messageSchema,
   type CompactionOutcome,
+  type ContextSnapshot,
   type RetractQueuedOptions,
   type QueuedInputEntry,
   type ConversationStore,
@@ -15,8 +16,10 @@ import {
   type ToolPort,
   type Usage,
 } from '@cosmew/contracts';
-import {normalizeHistory} from '../context/builder';
+import {contextSize, normalizeHistory} from '../context/builder';
+import {useContextSnapshot} from '../context/compaction';
 import {compactConversation} from './compact';
+import {estimateInitialContext} from './request-context';
 import {TurnRun} from './turn';
 import type {ActiveTurn, ConversationOptions, ConversationState, TurnHost, TurnLimitsSnapshot} from './turn-types';
 
@@ -33,6 +36,14 @@ export class Conversation {
   private readonly state: ConversationState = {messages: [], pendingInput: []};
   private running = false;
   private active?: ActiveTurn;
+  private previewHistory?: {
+    source: readonly Message[];
+    length: number;
+    snapshot?: ContextSnapshot;
+    count: number;
+    bytes: number;
+    media: number;
+  };
 
   constructor(
     private readonly selection: Selection,
@@ -60,6 +71,25 @@ export class Conversation {
 
   history(): readonly Message[] {
     return this.state.messages.map(m => ({...m}));
+  }
+
+  previewContext(draft: Message | undefined, projectBytes: number) {
+    if (this.active?.requestContext) return {...this.active.requestContext, prepared: true as const};
+    const {messages, snapshot} = this.state;
+    let prefix = this.previewHistory;
+    if (prefix?.source !== messages || prefix.length !== messages.length || prefix.snapshot !== snapshot) {
+      const history = useContextSnapshot(messages, snapshot);
+      prefix = {source: messages, length: messages.length, snapshot, count: history.length, ...contextSize(history)};
+      this.previewHistory = prefix;
+    }
+    const queued = this.state.pendingInput.map(input => input.message);
+    return estimateInitialContext(
+      [...queued, ...(draft ? [draft] : [])],
+      this.tools,
+      this.options,
+      projectBytes,
+      prefix,
+    );
   }
 
   /** Accepted instructions that no turn processed yet; the next `send` delivers them first. */
