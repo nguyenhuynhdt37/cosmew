@@ -9,7 +9,7 @@
 
 ## Surface inventory
 
-| Capability | Evidence / semantics | Hannes mapping | Required fixture |
+| Capability | Evidence / semantics | Cosmew mapping | Required fixture |
 |---|---|---|---|
 | Context/Service | Context service repository; object/function plugin with inject/apply or Service subclass | Scoped service proxies; identity/version mapping | Service available/missing/replaced, consumer reload |
 | Dependency injection | Dependencies wait for service presence | Dependency DAG and pending state with diagnostics | Cycles/missing services/timeouts |
@@ -20,11 +20,11 @@
 | Reload | HMR serialized; some templates startup-only | Generation swap only for supported modes | File edit, bundle list change, rollback failure |
 | Executable config | `!!js` supported upstream | Deny until explicit trusted review; no auto evaluation | Injection cannot obtain privileged service |
 
-App-boot docs establish profiles combine bundles and cordis.patch.yml; bundle manifest lists ordered patches. Web template enables live reload while other templates may apply on startup. Installation changes can take effect next profile start; không đồng nhất mọi change với immediate HMR. Exact overlay precedence/schema/version phải lock bằng fixture, không áp Hannes config merge thay upstream semantics.
+App-boot docs establish profiles combine bundles and cordis.patch.yml; bundle manifest lists ordered patches. Web template enables live reload while other templates may apply on startup. Installation changes can take effect next profile start; không đồng nhất mọi change với immediate HMR. Exact overlay precedence/schema/version phải lock bằng fixture, không áp Cosmew config merge thay upstream semantics.
 
 ## A. In-process Cordis integration
 
-Load reviewed Cordis runtime/fork in Bun, translate Hannes ports into scoped services; objects/functions có thể chia sẻ trực tiếp, preserving identity và synchronous event modes dễ hơn. Rủi ro: vendor deltas và package versions, ambient process quyền, dependency lifecycle chiếm domain ownership, service objects giữ stale grants. Chỉ trusted plugins; core loop/permission vẫn Hannes. Không expose raw `ctx.llm/tools/sessions` privileged implementations; wrappers giữ validation/authorization và registration generation.
+Load reviewed Cordis runtime/fork in Bun, translate Cosmew ports into scoped services; objects/functions có thể chia sẻ trực tiếp, preserving identity và synchronous event modes dễ hơn. Rủi ro: vendor deltas và package versions, ambient process quyền, dependency lifecycle chiếm domain ownership, service objects giữ stale grants. Chỉ trusted plugins; core loop/permission vẫn Cosmew. Không expose raw `ctx.llm/tools/sessions` privileged implementations; wrappers giữ validation/authorization và registration generation.
 
 Acceptance A: Bun compatibility, exact Context/Service semantics, fiber teardown/effect leaks, DI replacement, every service method permission coverage, upstream/fork differential tests. Không chọn chỉ vì TypeScript objects dễ chia sẻ.
 

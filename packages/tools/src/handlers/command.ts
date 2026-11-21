@@ -18,7 +18,17 @@ const LEGACY_CAPABILITIES = {network: false, tty: false, unsandboxed: false, she
 export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
   return {
     descriptor: execDescriptor,
-    available: () => options.commands?.availability().ok === true,
+    // Offered while the backend is healthy, when the sandbox is turned off, or when the user allows
+    // unsandboxed commands (every such run still needs its own approval; sandbox-required commands
+    // fail closed). Only `allowUnsandboxedCommands: false` with a broken backend removes the tool.
+    available: () => {
+      if (!options.commands) return false;
+      const config = sandboxConfig(options);
+      if (options.commands.availability().ok) return true;
+      // Only a runtime that can really run an approved command without its sandbox is offered while unhealthy;
+      // `COSMEW_COMMAND_BACKEND=none` / unsupported platforms stay closed.
+      return options.commands.capabilities?.().unsandboxed === true && (!config.enabled || config.allowUnsandboxed);
+    },
     unavailable: {
       status: 'error',
       code: 'SANDBOX_UNAVAILABLE',

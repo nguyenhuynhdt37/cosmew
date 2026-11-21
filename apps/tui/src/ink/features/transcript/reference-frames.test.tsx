@@ -473,3 +473,58 @@ test('reducer keeps the model, per-part arrival times and the finish clock for t
   expect(item).toMatchObject({model: 'm-1', durationMs: 8000, finishedAt: 9000});
   expect(item.parts).toEqual([{kind: 'text', text: 'xy', at: 2000}]);
 });
+
+// 2.1.330 captures are authoritative; compare the viewer region, not the product-specific banner.
+const PARITY_REF = `${import.meta.dir}/../../../../../../docs/delivery/tui-v4/reference/transcript-2.1.330`;
+async function viewerReference(width: number, name: string) {
+  const rows = (await Bun.file(`${PARITY_REF}/${width}x36-${name}.txt`).text())
+    .split('\n')
+    .map(line => /^\d+\|(.*)$/.exec(line)?.[1] ?? '');
+  const rule = rows.findIndex(row => row.startsWith('─'));
+  return rows
+    .slice(rule)
+    .map(normalizeViewer)
+    .filter(line => line !== '');
+}
+function normalizeViewer(line: string) {
+  return line
+    .replace(/Claude Code|Cosmew/g, '<product>')
+    .replace(/open in (?:code|editor)/g, 'open in <editor>')
+    .trimEnd();
+}
+for (const width of [100, 40]) {
+  test(`2.1.330 footer frame matches at ${width} columns`, async () => {
+    const {DetailedFooter} = await import('./detailed-footer');
+    const view = renderInk(<DetailedFooter width={width} editorName="editor" />);
+    await settle();
+    expect(frameLines(view.lastFrame()).map(normalizeViewer).filter(Boolean)).toEqual(
+      await viewerReference(width, '01-ctrl-o'),
+    );
+    view.unmount();
+  });
+  test(`2.1.330 legend frame matches at ${width} columns`, async () => {
+    const {TranscriptLegend} = await import('./legend');
+    const view = renderInk(<TranscriptLegend width={width} editorName="editor" />);
+    await settle();
+    expect(frameLines(view.lastFrame()).map(normalizeViewer).filter(Boolean)).toEqual(
+      await viewerReference(width, '02-help'),
+    );
+    view.unmount();
+  });
+  for (const [name, query, badge] of [
+    ['03-search-empty', '', undefined],
+    ['05-search-no-match', 'zz_transcript_no_match_98371', 'no matches'],
+  ] as const) {
+    test(`2.1.330 ${name} frame matches at ${width} columns`, async () => {
+      const {SearchBar} = await import('./search-bar');
+      const view = renderInk(
+        <SearchBar width={width} query={query} badge={badge} onChange={() => {}} onClose={() => {}} />,
+      );
+      await settle();
+      expect(frameLines(view.lastFrame()).map(normalizeViewer).filter(Boolean)).toEqual(
+        await viewerReference(width, name),
+      );
+      view.unmount();
+    });
+  }
+}

@@ -1,8 +1,10 @@
+// Canonical opt-in: COSMEW_VERIFY_KEYRING=1.
+import {scriptEnvironment} from './environment';
 import {SecureVault} from '@cosmew/security';
 
-// Opt-in OS backend probe. Uses only a new Futryn-owned entry and always deletes it.
-if (process.env.HANNES_VERIFY_KEYRING !== '1') {
-  console.error('Set HANNES_VERIFY_KEYRING=1 to create/read/delete one disposable Futryn keyring entry.');
+// Opt-in OS backend probe. Uses only a new Cosmew-owned entry and always deletes it.
+if (scriptEnvironment('VERIFY_KEYRING') !== '1') {
+  console.error('Set COSMEW_VERIFY_KEYRING=1 to create/read/delete one disposable Cosmew keyring entry.');
   process.exit(1);
 }
 const vault = new SecureVault();

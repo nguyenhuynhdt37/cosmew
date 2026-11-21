@@ -27,7 +27,7 @@ bun run test:integration  # provider adapters + tests/security
 bun run test:e2e          # tests/end-to-end (PTY/CLI flows)
 ```
 
-Optional, touches real OS keyring / network (opt-in via env): `HANNES_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts`, `HANNES_TEST_KEYRING=1 bun test tests/end-to-end/provider-cli.test.ts`, `HANNES_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts`. `model doctor --generate` makes a billable request.
+Optional, touches real OS keyring / network (opt-in via env): `COSMEW_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts`, `COSMEW_TEST_KEYRING=1 bun test tests/end-to-end/provider-cli.test.ts`, `COSMEW_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts`. `model doctor --generate` makes a billable request.
 
 ## Architecture
 
@@ -35,8 +35,8 @@ Workspace packages (`@cosmew/*`, resolved via bun workspaces, `moduleResolution:
 
 Dependency rules ([docs/architecture/dependency-rules.md](docs/architecture/dependency-rules.md)) are a DAG enforced by review, not tooling:
 
-- Every package may depend on `contracts`; `contracts` depends on no Hannes package and exports no foreign SDK types.
-- `core`, `models`, `security`, `persistence`, `sdk`, `workspace` depend on nothing else in Hannes. They meet only through injected ports. `tools` may depend on `workspace`, `security` and `code-intel`; `code-intel` may depend on `workspace`. `mcp` is a transport adapter injected by the CLI; tools never imports its implementation.
+- Every package may depend on `contracts`; `contracts` depends on no Cosmew package and exports no foreign SDK types.
+- `core`, `models`, `security`, `persistence`, `sdk`, `workspace` depend on nothing else in Cosmew. They meet only through injected ports. `tools` may depend on `workspace`, `security` and `code-intel`; `code-intel` may depend on `workspace`. `mcp` is a transport adapter injected by the CLI; tools never imports its implementation.
 - `apps/tui` depends on `sdk` only (UI talks command/event protocol). `apps/cli` is the **composition root**: it is the only place that wires models + security + persistence + core + tools + workspace + tui (`apps/cli/src/bootstrap/startup.ts` builds the `Application`).
 - Never deep-import another package's `src/` files; use its `index.ts`. Public contract changes need an ADR + migration/versioning + consumer updates.
 

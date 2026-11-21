@@ -87,6 +87,13 @@ Exact cell allocation ở các width khác hai khung đã đo: **Needs verificat
 Badge phải theo thứ tự: `status + " "` → `<current> of <count> ` → `verbose ` → rỗng.
 `verbose` chỉ hiện khi không có prefix working/dialog; searchBadge/status vẫn có thể hiện khi verbose bị tắt. B2.
 
+Task 5 footer regression correction (2026-11-21): the inline shell selects B2's scroll/help
+footer branch when the transcript has at most 30 messages, since there is no hidden recent
+window to expand. At width 140 the full scroll/editor/help hint fits; narrower widths retain
+the strict fit fallback. Actual transcript virtualization and Ctrl+E routing are unchanged.
+The regression test renders the shell with an empty transcript and the draft `keep this`;
+this is local test evidence, not new upstream live evidence.
+
 Live 100 cột: hai khoảng trắng đầu, `Showing detailed transcript · ctrl+o to toggle · ? for shortcuts`, badge `verbose` bên phải.
 Live 40 cột: `  Showing detailed transcript · …verbose` (không có khoảng trống giữa ellipsis và badge trong frame).
 Xem [`100x36-01-ctrl-o.txt`](reference/transcript-2.1.330/100x36-01-ctrl-o.txt) và
@@ -206,3 +213,210 @@ Tổng 14 frame, 14 color sidecar, một `binary-evidence.txt`.
 Task 1 verification: chạy `git diff --check` trên shared dirty tree và quét riêng tài liệu/frame mới để kiểm tra thông tin cá nhân.
 Kết quả: `git diff --check` PASS; quét thông tin cá nhân bắt buộc trả 0 match (exit 1 của `rg`); kiểm tra thêm email/UUID/path cũng PASS.
 14 frame đều đủ 36 dòng đánh số và 14 color sidecar đều parse JSON được. Không chạy suite source hoặc thay đổi các file của phiên khác.
+
+## Task 3 — footer composer (2026-11-21)
+
+Implemented `features/transcript/footer-logic.ts` and `detailed-footer.tsx`; the shell supplies width,
+editor and existing busy/pending-interaction state. Ctrl+O toggles during a turn or pending permission/question
+without cancelling it. Search/show-all/badge remain defaulted for Tasks 5–6. Hints subscribe to the central
+keymap and use Task 2 action IDs/keyLabels, including live remaps.
+
+Ruling: B2 overrides the plan's right-hand activity status: `working ·` / `dialog waiting ·` are left
+prefixes, suppressing `verbose `. The independent transient right status has its own optional `rightStatus`
+input; precedence is rightStatus → search badge → verbose → empty. Badge strings retain B2's trailing space.
+The full scroll/editor/help hint uses B2's strict `< width` test; otherwise the virtual-scroll variant is
+only `? for shortcuts`, with no intermediate editor-only fallback. Non-virtual variants are exposed through
+optional `virtualScroll`/`suppressShowAll` inputs. No new key bindings or public contract changes.
+
+Cell allocation reserves the two-cell indent and right badge before truncating the left with `…`.
+The trailing badge space is included in the budget, so at 40 cells the left ends ` ·…` rather than the
+live capture's ` · …`. Exact upstream renderer allocation remains **Needs verification**, as noted above;
+this implementation guarantees no wrap/overflow and does not claim pixel-exact live parity.
+
+TDD: missing-module RED, streaming/dialog RED, and live-remapping RED were each observed before their fixes.
+Verification: touched tests **31 pass**, including exhaustive cell-budget checks at every width 24–200 with
+wide/long strings and activity/search states; reference/composition tests **17 pass, 1 skip** (existing skip).
+Reviewed scoped diff: no existing golden includes the changed footer; all golden assertions pass, so none
+was re-recorded. `bun run typecheck` PASS. `bun run lint` stopped on formatting of the concurrently added
+`tests/contracts/sandbox-modes.test.ts`, outside Task 3; that file was left untouched.
+
+## Task 4 — transcript scroll keys (2026-11-21)
+
+Wired Task 2's existing B1 action IDs in the shell's Transcript context: j/k and Ctrl+N/P move one row;
+Ctrl+D/U move half the measured viewport (floor, minimum 1); Ctrl+F/space and Ctrl+B/b move a whole
+viewport; g/shift+g and Home/End reach the ends. No Task 4 key-name conflict with B1 was found.
+`useScrollback` now exposes `halfPageUp`/`halfPageDown`; existing PgUp/PgDn retain their half-screen
+steps, and Ctrl+Home/End, arrows and wheel paths remain available. No dependency or public contract change.
+
+Transcript handlers require `viewing && !searchOpen`; `searchOpen = false` is a commented placeholder
+for Task 6. Scroll fallback handlers also yield to search. Query routing, including Esc before Global/Chat
+fallbacks, remains Task 6 work and **Needs verification** with the actual search bar.
+
+Collisions resolved through the existing context priority and composer focus rules: Ctrl+D is Global
+`app:exit`/delete outside the viewer; Ctrl+B is Chat `task:background`; Ctrl+P/N navigate composer
+history/autocomplete; Ctrl+U deletes to the start; printable b/space/j/k/g/G remain prompt text.
+Transcript takes those keys only in detailed mode; composer code and non-transcript behavior are unchanged.
+
+TDD: missing line/half/full-page/end aliases failed before implementation. The Task 3 footer occupies two
+rows, so tests use a 28-row viewport at 100x30, half 14; the initial test assumption of three footer rows
+was corrected against the existing component. Tests assert visible content offsets via numbered answer
+rows, both directions, top/bottom, normal prompt typing/history/deletion and Esc/q/Ctrl+C focus restoration.
+Scoped independent review found no important Task 4 issues.
+
+Verification: `bun run typecheck` PASS; fullscreen tests **37 pass**, combined fullscreen/keymap tests
+**56 pass**, scoped `git diff --check` PASS. `bun run lint` fails only on formatting in untouched
+`tests/contracts/branding-guard.test.ts`, `cosmew-rename.test.ts` and `sandbox-modes.test.ts`.
+The broader `bun run test` and its one retry both report **601 pass, 9 skip, 306 fail**; failures are
+outside the touched test files, including fixture-server `EADDRINUSE`, native sandbox `UNSUPPORTED`,
+process/PTY/LSP environment checks and concurrent branding/state changes. These do not establish live
+terminal/OS parity and were left untouched. Logs for this run: `/tmp/task4-{red,fullscreen,touched,lint,suite,suite-retry}.log`.
+
+## Task 5 — show-all window (2026-11-21)
+
+Implemented `visibleWindow` in `features/transcript/show-all.ts`, exporting `DETAILED_RECENT_LIMIT = 30`.
+Detailed non-virtual transcripts render the most recent 30 items by default; Ctrl+E toggles all passed
+items and the footer's exact `ctrl+e to show all` / `ctrl+e to collapse` wording. Every Ctrl+O entry resets
+showAll to false. Normal transcripts retain their existing Static/live/history behavior. Short histories
+have no hidden-count hint and suppress the footer show-all variant. Hints use the live central keymap;
+the default top hint spells the chord `Ctrl+E`, as B6's fallback does, and bolds the count (B9).
+
+Ruling: B5/B7/B9 override Task 5's proposed `Showing last N of M · ctrl+e to show all` line. The actual
+lines are `Ctrl+E to show N previous messages` and, after expansion, `Ctrl+E to hide N previous messages`.
+30 is the recent-message window; 200 is an independent upstream renderer cap, not this window's size.
+This task does not add that upstream renderer/normalization pipeline or remove Cosmew's existing paging
+limits. Counts here are SDK transcript items; exact equivalence to upstream's normalized messages and
+B9's count-suppression condition remain **Needs verification**.
+
+Ruling: B4 disables Ctrl+E while virtual scroll is active; B7 also bypasses the 30-message window in that
+branch. Cosmew maps its fullscreen history paging (`60 + olderPages * 40`, `ScrollViewport` and
+`useScrollback`) to that branch: no show/hide hint, no Ctrl+E state change, existing scroll/footer behavior
+retained. Inline output has no paged viewport and uses the non-virtual show-all branch. This is an explicit
+adapter mapping: Cosmew clips a mounted tree and pages older history rather than using upstream's
+render-range virtualizer; precise equivalence is **Needs verification**. Scrolling away from the bottom
+does not switch branches or enable Ctrl+E. The component's `virtualScroll` prop bypasses its legacy window.
+
+TDD: observed missing-helper RED and missing recent-window/hint/inline-toggle RED before implementation.
+Tests cover short/exact-limit histories, oldest-item removal/counts/immutability, expansion/collapse,
+non-detailed preservation, virtual bypass, inline shell toggle/reset/composer focus, fullscreen Ctrl+E
+suppression, and computing the 5,000-item window in under 200 ms. The timing assertion covers window
+computation, not rendering 5,000 Ink components or live terminal input latency.
+
+Verification: `bun run typecheck` PASS; `bun run lint` PASS. Touched files plus footer, transcript-reference
+and composition-golden regression tests: **86 pass, 1 existing skip, 0 fail**. Reviewed scoped source/test diff;
+no golden changes were needed and none were re-recorded. Shared pre-existing edits were preserved;
+no stash/reset/commit and neither protected mouse/wheel source file was touched. Live long-history
+upstream/OS acceptance remains **Needs verification**.
+
+## Task 6 — search (2026-11-21)
+
+Implemented lazy, cancellable index warming and query scans in setImmediate chunks, visible ANSI/OSC-sanitized
+item text, UTF-16 visible offsets (including wide characters), current-match theme highlight and row reveal.
+Index warming is cached per transcript array revision; closing/reopening does not rebuild an unchanged index.
+B3 status priority, duration threshold (20 ms / 2 s), placeholder, wrapping query and responsive hints are wired.
+
+Ruling: B3/B4 override the plan's Enter-next step: Enter keeps a matching query and closes; n/N cycle with
+wrap only after close. Printable jkgqn belong to the query while open. Esc cancels back to the kept query;
+a subsequent Esc exits. No match queries are discarded on keep. No contract/dependency change.
+
+Needs verification: live upstream matching/highlight and slow-index behavior (no successful match was captured).
+The selected item uses a sanitized plain-body rendering to map offsets without corrupting ANSI or wide text;
+its Markdown/tool decoration is simplified while highlighted. Exact rendered-text normalization, cursor editing
+beyond append/backspace/Ctrl+U, single extremely large item latency, and real-terminal 5,000-item input latency
+remain Needs verification. Chunk tests cover 5,000 moderate items and cancellation, not an OS latency guarantee.
+
+TDD: missing-module/search-open RED; navigation initially failed to reveal the matching row; Backspace RED
+confirmed raw-key routing needed a non-printable fallback. Verification after fixes: typecheck PASS, lint PASS,
+search + fullscreen files **45 pass, 0 fail**. No golden was re-recorded. A focused test was inadvertently run
+while an earlier verification process was still finishing; final verification was rerun sequentially.
+
+## Task 7 — legend and editor message (2026-11-21)
+
+Legend now replaces the footer, with B3's eleven lines and column-major three-column layout when it fits,
+one column when narrow. Labels subscribe to the live keymap; default aliases retain the measured compact
+`ctrl+u/d`, `space/b`, `g/G`, `n/N` spellings. A remapped dump key is reflected without reopening help.
+`v` without VISUAL/EDITOR shows the exact `no $VISUAL/$EDITOR set` status for four seconds and does not suspend.
+Updated keys.md section 5, keys-status.md and g3-status.md.
+
+Ruling: B4's upstream full status includes `wrote <path> · `, but this no-editor branch does not write a
+throwaway file just to report that no editor exists. It displays the evidenced message suffix directly.
+Full upstream render/write/open status lifecycle and actual editor-name parsing beyond the first executable
+remain **Needs verification**. No new dependency/contract or terminal suspension path.
+
+TDD: legend text/remapping and no-editor RED observed; fixed an invalid test keymap document encoding and
+an editorName import shadow caught by typecheck. Final verification: typecheck PASS, lint PASS,
+keys.test.tsx **21 pass, 0 fail**. No golden changed.
+
+## Task 8 — reference verification (2026-11-21)
+
+Added footer, legend, empty-search and wrapped no-match region comparisons at 100 and 40 columns against
+`reference/transcript-2.1.330`. Only product/editor names and terminal-edge trailing blanks are normalized;
+spacing within rows is compared exactly. Banner/session content and absolute viewport row placement are outside
+these region assertions. No reference or golden was re-recorded.
+
+Frame RED exposed Task 3's one-cell narrow-footer difference. Corrected allocation: when clipping the left,
+drop the expendable terminal-edge trailing badge space before reserving the badge. At 40 columns it now reads
+`  Showing detailed transcript · …verbose`, matching the capture. This supersedes Task 3's documented difference;
+strict hint fit and the no-wrap cell budget remain tested across widths 24–200.
+
+Added native PTY sequence: Ctrl+O, `/`, query, n as query text, Backspace/Enter keep, n navigation, Ctrl+E,
+?, q; assertions check process stays alive. Ruling: Enter is necessary before n navigation because B3/B4 gives
+n to the query while the bar is open. The new case failed before reaching UI: `fixtureServer` cannot bind port 0
+(`EADDRINUSE`) in this environment. It remains a real failing test, not skipped or replaced by mock success.
+
+Final independent review found three issues, each reproduced RED and fixed GREEN:
+
+- Revealing the oldest match in 5,000 items expanded the mounted history tail to all items and timed out.
+  Search now mounts at most 60 items around the match; the existing viewport/controller reveals its row.
+- Custom code-point width estimation mislocated matches after wide emoji. Match row measurement now uses
+  Ink's own static Text renderer, matching its wrapping/grapheme behavior.
+- Search/legend could consume dialog space and input when a new question arrived. Both panels are suspended
+  while an overlay is active; the ordinary two-row activity footer preserves the dialog's existing budget.
+
+The 5,000-item shell case now passes, including a <16.7 ms yield assertion during query input and oldest-match
+reveal. This proves bounded work returns control to the input turn; exact visible-frame deadlines on a real
+terminal, a single enormous item, and platform-specific latency remain **Needs verification**.
+
+| Behavior | Result | Evidence / limits |
+| --- | --- | --- |
+| Footer text at 100/40 columns | matches | Exact viewer-region comparison, including 40-column ellipsis space |
+| Legend text and column layout at 100/40 | matches | Exact region comparison, product/editor names normalized |
+| Empty search and no-match wrapping at 100/40 | matches | Four B3 frame comparisons; 40-column query wraps |
+| `/`, printable query ownership, Enter keep, Esc cancel/exit | matches | B3/B4 semantics; fullscreen tests, including Backspace |
+| B3 four badge strings and precedence | matches | Pure tests; live duration/successful-match evidence still unavailable |
+| n/N wrap, footer hint/badge and matching-row reveal | matches | Local shell tests and B2/B4 static evidence; not an upstream live success capture |
+| ANSI/OSC visible offsets, wide text and emoji reveal | matches | Sanitizer/offset tests and actual Ink wrap/reveal test |
+| Ctrl+O during streaming/dialog; arriving dialog during search/help | matches | Existing streaming/dialog regressions and new overlay tests |
+| Remapped keys in footer/legend | matches | Live keymap subscription tests |
+| Ctrl+E virtual-scroll suppression / inline 30-item window | matches | Task 5 tests and B4/B7; upstream long-history normalization remains unverified |
+| Selected-item formatting during search | differs | Current match uses sanitized plain body rather than Markdown/tool decorations |
+| No-editor v status | differs | Exact `no $VISUAL/$EDITOR set` suffix; does not create upstream's `wrote <path>` temporary copy |
+| Search/legend widths other than measured 100/40 | Needs verification | Responsive layout implemented; exact upstream spacing unmeasured |
+| Full-screen absolute row placement at width 40 | Needs verification | Captured footer has an additional trailing blank row; region tests exclude surrounding blank rows |
+| 5,000-item real-terminal latency and huge single-item behavior | Needs verification | Local chunk/cancellation tests + bounded shell test, no OS guarantee |
+| New native PTY navigation/process-alive sequence | Needs verification | Environment fails before UI at fixtureServer port 0; no live acceptance claim |
+| Successful upstream search/highlight, external editor and scrollback acceptance | Needs verification | No new live upstream run; manual real-terminal check remains coordinator/user work |
+
+Final checks, run sequentially: `bun run typecheck` PASS; `bun run lint` PASS. Six touched/regression TUI files
+(search, transcript, footer-logic, reference-frames, fullscreen, keys): **118 pass, 1 existing skip, 0 fail**.
+Full touched `tests/end-to-end/tui-ink-pty.test.ts`: **1 pass, 5 fail**; all five failures are the fixture-server
+port-0 bind error, including the new case. Logs: `/tmp/task8-{typecheck,lint,tests,pty-full}.log`.
+The coordinator's whole suite was not run. No commit/stash/reset; protected mouse/wheel files were not touched.
+
+## PTY suite-order investigation (2026-11-21)
+
+The transcript PTY child now uses an explicit environment with isolated HOME/TMPDIR and COSMEW_HOME,
+fixed TERM/locale and NO_COLOR, rather than inheriting host state roots, keybindings, theme/color overrides
+or proxy settings. Its wait assertion permanently includes the awaited text and a bounded 8 KB terminal
+output tail (escaped to preserve ANSI evidence); the existing 8 s deadline is unchanged.
+
+Needs verification: the reported full-suite-only timeout's root cause. In this restricted execution session,
+contracts, security+contracts, MCP, workspace, and themes-cli combinations with the PTY file all fail at
+fixture-server listen with EADDRINUSE before the transcript child starts, both before and after environment
+isolation. These runs cannot identify the stuck frame or establish that isolation fixes the reported timeout.
+Typecheck and lint pass. This is diagnostic hardening, not a claim of successful PTY/full-suite acceptance.
+
+Exact final `bun test tests`: **603 pass, 9 skip, 305 fail** (76.72 s); the transcript PTY fails at
+fixtureServer before spawn (1.01 ms), not at a wait. Post-change security+contracts+PTY:
+**546 pass, 5 skip, 119 fail** (43.16 s). Logs: `/tmp/pty-full-suite.log`,
+`/tmp/pty-fixed-security-contracts.log`, `/tmp/pty-{contracts,mcp,workspace,themes}.log`,
+`/tmp/pty-{typecheck,lint}.log`. No timeout increase, production change, commit, stash or reset.

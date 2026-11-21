@@ -84,10 +84,13 @@ cùng kết quả từng bước với Claude Code thật (`out-keys3` so với 
 
 | Phím | Trạng thái | Test |
 |---|---|---|
-| Transcript: `q`, Esc, Ctrl+C thoát; `?` | done | S `transcript viewer: footer lists its keys…` |
+| Transcript: `q`, Esc, Ctrl+C thoát; `?` | done: legend 11 mục từ live keymap, remap được cập nhật | S `transcript legend uses evidence lines…` |
+| Ctrl+E | done: inline 30-message show/collapse; fullscreen không đổi | F Ctrl+E cases, show-all.test.ts |
+| `/`, Enter, Esc, n/N | done: search bar nhận chữ; Enter keep, Esc cancel trước exit; n/N wrap và reveal row | search.test.ts, F `search owns text…`; upstream match/latency Needs verification |
+| j/k, Ctrl+N/P, Ctrl+U/D, space/b, Ctrl+F/B, g/G, Home/End | done trong viewer, nhường cho query | F scroll keys + search |
 | `{` `}` nhảy prompt | done (fullscreen; đo vị trí Yoga của từng prompt) | F `detailed transcript: { and } jump…` |
 | `[` ghi hội thoại ra scrollback gốc | done ở fullscreen (rời alternate screen bằng `suspendTerminal`, in, quay lại); chế độ inline: báo "already in the terminal scrollback" | S (nhánh inline); fullscreen.test.tsx + native-pty.test.ts: rời alternate screen trước ghi và vào lại sau ghi |
-| `v` mở bằng `$VISUAL`/`$EDITOR` | done (bản sao file tạm 0600) | fullscreen.test.tsx: chạy editor executable thật, bản sao 0600, giữ nguyên hội thoại và resume Ink |
+| `v` mở bằng `$VISUAL`/`$EDITOR` | done (bản sao file tạm 0600); thiếu editor báo `no $VISUAL/$EDITOR set`, không suspend | fullscreen.test.tsx: chạy editor executable thật, bản sao 0600, giữ nguyên hội thoại và resume Ink |
 | Cuộn: PageUp/Down nửa viewport, Ctrl+Home/Ctrl+End (+ follow), ↑/↓ trong transcript | done | F `detailed transcript…`, F `scrolling with PgUp/PgDn…` |
 | Wheel, chọn bằng chuột, Ctrl+Shift+C / Cmd+C | gap (Ink 8 không có sự kiện chuột/chọn văn bản) | |
 | Footer: ←/→, ↑/↓ (Ctrl+P/N), Enter, Esc, `x` trên agent đang chạy | done (↓ từ ô rỗng vào footer; Enter/↓ mở `/agents`; x dừng agent) | K `footer: Down on an empty input…`. P2 thêm backgroundTasks: shell + agent, unified panel với output/stop |

@@ -109,7 +109,7 @@ export interface ToolDispatcherOptions {
    * always use the built-in search. A path inside the workspace is never used.
    */
   ripgrep?: string | null;
-  /** Sandboxed command runtime (ADR 0022). Without one, or while it is unavailable, exec_command is not offered. */
+  /** Command runtime (ADR 0022). Without one exec_command is not offered; sandbox health gates sandboxed launches. */
   commands?: CommandRuntime;
   /**
    * Configured command sandbox (ADR 0034). Read at prepare, authorization and revalidation, so a

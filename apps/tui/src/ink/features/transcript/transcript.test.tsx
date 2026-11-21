@@ -316,3 +316,46 @@ test('a streaming answer shows a bounded tail; the finished item keeps every lin
   expect(tail).not.toContain('line 1000');
   expect(liveTail('short\nanswer', 20)).toBe('short\nanswer');
 });
+
+const windowHistory: Item[] = Array.from({length: 35}, (_, n) => ({
+  id: `window-${n}`,
+  role: 'user',
+  content: `message-${String(n).padStart(3, '0')}`,
+}));
+
+test('detailed transcript shows only the recent 30 with the evidence hidden-count hint, then shows all', async () => {
+  const view = renderInk(<Transcript items={windowHistory} detailed animate={false} />);
+  await settle();
+  expect(view.lastFrame()).toContain('Ctrl+E to show 5 previous messages');
+  expect(view.lastFrame()).not.toContain('message-004');
+  expect(view.lastFrame()).toContain('message-005');
+  expect(view.lastFrame()).toContain('message-034');
+  view.rerender(<Transcript items={windowHistory} detailed showAll animate={false} />);
+  await settle();
+  expect(view.lastFrame()).toContain('message-000');
+  expect(view.lastFrame()).toContain('Ctrl+E to hide 5 previous messages');
+  expect(view.lastFrame()).not.toContain('to show 5');
+  view.rerender(<Transcript items={windowHistory} detailed animate={false} />);
+  await settle();
+  expect(view.lastFrame()).not.toContain('message-000');
+});
+
+test('short detailed histories have no hidden-count hint; non-detailed histories are never windowed', async () => {
+  const view = renderInk(<Transcript items={windowHistory.slice(0, 4)} detailed animate={false} />);
+  await settle();
+  expect(view.lastFrame()).toContain('message-000');
+  expect(view.lastFrame()).not.toContain('previous messages');
+  view.rerender(<Transcript items={windowHistory} bounded animate={false} />);
+  await settle();
+  expect(view.lastFrame()).toContain('message-000');
+  expect(view.lastFrame()).toContain('message-034');
+  expect(view.lastFrame()).not.toContain('previous messages');
+});
+
+test('virtual scrolling bypasses the detailed recent window and its hints', async () => {
+  const view = renderInk(<Transcript items={windowHistory} detailed virtualScroll animate={false} />);
+  await settle();
+  expect(view.lastFrame()).toContain('message-000');
+  expect(view.lastFrame()).toContain('message-034');
+  expect(view.lastFrame()).not.toContain('previous messages');
+});

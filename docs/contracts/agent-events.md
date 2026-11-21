@@ -286,7 +286,7 @@ không được cấp quyền. Completion shell `<task-notification>` vào cùng
 inbox đã lưu tồn tại qua restart. Không thêm SQLite migration.
 
 
-## P3 SDK (contract 1.39, ADR 0074)
+## P3 SDK (introduced in 1.39, current contract 1.40; ADR 0074)
 
 `WorkspaceDiffReport` thêm effective `base` và `capabilities` theo nguồn; SDK nhận optional base.
 `PlanProposal` thêm optional path/revision (row cũ vẫn đọc); approved/feedback outcome có edited plan khi revision > 1,
@@ -294,5 +294,5 @@ feedback đi cùng mode trong một resolution. `editPlanProposal` không grant.
 focus instructions giới hạn/redact, outcome cho biết model/excerpt và fallback. `retractQueuedEntries` selective
 trả id/type/content; no-argument `retractQueuedInput` cũ vẫn giữ. `PromptHistoryEntry` có id/sessionId/content/timestamp,
 scopes session/project/everywhere; model/effort session scope không persist user preference.
-Không có producer event mới; observer state update và JSONL dùng version 1.39. SQLite 10 thêm nullable canonical
+Không có producer event mới; observer state update và JSONL hiện dùng version 1.40. SQLite 10 thêm nullable canonical
 workspace và timestamp metadata cùng bounded prompt_history projection của actual submissions/steering. Migration từ 9 giữ unknown là NULL; copied context/handoff không tạo prompt mới; binary cũ từ chối schema mới.

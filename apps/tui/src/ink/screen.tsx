@@ -16,9 +16,11 @@ export interface Scrollback {
   back: number;
   maxBack: number;
   atBottom: boolean;
-  /** Rows of the viewport; one PgUp/PgDn moves one page less two rows of overlap. */
+  /** Rows of the viewport; existing PgUp/PgDn move half a viewport. */
   viewRows: number;
   pageUp(): void;
+  halfPageUp(): void;
+  halfPageDown(): void;
   /** Scroll to the very top / put the given content row at the top of the viewport. */
   toTop(): void;
   showRow(row: number): void;
@@ -66,6 +68,8 @@ export function useScrollback(onReachTop?: () => void): Scrollback {
     (rows: number) => setBack(current => Math.max(0, Math.min(maxBack, current + rows))),
     [maxBack],
   );
+  const halfPageUp = useCallback(() => scrollBy(Math.max(1, Math.floor(size.view / 2))), [scrollBy, size.view]);
+  const halfPageDown = useCallback(() => scrollBy(-Math.max(1, Math.floor(size.view / 2))), [scrollBy, size.view]);
   const toBottom = useCallback(() => setBack(0), []);
   const toTop = useCallback(() => setBack(maxBack), [maxBack]);
   const showRow = useCallback(
@@ -78,6 +82,8 @@ export function useScrollback(onReachTop?: () => void): Scrollback {
     atBottom: back <= 0,
     viewRows: size.view,
     pageUp,
+    halfPageUp,
+    halfPageDown,
     toTop,
     showRow,
     topRow: Math.max(0, size.content - size.view - Math.min(back, maxBack)),

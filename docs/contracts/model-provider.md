@@ -99,7 +99,7 @@ CLI composition gates discovery on approved workspace access and wires workspace
 
 [ADR 0020](../adr/0020-progressive-code-exploration.md) adds optional `ModelRequest.instructions` (≤ 8000 chars): trusted host guidance that adapters place in the provider's system channel (AI-SDK `system`) and the Codex host appends to `developerInstructions`. Core sets it only when workspace tools are offered or were used in the turn. It is never stored and never carries repository or user text. Additive; no migration.
 
-## Hannes-owned recovery and context
+## Cosmew-owned recovery and context
 
 [ADR 0030](../adr/0030-durable-conversation-recovery.md) keeps provider SDK types outside core. Direct providers receive normalized call/result pairs and labeled historical checkpoints; no adapter replays stored tools. Catalog context/output limits and measured usage inform token budgets, with conservative estimates otherwise. ContextCompactor is provider-neutral; the production default is deterministic extractive compaction, not a claim that any adapter supports Codex-native compaction. Unsupported safe compaction fails explicitly. Existing subscription backend labels and opt-in rules remain unchanged.
 

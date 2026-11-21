@@ -2,12 +2,12 @@
 
 > PA1 provider/auth implementation is documented in [providers/auth](../subsystems/providers-and-auth.md), [ADR 0005](../adr/0005-provider-auth-product.md) and the [acceptance report](../delivery/provider-auth-acceptance.md). The full subsystem/agent protocol below remains a future design except for that explicit slice.
 
-**Đề xuất Phase 0; Not implemented.** Hannes dùng contracts-first monorepo, domain runtime headless và composition tại apps. Nguồn cảm hứng và giới hạn bằng chứng nằm trong [catalog](../delivery/dependency-catalog.md) và các tài liệu compatibility; ranh giới dưới đây là quyết định Hannes, không phải mô tả implementation private upstream.
+**Đề xuất Phase 0; Not implemented.** Cosmew dùng contracts-first monorepo, domain runtime headless và composition tại apps. Nguồn cảm hứng và giới hạn bằng chứng nằm trong [catalog](../delivery/dependency-catalog.md) và các tài liệu compatibility; ranh giới dưới đây là quyết định Cosmew, không phải mô tả implementation private upstream.
 
 ```mermaid
 flowchart TB
   CLI[CLI composition root] --> CORE[Core runtime]
-  TUI[TUI client] --> SDK[Hannes SDK]
+  TUI[TUI client] --> SDK[Cosmew SDK]
   WEB[Web/Desktop tương lai] --> SDK
   SDK --> SERVER[Server transport và auth]
   SERVER --> CORE

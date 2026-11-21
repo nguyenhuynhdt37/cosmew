@@ -6,7 +6,7 @@ Tất cả status là **Not implemented**. Target version là phạm vi cần pi
 
 | Ecosystem | Capability | Target version | Strategy | Status | Acceptance test |
 |---|---|---|---|---|---|
-| Hannes | Model/tool/session contracts | Hannes proposed v1 | Native Support | Not implemented | Roundtrip schema, replay, unknown fields |
+| Cosmew | Model/tool/session contracts | Cosmew proposed v1 | Native Support | Not implemented | Roundtrip schema, replay, unknown fields |
 | 9Router | Text/tool streaming | Needs verification: endpoint/version | Planned | Not implemented | Fragmented calls, usage, auth, errors với endpoint đúng |
 | OpenAI-compatible | Chat completions | Provider-specific pin needed | Adapter | Not implemented | Chat-only endpoint không gọi Responses |
 | MCP | stdio tools | SDK v2 docs v2.4.0; protocol negotiated | Native Support | Not implemented | initialize/list/call/cancel/crash |
@@ -31,6 +31,6 @@ Tất cả status là **Not implemented**. Target version là phạm vi cần pi
 | DeepSeek | dsh runtime delegation | Supported IPC interface Needs verification | Sidecar Delegation | Not implemented | Handshake/auth/cancel/crash/receipts; không invent RPC |
 | DeepSeek | Arbitrary !!js config | Không auto-enable | Unsupported | Not implemented | Reject executable config chưa trusted/approved |
 | Cordis upstream | Generic upstream plugins | 4.0.0-rc.12 reference; fork deltas cần verify | Planned | Not implemented | Same services/lifecycle fixture against both runtimes |
-| Interfaces | Hannes desktop/web | Host chưa chọn | Planned | Not implemented | UI/auth/permission integration và plugin host conformance |
+| Interfaces | Cosmew desktop/web | Host chưa chọn | Planned | Not implemented | UI/auth/permission integration và plugin host conformance |
 
 Chi tiết [MCP](mcp.md), [OpenCode APIs](opencode-v1-v2.md), [UI/RPC](opencode-tui-gui-rpc.md), [DeepSeek/Cordis](deepseek-cordis.md). Native Support là strategy dự kiến, không nghĩa đã có implementation.

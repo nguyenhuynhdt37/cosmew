@@ -485,3 +485,100 @@ test.skipIf(process.platform === 'win32')(
   },
   30000,
 );
+
+test.skipIf(process.platform === 'win32')(
+  'Ink transcript parity PTY: search, navigate, Ctrl+E, legend and q keep process alive',
+  async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-transcript-pty-')));
+    const server = fixtureServer();
+    const app = startup(join(dir, 'state'), {vault: memoryVault()});
+    let terminal: Bun.Terminal | undefined;
+    let child: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      app.registry.add(server.provider('chat', {id: 'transcript-pty', auth: 'none'}));
+      await app.accounts.add('transcript-pty', 'Transcript fixture', {kind: 'none'});
+      const client = app.createFutrynClient(dir);
+      await client.discoverModels();
+      client.selectModel('fixture-model');
+      const historyId = app.conversations.create(client.status().selection!);
+      app.conversations.append(historyId, {role: 'user', content: 'needle first'}, 'committed');
+      app.conversations.append(historyId, {role: 'assistant', content: 'needle second'}, 'committed');
+      let output = '';
+      terminal = new Bun.Terminal({
+        cols: 100,
+        rows: 36,
+        data(_t, bytes) {
+          output += Buffer.from(bytes).toString('utf8');
+        },
+      });
+      child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), '--resume', historyId], {
+        cwd: dir,
+        terminal,
+        // This scenario asserts literal frame text and default keys. Do not inherit
+        // host theme/color overrides, state roots, keybindings, or proxy settings.
+        env: {
+          PATH: process.env.PATH,
+          HOME: dir,
+          TMPDIR: dir,
+          COSMEW_HOME: join(dir, 'state'),
+          FUTRYN_COMMAND_BACKEND: 'none',
+          TERM: 'xterm-256color',
+          LANG: 'en_US.UTF-8',
+          NO_COLOR: '1',
+        },
+      });
+      const wait = async (text: string, from = 0) => {
+        const deadline = Date.now() + 8000;
+        while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5);
+        expect(
+          output.slice(from).includes(text),
+          `waiting for ${JSON.stringify(text)}; last screen/output: ${JSON.stringify(output.slice(-8000))}`,
+        ).toBe(true);
+        expect(child!.exitCode).toBeNull();
+      };
+      const send = async (text: string) => {
+        const from = output.length;
+        terminal!.write(text);
+        await Bun.sleep(150);
+        return from;
+      };
+      await wait('Accessing workspace:');
+      await send('\x1b[A');
+      await send('\r');
+      await wait('manual mode on');
+      await wait('needle second');
+      let from = await send('\x0f');
+      await wait('Showing detailed transcript', from);
+      from = await send('/');
+      await wait('Search transcript…', from);
+      from = await send('needle');
+      await wait('1 of 2', from);
+      from = await send('n'); // n is text until Enter keeps and closes the bar (B3/B4).
+      await wait('needlen', from);
+      await wait('no matches', from);
+      await send('\x7f');
+      await send('\r');
+      await wait('n/N to navigate');
+      from = await send('n');
+      await wait('2 of 2', from);
+      from = await send('\x05');
+      expect(child.exitCode).toBeNull();
+      expect(output.slice(from)).not.toContain('ctrl+e to collapse');
+      from = await send('?');
+      await wait('move half a page', from);
+      await wait('print to scrollback', from);
+      from = await send('q');
+      await wait('manual mode on', from);
+      expect(child.exitCode).toBeNull();
+    } finally {
+      child?.kill('SIGKILL');
+      if (child) await child.exited;
+      terminal?.close();
+      await app.shutdownCommands();
+      app.db.close();
+      server.server.stop(true);
+      rmSync(dir, {recursive: true, force: true});
+    }
+  },
+  30000,
+);

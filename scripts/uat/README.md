@@ -1,4 +1,4 @@
-# Driver UAT cho agent Futryn (headless)
+# Driver UAT cho agent Cosmew (headless)
 
 Chạy agent thật (cùng đường code với TUI: `startup` → `createFutrynClient` → `setToolsEnabled(true)`) trên một thư mục dự án, không cần giao diện.
 
@@ -6,7 +6,7 @@ Chạy agent thật (cùng đường code với TUI: `startup` → `createFutryn
 
 ```sh
 bun run fyn exec "Đọc README và tóm tắt" --cd /path/to/project --json -o answer.txt
-cat prompt.txt | bun run hannes exec - -C /path/to/project --approval never --sandbox read-only
+cat prompt.txt | bun run cosmew exec - -C /path/to/project --approval never --sandbox read-only
 ```
 
 `--cd`/`-C` phải rõ ràng để đồng ý thư mục; không có cờ này thì exit 2. Có thể chọn
@@ -40,7 +40,7 @@ bun scripts/uat/agent-run.ts --workspace <thư-mục> --prompts <file.txt> --rep
   `question.asked` thay polling; CLI cũ giữ nguyên, option lập trình `pollMs` bị bỏ qua.
   Snapshot thêm `permissionMode` (ADR 0061). Driver bật user input riêng vì có bộ trả lời tự động;
   hành vi này khác exec một lượt ở trên.
-- Thư mục trạng thái giống CLI: `FUTRYN_HOME`/`HANNES_HOME`, mặc định `~/.futryn` (dùng lại `~/.hannes` nếu có). Cần đã chọn account và model.
+- Thư mục trạng thái giống CLI: `COSMEW_HOME`, mặc định `~/.cosmew` (đọc `FUTRYN_HOME` rồi `HANNES_HOME` và dùng lại legacy roots nếu có). Cần đã chọn account và model.
 - Timeout mỗi lượt mặc định 20 phút (huỷ bằng AbortSignal). Ctrl+C huỷ gọn. Mã thoát 0 chỉ khi mọi lượt hoàn tất không lỗi.
 - Báo cáo JSON: từng lượt (prompt, finalText, toolCalls, permissions, questions, planFinal, error, durationMs), usage và status. Mọi đầu ra đi qua redactor.
   Call lỗi/bị từ chối (`status` khác `ok`) có thêm `toolCalls[].error`: text kết quả tool mà model nhìn thấy (đã redact, gộp một dòng, tối đa 300 ký tự) để chẩn đoán nguyên nhân như `INVALID_INPUT`; call `ok` không có trường này. `evidence` vẫn không chứa input/path/nội dung.

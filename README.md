@@ -99,7 +99,7 @@ In a writable scratch project, choose a direct model backend (`fyn`), then ask: 
 
 Durable history is retained separately from token-budgeted model context. Extractive checkpoints preserve user constraints, mutation receipts and recent turns; if critical context cannot fit safely, the turn reports a limit. No approval is restored by history, resume or fork. See [recovery architecture](docs/adr/0030-durable-conversation-recovery.md) and [fixture/process acceptance](docs/delivery/conversation-recovery.md).
 
-Rename compatibility: private workspace imports now use `@cosmew/*`; `CosmewError` is the canonical exported error, with `HannesError` retained as the same constructor. Persisted backend IDs (including `hannes`), database schema and authorization rules are unchanged. Historical ADRs retain the old product name. See [ADR 0031](docs/adr/0031-cosmew-project-rename.md).
+Rename compatibility: private workspace imports now use `@cosmew/*`; `CosmewError` is the canonical exported error, with `HannesError` retained as the same constructor. Persisted backend IDs (including `hannes`), database schema and authorization rules are unchanged. Historical ADRs retain the old product name. See [ADR 0076](docs/adr/0076-cosmew-project-rename.md).
 
 ## Command sandbox
 

@@ -107,6 +107,9 @@ export class SandboxProxy {
         if (address && typeof address === 'object') resolve(`http://127.0.0.1:${address.port}`);
         else reject(new Error('proxy did not bind'));
       });
+    }).catch(error => {
+      this.starting = undefined;
+      throw error;
     });
     return this.starting;
   }

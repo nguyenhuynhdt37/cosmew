@@ -4,7 +4,7 @@
 
 ## 1. Mục đích và phạm vi
 
-Hannes là MCP Host; manager tạo một Client cho mỗi Server connection. Server cung cấp tools/resources/prompts; tích hợp theo SDK chính thức, không viết lại protocol.
+Cosmew là MCP Host; manager tạo một Client cho mỗi Server connection. Server cung cấp tools/resources/prompts; tích hợp theo SDK chính thức, không viết lại protocol.
 
 ## 2. Trách nhiệm sở hữu
 
@@ -12,7 +12,7 @@ MCP package sở hữu discovery, namespacing, client connections, negotiated ca
 
 ## 3. Ngoài trách nhiệm
 
-Không biến remote server thành trusted code, không cấp toàn bộ shell/network credentials, không thay tool dispatcher. Hannes server HTTP/WebSocket không đồng nghĩa MCP Server; expose Hannes như MCP Server là capability tương lai riêng.
+Không biến remote server thành trusted code, không cấp toàn bộ shell/network credentials, không thay tool dispatcher. Cosmew server HTTP/WebSocket không đồng nghĩa MCP Server; expose Cosmew như MCP Server là capability tương lai riêng.
 
 ## 4. Input, output và dữ liệu sở hữu
 
@@ -24,11 +24,11 @@ Discover không execute → validate config/trust → connect stdio hoặc Strea
 
 ## 6. Dependencies và interface boundaries
 
-Depend contracts/security; official SDK split v2 client/core packages dự kiến. Tool registrations qua injected port, tránh mcp↔tools. SDK semver v2 khác protocol negotiated revision. MCP Streamable HTTP là transport riêng, không dùng WebSocket của Hannes.
+Depend contracts/security; official SDK split v2 client/core packages dự kiến. Tool registrations qua injected port, tránh mcp↔tools. SDK semver v2 khác protocol negotiated revision. MCP Streamable HTTP là transport riêng, không dùng WebSocket của Cosmew.
 
 ## 7. Luồng sự kiện
 
-Host discover → Client initialize → Server capabilities → Client tools/list → Hannes registration → User/model tool request → Hannes permission → Client tools/call → Server result → validate → transcript. Resources/read và prompts/get có scope riêng; list_changed refresh theo server support.
+Host discover → Client initialize → Server capabilities → Client tools/list → Cosmew registration → User/model tool request → Cosmew permission → Client tools/call → Server result → validate → transcript. Resources/read và prompts/get có scope riêng; list_changed refresh theo server support.
 
 ## 8. Errors, cancellation và recovery
 

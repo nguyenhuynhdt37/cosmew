@@ -61,10 +61,19 @@ Model picker: ←/→ đổi effort, `s` chỉ cho phiên này. Effort slider (`
 
 ## 5. Transcript viewer (Ctrl+O) và cuộn (fullscreen)
 
-Transcript viewer: `q`, Ctrl+C, Esc thoát · `?` bảng phím · `{` / `}` nhảy prompt trước/sau · `[` ghi toàn bộ hội thoại ra scrollback gốc của terminal · `v` mở bằng `$VISUAL`/`$EDITOR` ·
-↑/↓ cuộn (khung `L08`: "↑/↓ to scroll · v to open in code").
-Scroll (fullscreen): wheel = 1 dòng · PageUp/PageDown nửa viewport · Ctrl+Home đầu · Ctrl+End cuối + bật auto-follow · chip `Jump to bottom · fn+↓ to scroll`.
-Chọn text: Shift+←/→/↑/↓ mở rộng, Shift+Home/End tới đầu/cuối dòng, Ctrl+Shift+C / Cmd+C copy. Chuột (nếu Ink không hỗ trợ: gap, ghi rõ).
+Transcript viewer: `q`, Ctrl+C, Esc thoát · `?` bật/tắt legend (11 mục, sinh từ keymap đang dùng) ·
+`{` / `}` nhảy prompt trước/sau · `[` print to scrollback · `v` mở bản sao bằng `$VISUAL`/`$EDITOR`;
+không có editor: `no $VISUAL/$EDITOR set`, không suspend terminal.
+
+`/` mở search, chữ gõ (kể cả j/k/g/q/n) vào query. Enter giữ query khớp và đóng bar; Esc huỷ về query đã giữ,
+Esc tiếp theo thoát viewer. Khi bar đóng, `n`/`N` cycle matches (wrap); footer `n/N to navigate`, badge `N of M`.
+Bar: `Search transcript…`, `indexing…`, `indexed in <ms>ms`, `no matches`; index/query scan chia chunk, chỉ tạo khi cần.
+Ctrl+E show/collapse 30-message window chỉ ở inline; fullscreen history paging vô hiệu hoá toggle theo B4/B7.
+
+Cuộn viewer: ↑/↓, j/k, Ctrl+N/P từng dòng; Ctrl+U/D nửa viewport; space/b, Ctrl+F/B một viewport;
+g/G, Home/End đầu/cuối. PageUp/PageDown giữ nửa viewport; Ctrl+Home/End giữ đầu/cuối + follow.
+Wheel/selection giữ hành vi hiện có. Footer strict-fit và legend 100/40 cột theo
+[reference 2.1.330](transcript-mode-parity.md); live search, renderer normalization và latency host: **Needs verification**.
 
 ## 6. Tìm lịch sử (Ctrl+R, fullscreen)
 

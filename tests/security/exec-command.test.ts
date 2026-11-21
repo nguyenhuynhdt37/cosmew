@@ -9,9 +9,11 @@ import {
   ToolDispatcher,
   SeatbeltRuntime,
   platformCommandRuntime,
+  NativeCommandRuntime,
   HeadTailBuffer,
   plainTerminalText,
   commandGrantTarget,
+  DEFAULT_SANDBOX_CONFIG,
 } from '@cosmew/tools';
 import {runProcess} from '../../packages/tools/src/exec/process';
 import {waitFor} from '../process-fixtures/observe';
@@ -77,6 +79,9 @@ test('platforms without a native sandbox are closed, without an unsafe fallback'
       workspace: f.workspace,
       grants: new SessionGrants(),
       commands,
+      // Closed only when unsandboxed commands are forbidden; with them allowed the tool stays offered
+      // (each unsandboxed run needs its own approval) and sandbox-required commands still fail closed.
+      sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, allowUnsandboxed: false}),
       approve: async () => {
         prompts++;
         return 'once';
@@ -95,6 +100,21 @@ test('platforms without a native sandbox are closed, without an unsafe fallback'
     expect(await invoke(tools, {cmd: 'touch forbidden'})).toMatchObject({status: 'error', code: 'SANDBOX_UNAVAILABLE'});
   }
   expect(prompts).toBe(0);
+  expect(existsSync(join(f.root, 'forbidden'))).toBe(false);
+  // Unsandboxed commands allowed (default): the tool is offered, a sandbox-required command still fails closed.
+  const open = new ToolDispatcher({
+    workspace: f.workspace,
+    grants: new SessionGrants(),
+    commands: new NativeCommandRuntime({workspaceRoot: f.root, platform: 'win32'}),
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, enabled: true, allowUnsandboxed: true}),
+    approve: async () => {
+      prompts++;
+      return 'once';
+    },
+    redact: t => t,
+  });
+  expect(open.descriptors().some(t => t.name === 'exec_command')).toBe(true);
+  expect(await invoke(open, {cmd: 'touch forbidden'})).toMatchObject({status: 'error', code: 'SANDBOX_UNAVAILABLE'});
   expect(existsSync(join(f.root, 'forbidden'))).toBe(false);
 });
 

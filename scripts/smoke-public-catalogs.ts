@@ -1,15 +1,17 @@
+// Canonical opt-in: COSMEW_LIVE_PUBLIC=1.
+import {scriptEnvironment} from './environment';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
-if (process.env.HANNES_LIVE_PUBLIC !== '1') {
-  console.error('Set HANNES_LIVE_PUBLIC=1 to contact public OpenRouter and Models.dev catalogs (no generation).');
+if (scriptEnvironment('LIVE_PUBLIC') !== '1') {
+  console.error('Set COSMEW_LIVE_PUBLIC=1 to contact public OpenRouter and Models.dev catalogs (no generation).');
   process.exit(1);
 }
-const root = mkdtempSync(join(tmpdir(), 'hannes-public-smoke-'));
+const root = mkdtempSync(join(tmpdir(), 'cosmew-public-smoke-'));
 async function run(args: string[]) {
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-    env: {...process.env, HANNES_HOME: root},
+    env: {...process.env, COSMEW_HOME: root},
     stdout: 'pipe',
     stderr: 'pipe',
   });

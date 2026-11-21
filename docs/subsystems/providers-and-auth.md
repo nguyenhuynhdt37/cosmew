@@ -22,7 +22,7 @@ Runtime arrows to injected implementations do not add compile-time package depen
 
 ## Configure and connect
 
-Use `bun run hannes` as the local command prefix below; `hannes` is also the workspace CLI bin when Bun's bin directory is on PATH. `bun run hannes --help` lists all options.
+Use `bun run cosmew` as the local command prefix below; `cosmew` is also the workspace CLI bin when Bun's bin directory is on PATH. `bun run cosmew --help` lists all options.
 
 - `providers list` shows configured entries and available presets separately. Presets: OpenAI Responses, Anthropic Messages, Gemini, OpenRouter Chat and Ollama Chat.
 - `providers add <id>` accepts `--url`, `--protocol`, `--catalog`, `--auth`, `--name`, `--timeout-ms`. Adding a provider never claims connection success. To change an endpoint, remove its accounts then remove/recreate the provider; in-flight bindings never silently change.
@@ -35,35 +35,35 @@ A new identity is first `unvalidated`. Missing/rejected credentials become `inva
 ## Gateway URL + model
 
 ```sh
-bun run hannes providers add my-9router --url https://your-gateway.example/v1 --protocol responses --catalog manual
-bun run hannes auth login --provider my-9router --alias router-main --model your-model-id
-bun run hannes model doctor --generate
-bun run hannes
+bun run cosmew providers add my-9router --url https://your-gateway.example/v1 --protocol responses --catalog manual
+bun run cosmew auth login --provider my-9router --alias router-main --model your-model-id
+bun run cosmew model doctor --generate
+bun run cosmew
 ```
 
 This implements the user's clarified 9Router workflow without assuming a vendor/project. `--catalog manual` skips `/models` and makes a real small request to the chosen model for validation; arbitrary saved strings are not login success. For a Chat gateway choose `--protocol chat`; usage streaming extensions are off by default on custom Chat endpoints. Add `--stream-usage` only if the endpoint supports `stream_options.include_usage`. OpenRouter/Ollama presets enable it. Unknown usage is null.
 
-Ollama uses `http://127.0.0.1:11434/v1` for Chat and `/api/tags` for discovery. Start/install Ollama yourself and pull a model first; Hannes never installs a local daemon. Remote endpoints require HTTPS. HTTP is allowed only on explicit loopback hosts. URL credentials, query strings, fragments and redirects are rejected. Credentials never move to another origin through redirects.
+Ollama uses `http://127.0.0.1:11434/v1` for Chat and `/api/tags` for discovery. Start/install Ollama yourself and pull a model first; Cosmew never installs a local daemon. Remote endpoints require HTTPS. HTTP is allowed only on explicit loopback hosts. URL credentials, query strings, fragments and redirects are rejected. Credentials never move to another origin through redirects.
 
 ## Models and accounts
 
 ```sh
-bun run hannes models list --account personal
-bun run hannes models search claude --account work
-bun run hannes models info <model-id> --account work
-bun run hannes models select <model-id> --account work
-bun run hannes models add <manual-model-id> --account work
-bun run hannes models list --offline
-bun run hannes models sync-metadata
-bun run hannes accounts list
-bun run hannes accounts use personal
-bun run hannes accounts rename personal --alias personal-new
-bun run hannes auth status --account personal-new
-bun run hannes auth logout --account personal-new
-bun run hannes accounts remove personal-new
+bun run cosmew models list --account personal
+bun run cosmew models search claude --account work
+bun run cosmew models info <model-id> --account work
+bun run cosmew models select <model-id> --account work
+bun run cosmew models add <manual-model-id> --account work
+bun run cosmew models list --offline
+bun run cosmew models sync-metadata
+bun run cosmew accounts list
+bun run cosmew accounts use personal
+bun run cosmew accounts rename personal --alias personal-new
+bun run cosmew auth status --account personal-new
+bun run cosmew auth logout --account personal-new
+bun run cosmew accounts remove personal-new
 ```
 
-IDs are UUIDs independent of aliases/provider/model IDs. Alias uniqueness is global to avoid ambiguous commands. A selected model is saved as the account default. Using an account without a default clears the current selection; select a model before requesting generation. `models select --project` stores an explicit preference keyed by the current absolute directory in private user state, not in a repository file; `hannes --project` uses it. Hannes does not auto-load executable or repository provider configuration.
+IDs are UUIDs independent of aliases/provider/model IDs. Alias uniqueness is global to avoid ambiguous commands. A selected model is saved as the account default. Using an account without a default clears the current selection; select a model before requesting generation. `models select --project` stores an explicit preference keyed by the current absolute directory in private user state, not in a repository file; `cosmew --project` uses it. Cosmew does not auto-load executable or repository provider configuration.
 
 Catalog caches are account-specific and endpoint-fingerprinted, with fetch times. Offline fallback occurs only for transport/timeouts, never to hide auth/protocol errors. Manual records remain unknown until an invocation succeeds; even success on one operation does not establish tools/vision/reasoning compatibility. `--capability tools|streaming|vision|reasoning|text` filters verified fields; unknown does not count as supported. Current discovered/manual records keep capabilities unknown. There is no fabricated fixed model list.
 
@@ -72,22 +72,22 @@ Catalog caches are account-specific and endpoint-fingerprinted, with fetch times
 ## Chat and scripts
 
 ```sh
-bun run hannes
-printf 'Hello\n' | bun run hannes run --json
-bun run hannes --max-output-tokens 1024
+bun run cosmew
+printf 'Hello\n' | bun run cosmew run --json
+bun run cosmew --max-output-tokens 1024
 ```
 
-Start `bun run hannes` and type `/login`; no prior account/model configuration is required. The guided wizard lists existing accounts and provider presets, supports new gateways through URL/protocol/model, hidden OS-keyring entry or environment references, validates the connection, then selects a model and starts fresh context. Menu answers accept numbers/IDs; model lists show up to 20 entries at once and accept search keywords. `/login <alias-or-id>` reuses or reauthenticates a stable account. `/logout [alias-or-id]` deletes local credentials through the same account manager and leaves the CLI open; the current context is discarded on current-account logout. `/status` works while signed out. `/cancel` at a wizard question returns to chat; Ctrl-C exits 130.
+Start `bun run cosmew` and type `/login`; no prior account/model configuration is required. The guided wizard lists existing accounts and provider presets, supports new gateways through URL/protocol/model, hidden OS-keyring entry or environment references, validates the connection, then selects a model and starts fresh context. Menu answers accept numbers/IDs; model lists show up to 20 entries at once and accept search keywords. `/login <alias-or-id>` reuses or reauthenticates a stable account. `/logout [alias-or-id]` deletes local credentials through the same account manager and leaves the CLI open; the current context is discarded on current-account logout. `/status` works while signed out. `/cancel` at a wizard question returns to chat; Ctrl-C exits 130.
 
 Chat and the login wizard share one input owner with terminal history disabled and echo suppressed for secret entry, so login answers/keys are not submitted as chat. Hidden keys require a real terminal; piped wizard scripts must choose an environment reference. The real PTY test verifies key masking, history isolation, login, message send and logout using the native macOS credential store.
 
 Other interactive commands are `/models`, `/model <id>`, `/accounts [alias]`, `/status`, `/connect`, `/connect <provider> <alias> <ENV_NAME> [model-id]`, `/new`, `/exit`. Bare `/connect` opens the same login wizard; its argument form remains a scripting shortcut. `/accounts` or `/model` switching starts a fresh conversation; prior prompts are not forwarded. Unknown capability/tool requests fail closed. Generation errors do not switch endpoints or retry partial output. Ctrl-C aborts and exits 130; restart or explicitly reissue the failed turn. `run` reads a single message from stdin and exits nonzero on failure. There is no `--api-key` argument. `--json` on run returns one JSON response; other commands return JSON records/arrays.
 
-Transcript messages are durable, but resume/recovery commands are not implemented. Protect `~/.hannes` and disk encryption: SQLite stores prompts/responses without application-level encryption, and removing an account does not erase past conversations. No raw prompt telemetry or debug provider-body logs are enabled.
+Transcript messages are durable, but resume/recovery commands are not implemented. Protect `~/.cosmew` and disk encryption: SQLite stores prompts/responses without application-level encryption, and removing an account does not erase past conversations. No raw prompt telemetry or debug provider-body logs are enabled.
 
 ## Storage and troubleshooting
 
-The state root is `~/.hannes` or an explicitly set `HANNES_HOME`. It must be owned by the current user with mode 0700; the database is mode 0600. Insecure roots and direct store symlinks fail closed. SQLite schema 1 rejects newer schemas; no automatic downgrade. macOS uses Keychain, Linux explicitly requires Secret Service, Windows uses the package's credential-store backend. macOS has local runtime evidence; Linux/Windows remain pending. No keyring backend falls back to plaintext; use environment references where the backend is unavailable. Environment values remain accessible to your process/user and should be injected by a secret manager, not pasted into shell history.
+The state root is `~/.cosmew` or an explicitly set `COSMEW_HOME`. It must be owned by the current user with mode 0700; the database is mode 0600. Insecure roots and direct store symlinks fail closed. SQLite schema 1 rejects newer schemas; no automatic downgrade. macOS uses Keychain, Linux explicitly requires Secret Service, Windows uses the package's credential-store backend. macOS has local runtime evidence; Linux/Windows remain pending. No keyring backend falls back to plaintext; use environment references where the backend is unavailable. Environment values remain accessible to your process/user and should be injected by a secret manager, not pasted into shell history.
 
 | Diagnostic | Recovery |
 |---|---|
@@ -101,7 +101,7 @@ The state root is `~/.hannes` or an explicitly set `HANNES_HOME`. It must be own
 | BUDGET | Refresh advisory metadata or explicitly change the estimated-cost limit; unknown pricing fails closed. This guard is not a provider billing ceiling. |
 | UNSUPPORTED | API credentials or official CLI separately; delegated agents require a separate security integration. |
 
-Logout deletes the local keyring entry and clears selections, project references and catalog; API keys have no standard remote revoke endpoint, so revoke them in the provider console. Environment refs are fenced locally; Hannes cannot unset your parent shell variables. Authentication generations prevent late validations from reviving a logged-out/rotated account. The same root policy is rechecked for new HTTP operations and streamed wire chunks, but cancellation cannot undo provider processing already accepted.
+Logout deletes the local keyring entry and clears selections, project references and catalog; API keys have no standard remote revoke endpoint, so revoke them in the provider console. Environment refs are fenced locally; Cosmew cannot unset your parent shell variables. Authentication generations prevent late validations from reviving a logged-out/rotated account. The same root policy is rechecked for new HTTP operations and streamed wire chunks, but cancellation cannot undo provider processing already accepted.
 
 
 ## Provider Connect TUI and canonical commands

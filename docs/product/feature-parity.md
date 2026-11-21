@@ -1,8 +1,8 @@
 # Feature parity theo capability
 
-Đây là backlog mục tiêu; mọi hàng **Not implemented**. Nguồn tham khảo mô tả công khai, không chứng minh Hannes tương đương.
+Đây là backlog mục tiêu; mọi hàng **Not implemented**. Nguồn tham khảo mô tả công khai, không chứng minh Cosmew tương đương.
 
-| Capability | Cảm hứng | Đích Hannes | Acceptance / phase |
+| Capability | Cảm hứng | Đích Cosmew | Acceptance / phase |
 |---|---|---|---|
 | Headless agent và tools | Codex, Goose | Một loop độc lập UI | P1: task đọc/chỉnh sửa có kết quả xác thực |
 | Provider abstraction | OpenCode | 9Router trước; adapter đổi endpoint | P1: fixture tool call/usage/error qua cùng contract |

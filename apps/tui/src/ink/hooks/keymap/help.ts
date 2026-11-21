@@ -92,3 +92,34 @@ export function shortcutColumns(keymap: Keymap, capabilities: HelpCapabilities):
   }
   return columns;
 }
+
+/** B3's transcript legend; prefer its displayed aliases only while they remain bound. */
+export function transcriptLegend(keymap: Keymap, editorName = 'editor'): string[] {
+  const label = (action: string, preferred?: readonly string[], context: KeyContext = 'Transcript') => {
+    const chords = chordsFor(keymap, context, action);
+    const shown = preferred?.filter(chord => chords.includes(chord));
+    return (shown?.length ? shown : chords).map(chord => {
+      const parsed = parseChord(chord);
+      return (parsed.ok ? displayChord(parsed.value) : chord).replace(/^shift\+([a-z])$/, (_, letter: string) =>
+        letter.toUpperCase(),
+      );
+    });
+  };
+  const keys = (action: string, preferred?: readonly string[]) => label(action, preferred).join('/') || 'unbound';
+  const pair = (a: string, b: string, ap: string[], bp: string[]) =>
+    [...label(a, ap), ...label(b, bp)].join('/') || 'unbound';
+  const half = pair('scroll:halfPageUp', 'scroll:halfPageDown', ['ctrl+u'], ['ctrl+d']);
+  return [
+    `${keys('transcript:exit', ['q'])}/${label('app:toggleTranscript', undefined, 'Global').join('/') || 'unbound'} to exit`,
+    `${keys('transcript:help')} to close`,
+    `${[...label('scroll:lineUp', ['up']), ...label('scroll:lineDown', ['down']), ...label('scroll:lineDown', ['j']), ...label('scroll:lineUp', ['k'])].filter((key, at, all) => all.indexOf(key) === at).join('/')} to scroll`,
+    `${half === 'ctrl+u/ctrl+d' ? 'ctrl+u/d' : half} to move half a page`,
+    `${pair('scroll:fullPageDown', 'scroll:fullPageUp', ['space'], ['b'])} to move a page`,
+    `${pair('scroll:top', 'scroll:bottom', ['g'], ['shift+g'])} to go to top/bottom`,
+    `${pair('transcript:previousPrompt', 'transcript:nextPrompt', ['{'], ['}'])} to jump between prompts`,
+    `${keys('transcript:search')} to search`,
+    `${pair('transcript:nextMatch', 'transcript:previousMatch', ['n'], ['shift+n'])} to cycle matches`,
+    `${keys('transcript:dumpScrollback')} to print to scrollback`,
+    `${keys('transcript:openEditor')} to open in ${editorName}`,
+  ];
+}

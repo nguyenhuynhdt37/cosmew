@@ -77,12 +77,29 @@ function frameLines(frame: string | undefined): string[] {
   return (frame ?? '').replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '').split('\n');
 }
 
-function openSized(columns: number, rows: number, debug = true, answerLines = 0, hang = false) {
+function openSized(
+  columns: number,
+  rows: number,
+  debug = true,
+  answerLines = 0,
+  hang = false,
+  historyItems = 0,
+  historyText = (n: number) => `history ${n} needle`,
+) {
   const prompts: string[] = [];
+  let finishStreaming = () => {};
+  let interrupted = false;
   let client: ReturnType<typeof dialogFixture>['client'];
   const fixture = dialogFixture({
     validateAccount: async () => ({models: 1, validation: 'fixture'}),
-    startSession: () => ({id: 'session-1', selection, messages: []}),
+    startSession: () => ({
+      id: 'session-1',
+      selection,
+      messages: Array.from({length: historyItems}, (_, n) => ({
+        role: n % 2 ? ('assistant' as const) : ('user' as const),
+        content: historyText(n),
+      })),
+    }),
     async *sendTurn(_id, content, signal): AsyncIterable<ModelEvent> {
       prompts.push(content);
       if (answerLines) {
@@ -90,7 +107,16 @@ function openSized(columns: number, rows: number, debug = true, answerLines = 0,
           type: 'textDelta',
           text: Array.from({length: answerLines}, (_, index) => `answer line ${index + 1}`).join('\n\n'),
         };
-        if (hang) await new Promise<void>(resolve => signal?.addEventListener('abort', () => resolve()));
+        if (hang) {
+          await new Promise<void>(resolve => {
+            finishStreaming = resolve;
+            signal?.addEventListener('abort', () => {
+              interrupted = true;
+              resolve();
+            });
+          });
+          if (!signal?.aborted) yield {type: 'textDelta', text: '\n\nstream completed'};
+        }
         return;
       }
       yield {type: 'toolCallComplete', call: {id: 'read-1', name: 'read', input: {path: 'file'}}};
@@ -118,6 +144,7 @@ function openSized(columns: number, rows: number, debug = true, answerLines = 0,
     },
   });
   client = fixture.client;
+  if (historyItems) client.createSession();
   const stdout = new SizedStream(columns, rows);
   const stdin = new SizedStream(columns, rows);
   const stderr = new SizedStream(columns, rows);
@@ -146,6 +173,8 @@ function openSized(columns: number, rows: number, debug = true, answerLines = 0,
   return {
     fixture,
     prompts,
+    finishStreaming: () => finishStreaming(),
+    interrupted: () => interrupted,
     stdout,
     stdin,
     rows: () => frameLines(stdout.lastFrame()),
@@ -173,8 +202,16 @@ async function waitFor(read: () => string, text: string) {
 }
 
 /** Opens the app past the startup gate, then returns the ready view. */
-async function openReady(columns: number, rows: number, debug = true, answerLines = 0, hang = false) {
-  const view = openSized(columns, rows, debug, answerLines, hang);
+async function openReady(
+  columns: number,
+  rows: number,
+  debug = true,
+  answerLines = 0,
+  hang = false,
+  historyItems = 0,
+  historyText = (n: number) => `history ${n} needle`,
+) {
+  const view = openSized(columns, rows, debug, answerLines, hang, historyItems, historyText);
   await waitFor(view.fullFrame, 'Accessing workspace:');
   view.stdin.write('\u001b[A');
   await settle();
@@ -555,6 +592,206 @@ test('a narrow short permission keeps NO SANDBOX and the command above active ch
   }
 });
 
+test('detailed transcript toggles during streaming, shows working and lets the turn finish', async () => {
+  const view = await openReady(120, 30, true, 2, true);
+  try {
+    view.stdin.write('go');
+    await settle();
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'answer line 2');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'working · Showing detailed transcript');
+    expect(view.fullFrame()).not.toContain('verbose');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Tip:');
+    expect(view.fullFrame()).not.toContain('Showing detailed transcript');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'working · Showing detailed transcript');
+    expect(view.interrupted()).toBe(false);
+    view.finishStreaming();
+    await waitFor(view.fullFrame, 'stream completed');
+    await waitFor(view.fullFrame, 'verbose');
+    expect(view.fullFrame()).not.toContain('working ·');
+    expect(view.interrupted()).toBe(false);
+    expect(view.prompts).toEqual(['go']);
+  } finally {
+    view.unmount();
+  }
+});
+
+for (const kind of ['permission', 'question'] as const)
+  test(`detailed transcript shows dialog waiting during a ${kind} overlay`, async () => {
+    const view = await openReady(120, 36);
+    try {
+      if (kind === 'permission') {
+        view.stdin.write('read it');
+        await settle();
+        view.stdin.write('\r');
+        await waitFor(view.fullFrame, '3. No');
+      } else {
+        void view.fixture.client.askUser([
+          {
+            id: 'choice',
+            header: 'Choice',
+            question: 'Which option?',
+            options: [
+              {label: 'First', description: 'First option'},
+              {label: 'Second', description: 'Second option'},
+            ],
+          },
+        ]);
+        await waitFor(view.fullFrame, 'Which option?');
+      }
+      view.stdin.write('\x0f');
+      await waitFor(view.fullFrame, 'dialog waiting · Showing detailed transcript');
+      expect(view.fullFrame()).not.toContain('verbose');
+      expect(view.rows().length).toBeLessThanOrEqual(36);
+      expect(
+        kind === 'permission'
+          ? view.fixture.client.listPendingPermissions()
+          : view.fixture.client.listPendingQuestions(),
+      ).toHaveLength(1);
+      view.stdin.write('\x0f');
+      await settle();
+      expect(view.fullFrame()).not.toContain('Showing detailed transcript');
+      expect(
+        kind === 'permission'
+          ? view.fixture.client.listPendingPermissions()
+          : view.fixture.client.listPendingQuestions(),
+      ).toHaveLength(1);
+    } finally {
+      view.unmount();
+    }
+  });
+
+/** Answer paragraphs are two terminal rows apart; recover the visible content offset from any numbered row. */
+function answerPosition(view: Awaited<ReturnType<typeof openReady>>): number {
+  const rows = view.rows();
+  const row = rows.findIndex(line => /answer line \d+/.test(line));
+  expect(row, view.fullFrame()).toBeGreaterThanOrEqual(0);
+  return Number(/answer line (\d+)/.exec(rows[row]!)![1]) * 2 - row;
+}
+
+for (const [family, up, down, distance] of [
+  ['j/k', 'k', 'j', 1],
+  ['Ctrl+P/N', '\x10', '\x0e', 1],
+  ['arrows', '\x1b[A', '\x1b[B', 1],
+  ['half viewport', '\x15', '\x04', 14],
+  ['Ctrl+B/F', '\x02', '\x06', 28],
+  ['b/space', 'b', ' ', 28],
+] as const)
+  test(`detailed transcript scroll keys: ${family} move the expected rows without editing the draft`, async () => {
+    const view = await openReady(100, 30, true, 100);
+    try {
+      view.stdin.write('long answer');
+      await settle();
+      view.stdin.write('\r');
+      await waitFor(view.fullFrame, 'answer line 100');
+      // Keep the prompt empty: Ctrl+D must scroll rather than arm the global exit.
+      view.stdin.write('\x0f');
+      await waitFor(view.fullFrame, 'Showing detailed transcript');
+      // Footer uses two rows, leaving a 28-row viewport (half is 14).
+      expect(view.rows()).toHaveLength(30);
+      expect(isRule(view.rows()[28])).toBe(true);
+      view.stdin.write('\x1b[5~');
+      await settle();
+      view.stdin.write('\x1b[5~');
+      await settle();
+      view.stdin.write('\x1b[5~');
+      await settle();
+      const before = answerPosition(view);
+      view.stdin.write(up);
+      await settle();
+      expect(answerPosition(view)).toBe(before - distance);
+      view.stdin.write(down);
+      await settle();
+      expect(answerPosition(view)).toBe(before);
+      expect(view.fullFrame()).toContain('Showing detailed transcript');
+      expect(view.fullFrame()).not.toContain('Press Ctrl-D');
+      view.stdin.write('q');
+      await waitFor(view.fullFrame, 'manual mode on');
+      view.stdin.write('unchanged');
+      await settle();
+      expect(view.rows()[26]).toContain('❯ unchanged');
+    } finally {
+      view.unmount();
+    }
+  });
+
+for (const [family, top, bottom] of [
+  ['g/G', 'g', 'G'],
+  ['Home/End', '\x1b[H', '\x1b[F'],
+] as const)
+  test(`detailed transcript scroll keys: ${family} reach both ends`, async () => {
+    const view = await openReady(100, 30, true, 50);
+    try {
+      view.stdin.write('long answer');
+      await settle();
+      view.stdin.write('\r');
+      await waitFor(view.fullFrame, 'answer line 50');
+      view.stdin.write('\x0f');
+      await waitFor(view.fullFrame, 'Showing detailed transcript');
+      view.stdin.write(top);
+      await waitFor(view.fullFrame, 'Cosmew v');
+      expect(view.fullFrame()).not.toContain('answer line 50');
+      view.stdin.write(bottom);
+      await waitFor(view.fullFrame, 'answer line 50');
+      expect(view.fullFrame()).not.toContain('Jump to bottom');
+    } finally {
+      view.unmount();
+    }
+  });
+
+test('detailed transcript scroll aliases keep normal prompt typing and composer editing outside the mode', async () => {
+  const view = await openReady(100, 30, true, 1);
+  try {
+    for (const key of ['j', 'k', 'g', 'G', ' ', 'b', 'q', 'n']) {
+      view.stdin.write(key);
+      await settle();
+    }
+    expect(view.rows()[26]).toContain('❯ jkgG bqn');
+    // The normal composer still owns history navigation and Ctrl+D deletion.
+    view.stdin.write('\x1b[D');
+    await settle();
+    view.stdin.write('\x04');
+    await settle();
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'answer line 1');
+    expect(view.prompts).toEqual(['jkgG bq']);
+    view.stdin.write('\x10');
+    await settle();
+    expect(view.rows()[26]).toContain('❯ jkgG bq');
+    view.stdin.write('\x0e');
+    await settle();
+    expect(view.rows()[26]).not.toContain('jkgG bq');
+  } finally {
+    view.unmount();
+  }
+});
+
+for (const [label, key] of [
+  ['Esc', '\x1b'],
+  ['q', 'q'],
+  ['Ctrl+C', '\x03'],
+] as const)
+  test(`detailed transcript still exits with ${label} and restores composer focus`, async () => {
+    const view = await openReady(100, 30);
+    try {
+      view.stdin.write('kept draft');
+      await settle();
+      view.stdin.write('\x0f');
+      await waitFor(view.fullFrame, 'Showing detailed transcript');
+      view.stdin.write(key);
+      await waitFor(view.fullFrame, 'manual mode on');
+      expect(view.fullFrame()).not.toContain('Showing detailed transcript');
+      view.stdin.write('!');
+      await settle();
+      expect(view.rows()[26]).toContain('❯ kept draft!');
+    } finally {
+      view.unmount();
+    }
+  });
+
 test('detailed transcript: { and } jump between prompts, Ctrl+Home/Ctrl+End go to the ends, q leaves', async () => {
   const view = await openReady(100, 30, true, 40);
   try {
@@ -707,6 +944,194 @@ test('raw terminal replies never emit Escape or cancel workspace consent', async
     stdin.write('\x1b');
     await Bun.sleep(100);
     expect(escapes).toBe(1); // Actual Escape still reaches the input layer.
+  } finally {
+    view.unmount();
+  }
+});
+
+test('detailed transcript Ctrl+E reveals and collapses inline history, resets on entry and yields to the composer', async () => {
+  const view = await openReady(120, 0, true, 1);
+  try {
+    for (let n = 0; n < 17; n++) {
+      view.stdin.write(`window-prompt-${String(n).padStart(3, '0')}`);
+      await settle();
+      view.stdin.write('\r');
+      await settle();
+    }
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Ctrl+E to show 4 previous messages');
+    expect(view.fullFrame()).not.toContain('window-prompt-000');
+    view.stdin.write('\x05');
+    await waitFor(view.fullFrame, 'ctrl+e to collapse');
+    expect(view.fullFrame()).toContain('window-prompt-000');
+    expect(view.fullFrame()).toContain('Ctrl+E to hide 4 previous messages');
+    view.stdin.write('\x05');
+    await waitFor(view.fullFrame, 'Ctrl+E to show 4 previous messages');
+    expect(view.fullFrame()).not.toContain('window-prompt-000');
+    view.stdin.write('\x05');
+    await waitFor(view.fullFrame, 'ctrl+e to collapse');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'manual mode on');
+    view.stdin.write('draft');
+    await settle();
+    view.stdin.write('\x01');
+    await settle();
+    view.stdin.write('\x05');
+    await settle();
+    view.stdin.write('!');
+    await settle();
+    expect(view.fullFrame()).toContain('❯ draft!');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Ctrl+E to show 4 previous messages');
+    expect(view.fullFrame()).not.toContain('window-prompt-000');
+  } finally {
+    view.unmount();
+  }
+}, 15000);
+
+test('detailed transcript Ctrl+E is disabled while fullscreen history scrolling is active', async () => {
+  const view = await openReady(120, 30, true, 50);
+  try {
+    view.stdin.write('long answer');
+    await settle();
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'answer line 50');
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    view.stdin.write('g');
+    await settle();
+    const before = view.fullFrame();
+    view.stdin.write('\x05');
+    await settle();
+    expect(view.fullFrame()).toBe(before);
+    expect(view.fullFrame()).not.toContain('ctrl+e to collapse');
+    expect(view.fullFrame()).not.toContain('previous messages');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('short inline detailed transcript suppresses the footer show-all hint', async () => {
+  const view = await openReady(120, 0, true, 1);
+  try {
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    expect(view.fullFrame()).not.toContain('ctrl+e to show all');
+    expect(view.fullFrame()).not.toContain('previous messages');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('detailed transcript search owns text, keeps on Enter, cycles and cancels before exit', async () => {
+  const view = await openReady(100, 30, true, 80);
+  try {
+    view.stdin.write('inspect');
+    await settle();
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'answer line 80');
+    view.stdin.write('\x0f');
+    await settle();
+    view.stdin.write('/');
+    await waitFor(view.fullFrame, 'Search transcript…');
+    view.stdin.write('jkgqnx');
+    await waitFor(view.fullFrame, 'jkgqnx');
+    view.stdin.write('\x7f');
+    await settle();
+    expect(view.fullFrame()).not.toContain('jkgqnx');
+    await waitFor(view.fullFrame, 'jkgqn');
+    expect(view.fullFrame()).toContain('no matches');
+    view.stdin.write('\x1b');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    view.stdin.write('/');
+    await settle();
+    view.stdin.write('answer line');
+    await waitFor(view.fullFrame, '1 of 80');
+    expect(view.fullFrame()).toContain('answer line 1');
+    view.stdin.write('\r');
+    await waitFor(view.fullFrame, 'n/N to navigate');
+    view.stdin.write('N');
+    await waitFor(view.fullFrame, '80 of 80');
+    expect(view.fullFrame()).toContain('answer line 80');
+    view.stdin.write('n');
+    await waitFor(view.fullFrame, '1 of 80');
+    expect(view.fullFrame()).toContain('answer line 1');
+    view.stdin.write('/');
+    await waitFor(view.fullFrame, 'enter to keep');
+    view.stdin.write('\x1b');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    view.stdin.write('\x1b');
+    await waitFor(view.fullFrame, 'manual mode on');
+    expect(view.fullFrame()).not.toContain('Showing detailed transcript');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('detailed transcript search keeps a 5000-item history responsive while warming and revealing old matches', async () => {
+  const view = await openReady(100, 30, true, 0, false, 5000);
+  try {
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    view.stdin.write('/');
+    await waitFor(view.fullFrame, 'Search transcript…');
+    const start = performance.now();
+    view.stdin.write('jkgqn');
+    await new Promise<void>(resolve => setImmediate(resolve));
+    // A synchronous full-history scan/render would delay this input-turn callback.
+    expect(performance.now() - start).toBeLessThan(16.7);
+    await waitFor(view.fullFrame, 'jkgqn');
+    view.stdin.write('\x15');
+    await settle();
+    view.stdin.write('history 0');
+    await waitFor(view.fullFrame, '1 of 1');
+    await waitFor(view.fullFrame, 'history 0 needle');
+    // Search must reveal the oldest item through a bounded mounted window, not mount all 5000.
+    expect(view.fullFrame()).not.toContain('history 4999 needle');
+  } finally {
+    view.unmount();
+  }
+});
+
+for (const mode of ['search', 'legend'] as const)
+  test(`detailed transcript ${mode} yields focus and space to a new dialog`, async () => {
+    const view = await openReady(40, 24);
+    try {
+      view.stdin.write('\x0f');
+      await settle();
+      view.stdin.write(mode === 'search' ? '/' : '?');
+      await settle();
+      void view.fixture.client.askUser([
+        {
+          id: 'choice',
+          header: 'Choice',
+          question: 'Which option?',
+          options: [
+            {label: 'First', description: 'First option'},
+            {label: 'Second', description: 'Second option'},
+          ],
+        },
+      ]);
+      await waitFor(view.fullFrame, 'Which option?');
+      expect(view.fullFrame()).not.toContain('Search transcript…');
+      expect(view.fullFrame()).not.toContain('print to scrollback');
+      expect(view.fullFrame()).toContain('Second');
+      expect(view.rows()).toHaveLength(24);
+    } finally {
+      view.unmount();
+    }
+  });
+
+test('detailed transcript search reveals a match after wide emoji output', async () => {
+  const view = await openReady(40, 24, true, 0, false, 2, n => (n ? `${'🚀'.repeat(1000)} target` : 'prompt'));
+  try {
+    view.stdin.write('\x0f');
+    await settle();
+    view.stdin.write('/');
+    await settle();
+    view.stdin.write('target');
+    await waitFor(view.fullFrame, '1 of 1');
+    await waitFor(() => view.fullFrame().split('─')[0] ?? '', 'target');
   } finally {
     view.unmount();
   }

@@ -2,14 +2,14 @@
 
 **Not implemented.** Nguồn truy cập 2026-11-13: [SDK v2](https://ts.sdk.modelcontextprotocol.io/v2/), [v2.4.0 docs](https://github.com/modelcontextprotocol/typescript-sdk/tree/v2.4.0/docs), [upgrade guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/docs/migration/upgrade-to-v2.md), [OAuth client](https://github.com/modelcontextprotocol/typescript-sdk/blob/v2.4.0/docs/clients/oauth.md), [transport API](https://ts.sdk.modelcontextprotocol.io/v2/api/shared/transport.html). Đây là evidence documentation, chưa là Bun runtime tests hay npm package pins.
 
-Hannes là Host, mỗi configured server có một Client connection; MCP Server là external process/service cung cấp capabilities. Dùng SDK chính thức. SDK major v2 không phải protocol version 2: initialize negotiate protocol revision độc lập. Pin client/core/server/node adapters theo cùng release sau dependency review; Hannes chỉ cần client để consume, không mặc nhiên cần server package. v1 @modelcontextprotocol/sdk không drop-in source-compatible với v2 split packages; stdio import chuyển vào client/stdio hoặc server/stdio, không root neutral barrels. v2 bỏ SSE/WebSocket transports trong surface đã khảo sát; Hannes WebSocket event transport không liên quan.
+Cosmew là Host, mỗi configured server có một Client connection; MCP Server là external process/service cung cấp capabilities. Dùng SDK chính thức. SDK major v2 không phải protocol version 2: initialize negotiate protocol revision độc lập. Pin client/core/server/node adapters theo cùng release sau dependency review; Cosmew chỉ cần client để consume, không mặc nhiên cần server package. v1 @modelcontextprotocol/sdk không drop-in source-compatible với v2 split packages; stdio import chuyển vào client/stdio hoặc server/stdio, không root neutral barrels. v2 bỏ SSE/WebSocket transports trong surface đã khảo sát; Cosmew WebSocket event transport không liên quan.
 
-| Surface | Mapping Hannes | Invariant / acceptance |
+| Surface | Mapping Cosmew | Invariant / acceptance |
 |---|---|---|
 | stdio | Managed local process + SDK client transport | stdout chỉ protocol; env allowlist; crash unregister |
 | Streamable HTTP | SDK transport và OAuth provider | TLS/origin rules, session headers theo SDK; reconnect không replay effects |
 | Capabilities | Registry snapshot sau initialize | Không gọi feature không advertised |
-| tools | Namespaced descriptor → ToolPort | Hannes permission trước tools/call; output validation sau response |
+| tools | Namespaced descriptor → ToolPort | Cosmew permission trước tools/call; output validation sau response |
 | resources | Scoped list/read/subscription nếu supported | URI không tự fetch, limits/provenance/permission riêng |
 | prompts | Scoped list/get với arguments | Returned messages untrusted; không override policy |
 | notifications | SDK handlers → capability/events | list_changed refresh nếu advertised; epochs loại stale updates |
@@ -19,7 +19,7 @@ Lifecycle: discovered → configured → connecting → initializing → ready �
 
 ```mermaid
 sequenceDiagram
- participant H as Hannes Host
+ participant H as Cosmew Host
  participant C as SDK Client
  participant S as MCP Server
  H->>C: Approved server configuration

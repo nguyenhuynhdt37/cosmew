@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Headless UAT driver: runs the real Futryn agent (same startup/client/tool path as the TUI)
+ * Headless UAT driver: runs the real Cosmew agent (same startup/client/tool path as the TUI)
+ * Canonical state variable: COSMEW_HOME (legacy prefixes are read-only fallbacks).
  * over a list of prompts and writes a JSON report. See scripts/uat/README.md.
  *
  * `--approve all` auto-approves EVERY permission request. Use only against disposable projects.
@@ -18,7 +19,7 @@ export interface AgentRunOptions {
   prompts: string[];
   approve?: 'all' | 'none';
   turnTimeoutMs?: number;
-  /** Explicit state directory; defaults to the CLI's resolution (FUTRYN_HOME, HANNES_HOME, ~/.futryn, ~/.hannes). */
+  /** Explicit state directory; defaults to the CLI's resolution (COSMEW_HOME first; legacy environment and state roots are read-only fallbacks). */
   stateDir?: string;
   /** Existing application (tests); the driver then does not open or close one. */
   app?: Application;
@@ -140,7 +141,7 @@ export async function runAgent(options: AgentRunOptions): Promise<{report: Agent
     };
     const before = client.status();
     if (!before.activeAccount || !before.selection || !before.activeModel) {
-      log('ERROR: no account/model selected. Run `hannes auth` / `hannes model use` first. Status:');
+      log('ERROR: no account/model selected. Run `cosmew auth` / `cosmew model use` first. Status:');
       log(JSON.stringify(snapshot(), null, 2));
       report = {...report, status: JSON.parse(redact(JSON.stringify(snapshot())))};
       return {report: JSON.parse(redact(JSON.stringify(report))), exitCode: 2};

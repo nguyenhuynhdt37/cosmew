@@ -493,7 +493,9 @@ export class NativeCommandRuntime implements CommandRuntime {
   }
 
   async run(request: CommandRequest, signal?: AbortSignal): Promise<CommandOutcome> {
-    if (!this.availability().ok) throw new FutrynError('UNSUPPORTED');
+    if (this.closed || this.invalidWorkspaceReason) throw new FutrynError('UNSUPPORTED');
+    const sandbox = request.sandbox ?? READ_ONLY;
+    if (!sandbox.unsandboxed && !this.availability().ok) throw new FutrynError('UNSUPPORTED');
     signal?.throwIfAborted();
     // Completed background tasks already have bounded snapshots; reclaim their terminal slots
     // when admission needs one, without consuming any live session's pending output.
@@ -513,7 +515,6 @@ export class NativeCommandRuntime implements CommandRuntime {
     if (cwd.kind !== 'directory') throw new FutrynError('POLICY');
     if (this.workspaceRetargeted()) throw new FutrynError('POLICY');
 
-    const sandbox = request.sandbox ?? READ_ONLY;
     // Only an explicit, user-approved escalation (ADR 0053) skips the sandbox, and only for this
     // command. A sandbox that fails to start is reported; it is never replaced by this path.
     const argv =

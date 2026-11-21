@@ -23,7 +23,7 @@ TUI V2: [architecture decision](adr/0039-tui-v2-virtualized-transcript.md),
 
 Latest execution milestone: [ADR 0062](adr/0062-remove-docker-command-backend.md) — commands use the OS sandbox only. The Docker backend of [ADR 0032](adr/0032-contained-command-sessions.md), [ADR 0034](adr/0034-unified-exec-terminal-parity.md) and [ADR 0035](adr/0035-native-sandbox-default.md) is gone. Historical gate descriptions below do not enable it.
 
-Project/repository rename: [ADR 0031](adr/0031-cosmew-project-rename.md). Cosmew is the product; `fyn` is the short CLI command. Historical documents retain Hannes where recording earlier decisions.
+Project/repository rename: [ADR 0076](adr/0076-cosmew-project-rename.md). Cosmew is the product; `fyn` is the short CLI command. Historical documents retain legacy product names where recording earlier decisions.
 
 Current conversation recovery: [ADR 0030](adr/0030-durable-conversation-recovery.md), [acceptance matrix](delivery/conversation-recovery.md). Contract 1.12 / SQLite 4 preserve interrupted evidence without replaying tools.
 
@@ -38,13 +38,13 @@ Interactive startup and folder consent: [ADR 0014](adr/0014-interactive-startup-
 Current slash-command rules: [ADR 0013](adr/0013-canonical-slash-commands.md).
 Claude Code command-name and autocomplete parity: [ADR 0077](adr/0077-claude-slash-command-parity.md).
 
-Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/cosmew-tui-acceptance.md).
+Current Auto/Dark/Light themes: [ADR 0012](adr/0012-theme-naming-and-semantic-colors.md), [acceptance](delivery/futryn-tui-acceptance.md).
 
 Current provider-connect rebuild: [usage, command audit and acceptance](delivery/provider-connect-acceptance.md), [ADR 0007 and contract 1.1 migration](adr/0007-provider-connect-and-commands.md). These updates supersede older blanket OAuth/TUI/command limitations only for their stated scope.
 
 Fyn companion: [usage, lifecycle and verification](delivery/fyn-companion.md).
 
-> PA1 & TUI1 implementations are authorized: [PA1 plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md), [ADR 0006 (COSMEW TUI & Theme Engine)](adr/0006-cosmew-tui-and-theme-engine.md), [TUI1 Research](delivery/cosmew-tui-upstream-research.md), [TUI1 Acceptance](delivery/cosmew-tui-acceptance.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
+> PA1 & TUI1 implementations are authorized: [PA1 plan](delivery/provider-auth-plan.md), [ADR 0005](adr/0005-provider-auth-product.md), [ADR 0006 (COSMEW TUI & Theme Engine)](adr/0006-futryn-tui-and-theme-engine.md), [TUI1 Research](delivery/futryn-tui-upstream-research.md), [TUI1 Acceptance](delivery/futryn-tui-acceptance.md). Phase 0 feature descriptions below remain historical for unrelated subsystems.
 
 **Historical Phase 0 baseline follows.** The PA1 implementation and evidence are linked below; unrelated subsystems remain Not implemented. Đọc [quy tắc agents](../AGENTS.md) trước khi thay đổi repository. Nghiên cứu thực hiện 2026-11-13; tổng hợp/quality gate 2026-11-14. Không install/build/lint/test/start application trong Phase 0.
 
@@ -86,11 +86,11 @@ Fyn companion: [usage, lifecycle and verification](delivery/fyn-companion.md).
 
 ## Nguồn khảo sát và giới hạn bằng chứng
 
-Các URL/paths được nghiên cứu read-only. Snapshot code/docs là evidence về nguồn tham khảo, không chứng minh Hannes hoạt động hoặc upstream deployments có behavior bất biến. Main agent tổng hợp quyết định từ readers; không sao chép nguyên cấu trúc repository nào.
+Các URL/paths được nghiên cứu read-only. Snapshot code/docs là evidence về nguồn tham khảo, không chứng minh Cosmew hoạt động hoặc upstream deployments có behavior bất biến. Main agent tổng hợp quyết định từ readers; không sao chép nguyên cấu trúc repository nào.
 
 | Nguồn yêu cầu                                                       | Revision / paths đã khảo sát                                                                                                                                                                                                                                                                                                                                                                                                          | Kết luận dùng trong thiết kế                                                                                                        |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| [OpenCode](https://github.com/anomalyco/opencode)                   | `f6e0c2d0833ffe772035f221fed923e1cd5fb408`; packages/, packages/plugin/src/promise/plugin.ts, packages/plugin/src/effect/plugin.ts, packages/schema/src/config/plugin.ts                                                                                                                                                                                                                                                              | Separation contracts/protocol/core/interfaces; Hannes giữ baseline riêng; [ADR 0002](adr/0002-contracts-first.md)                   |
+| [OpenCode](https://github.com/anomalyco/opencode)                   | `f6e0c2d0833ffe772035f221fed923e1cd5fb408`; packages/, packages/plugin/src/promise/plugin.ts, packages/plugin/src/effect/plugin.ts, packages/schema/src/config/plugin.ts                                                                                                                                                                                                                                                              | Separation contracts/protocol/core/interfaces; Cosmew giữ baseline riêng; [ADR 0002](adr/0002-contracts-first.md)                   |
 | [Codex CLI](https://github.com/openai/codex)                        | `69231e119bfca0b14453515e97d99688ce1c47c9`; [core/config](https://github.com/openai/codex/blob/69231e119bfca0b14453515e97d99688ce1c47c9/codex-rs/core/src/config/mod.rs), [protocol models](https://github.com/openai/codex/blob/69231e119bfca0b14453515e97d99688ce1c47c9/codex-rs/protocol/src/models.rs), [session](https://github.com/openai/codex/blob/69231e119bfca0b14453515e97d99688ce1c47c9/codex-rs/core/src/session/mod.rs) | Tách policy/execution/state, không coi internal protocol là public plugin ABI; [ADR 0004](adr/0004-security-boundary.md)            |
 | [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | `39163dd30f703a79079e2d2446545cff3c453738`; docs/cordis-primer.md, vendor/README.md, packages/boot/app-boot/README.md, packages/boot/hmr/README.md, apps/cli/reference/README.md                                                                                                                                                                                                                                                      | Vendored Cordis, reversible effects, DI, profiles; A/B phải kiểm chứng; [analysis](compatibility/deepseek-cordis.md)                |
 | [Goose](https://github.com/aaif-goose/goose)                        | `73b0f040a81369b4f0654ef64074cd3cd654b1da`; [README](https://github.com/aaif-goose/goose/blob/73b0f040a81369b4f0654ef64074cd3cd654b1da/README.md), [crates/goose-agent/README.md](https://github.com/aaif-goose/goose/blob/73b0f040a81369b4f0654ef64074cd3cd654b1da/crates/goose-agent/README.md)                                                                                                                                     | Headless machinery/host interfaces, persisted approval trước UI; cancel không undo external actions                                 |
@@ -116,7 +116,7 @@ Current subscription and simplified login: [usage, prerequisites and evidence](d
 
 Commands/usage/context and continued multi-account chat: [usage and verification](delivery/commands-usage-context-acceptance.md), [ADR 0009](adr/0009-command-telemetry-and-account-continuation.md). This supersedes direct logout with a named confirmation and adds `/switch`, `/usage` (`/cost`) and `/context` within PA1/TUI1/SUB1.
 
-ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [usage and live evidence](delivery/subscription-auth.md). The bridge exposes only Hannes read/glob/grep after folder consent; native runtime tools remain denied.
+ChatGPT/Codex project reads: [ADR 0018](adr/0018-codex-read-tool-bridge.md), [usage and live evidence](delivery/subscription-auth.md). The bridge exposes only Cosmew read/glob/grep after folder consent; native runtime tools remain denied.
 
 Task 01 Project Context Loader: [usage, module changes and deterministic acceptance](delivery/project-context-loader.md), [ADR 0019 and pinned Codex research](adr/0019-project-context-loader.md). Project instructions are approved-workspace user context, not system/developer authority.
 

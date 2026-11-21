@@ -1,6 +1,6 @@
 # Provider and authentication verification matrix
 
-2026-11-14. **Product MVP acceptance: pending.** Implemented means executable Hannes code; fixture-tested means deterministic HTTP/subprocess tests; live-verified means a named operation actually contacted the service. No commercial generation is live-verified in this environment. Model count is not a support claim.
+2026-11-14. **Product MVP acceptance: pending.** Implemented means executable Cosmew code; fixture-tested means deterministic HTTP/subprocess tests; live-verified means a named operation actually contacted the service. No commercial generation is live-verified in this environment. Model count is not a support claim.
 
 | Provider/integration | Implemented path | Deterministic evidence | Live status / limitation |
 |---|---|---|---|
@@ -13,7 +13,7 @@
 | User's 9Router configuration | URL + chosen protocol + manual model or provider listing, as user clarified | Manual gateway login does real generation against fixture HTTP service | No service URL/model/credentials supplied; identity-specific protocol/live compatibility unverified |
 | Models.dev | Explicit advisory limits/prices sync, cached provenance | Normalization fixture; never upgrades unknown capabilities | Public metadata sync live passed; metadata is not provider entitlement/verified capabilities |
 
-All named live-pending providers are **implemented but pending live verification**, not production-certified. Tool-call normalization has fixtures; Hannes tool execution is disabled. Streaming is an adapter capability verified against fixtures, not automatically a verified property of every catalog model. Model capability fields remain unknown unless independently established; price metadata is advisory and unavailable values stay null.
+All named live-pending providers are **implemented but pending live verification**, not production-certified. Tool-call normalization has fixtures; Cosmew tool execution is disabled. Streaming is an adapter capability verified against fixtures, not automatically a verified property of every catalog model. Model capability fields remain unknown unless independently established; price metadata is advisory and unavailable values stay null.
 
 ## Additional provider assessment
 
@@ -35,22 +35,22 @@ The selection boundary does not expose SDK types, so adding a native adapter doe
 
 ## Authentication and subscription matrix
 
-| Mode | Hannes status | Evidence / alternative |
+| Mode | Cosmew status | Evidence / alternative |
 |---|---|---|
 | API key in OS secure storage | Implemented; native macOS keyring and CLI key-stdin tested | Disposable entry roundtrip/delete, CLI key-stdin lifecycle and a real terminal `/login` → chat → `/logout` with masked key/history checks against HTTP fixtures; Linux/Windows pending |
 | Environment variable reference | Implemented/tested | Only variable name persisted; logout fences identity, not the parent shell variable |
 | Explicit no-auth | Implemented/tested | Local/public configuration only; public discovery does not establish paid generation entitlement |
 | API key refresh | Not applicable | API keys are replaced via stable-ID reauthentication; no invented refresh/revoke protocol |
-| OpenAI ChatGPT/Codex | Official Codex CLI/SDK supports subscription auth; Hannes delegated integration Not implemented | Use official Codex CLI separately or an OpenAI API key. SDK is agent execution with its own tool/runtime surfaces, not raw API entitlement. |
-| Google/Gemini CLI subscription | Official sign-in documented for Gemini CLI/Code Assist; Hannes delegated integration Not implemented | Use official CLI separately or Gemini API key; do not copy first-party client credentials. |
-| GitHub Copilot | Official Copilot SDK supports signed-in users and an application's own OAuth tokens; Hannes integration Not implemented | Own OAuth app or supported CLI credentials through official SDK, plus permission mediation required; no borrowed client ID/raw endpoint claim. |
-| Qwen Code subscription | Official device/SDK flows are application-specific; Hannes integration Not implemented | Official Qwen Code separately, or explicit API-compatible endpoint/key with actual entitlements. |
-| Claude subscription / Agent SDK | SDK is available under Anthropic commercial terms; Hannes delegated integration Not implemented | Review allowed third-party auth/terms and mediate tool execution first; use Anthropic API key here. |
+| OpenAI ChatGPT/Codex | Official Codex CLI/SDK supports subscription auth; Cosmew delegated integration Not implemented | Use official Codex CLI separately or an OpenAI API key. SDK is agent execution with its own tool/runtime surfaces, not raw API entitlement. |
+| Google/Gemini CLI subscription | Official sign-in documented for Gemini CLI/Code Assist; Cosmew delegated integration Not implemented | Use official CLI separately or Gemini API key; do not copy first-party client credentials. |
+| GitHub Copilot | Official Copilot SDK supports signed-in users and an application's own OAuth tokens; Cosmew integration Not implemented | Own OAuth app or supported CLI credentials through official SDK, plus permission mediation required; no borrowed client ID/raw endpoint claim. |
+| Qwen Code subscription | Official device/SDK flows are application-specific; Cosmew integration Not implemented | Official Qwen Code separately, or explicit API-compatible endpoint/key with actual entitlements. |
+| Claude subscription / Agent SDK | SDK is available under Anthropic commercial terms; Cosmew delegated integration Not implemented | Review allowed third-party auth/terms and mediate tool execution first; use Anthropic API key here. |
 
-The delegated-agent blocker is precise: this repository has no implemented general permission dispatcher/sandbox/agent-tool mediation. Launching a provider SDK that can read files or run commands would bypass the required Hannes security gate. No such process is launched and no other application's auth files/cookies are read. These integrations are future work, not working OAuth buttons.
+The delegated-agent blocker is precise: this repository has no implemented general permission dispatcher/sandbox/agent-tool mediation. Launching a provider SDK that can read files or run commands would bypass the required Cosmew security gate. No such process is launched and no other application's auth files/cookies are read. These integrations are future work, not working OAuth buttons.
 
 
 Provider Connect follow-up: [ADR 0007](../adr/0007-provider-connect-and-commands.md), [command/acceptance evidence](../delivery/provider-connect-acceptance.md). Device-code/delegated-CLI authentication and external auth plugins remain Not implemented. OpenRouter OAuth uses its own API credits and does not grant access through another consumer subscription.
 
 
-SUB1 follow-up: [current subscription implementation and exact evidence](../delivery/subscription-auth.md) supersede the older blanket “Hannes integration Not implemented” rows for bounded official Codex/Copilot/Gemini/Qwen transports. Installed/vendor acceptance is still pending as detailed there; Claude subscription sign-in still requires approval.
+SUB1 follow-up: [current subscription implementation and exact evidence](../delivery/subscription-auth.md) supersede the older blanket “Cosmew integration Not implemented” rows for bounded official Codex/Copilot/Gemini/Qwen transports. Installed/vendor acceptance is still pending as detailed there; Claude subscription sign-in still requires approval.

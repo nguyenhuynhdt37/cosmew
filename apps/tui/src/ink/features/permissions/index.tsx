@@ -327,10 +327,10 @@ export function PermissionRulesDialog(props: PermissionRulesDialogProps) {
           label: scope,
           description:
             scope === 'local'
-              ? '.futryn/settings.local.json (this project, not shared)'
+              ? '.cosmew/settings.local.json (this project, not shared)'
               : scope === 'project'
-                ? '.futryn/settings.json (this project, shared with the repository)'
-                : '~/.futryn/settings.json (all projects)',
+                ? '.cosmew/settings.json (this project, shared with the repository)'
+                : '~/.cosmew/settings.json (all projects)',
         }))}
         onSelect={item => setAdding(item.id as PermissionSettingsScope)}
       />

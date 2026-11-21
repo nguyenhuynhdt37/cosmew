@@ -1,6 +1,6 @@
 # Tầm nhìn sản phẩm
 
-Trạng thái tất cả capability: **Not implemented**. Hannes là harness độc lập phục vụ developer thao tác trong repository với vòng lặp có thể quan sát, dừng, kiểm duyệt và tiếp tục. Người dùng mục tiêu cần quyền sở hữu session, thay provider và tích hợp công cụ mà không phụ thuộc một UI.
+Trạng thái tất cả capability: **Not implemented**. Cosmew là harness độc lập phục vụ developer thao tác trong repository với vòng lặp có thể quan sát, dừng, kiểm duyệt và tiếp tục. Người dùng mục tiêu cần quyền sở hữu session, thay provider và tích hợp công cụ mà không phụ thuộc một UI.
 
 Luồng sản phẩm đích: chọn workspace/profile → gửi yêu cầu → thấy stream và tool requests → chấp thuận theo policy → kiểm tra diff/kết quả → tiếp tục hoặc resume. CLI headless phù hợp scripting, TUI cho tương tác, server cho clients. Web/desktop chỉ là chỗ dự trữ.
 

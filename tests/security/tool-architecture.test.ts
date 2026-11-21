@@ -76,6 +76,7 @@ test('registry rejects duplicate identities, owns descriptor snapshots and route
   expect(router.resolve('read')).toHaveProperty('handler');
   for (const name of ['shell', 'bash', 'functions.read', 'constructor', '__proto__'])
     expect(router.resolve(name)).toMatchObject({status: 'error', code: 'UNKNOWN_TOOL'});
+  // A runtime that cannot run unsandboxed (no such capability) is closed while its backend is unavailable.
   f.disable();
   expect(registry.descriptors().some(d => d.name === 'exec_command')).toBe(false);
   expect(router.resolve('exec_command')).toMatchObject({code: 'SANDBOX_UNAVAILABLE'});

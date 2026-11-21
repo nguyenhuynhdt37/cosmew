@@ -1,10 +1,20 @@
 /** @jsxImportSource react */
 import {useTerminalSize} from '../../hooks/use-terminal-size';
-import {createContext, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode} from 'react';
+import {
+  createContext,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from 'react';
 import {Box, Static, Text, type DOMElement} from 'ink';
 import {isFileChangeTool, type ToolCall, type ToolResult} from '@cosmew/contracts';
 import {parseMemoryCitations} from '@cosmew/sdk';
-import {useKeymap} from '../../hooks';
+import {keyLabels, keymapStore, useKeymap} from '../../hooks';
 import {useTheme} from '../../theme';
 import {
   Markdown,
@@ -26,7 +36,9 @@ import {Notices} from '../notices';
 import {ContextBlockView} from '../usage';
 import {toolDisplay, transcriptParts, transcriptWindow, type TranscriptItem as Item} from './logic';
 import {segmentTools} from './summary';
+import {DETAILED_RECENT_LIMIT, visibleWindow} from './show-all';
 /** The detailed-transcript viewer jumps between prompts (`{` / `}`): user items register their box here. */
+export const SearchAnchors = createContext<Map<string, DOMElement> | null>(null);
 export const PromptAnchors = createContext<Map<string, DOMElement> | null>(null);
 /** Row of `el` inside `root`, summed from Yoga's computed tops. */
 export function rowWithin(el: DOMElement, root: DOMElement): number {
@@ -251,6 +263,7 @@ export interface TranscriptItemProps {
   /** Ctrl+O: every tool as `⏺ Bash(cmd)` with its full result, reasoning open and a `<time> <model>` header per answer. */
   detailed?: boolean;
   /** Model name for the detailed header when the item does not carry one. */
+  searchMatch?: {id: string; start: number; end: number; text: string};
   model?: string;
   /** Clock formatter for `done 11:00 PM` and the detailed header; injectable for tests. */
   formatTime?: (ms: number) => string;
@@ -266,10 +279,12 @@ export const TranscriptItem = memo(function TranscriptItem({
   detailed = false,
   model,
   formatTime = formatClock,
+  searchMatch,
 }: TranscriptItemProps) {
   const {color} = useTheme();
   const ui = useUiTheme();
   const anchors = useContext(PromptAnchors);
+  const searchAnchors = useContext(SearchAnchors);
   const {rows} = useTerminalSize();
   const liveRows = liveRowBudget ?? Math.max(8, (rows || 24) - 12);
   const bodyWidth = Math.max(1, width - 2);
@@ -482,25 +497,39 @@ export const TranscriptItem = memo(function TranscriptItem({
       flexDirection="column"
       marginBottom={1}
       ref={
-        anchors && item.role === 'user'
+        anchors || searchAnchors
           ? (el: DOMElement | null) => {
-              if (el) anchors.set(item.id, el);
-              else anchors.delete(item.id);
+              if (item.role === 'user') {
+                if (el) anchors?.set(item.id, el);
+                else anchors?.delete(item.id);
+              }
+              if (el) searchAnchors?.set(item.id, el);
+              else searchAnchors?.delete(item.id);
             }
           : undefined
       }
     >
-      {entries.map((entry, index) => (
-        <Box
-          key={entry.key}
-          width={width}
-          minWidth={0}
-          flexDirection="column"
-          marginTop={index && !entry.attached ? 1 : 0}
-        >
-          {entry.node}
-        </Box>
-      ))}
+      {searchMatch?.id === item.id ? (
+        <Text>
+          {searchMatch.text.slice(0, searchMatch.start)}
+          <Text inverse color={ui.color('accent')}>
+            {searchMatch.text.slice(searchMatch.start, searchMatch.end)}
+          </Text>
+          {searchMatch.text.slice(searchMatch.end)}
+        </Text>
+      ) : (
+        entries.map((entry, index) => (
+          <Box
+            key={entry.key}
+            width={width}
+            minWidth={0}
+            flexDirection="column"
+            marginTop={index && !entry.attached ? 1 : 0}
+          >
+            {entry.node}
+          </Box>
+        ))
+      )}
     </Box>
   );
 });
@@ -525,6 +554,10 @@ export interface TranscriptProps {
   showSpinner?: boolean;
   /** Ctrl+O detailed transcript (see `useDetailedTranscript`). */
   detailed?: boolean;
+  showAll?: boolean;
+  /** Virtual history owns its window and disables the legacy show-all window (B4/B7). */
+  virtualScroll?: boolean;
+  searchMatch?: {id: string; start: number; end: number; text: string};
   model?: string;
   formatTime?: (ms: number) => string;
 }
@@ -542,6 +575,9 @@ export function Transcript({
   showSpinner = true,
   liveRows,
   detailed = false,
+  showAll = false,
+  virtualScroll = false,
+  searchMatch,
   model,
   formatTime,
 }: TranscriptProps) {
@@ -553,8 +589,16 @@ export function Transcript({
   const count = Math.max(1, liveItems);
   const end = Math.max(0, items.length - Math.max(0, historyOffset ?? 0));
   const live = historyOffset === undefined ? window.live : items.slice(Math.max(0, end - count), end);
-  const shown = bounded && historyOffset === undefined ? items : live;
-  const useStatic = !bounded && historyOffset === undefined;
+  const recent = useMemo(() => visibleWindow(items, showAll || virtualScroll), [items, showAll, virtualScroll]);
+  const shown = detailed ? recent.items : bounded && historyOffset === undefined ? items : live;
+  const useStatic = !detailed && !bounded && historyOffset === undefined;
+  const previousCount = detailed && !virtualScroll ? Math.max(0, items.length - DETAILED_RECENT_LIMIT) : 0;
+  const keymap = useSyncExternalStore(
+    listener => keymapStore.subscribe(listener),
+    () => keymapStore.get(),
+  );
+  const showAllKey = keyLabels(keymap, 'Transcript', 'transcript:toggleShowAll')[0] ?? 'unbound';
+  const hintKey = showAllKey === 'ctrl+e' ? 'Ctrl+E' : showAllKey;
   const ids = live.flatMap(activityIds);
   const selected = focusedId ?? (localFocus && ids.includes(localFocus) ? localFocus : ids.at(-1));
   const focus = (delta: number) => {
@@ -581,6 +625,11 @@ export function Transcript({
   );
   return (
     <Box width={width} minWidth={0} flexDirection="column">
+      {previousCount > 0 ? (
+        <Text dimColor wrap="truncate-end">
+          {hintKey} to {showAll ? 'hide' : 'show'} <Text bold>{previousCount}</Text> previous messages
+        </Text>
+      ) : null}
       {useStatic ? (
         <Static key={historyKey} items={window.settled}>
           {item => (
@@ -610,6 +659,7 @@ export function Transcript({
           showSpinner={showSpinner}
           animate={animate}
           detailed={detailed}
+          searchMatch={searchMatch}
           model={model}
           formatTime={formatTime}
         />

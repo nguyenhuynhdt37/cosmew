@@ -24,7 +24,7 @@ CLI run/serve/resume/models/mcp/plugins/doctor map vào commands/queries; startu
 
 ## 6. Dependencies và interface boundaries
 
-CLI/server là composition roots; TUI chỉ sdk; sdk chỉ contracts. HTTP commands và WebSocket events là dự kiến cần protocol ADR trước implementation; stdio mode nếu thêm phải có framing riêng. OpenCode SDK bridge là adapter, không Hannes SDK public contract.
+CLI/server là composition roots; TUI chỉ sdk; sdk chỉ contracts. HTTP commands và WebSocket events là dự kiến cần protocol ADR trước implementation; stdio mode nếu thêm phải có framing riêng. OpenCode SDK bridge là adapter, không Cosmew SDK public contract.
 
 ## 7. Luồng sự kiện
 

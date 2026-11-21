@@ -6,13 +6,12 @@ import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {Box, Text, useApp, useStdout, type DOMElement} from 'ink';
+import {Box, Text, renderToString, useApp, useStdout, type DOMElement} from 'ink';
 import {BYPASS_PERMISSIONS_WARNING, FutrynError, type ToolCall, type ToolResult} from '@cosmew/contracts';
 import {useOverlay} from './core';
 import {
   InputScope,
   ensureKeybindingsFile,
-  keyLabels,
   keybindingsPath,
   keymapStore,
   loadKeybindings,
@@ -23,12 +22,13 @@ import {
   useTextInput,
 } from './hooks';
 import {useTheme} from './theme';
-import {Panel, Rule, TextLine, safeText, spinnerTip, stringCells} from './ui';
+import {Panel, TextLine, safeText, spinnerTip} from './ui';
 import {readMacClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
 import {
   PromptAnchors,
+  SearchAnchors,
   Transcript,
   isThinking,
   rowWithin,
@@ -37,6 +37,17 @@ import {
   useTranscript,
   type TranscriptItem,
 } from './features/transcript';
+import {
+  buildSearchIndexAsync,
+  findMatchesAsync,
+  searchStatus,
+  type SearchIndex,
+  type SearchMatch,
+} from './features/transcript/search';
+import {TranscriptLegend} from './features/transcript/legend';
+import {SearchBar} from './features/transcript/search-bar';
+import {DetailedFooter} from './features/transcript/detailed-footer';
+import {DETAILED_RECENT_LIMIT} from './features/transcript/show-all';
 import {ComposerView, useComposer, editorName} from './features/composer';
 import {Plan, usePlan} from './features/plan';
 import {Notices, useNotices} from './features/notices';
@@ -72,7 +83,6 @@ import {PlanApprovalDialog} from './features/plan-approval';
 import {routeCommand, type CommandHost} from './features/commands';
 import {ScrollViewport, useLiveRows, useScrollback} from './screen';
 import {LiveDialog, Spinner} from './ui';
-import {useUiTheme} from './ui/ui-theme';
 
 export interface IntegratedShellProps {
   width?: number;
@@ -88,28 +98,6 @@ function ReportDialog({kind, width, tab}: {kind: ReportKind; width?: number; tab
   if (kind !== 'context')
     return <SettingsDialog width={width} initialTab={tab ?? (kind === 'status' ? 'Status' : 'Usage')} />;
   return <Usage state={state} width={width} />;
-}
-/** Detailed transcript footer (spec 3): the composer is hidden while Ctrl+O is on. */
-function DetailedFooter({width}: {width: number}) {
-  const ui = useUiTheme();
-  const keymap = keymapStore.get();
-  const key = (context: 'Global' | 'Transcript', action: string) => keyLabels(keymap, context, action)[0];
-  // Keys come from the keymap; optional parts are dropped when the line would not leave room for `verbose`.
-  const optional = [
-    key('Transcript', 'transcript:openEditor') && `${key('Transcript', 'transcript:openEditor')} to open in code`,
-    key('Transcript', 'transcript:help') && `${key('Transcript', 'transcript:help')} for shortcuts`,
-  ].filter((part): part is string => !!part);
-  let line = `  Showing detailed transcript · ${key('Global', 'app:toggleTranscript') ?? 'ctrl+o'} to toggle · ↑/↓ to scroll`;
-  for (const part of optional) if (stringCells(`${line} · ${part}`) <= width - 12) line += ` · ${part}`;
-  return (
-    <Box flexDirection="column" width={width} flexShrink={0}>
-      <Rule width={width} />
-      <Box width={width} justifyContent="space-between">
-        <Text color={ui.color('dim')}>{line}</Text>
-        <Text color={ui.color('dim')}>{'verbose  '}</Text>
-      </Box>
-    </Box>
-  );
 }
 /** Transcript lines of a command result: the user-message line and the `⎿` text without its connector. */
 function resultParts(result: CommandResultLines): [string, string[]] {
@@ -195,6 +183,19 @@ export function IntegratedShell({
   const width = Math.max(1, requestedWidth ?? columns);
   const transcript = useTranscript();
   const detail = useDetailedTranscript();
+  const [showAll, setShowAll] = useState(false);
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [viewerStatus, setViewerStatus] = useState<string>();
+  const transcriptEditorName =
+    (process.env.VISUAL || process.env.EDITOR || '').trim().split(/\s+/)[0]?.split('/').pop() || undefined;
+  useEffect(() => {
+    if (!viewerStatus) return;
+    const timer = setTimeout(() => setViewerStatus(undefined), 4000);
+    return () => clearTimeout(timer);
+  }, [viewerStatus]);
+  // Fullscreen owns a paged history window; use upstream's virtual-scroll branch (B4/B7).
+  // Equivalence to upstream's render-range virtualizer: Needs verification.
+  const virtualScrollActive = fullscreen;
   const diff = useDiff();
   const [diffOpen, setDiffOpen] = useState(false);
   const diffLayout = diffPanelLayout(width, diffOpen);
@@ -532,6 +533,11 @@ export function IntegratedShell({
   /** `v` in the transcript viewer: the conversation as text in $VISUAL/$EDITOR (a copy; edits are discarded). */
   const openTranscriptInEditor = async () => {
     if (editing.current) return;
+    setLegendOpen(false);
+    if (!(process.env.VISUAL || process.env.EDITOR || '').trim()) {
+      setViewerStatus('no $VISUAL/$EDITOR set');
+      return;
+    }
     if (process.platform === 'win32') {
       notices.addNotice('Not implemented: external editor on Windows.');
       return;
@@ -853,18 +859,83 @@ export function IntegratedShell({
     else overlay.close();
   };
   const viewing = ready && detail.detailed && !overlay.active;
-  const scrolling = fullscreen && ready && !overlay.active;
-  const quickKeys = (): string => {
-    const keymap = keymapStore.get();
-    const labels = (action: string) => keyLabels(keymap, 'Transcript', action).join(' / ') || 'unbound';
-    return [
-      `${labels('transcript:exit')} exit`,
-      '↑/↓ PgUp/PgDn scroll',
-      `${labels('transcript:previousPrompt')} ${labels('transcript:nextPrompt')} prompts`,
-      `${labels('transcript:dumpScrollback')} to scrollback`,
-      `${labels('transcript:openEditor')} open in editor`,
-    ].join(' · ');
+  // Task 6 supplies the search bar state; transcript keys yield while its query owns focus.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [keptQuery, setKeptQuery] = useState('');
+  const [searchIndex, setSearchIndex] = useState<SearchIndex | null>(null);
+  const [indexMs, setIndexMs] = useState<number>();
+  const [matchAt, setMatchAt] = useState(0);
+  const searchRevision = useRef(transcript.items);
+  useEffect(() => {
+    if (!detail.detailed) {
+      setSearchOpen(false);
+      setLegendOpen(false);
+      setViewerStatus(undefined);
+      setQuery('');
+      setKeptQuery('');
+    }
+  }, [detail.detailed]);
+  useEffect(() => {
+    if (searchRevision.current !== transcript.items) {
+      searchRevision.current = transcript.items;
+      setSearchIndex(null);
+    }
+    if (!detail.detailed || (!searchOpen && !query)) return;
+    if (searchIndex && searchRevision.current === transcript.items) return;
+    const abort = new AbortController();
+    const start = performance.now();
+    void buildSearchIndexAsync(transcript.items, abort.signal).then(index => {
+      if (!index || abort.signal.aborted) return;
+      setSearchIndex(index);
+      const ms = Math.round(performance.now() - start);
+      setIndexMs(ms >= 20 ? ms : undefined);
+    });
+    return () => abort.abort();
+  }, [transcript.items, detail.detailed, searchOpen, !!query, searchIndex]);
+  useEffect(() => {
+    if (indexMs === undefined) return;
+    const timer = setTimeout(() => setIndexMs(undefined), 2000);
+    return () => clearTimeout(timer);
+  }, [indexMs]);
+  const [matches, setMatches] = useState<SearchMatch[]>([]);
+  useEffect(() => {
+    const abort = new AbortController();
+    setMatches([]);
+    if (searchIndex)
+      void findMatchesAsync(searchIndex, query, abort.signal).then(found => {
+        if (found && !abort.signal.aborted) setMatches(found);
+      });
+    return () => abort.abort();
+  }, [searchIndex, query]);
+  const currentMatch = matches[matchAt % Math.max(1, matches.length)];
+  const currentItem = currentMatch ? transcript.items[currentMatch.itemIndex] : undefined;
+  const matchBadge = matches.length ? `${(matchAt % matches.length) + 1} of ${matches.length}` : undefined;
+  const searchAnchors = useRef(new Map<string, DOMElement>());
+  useEffect(() => {
+    if (!currentMatch || !currentItem || !detail.detailed) return;
+    const timer = setImmediate(() => {
+      const element = searchAnchors.current.get(currentItem.id);
+      const root = scroll.content.current;
+      if (element && root)
+        scroll.showRow(
+          rowWithin(element, root) +
+            renderToString(
+              <Box width={contentWidth}>
+                <Text>{(searchIndex?.[currentMatch.itemIndex] ?? '').slice(0, currentMatch.end)}</Text>
+              </Box>,
+            ).split('\n').length -
+            1,
+        );
+    });
+    return () => clearImmediate(timer);
+  }, [currentMatch, currentItem, detail.detailed, olderPages]);
+  const cycleMatch = (delta: number) => {
+    if (!transcriptKeysActive) return false;
+    if (matches.length) setMatchAt(at => (at + delta + matches.length) % matches.length);
   };
+  const transcriptKeysActive = viewing && !searchOpen;
+  const scrolling = fullscreen && ready && !overlay.active && !searchOpen;
   useKeybindings({
     Global: {
       'app:interrupt': () => {
@@ -890,7 +961,10 @@ export function IntegratedShell({
           composer.interrupt();
           return;
         }
-        if (ready && !overlay.active) detail.toggleDetailed();
+        if (ready) {
+          if (!detail.detailed) setShowAll(false);
+          detail.toggleDetailed();
+        }
       },
     },
     Chat: {
@@ -923,16 +997,33 @@ export function IntegratedShell({
       'scroll:pageDown': () => (scrolling ? scroll.pageDown() : false),
       'scroll:top': () => (scrolling ? scroll.toTop() : false),
       'scroll:bottom': () => (scrolling ? scroll.toBottom() : false),
-      'scroll:lineUp': () => (scrolling && detail.detailed ? scroll.scrollBy(1) : false),
-      'scroll:lineDown': () => (scrolling && detail.detailed ? scroll.scrollBy(-1) : false),
+      'scroll:lineUp': () => (transcriptKeysActive ? scroll.scrollBy(1) : false),
+      'scroll:lineDown': () => (transcriptKeysActive ? scroll.scrollBy(-1) : false),
     },
     Transcript: {
-      'transcript:exit': () => (viewing ? detail.setDetailed(false) : false),
-      'transcript:previousPrompt': () => (viewing ? jumpPrompt(-1) : false),
-      'transcript:nextPrompt': () => (viewing ? jumpPrompt(1) : false),
-      'transcript:dumpScrollback': () => (viewing ? void dumpScrollback() : false),
-      'transcript:openEditor': () => (viewing ? void openTranscriptInEditor() : false),
-      'transcript:help': () => (viewing ? notices.addNotice(quickKeys()) : false),
+      'transcript:search': () => {
+        if (!transcriptKeysActive) return false;
+        setSearchOpen(true);
+        setLegendOpen(false);
+      },
+      'transcript:nextMatch': () => cycleMatch(1),
+      'transcript:previousMatch': () => cycleMatch(-1),
+      'transcript:toggleShowAll': () =>
+        transcriptKeysActive && !virtualScrollActive ? setShowAll(value => !value) : false,
+      'scroll:lineUp': () => (transcriptKeysActive ? scroll.scrollBy(1) : false),
+      'scroll:lineDown': () => (transcriptKeysActive ? scroll.scrollBy(-1) : false),
+      'scroll:halfPageUp': () => (transcriptKeysActive ? scroll.halfPageUp() : false),
+      'scroll:halfPageDown': () => (transcriptKeysActive ? scroll.halfPageDown() : false),
+      'scroll:fullPageUp': () => (transcriptKeysActive ? scroll.scrollBy(Math.max(1, scroll.viewRows)) : false),
+      'scroll:fullPageDown': () => (transcriptKeysActive ? scroll.scrollBy(-Math.max(1, scroll.viewRows)) : false),
+      'scroll:top': () => (transcriptKeysActive ? scroll.toTop() : false),
+      'scroll:bottom': () => (transcriptKeysActive ? scroll.toBottom() : false),
+      'transcript:exit': () => (transcriptKeysActive ? detail.setDetailed(false) : false),
+      'transcript:previousPrompt': () => (transcriptKeysActive ? jumpPrompt(-1) : false),
+      'transcript:nextPrompt': () => (transcriptKeysActive ? jumpPrompt(1) : false),
+      'transcript:dumpScrollback': () => (transcriptKeysActive ? void dumpScrollback() : false),
+      'transcript:openEditor': () => (transcriptKeysActive ? void openTranscriptInEditor() : false),
+      'transcript:help': () => (transcriptKeysActive ? setLegendOpen(value => !value) : false),
     },
   });
   // The shared router reports chord problems in the composer footer and runs `command:<name>` bindings.
@@ -967,12 +1058,18 @@ export function IntegratedShell({
   const activity = transcript.items.findLast(item => item.streaming);
   // The tail window keeps frame cost bounded in long sessions; paging to the top pulls older items in.
   const windowSize = 60 + olderPages * 40;
-  const shownItems = fullscreen ? transcript.items.slice(-windowSize) : transcript.items;
+  const matchWindowStart = currentMatch ? Math.max(0, currentMatch.itemIndex - 30) : undefined;
+  const shownItems = fullscreen
+    ? matchWindowStart !== undefined
+      ? transcript.items.slice(matchWindowStart, matchWindowStart + 60)
+      : transcript.items.slice(-windowSize)
+    : transcript.items;
   const showBanner = ready && shownItems.length === transcript.items.length;
   const tip = spinnerTip(transcript.items.filter(item => item.role === 'user').length);
   const warning = composer.status.permissionMode === 'bypassPermissions' ? BYPASS_PERMISSIONS_WARNING : undefined;
-  // A dialog replaces the composer and footer; the transcript clips first so choices never leave the screen.
-  const dialogRows = screenRows ? Math.max(1, screenRows - 1) : undefined;
+  const dialogWaiting = !!client.listPendingPermissions().length || !!client.listPendingQuestions().length;
+  // A dialog replaces the composer; the transcript clips first so choices never leave the screen.
+  const dialogRows = screenRows ? Math.max(1, screenRows - 1 - (ready && detail.detailed ? 2 : 0)) : undefined;
   const body = (
     <>
       {!ready ? (
@@ -987,15 +1084,24 @@ export function IntegratedShell({
             </Box>
           ) : null}
           <PromptAnchors.Provider value={anchors.current}>
-            <Transcript
-              items={shownItems}
-              bounded
-              showSpinner={false}
-              width={contentWidth}
-              liveRows={Math.max(1, (screenRows ?? 24) - 6)}
-              detailed={detail.detailed}
-              model={status.status.selection?.modelId}
-            />
+            <SearchAnchors.Provider value={searchAnchors.current}>
+              <Transcript
+                items={shownItems}
+                bounded
+                showSpinner={false}
+                width={contentWidth}
+                liveRows={Math.max(1, (screenRows ?? 24) - 6)}
+                detailed={detail.detailed}
+                showAll={showAll || !!currentMatch}
+                searchMatch={
+                  currentItem && currentMatch
+                    ? {id: currentItem.id, ...currentMatch, text: searchIndex?.[currentMatch.itemIndex] ?? ''}
+                    : undefined
+                }
+                virtualScroll={virtualScrollActive}
+                model={status.status.selection?.modelId}
+              />
+            </SearchAnchors.Provider>
           </PromptAnchors.Provider>
           <Subagents agents={agents.agents} width={contentWidth} />
           <Notices notices={notices.notices} width={contentWidth} />
@@ -1069,7 +1175,48 @@ export function IntegratedShell({
           </Box>
         ) : null}
       </InputScope>
-      {ready && detail.detailed && !overlay.active ? <DetailedFooter width={width} /> : null}
+      {ready && detail.detailed && !overlay.active && searchOpen ? (
+        <SearchBar
+          width={width}
+          query={query}
+          onChange={value => {
+            setQuery(value);
+            setMatchAt(0);
+          }}
+          count={matches.length}
+          badge={searchStatus({
+            building: !searchIndex,
+            ms: indexMs,
+            query,
+            count: matches.length,
+            current: matchAt + 1,
+          })}
+          onClose={keep => {
+            setSearchOpen(false);
+            const value = keep && matches.length ? query : keptQuery;
+            setQuery(value);
+            if (keep) setKeptQuery(value);
+            setMatchAt(0);
+          }}
+        />
+      ) : ready && detail.detailed && !overlay.active && legendOpen ? (
+        <TranscriptLegend width={width} editorName={transcriptEditorName} />
+      ) : ready && detail.detailed ? (
+        <DetailedFooter
+          rightStatus={viewerStatus}
+          searchActive={!!matchBadge}
+          badge={matchBadge}
+          width={width}
+          showingAll={showAll}
+          // Use B2's scroll/help variant when the recent window has nothing to hide.
+          virtualScroll={virtualScrollActive || transcript.items.length <= DETAILED_RECENT_LIMIT}
+          suppressShowAll={transcript.items.length <= DETAILED_RECENT_LIMIT}
+          status={dialogWaiting ? 'dialog waiting' : busy || composer.busy ? 'working' : undefined}
+          editorName={
+            (process.env.VISUAL || process.env.EDITOR || '').trim().split(/\s+/)[0]?.split('/').pop() || undefined
+          }
+        />
+      ) : null}
       {overlay.active ? (
         <Box flexDirection="column" flexShrink={0}>
           <LiveDialog rows={dialogRows}>{overlay.active.content}</LiveDialog>

@@ -7,7 +7,7 @@ import type {KeymapStore} from './store';
 
 /** User-level only: a workspace can never ship keybindings. HOME is honoured so tests use a temporary directory. */
 export function keybindingsPath(home: string = process.env.HOME || homedir()): string {
-  // Prefer the canonical Cosmew file, then preserve existing Futryn/Hannes/Claude files in place.
+  // Prefer the canonical Cosmew file, then preserve existing legacy/Claude files in place.
   for (const directory of ['.cosmew', '.futryn', '.hannes', '.claude']) {
     const path = join(home, directory, 'keybindings.json');
     try {

@@ -1,6 +1,6 @@
 # Extensions, plugins và hooks
 
-**Đề xuất v1; Not implemented.** Hannes manifest là domain data; OpenCode/Cordis manifests được adapter chuyển sang đây, lưu original reference và cảnh báo loss. Không giả định mọi ecosystem dùng cùng lifecycle.
+**Đề xuất v1; Not implemented.** Cosmew manifest là domain data; OpenCode/Cordis manifests được adapter chuyển sang đây, lưu original reference và cảnh báo loss. Không giả định mọi ecosystem dùng cùng lifecycle.
 
 | Record | Fields | Invariant |
 |---|---|---|

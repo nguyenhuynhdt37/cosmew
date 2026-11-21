@@ -925,7 +925,7 @@ export class ToolOrchestrator {
         content: 'The session expired before input approval. Nothing was sent.',
         target: label,
       };
-    if (!runtime.availability().ok)
+    if ((prepared.stdin || !prepared.sandbox?.unsandboxed) && !runtime.availability().ok)
       return {
         status: 'error',
         code: 'SANDBOX_UNAVAILABLE',

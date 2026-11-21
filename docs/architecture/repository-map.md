@@ -14,7 +14,7 @@ Task 03A foundation ([ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md
 
 ## Public/private và thay đổi cần ADR
 
-Contracts public chỉ gồm domain records/ports, không third-party SDK/Bun types. sdk public là Hannes client protocol. Models/tools/workspace/mcp/extensions/security/persistence/agents chỉ xuất facades qua index; adapters xuất capability report và registration factory, không mở host internals. Apps không được import bởi packages. testkit chỉ test consumers, không production.
+Contracts public chỉ gồm domain records/ports, không third-party SDK/Bun types. sdk public là Cosmew client protocol. Models/tools/workspace/mcp/extensions/security/persistence/agents chỉ xuất facades qua index; adapters xuất capability report và registration factory, không mở host internals. Apps không được import bởi packages. testkit chỉ test consumers, không production.
 
 Ghi ADR (làm lịch sử quyết định, không phải cổng xin phép) khi thay đổi: public schema/semantics/version, dependency edge mới, shared ownership, package/process boundaries, plugin host privileges, storage migration strategy, runtime/language/framework swap, sandbox/trust model hoặc compatibility claim mới. Refactor private file không đổi contract không cần ADR mới nhưng cần docs/tests trong phase triển khai.
 
@@ -179,7 +179,7 @@ Ghi ADR (làm lịch sử quyết định, không phải cổng xin phép) khi t
 | [`src/v2/tui.ts](../../packages/compat-opencode/src/v2/tui.ts) | TUI commands/routes/slots/dialog/theme host mapping |
 | [`src/v2/gui.ts](../../packages/compat-opencode/src/v2/gui.ts) | Future desktop window/main mapping; unsupported without host |
 | [`src/v2/rpc.ts](../../packages/compat-opencode/src/v2/rpc.ts) | Pinned RPC codecs/method/error/cancel mapping |
-| [`src/v2/sdk-bridge.ts](../../packages/compat-opencode/src/v2/sdk-bridge.ts) | OpenCode client methods → Hannes ports/protocol |
+| [`src/v2/sdk-bridge.ts](../../packages/compat-opencode/src/v2/sdk-bridge.ts) | OpenCode client methods → Cosmew ports/protocol |
 
 ## packages/compat-deepseek
 
@@ -250,7 +250,7 @@ Ghi ADR (làm lịch sử quyết định, không phải cổng xin phép) khi t
 
 | File dự kiến | Vai trò và ranh giới |
 |---|---|
-| [`src/index.ts](../../packages/sdk/src/index.ts) | Public Hannes client exports |
+| [`src/index.ts](../../packages/sdk/src/index.ts) | Public Cosmew client exports |
 | [`src/client.ts](../../packages/sdk/src/client.ts) | Authenticated commands/queries/events/reconnect/errors |
 
 ## packages/testkit
@@ -284,7 +284,7 @@ Ghi ADR (làm lịch sử quyết định, không phải cổng xin phép) khi t
 | examples/mcp/.gitkeep | MCP fixture/example sau Phase 4; [MCP](../compatibility/mcp.md) |
 | examples/opencode-plugin/.gitkeep | OpenCode examples sau API pin; [OpenCode](../compatibility/opencode-v1-v2.md) |
 | examples/deepseek-plugin/.gitkeep | Cordis examples sau A/B gate; [DeepSeek](../compatibility/deepseek-cordis.md) |
-| examples/hannes-plugin/.gitkeep | Hannes extension examples sau Phase 5; [hooks](../contracts/plugins-and-hooks.md) |
+| examples/hannes-plugin/.gitkeep | Cosmew extension examples sau Phase 5; [hooks](../contracts/plugins-and-hooks.md) |
 | native/.gitkeep | Rust/native tối ưu optional; [ADR 0001](../adr/0001-typescript-bun.md) |
 | scripts/.gitkeep | Future maintenance tools, chưa có scripts thực thi |
 | .github/workflows/.gitkeep | Chỉ placeholder, chưa có CI workflow/deployment |
@@ -306,7 +306,7 @@ The Phase 0 file table above is retained as the original roadmap. Actual nonempt
 | apps/cli | index/input/auth-wizard/bootstrap/startup: command parsing, shared chat/wizard input, hidden secret input, guided login/logout and root wiring |
 | tests/scripts | contract/security/CLI HTTP fixtures and opt-in OS/public catalog probes; no production fake provider is exported |
 
-New package-internal files are private; all cross-package imports use `@cosmew/<package>`. No Hannes package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
+New package-internal files are private; all cross-package imports use `@cosmew/<package>`. No Cosmew package was added, and there are no new package graph edges. The scope does not implement server/TUI/tools or the original full Phase 1 exit gate. [ADR 0005](../adr/0005-provider-auth-product.md).
 
 
 ## PA1/TUI1 Provider Connect rebuild (ADR 0007)

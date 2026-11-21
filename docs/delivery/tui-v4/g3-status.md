@@ -76,3 +76,13 @@ La prueba PTY verifica salida real de alternate screen para `[`; `v` ejecuta un 
 No se regrabaron goldens; se revisan las variantes 80 y 36 con las pruebas existentes.
 
 Auditoría P2 por los ocho puntos, límites SDK y resultados locales: [p2-status.md](p2-status.md). La aprobación con feedback y la retracción selectiva de colas mixtas también necesitan API; no se presentan como completadas.
+
+
+## Ctrl+O parity — 2026-11-21 (Tasks 6–7)
+
+Footer/search/legend now follow Claude Code 2.1.330 B2–B4 evidence: Ctrl+O replaces composer;
+Ctrl+E toggles the inline 30-message window (disabled for fullscreen paging); viewer vim/Emacs scroll
+keys yield to `/` query input. Enter keeps search; n/N wrap and reveal a match after closing the bar.
+`?` shows the live-keymap legend in three columns or one narrow column. `v` without an editor reports
+`no $VISUAL/$EDITOR set` without suspending. See [parity evidence and limits](transcript-mode-parity.md).
+Successful upstream search/highlight, exact message normalization and host latency remain **Needs verification**.

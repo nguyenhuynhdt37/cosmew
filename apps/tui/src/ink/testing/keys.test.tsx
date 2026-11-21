@@ -234,7 +234,9 @@ test('transcript viewer: footer lists its keys; q, Esc and Ctrl+C leave; ? lists
   expect(view.lastFrame()).toContain('? for shortcuts');
   await key(view, '?');
   expect(view.lastFrame()).toContain('exit');
-  expect(view.lastFrame()).toContain('open in editor');
+  expect(view.lastFrame()).toContain(
+    `open in ${(process.env.VISUAL || process.env.EDITOR || '').trim().split(/\s+/)[0]?.split('/').pop() || 'editor'}`,
+  );
   await key(view, '[');
   expect(view.lastFrame()).toContain('already in the terminal scrollback');
   await key(view, 'q');
@@ -412,3 +414,53 @@ test('diff dialog keys: J/K pick the file, ←/→ the source, Space and B page,
   view.unmount();
 });
 void up;
+
+test('transcript legend uses evidence lines and live remapped keys', async () => {
+  const {view} = await readyApp();
+  await key(view, '\x0f');
+  await key(view, '?');
+  for (const line of [
+    'q/ctrl+o to exit',
+    '? to close',
+    'ctrl+u/d to move half a page',
+    'space/b to move a page',
+    'g/G to go to top/bottom',
+    '{/} to jump between prompts',
+    'n/N to cycle matches',
+    '[ to print to scrollback',
+  ])
+    expect(view.lastFrame()).toContain(line);
+  keymapStore.set(
+    buildKeymap(
+      JSON.stringify({bindings: [{context: 'Transcript', bindings: {'[': null, p: 'transcript:dumpScrollback'}}]}),
+    ),
+  );
+  await settle();
+  expect(view.lastFrame()).toContain('p to print to scrollback');
+  expect(view.lastFrame()).not.toContain('[ to print to scrollback');
+  await key(view, '?');
+  expect(view.lastFrame()).toContain('Showing detailed transcript');
+  view.unmount();
+});
+
+test('transcript v without editor reports exact message without suspending', async () => {
+  const visual = process.env.VISUAL,
+    editor = process.env.EDITOR;
+  delete process.env.VISUAL;
+  delete process.env.EDITOR;
+  try {
+    const {view} = await readyApp();
+    await key(view, '\x0f');
+    const before = view.frames.length;
+    await key(view, 'v');
+    expect(view.lastFrame()).toContain('no $VISUAL/$EDITOR set');
+    expect(view.lastFrame()).toContain('Showing detailed transcript');
+    expect(view.frames.slice(before).join('')).not.toContain('\x1b[?1049l');
+    view.unmount();
+  } finally {
+    if (visual === undefined) delete process.env.VISUAL;
+    else process.env.VISUAL = visual;
+    if (editor === undefined) delete process.env.EDITOR;
+    else process.env.EDITOR = editor;
+  }
+});

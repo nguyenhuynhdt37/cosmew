@@ -1,6 +1,6 @@
 # Thuật ngữ
 
-| Thuật ngữ | Nghĩa trong Hannes |
+| Thuật ngữ | Nghĩa trong Cosmew |
 |---|---|
 | Contract | Dữ liệu/ports công khai, có version; không chứa SDK-specific objects |
 | Composition root | App bootstrap nối implementations với ports |
@@ -11,7 +11,7 @@
 | Tool invocation | Lệnh đã chuẩn hóa có invocationId, input hash và quyền gắn với đối tượng cụ thể |
 | Capability | Năng lực model, protocol hoặc quyền extension; luôn ghi rõ loại |
 | Permission lease | Quyền giới hạn scope/thời hạn/policy revision; có thể bị thu hồi |
-| Extension / plugin | Gói mở rộng Hannes / gói từ ecosystem cụ thể qua adapter |
+| Extension / plugin | Gói mở rộng Cosmew / gói từ ecosystem cụ thể qua adapter |
 | Skill | Nội dung hướng dẫn không đáng tin mặc định; không tự cấp quyền |
 | Hook | Callback lifecycle với budget và quyền rõ ràng |
 | Host / Client / Server MCP | App quản lý integrations / một peer connection / dịch vụ cung cấp capabilities |
