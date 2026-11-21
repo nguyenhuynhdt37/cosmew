@@ -5,6 +5,9 @@ Exports (import each feature's index):
 - `Header({status, version, width?, preview?, stateLabel?, reactiveEffectsEnabled?})`, `useHeader()`.
 - `Welcome({status, width?, greeting?})`, `useWelcome()`.
 - `StatusLine({status, context, usage, runningAgents?, branch?, width?})`, `useStatusLine(draft?)`.
+- `SessionModeBanner({mode, width})` shows Review/Plan as read-only with `/chat`
+  to return to implementation. It is independent of permission mode and the OS
+  sandbox switch; ordinary Chat adds no row.
 - `ContextMeter({context, width?})`, `useContextMeter(draft?)`, `contextPercent`.
 - `StartupGate({state, width?})`, `useStartupGate({onReady, onExit})`.
 - `Usage({state, width?, visibleRows?})`, `useUsage({kind?, draft?, onClose, isActive?})`; kinds usage/context/status. Pure report helpers exported here retain old report data and provider limits.
@@ -35,8 +38,8 @@ no-op. `ComposerFooter` owns the exact permission mode strings, replacing that
 row with temporary messages, a three-column shortcut panel, or a right-aligned
 context warning. `contextLeft` only accepts the SDK's `measuredCurrentHistory`
 and provider/runtime measurement, subtracts output reserve and uses the existing
-90% auto-compaction threshold; stale observations, local estimates and invalid
-limits never manufacture a warning. `/usage`, `/context` and `/status` retain
+85% auto-compaction threshold. The warning requires Auto-compact to be on,
+current measured usage and a valid context limit. `/usage`, `/context` and `/status` retain
 report data. Mode colors reuse phase A's theme aliases (bypass is red).
 
 Phase E removes the inert StatusLine import/render from IntegratedShell.
@@ -46,3 +49,5 @@ Ctrl+C confirmation without changing startup cancellation or mode policy.
 
 The phase E fix round insets mode, temporary messages and shortcut columns by
 two cells; right-aligned context warnings respect the same content inset.
+
+The composer footer shows an estimated context count against the selected model's full context limit. Wide terminals include a usage bar and percentage. Narrow terminals keep the token ratio. A question mark means the model limit is unknown. The meter updates with the current model request and after compaction.

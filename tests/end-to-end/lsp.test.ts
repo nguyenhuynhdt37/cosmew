@@ -72,6 +72,7 @@ function setup(mode = '') {
     grants: new SessionGrants(),
     stateDirectory: join(root, 'state'),
     readPolicy: path => (path === 'hidden.ts' ? 'deny' : undefined),
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false}),
     codeIntel: manager,
     redact: t => t,
     approve: async r => {

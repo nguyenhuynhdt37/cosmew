@@ -85,7 +85,8 @@ test('did-you-mean suggests one readable path and never a secret, Git internals 
   expect((await s.read({path: 'src/App.js'})).content).toContain('Did you mean src/App.ts?');
   // Absolute path written from the wrong root: its tail exists in the workspace.
   const moved = await s.read({path: '/home/other/checkout/src/App.ts'});
-  expect(moved.status).toBe('denied');
+  expect(moved.status).toBe('error');
+  expect(moved.code).toBe('NOT_FOUND');
   expect(moved.content).toContain('Did you mean src/App.ts');
   // Secret, Git and ambiguous candidates are never suggested.
   for (const path of ['.envv', '.git/confg', 'src/c.ts', '/tmp/nowhere/.env'])

@@ -83,6 +83,7 @@ test('review command inspects real Git changes, reads source and emits findings 
     },
   });
   await c.tui.submit('/review focus on value.ts');
+  await c.tui.waitFor('zero causes callers to divide by zero');
   for (let i = 0; i < 100 && c.client.mode() !== 'review'; i++) await Bun.sleep(50);
   await c.tui.idle();
   expect(c.client.mode()).toBe('review');

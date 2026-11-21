@@ -8,7 +8,7 @@ một lần bấm nhầm `Ctrl+X Ctrl+S` khi ô nhập có chữ `bc` đã gửi
 | Mô-đun | Vai trò |
 |---|---|
 | `apps/tui/src/ink/hooks/keymap/keystroke.ts` | Parser phím (`ctrl+`, `shift+`, `alt\|opt\|option\|meta+`, `cmd\|command\|super\|win+`, `esc`, `return`, chord cách nhau bằng dấu cách, không phân biệt hoa thường), dịch phím Ink, danh sách phím cố định |
-| `keymap/defaults.ts` | 17 context, bảng phím mặc định và id hành động (nguồn duy nhất cho dispatch, help, `/keybindings`, kiểm tra hợp lệ), thứ hạng context |
+| `keymap/defaults.ts` | 19 context, bảng phím mặc định và id hành động (nguồn duy nhất cho dispatch, help, `/keybindings`, kiểm tra hợp lệ), thứ hạng context |
 | `keymap/keymap.ts` | Ghép mặc định + `keybindings.json`, kiểm tra hợp lệ (cảnh báo, không bao giờ ném lỗi), `null` bỏ phím, `command:<name>` |
 | `keymap/router.ts` | Dispatcher thuần (không React): context trong cùng trước, handler trả `false` = nhường, chord có timeout 3 s (đồng hồ giả được) + thông báo `Chord cancelled`, phím cố định, `onKey` thô cho chữ gõ |
 | `keymap/react.tsx` | `KeymapProvider` (một `useInput` cho cả app), `useKeybindings(handlersByContext, {isActive, onKey})` (không có provider thì tự có router riêng) |
@@ -106,7 +106,7 @@ cùng kết quả từng bước với Claude Code thật (`out-keys3` so với 
 |---|---|---|
 | Phím cố định Ctrl+C/D/M/[/I/H | done: user không gán được (cảnh báo), mặc định giữ nguyên | M `reserved keys keep their meaning…`, M `validation…` |
 | Chord 3 s, `Chord cancelled` | done | M `chords: ctrl+x waits…` (đồng hồ giả), S `a half-typed ctrl+x chord…` |
-| Vim mode | ngoài phạm vi: `/config` → `Editor mode = Not implemented` | P `settings reports every supported section…` |
+| Vim mode | `/config` → `Editor mode` đổi `normal/vim` trực tiếp; lưu user settings | `vim.test.ts`, K `Vim mode routes remapped edits…`, S `/config switches the live composer…`; [bằng chứng và giới hạn](vim-mode-parity.md) |
 | `~/.cosmew/keybindings.json` | done: cùng schema/context/action id, `null` bỏ phím, `command:<name>`, cảnh báo một lần + ghi `~/.cosmew/debug/keybindings.log` (chưa có đường debug sẵn trong repo, đường này mới) | M `user keybindings…`, `validation…`, `hot reload…` (HOME tạm), `keybindings.json lives under the (temporary) HOME…` |
 | Nạp lại khi file đổi | done (poll mtime 1 s, không phụ thuộc mới) | M `hot reload…` |
 | `/keybindings` | done: tạo file mẫu (mặc định ghi trong `$docs`) rồi mở editor, nạp lại ngay khi editor thoát; có trong menu `/` và `/help` | M `template lists every default…`, S `/keybindings is a real command…` |
@@ -157,6 +157,14 @@ to Config. Theme assignment normalizes both ID and mode. Four daltonized/ANSI
 palettes are available (exact upstream colors: Needs verification). Appearance
 writes use user settings JSON; Ctrl+G project scope lasts only for this session.
 See [ADR 0080](../../adr/0080-user-settings-appearance.md).
+
+`/config` saves Auto-compact, Verbose and Show turn duration in user settings.
+Enter toggles the focused row. Verbose updates the Ctrl+O view live and opens
+tool details by default. Auto-compact off hides the automatic compaction
+warning and leaves `/compact` available. Reduce motion freezes the mascot.
+In `/effort` and `/model`, Enter saves and `s` applies the selection to the
+current session. [ADR 0080](../../adr/0080-user-settings-appearance.md) ·
+[ADR 0090](../../adr/0090-anthropic-gemini-reasoning-efforts.md)
 
 Sandbox: `/sandbox` opens Mode | Dependencies | Overrides | Config; Tab/Shift+Tab
 switch tabs, Up/Down choose, Enter saves, Esc closes. The Settings Sandbox row

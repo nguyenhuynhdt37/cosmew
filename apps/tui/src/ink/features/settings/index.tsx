@@ -7,7 +7,7 @@ import {Box, Text} from 'ink';
 import {useFutrynClient, useKeybindings, useTextInput} from '../../hooks';
 import {useTheme} from '../../theme';
 import {useTerminalSize} from '../../hooks/use-terminal-size';
-import {ListPicker, Panel, PanelTabs, TextLine, useUiTheme} from '../../ui';
+import {ListPicker, Panel, PanelTabs, safeText, TextLine, useUiTheme} from '../../ui';
 import {useDialogRefresh, useDialogSize, useDialogTask, type DialogProps} from '../picker';
 import {reportRows} from '../usage/logic';
 import {
@@ -130,6 +130,12 @@ export function SettingsDialog({
       }
       const action = row.action;
       if (!action) return;
+      if (action === 'autoCompact' || action === 'verbose' || action === 'showTurnDuration') {
+        client.updateUserPreferences({[action]: !client.userPreferences()[action]});
+        task.setMessage(client.appearanceNotices().join(' '));
+        refresh();
+        return;
+      }
       if (isStreaming && action !== 'sandbox' && !action.startsWith('appearance-')) {
         task.setMessage('Wait for the active turn before changing agent settings.');
         return;
@@ -202,6 +208,12 @@ export function SettingsDialog({
       refresh();
     });
   const muted = color('foregroundMuted');
+  const valueTone = (row: (typeof rows)[number]) => {
+    if (row.action === 'sandbox') return row.value === 'Enabled' ? 'success' : 'warning';
+    if (row.disabled || ['OFF', 'DISABLED', 'COLLAPSED'].includes(row.value)) return 'dim';
+    if (['ON', 'ENABLED', 'VISIBLE'].includes(row.value)) return 'success';
+    return 'command';
+  };
   const listRows = Math.max(3, Math.min(30, (terminalRows || 24) - 12));
   const lines = (fields: readonly (readonly [string, string])[]) => {
     // Two cells after the longest label (reference Stats pads to 24), never narrower than the status tab's 19.
@@ -209,8 +221,10 @@ export function SettingsDialog({
     return fields.map(([label, value], at) =>
       label ? (
         <Text key={at}>
-          <Text bold>{`${label}:`.padEnd(pad)}</Text>
-          {value}
+          <Text bold color={color('markdownHeading')}>
+            {`${label}:`.padEnd(pad)}
+          </Text>
+          <Text color={value === 'Not reported' ? muted : ui.color('command')}>{safeText(value)}</Text>
         </Text>
       ) : (
         <Text key={at}> </Text>
@@ -239,6 +253,7 @@ export function SettingsDialog({
               id: String(index),
               label: r.label,
               description: r.value,
+              descriptionTone: valueTone(r),
             }))}
             placeholder="Search settings…"
             visibleRows={listRows}

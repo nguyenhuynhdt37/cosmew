@@ -146,7 +146,8 @@ export function PermissionRequestDialog({
   const items = permissionChoices(request, mode);
   // Short and narrow: wrapped labels would push choices off the screen.
   const terse = compact && size.width < 60;
-  const safeFirst = isEscalation(request) || request.capability === 'settings.trust';
+  const escalation = isEscalation(request);
+  const safeFirst = escalation || request.capability === 'settings.trust';
   const [cursor, setCursor] = useState(safeFirst ? items.length - 1 : 0);
   const [amending, setAmending] = useState(false);
   useEffect(
@@ -171,7 +172,7 @@ export function PermissionRequestDialog({
     });
   };
   const move = (delta: number) => setCursor(current => (current + delta + items.length) % items.length);
-  // Confirmation keys: Enter yes, ↑/↓ choose, Tab opens/closes the comment field, Shift+Tab takes the
+  // Confirmation keys: Enter confirms the selection, ↑/↓ choose, Tab opens/closes the comment field, Shift+Tab takes the
   // "accept edits for the session" choice (or closes the comment field). Esc is the shell's `confirm:no` (deny).
   useKeybindings(
     {
@@ -226,9 +227,9 @@ export function PermissionRequestDialog({
         <Text bold color={ui.color('rule')}>
           {safeText(title)}
         </Text>
-        {isEscalation(request) ? (
+        {escalation ? (
           <TextLine bold color={color('error')}>
-            {compact ? 'NO SANDBOX' : 'NO SANDBOX · This command runs outside the sandbox.'}
+            {compact ? 'NO SANDBOX · Full user permissions' : 'NO SANDBOX · This command runs outside the sandbox.'}
           </TextLine>
         ) : null}
         {request.subagent && !compact ? (
@@ -238,10 +239,10 @@ export function PermissionRequestDialog({
         ) : null}
         {edit || kind === 'fs.read' ? null : <Box height={compact ? 0 : 1} />}
         {edit || kind === 'fs.read' ? (
-          <TextLine color={muted}>{request.target}</TextLine>
+          <TextLine color={ui.color('path')}>{request.target}</TextLine>
         ) : (
           <Box paddingLeft={2} flexDirection="column" minWidth={0}>
-            <TextLine>
+            <TextLine color={kind === 'process.execute' ? ui.color('command') : undefined}>
               {previewTarget(request.target, compact ? 1 : Math.max(1, Math.min(8, size.visibleRows)))}
             </TextLine>
             {!compact ? <TextLine color={muted}>{request.reason}</TextLine> : null}
@@ -280,6 +281,11 @@ export function PermissionRequestDialog({
             {task.message ? <TextLine color={color('warning')}>{task.message}</TextLine> : null}
             {compact ? null : <Box height={1} />}
             <TextLine color={muted}>{footer.join(' · ')}</TextLine>
+            {request.commandSandbox === 'disabled' ? (
+              <TextLine color={muted} wrap="truncate-end">
+                {width < 38 ? 'sandbox off · /sandbox to enable' : 'sandbox off · /sandbox to turn it on'}
+              </TextLine>
+            ) : null}
           </>
         )}
       </Box>

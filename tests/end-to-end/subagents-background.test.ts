@@ -26,6 +26,7 @@ type ExtendedScriptedReply = Omit<ScriptedReply, 'calls'> & {
 };
 
 interface SetupOptions {
+  allow?: string[];
   config?: string;
   files?: Record<string, string>;
   models?: {id: string; context_length?: number}[];
@@ -163,7 +164,7 @@ async function setup(options: SetupOptions) {
   }) as typeof globalThis.fetch;
 
   const app = startup(state, {
-    permissions: {mode: 'acceptEdits'},
+    permissions: {mode: 'acceptEdits', allow: options.allow},
     vault: memoryVault(),
     fetch,
     skillsHome: home,
@@ -271,6 +272,7 @@ test('background subagent returns {id} at once, parent keeps working, and the re
 test('agent_message, agent_wait and agent_close: resume an idle child, wait for it, close it, reject messages to a closed one', async () => {
   const toolsAt: Record<string, string[]> = {};
   const h = await setup({
+    allow: ['Tool(agent_message)'],
     script: view => {
       if (isExplore(view)) {
         return view.user.some(u => u.includes('now do X')) ? {text: 'CHILD_TWO'} : {text: 'CHILD_ONE'};
@@ -534,12 +536,19 @@ test('/agents lists types and children, shows a transcript and stops a running b
   await tui.handleKey('Enter');
   await tui.waitFor('Stop agent');
   await tui.handleKey('Enter'); // View transcript
-  expect(tui.frame()).toContain('Agent transcript');
-  await tui.handleKey('Enter'); // back
-  await tui.waitFor('Stop agent');
+  const transcriptHeader = '← Main chat / Agent · explore · running';
+  await tui.waitFor(transcriptHeader);
+  const transcript = tui.frame();
+  expect(transcript).toContain(transcriptHeader);
+  expect(transcript).toContain('❯ scan');
+  expect(transcript).toMatch(/esc back · (?:↑\/↓ scroll|[^\n]+ tool · [^\n]+ toggle) · ctrl\+o expand tools · x stop/);
+  await tui.handleKey('Escape'); // back to the child menu
+  expect(tui.frame()).toContain('Stop agent');
+  expect(h.client.subagents()[0]!.status).toBe('running');
   await tui.handleKey('Down');
   await tui.handleKey('Down');
   await tui.handleKey('Up'); // Stop agent
+  expect(tui.frame()).toMatch(/❯ +Stop agent/);
   await tui.handleKey('Enter');
   await until(() => h.client.subagents()[0]!.status === 'cancelled');
   // A user stop is reported to the model like any other result; the idle TUI turns it into the next parent turn.

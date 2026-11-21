@@ -158,7 +158,7 @@ test('durably delivered background completion prints once, ignores another conve
     notify!({type: 'task.finished', task, parentSessionId: 'p2-session', delivery: 'queued'});
     notify!({type: 'task.finished', task, parentSessionId: 'p2-session', delivery: 'queued'});
     await ui.press('');
-    expect(ui.frame().match(/Background command "bun test" completed \(exit code 2\)/g)).toHaveLength(1);
+    expect(ui.frame().match(/Background command "bun test" \[task-1\] completed \(exit code 2\)/g)).toHaveLength(1);
     expect(client.activeSession()?.messages).toEqual([]);
   } finally {
     await ui.close();

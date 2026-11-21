@@ -1,6 +1,6 @@
 import type {CommandRequest, CommandRuntime, CommandSandbox} from '@cosmew/contracts';
 import {effectiveSandboxMode, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
-import {resolveWorkspacePath} from '../working-roots';
+import {outsideWorkingDirectories, resolveWorkspacePath} from '../working-roots';
 import {EXEC_LIMITS, clampYield, execDescriptor, execInput, shellOf, type ExecInput} from '../exec/command';
 import {runCommand} from '../runtimes/process';
 import type {PreparedTool, ToolHandler} from './types';
@@ -89,8 +89,11 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
       const request = buildRequest(input, file.absolute, sandbox, shell!, sessions);
       request.taskSessionId = options.sessionId?.();
       // Seatbelt writable roots stay off an unsandboxed or read-only command. The cwd
-      // allowlist is the same trusted directories and is checked again by the runtime.
-      if (config.additionalDirectories.length) request.cwdRoots = [...config.additionalDirectories];
+      // roots include the exact external cwd for this invocation and are checked by the runtime.
+      request.cwdRoots = [
+        ...config.additionalDirectories,
+        ...(outsideWorkingDirectories(options, file.absolute) ? [file.absolute] : []),
+      ];
       // A sandbox denial may be retried unsandboxed only when the settings allow it and the user can still be asked.
       const canEscalate = config.enabled && !escalated && config.allowUnsandboxed;
       // The approval scope binds everything that changes authority or lifetime, not just the text.

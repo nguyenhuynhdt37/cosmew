@@ -5,9 +5,9 @@ import {Box, Text} from 'ink';
 import {useEffect, useMemo, useState, type ReactNode} from 'react';
 import {nextGrapheme} from '../../../input/text';
 import {useTheme} from '../../theme';
-import {Rule, TextLine, safeText} from '../../ui';
+import {Rule, TextLine, leadingSlashCommand, safeText} from '../../ui';
 import {useUiTheme} from '../../ui/ui-theme';
-import {ComposerFooter, SandboxBanner, contextLeft} from '../status';
+import {ComposerFooter, SandboxBanner, SessionModeBanner, contextLeft} from '../status';
 import {Autocomplete} from '../autocomplete';
 import {History} from '../history';
 import {visualRows} from './logic';
@@ -60,13 +60,50 @@ export function QueuedMessages({messages, width}: {messages: readonly string[]; 
   );
 }
 
+function ComposerHint({controller, width, bash}: {controller: ComposerController; width: number; bash: boolean}) {
+  const ui = useUiTheme();
+  const complete = useBindingLabel('Autocomplete', 'autocomplete:accept');
+  const previous = useBindingLabel('Autocomplete', 'autocomplete:previous').split('/')[0]!;
+  const next = useBindingLabel('Autocomplete', 'autocomplete:next').split('/')[0]!;
+  const dismiss = useBindingLabel('Autocomplete', 'autocomplete:dismiss');
+  const send = useBindingLabel('Chat', 'chat:submit');
+  const newline = useBindingLabel('Chat', 'chat:newline').split('/')[0]!;
+  const mode = useBindingLabel('Chat', 'chat:cycleMode');
+  const suggestions = [[previous, next].filter(key => key !== 'unbound').join('/'), 'select'];
+  const hints = controller.items.length
+    ? [[complete, 'complete'], suggestions, [dismiss, 'dismiss']]
+    : [
+        [send, controller.busy ? 'queue' : bash ? 'run shell' : 'send'],
+        [newline, 'new line'],
+        [mode, 'permissions'],
+        ...(controller.draft.value
+          ? []
+          : [['/', 'commands'], ['@', 'files'], ...(controller.vimMode ? [] : [['?', 'shortcuts']])]),
+      ];
+  return (
+    <Box width={width} paddingLeft={2}>
+      <Text wrap="truncate-end" color={ui.color('dim')}>
+        {controller.vimMode === 'INSERT' ? '-- INSERT -- · ' : null}
+        {hints
+          .filter(([key]) => key && key !== 'unbound')
+          .map(([key, label], index) => (
+            <Text key={label}>
+              {index ? ' · ' : ''}
+              <Text color={ui.color('command')}>{key}</Text> {label}
+            </Text>
+          ))}
+      </Text>
+    </Box>
+  );
+}
+
 export interface ComposerViewProps {
   controller: ComposerController;
   width?: number;
   maxRows?: number;
   placeholder?: string;
   isActive?: boolean;
-  /** Retained for existing callers; the old hint rows have been removed. */
+  /** Show shortcuts that apply to the current input state. */
   showHints?: boolean;
   /** Fullscreen bottom block: fixed effort row, blank row before the footer. */
   fullscreen?: boolean;
@@ -83,6 +120,7 @@ export function ComposerView({
   maxRows = 6,
   placeholder,
   isActive = true,
+  showHints = true,
   fullscreen = false,
   activity,
   warning,
@@ -109,9 +147,13 @@ export function ComposerView({
     : (placeholder ?? `Try "${EXAMPLES[example]}"`);
   // `#` is only a dispatch prefix now: it keeps the normal prompt and rules (spec 2).
   const mode = controller.draft.value.startsWith('!') ? 'bash' : 'prompt';
-  const promptColor = mode === 'bash' ? ui.color('bashMode') : controller.busy ? ui.color('dim') : undefined;
+  const promptColor =
+    mode === 'bash' ? ui.color('bashMode') : color(controller.busy ? 'foregroundMuted' : 'foreground');
   const ruleColor = mode === 'bash' ? ui.color('bashMode') : undefined;
   const displayValue = mode === 'prompt' ? controller.draft.value : controller.draft.value.slice(1);
+  const slashCommand = mode === 'prompt' ? leadingSlashCommand(displayValue) : null;
+  const commandStart = slashCommand?.[1]?.length ?? 0;
+  const commandEnd = slashCommand?.[0].length ?? 0;
   const displayCursor = Math.max(0, controller.draft.cursor - (mode === 'prompt' ? 0 : 1));
   const marker = mode === 'bash' ? '! ' : '❯ ';
   const outerWidth = Math.max(1, width ?? columns ?? 80);
@@ -125,8 +167,11 @@ export function ComposerView({
   );
   const first = Math.max(0, cursorRow - Math.max(1, maxRows) + 1);
   const anchor = Math.max(0, (draft.selectionAnchor ?? draft.cursor) - (mode === 'prompt' ? 0 : 1));
-  const from = Math.min(anchor, displayCursor),
-    to = Math.max(anchor, displayCursor);
+  const prefixLength = mode === 'prompt' ? 0 : 1;
+  const from = controller.vimRange
+    ? Math.max(0, controller.vimRange[0] - prefixLength)
+    : Math.min(anchor, displayCursor);
+  const to = controller.vimRange ? Math.max(0, controller.vimRange[1] - prefixLength) : Math.max(anchor, displayCursor);
   if (outerWidth < 6)
     return (
       <TextLine width={outerWidth} wrap="truncate-end">
@@ -152,7 +197,7 @@ export function ComposerView({
     );
   }
   const effort = controller.status.activeModel?.reasoningEfforts?.length
-    ? `◐ ${safeText(controller.status.reasoningEffort ?? 'default')} · /effort`
+    ? safeText(controller.status.reasoningEffort ?? 'default')
     : '';
   // One right-aligned slot above the rule: the deleted-text hint, the editor hint, else the effort line.
   const slot = controller.slotNotice
@@ -161,16 +206,25 @@ export function ComposerView({
       ? 'ctrl+y to paste deleted text'
       : displayValue.includes('\n')
         ? `ctrl+g to edit in ${editorName()}`
-        : effort;
+        : '';
   return (
     <Box flexDirection="column" width={outerWidth} minWidth={0}>
       <QueuedMessages messages={queued} width={outerWidth} />
       {activity}
       {items.length ? <Autocomplete items={items} selected={selected} width={outerWidth} /> : null}
-      {!items.length && (fullscreen || slot) ? (
+      {!items.length && (fullscreen || slot || effort) ? (
         // Reference: effort and deleted-text hint end two cells before the edge; the editor hint ends 18 cells before.
         <Box width={outerWidth} justifyContent="flex-end" paddingRight={slot.startsWith('ctrl+g') ? 18 : 2}>
-          <Text color={ui.color('dim')}>{slot || ' '}</Text>
+          {slot ? (
+            <Text color={ui.color('dim')}>{slot}</Text>
+          ) : effort ? (
+            <Text color={ui.color('dim')}>
+              <Text color={ui.color('thinking')}>{`◐ ${effort}`}</Text> ·{' '}
+              <Text color={ui.color('command')}>/effort</Text>
+            </Text>
+          ) : (
+            <Text> </Text>
+          )}
         </Box>
       ) : null}
       {controller.images.length ? (
@@ -195,6 +249,9 @@ export function ComposerView({
               Math.max(0, Math.min(row.text.length, from - row.start)),
               Math.max(0, Math.min(row.text.length, to - row.start)),
             ]);
+            for (const boundary of [commandStart, commandEnd]) {
+              if (boundary > row.start && boundary < row.start + row.text.length) boundaries.add(boundary - row.start);
+            }
             if (caret) {
               boundaries.add(caretOffset);
               boundaries.add(nextGrapheme(row.text, caretOffset));
@@ -203,12 +260,14 @@ export function ComposerView({
             return (
               <Box key={first + index} minWidth={0}>
                 <Text color={promptColor}>{first + index === 0 ? marker : '  '}</Text>
-                <Text wrap="truncate-end">
+                <Text wrap="truncate-end" color={color('foreground')}>
                   {points.slice(0, -1).map((start, part) => {
                     const end = points[part + 1]!;
                     const selected = row.start + start >= from && row.start + start < to;
+                    const command = row.start + start >= commandStart && row.start + start < commandEnd;
+                    const tint = command ? ui.color('command') : undefined;
                     return (
-                      <Text key={start} inverse={selected || (caret && start === caretOffset)}>
+                      <Text key={start} color={tint} inverse={selected || (caret && start === caretOffset)}>
                         {safeText(row.text.slice(start, end))}
                       </Text>
                     );
@@ -234,8 +293,17 @@ export function ComposerView({
           <TextLine width={Math.max(1, outerWidth - 2)} color={color('warning')}>{`⚠ ${warning}`}</TextLine>
         </Box>
       ) : null}
-      {fullscreen && !controller.shortcuts ? <Text> </Text> : null}
+      {!controller.shortcuts && isActive && showHints && (!controller.vimMode || controller.vimMode === 'INSERT') ? (
+        <ComposerHint controller={controller} width={outerWidth} bash={mode === 'bash'} />
+      ) : controller.vimMode && controller.vimMode !== 'NORMAL' ? (
+        <Box width={outerWidth} paddingLeft={2}>
+          <Text color={ui.color('dim')}>{`-- ${controller.vimMode} --`}</Text>
+        </Box>
+      ) : fullscreen && !controller.shortcuts ? (
+        <Text> </Text>
+      ) : null}
       <SandboxBanner enabled={controller.status.sandbox.enabled} count={controller.status.sandboxBlockedOperations} />
+      <SessionModeBanner mode={controller.status.mode} width={outerWidth} />
       {!controller.shortcuts && controller.tasks.length ? (
         <Box flexDirection="column" width={outerWidth} paddingLeft={2} minWidth={0}>
           <Text wrap="truncate-end" color={ui.color('dim')}>
@@ -266,6 +334,14 @@ export function ComposerView({
         shortcuts={controller.shortcuts ? controller.shortcutColumns : undefined}
         message={controller.notice || controller.completionError}
         remaining={contextLeft(controller.context)}
+        context={
+          controller.status.selection
+            ? {
+                usedTokens: controller.context.estimateTokens,
+                modelLimitTokens: controller.status.activeModel?.contextLimit ?? null,
+              }
+            : undefined
+        }
         transcriptHint={transcriptHint}
       />
     </Box>

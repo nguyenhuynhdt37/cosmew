@@ -765,7 +765,7 @@ test.skipIf(process.platform === 'win32')(
       const footer = '⏸ manual mode on';
       const summaryRow = () => {
         const lines = stripVTControlCharacters(output).split(/\r?\n/);
-        const last = lines.findLastIndex(line => line.trim() === footer);
+        const last = lines.findLastIndex(line => line.trimStart().startsWith(footer));
         if (last < 0) return 0;
         const first = lines.findLastIndex((line, index) => index < last && line.trim() === summary);
         return first >= 0 && last - first < 36 ? 36 - (last - first) : 0;

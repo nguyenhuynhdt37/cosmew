@@ -18,7 +18,7 @@ test('settle drains effects and timer/promise work across multiple paints', asyn
     return <Text>step {step}</Text>;
   }
   const view = renderInk(<Delayed />);
-  await settle();
+  await settle(0, 2000, {quietMs: 45});
   expect(view.lastFrame()).toContain('step 3');
 });
 
@@ -31,7 +31,7 @@ test('settle observes identical-text repaints', async () => {
     if (frames.length === 4) clearInterval(timer);
   }, 20);
   try {
-    await settle();
+    await settle(0, 2000, {quietMs: 45});
     expect(view.frames).toHaveLength(4);
   } finally {
     clearInterval(timer);
@@ -50,7 +50,7 @@ test('settle times out on continuous paints instead of returning a stale frame',
   const view = trackFrames({frames, lastFrame: () => frames.at(-1)});
   const timer = setInterval(() => frames.push('painting'), 5);
   try {
-    await expect(settle(0, 90)).rejects.toThrow('Ink did not settle within 90ms');
+    await expect(settle(0, 90, {quietMs: 45})).rejects.toThrow('Ink did not settle within 90ms');
     expect(view.frames.length).toBeGreaterThan(1);
   } finally {
     clearInterval(timer);

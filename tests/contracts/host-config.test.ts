@@ -157,12 +157,13 @@ test('reasoning declarations parse and round-trip with strict nested validation'
   const head = '[model_providers.x]\nbase_url = "https://h.example/v1"\n';
   const good = load(
     head +
-      '[model_providers.x.reasoning]\nefforts = ["low", "high"]\n[model_providers.x.reasoning.models."grok-4.7"]\nsupported = true\nefforts = ["high"]\n[model_providers.x.reasoning.models.disabled]\nsupported = false\n',
+      '[model_providers.x.reasoning]\nefforts = ["low", "high"]\n[model_providers.x.reasoning.budgets]\nhigh = 4096\n[model_providers.x.reasoning.models."grok-4.7"]\nsupported = true\nefforts = ["high"]\n[model_providers.x.reasoning.models."grok-4.7".budgets]\nhigh = 8192\n[model_providers.x.reasoning.models.disabled]\nsupported = false\n',
   );
   expect(good.diagnostics).toEqual([]);
   expect(good.providers[0]!.provider.reasoning).toEqual({
     efforts: ['low', 'high'],
-    models: {'grok-4.7': {supported: true, efforts: ['high']}, disabled: {supported: false}},
+    budgets: {high: 4096},
+    models: {'grok-4.7': {supported: true, efforts: ['high'], budgets: {high: 8192}}, disabled: {supported: false}},
   });
   expect(load(renderProviderToml(good.providers[0]!)).providers[0]!.provider).toEqual(good.providers[0]!.provider);
   for (const bad of [
@@ -177,6 +178,11 @@ test('reasoning declarations parse and round-trip with strict nested validation'
     {supported: 'yes'},
     {unknown: true},
     {supported: false, efforts: ['high']},
+    {supported: false, budgets: {low: 1024}},
+    {budgets: {none: 0}},
+    {budgets: {high: 0}},
+    {budgets: {high: 1.5}},
+    {budgets: {high: '1024'}},
     {models: {'bad model id': {supported: true}}},
     {models: {valid: {effort: ['low']}}},
     {models: {valid: {supported: false, efforts: ['low']}}},

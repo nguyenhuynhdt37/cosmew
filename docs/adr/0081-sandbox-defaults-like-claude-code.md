@@ -58,3 +58,13 @@ banner near 328900871 selects `operation` / `operations`. Claude's live banner
 expires after five seconds and adds shortcut details; Cosmew intentionally uses
 the requested current-turn count, without advertising an unimplemented OS log
 inspector. This observation verifies strings, not Claude's schema defaults.
+
+## Bash permission prompts
+
+With the sandbox off, an ordinary Bash prompt focuses **Yes** and puts the
+`/sandbox` hint in the footer. Escapes and exclusions while the sandbox is on
+show **NO SANDBOX**, warn about full user permissions, and focus **No**.
+`dangerouslyDisableSandbox` offers once and session only. Exclusions keep
+their existing exact-command rule option. Sandboxed prompts retain their
+existing presentation. The optional `commandSandbox` field is additive
+within contract 1.43. [Tools and permissions](../contracts/tools-and-permissions.md)

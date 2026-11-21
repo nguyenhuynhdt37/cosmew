@@ -22,7 +22,6 @@ import {toCodePointColumn, type LspDiagnostic} from '@cosmew/code-intel';
 import {WriteBoundaryError, WorkspaceDenied, type ResolvedPath} from '@cosmew/workspace';
 import {
   commandGrantTarget,
-  readDecision,
   effectiveSandboxMode,
   sandboxConfig,
   type ApprovalRequest,
@@ -32,7 +31,12 @@ import {
 } from './context';
 import type {PreparedTool} from './handlers/types';
 import {join} from 'node:path';
-import {resolveWorkspacePath} from './working-roots';
+import {
+  resolveWorkspacePath,
+  readTargetDecision,
+  outsideWorkingDirectories,
+  OUTSIDE_WORKING_DIRECTORIES_MESSAGE,
+} from './working-roots';
 import {clipBytes} from './limits';
 import {plainTerminalText} from './exec/output';
 import {ToolRouter} from './router';
@@ -43,6 +47,7 @@ type Authorization = {
   viaSession: boolean;
   scopeHash?: string;
   sourceRead?: {file: ResolvedPath; decision: PermissionDecision};
+  readDecision?: PermissionDecision;
 };
 
 /** Shared invocation lifecycle. Discovery never replaces policy, approval or launch-time checks. */
@@ -144,7 +149,7 @@ export class ToolOrchestrator {
         const read = await this.authorizeRead(call.name, prepared.file, audit, signal);
         if (read.gate) return finish(read.gate);
         signal?.throwIfAborted();
-        const denied = this.revalidateRead(prepared.file, read.viaSession, audit);
+        const denied = this.revalidateRead(prepared.file, read.viaSession, audit, true, undefined, read.readDecision);
         if (denied) return finish(denied);
         const current = this.router.resolve(call.name);
         if (!('handler' in current) || current.handler !== resolved.handler)
@@ -186,10 +191,10 @@ export class ToolOrchestrator {
                       : prepared.kind === 'state' || prepared.kind === 'question'
                         ? this.authorizeState(audit, prepared.kind)
                         : prepared.kind === 'agent'
-                          ? this.authorizeAgent(prepared, audit)
+                          ? await this.authorizeAgent(call, prepared, audit, signal)
                           : prepared.kind === 'mcp'
                             ? await this.authorizeMcp(call.name, prepared.target, audit, signal)
-                            : {gate: this.authorizeSearch(prepared, audit), viaSession: false};
+                            : await this.authorizeSearch(call.name, prepared, audit, signal);
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
       signal?.throwIfAborted();
@@ -206,13 +211,22 @@ export class ToolOrchestrator {
               audit,
               true,
               prepared.revalidate,
-              prepared.readDecision,
+              prepared.readDecision ?? authorization.readDecision,
             )
-          : prepared.kind === 'command'
-            ? this.revalidateCommand(prepared, authorization.viaSession, audit)
-            : prepared.kind === 'output' && authorization.sourceRead
-              ? this.revalidateOutputSource(prepared, authorization, audit)
-              : null;
+          : prepared.kind === 'search'
+            ? this.revalidateRead(
+                prepared.file,
+                authorization.viaSession,
+                audit,
+                true,
+                undefined,
+                authorization.readDecision,
+              )
+            : prepared.kind === 'command'
+              ? this.revalidateCommand(prepared, authorization.viaSession, audit)
+              : prepared.kind === 'output' && authorization.sourceRead
+                ? this.revalidateOutputSource(prepared, authorization, audit)
+                : null;
       if (revalidation) return finish(revalidation);
       if (prepared.kind === 'output' && !prepared.valid())
         return finish({
@@ -220,11 +234,22 @@ export class ToolOrchestrator {
           code: 'DENIED',
           content: 'Output permission context changed before retrieval.',
         });
+      if (call.name === 'agent_message') {
+        const denied = this.agentMessageRestriction();
+        if (denied) return finish(denied);
+      }
       if (prepared.kind === 'state-write') {
         const denied = this.stateWriteRestriction();
         if (denied) return finish(denied);
       }
       if (prepared.kind === 'patch') {
+        const mode = sandboxConfig(this.options);
+        if (mode.readOnly || mode.permissionMode === 'plan' || this.options.analysisOnly?.())
+          return finish({
+            status: 'denied',
+            code: 'MODE_RESTRICTED',
+            content: 'Read-only mode refuses file changes. Nothing was written.',
+          });
         if (authorization.viaSession && !this.options.grants.has('fs.write', prepared.plan.scopeKey))
           return finish({
             status: 'denied',
@@ -299,13 +324,18 @@ export class ToolOrchestrator {
           return finish({
             status: 'denied',
             code: 'DENIED',
-            content: 'Access denied: the path is outside the approved workspace.',
+            content: OUTSIDE_WORKING_DIRECTORIES_MESSAGE,
           });
         }
         if (error.reason === 'inaccessible')
           return finish({status: 'error', code: 'UNREADABLE', content: 'File metadata is inaccessible.'});
         if (error.reason === 'not-found')
-          return finish({status: 'error', code: 'NOT_FOUND', content: 'No such file or directory in the workspace.'});
+          return finish({
+            status: 'error',
+            code: 'NOT_FOUND',
+            content:
+              'Path not found in the working directories; this is not a permission denial. Check the path with glob before retrying.',
+          });
         return finish({status: 'error', code: 'INVALID_INPUT', content: 'Invalid path.'});
       }
       if (error instanceof FutrynError && error.code === 'TIMEOUT')
@@ -379,7 +409,7 @@ export class ToolOrchestrator {
       };
       const file = resolveSource();
       if (!file) return targetChanged();
-      const initialDecision = readDecision(this.options, file.relative, file.absolute);
+      const initialDecision = readTargetDecision(this.options, file);
       const authorization = await this.authorizeRead('tool_output', file, audit, signal);
       if (authorization.gate) return authorization;
       if (!prepared.valid()) return deny();
@@ -439,6 +469,7 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
     allowPrompt = true,
   ): Promise<Authorization> {
+    const generation = this.options.grants.generation;
     const scopeHash = createHash('sha256')
       .update(JSON.stringify([request.capability, grant]))
       .digest('hex');
@@ -460,6 +491,17 @@ export class ToolOrchestrator {
       };
     const answer = await this.options.approve(request, signal);
     signal?.throwIfAborted();
+    if (this.options.grants.generation !== generation)
+      return {
+        gate: {
+          status: 'denied',
+          code: 'DENIED',
+          content: 'Permissions were revoked while approval was pending. Request access again.',
+          target,
+        },
+        viaSession: false,
+        scopeHash,
+      };
     audit({target, phase: 'decided', decision: answer, reason: 'user', scopeHash});
     // Fail closed even if an injected approval adapter returns an unexpected value. `always` was
     // saved as a project rule by the adapter; it authorizes this call like `once` (ADR 0055).
@@ -477,8 +519,8 @@ export class ToolOrchestrator {
     allowPrompt = true,
     skillRead = false,
   ): Promise<Authorization> {
-    const decision = readDecision(this.options, file.relative, file.absolute, skillRead);
-    return this.permission(
+    const decision = readTargetDecision(this.options, file, skillRead);
+    const result = await this.permission(
       decision,
       {tool, capability: 'fs.read', target: file.relative, reason: decision.reason},
       file.absolute,
@@ -489,6 +531,7 @@ export class ToolOrchestrator {
       signal,
       allowPrompt,
     );
+    return {...result, readDecision: decision};
   }
 
   revalidateRead(
@@ -500,7 +543,7 @@ export class ToolOrchestrator {
     authorizedDecision?: PermissionDecision,
   ): ToolOutput | null {
     const again = resolve ? resolve() : resolveWorkspacePath(this.options, file.relative);
-    const current = readDecision(this.options, again.relative, again.absolute, !!resolve);
+    const current = readTargetDecision(this.options, again, !!resolve);
     if (
       again.absolute !== file.absolute ||
       again.kind !== file.kind ||
@@ -528,7 +571,7 @@ export class ToolOrchestrator {
       try {
         const key = change.snapshot.identity ?? change.snapshot.path;
         const file = resolveWorkspacePath(this.options, key);
-        if (readDecision(this.options, file.relative, file.absolute).effect !== 'allow') continue;
+        if (readTargetDecision(this.options, file).effect !== 'allow') continue;
         known.set(key, lsp.knownErrors(file));
       } catch {
         known.set(change.snapshot.identity ?? change.snapshot.path, undefined);
@@ -558,7 +601,7 @@ export class ToolOrchestrator {
       let file;
       try {
         file = resolveWorkspacePath(this.options, path);
-        if (readDecision(this.options, file.relative, file.absolute).effect !== 'allow') continue;
+        if (readTargetDecision(this.options, file).effect !== 'allow') continue;
       } catch {
         continue;
       }
@@ -691,25 +734,97 @@ export class ToolOrchestrator {
     );
   }
 
-  private authorizeAgent(prepared: Extract<PreparedTool, {kind: 'agent'}>, audit: Audit): Authorization {
-    audit({target: prepared.target, phase: 'decided', decision: 'allow', reason: 'subagent'});
-    return {gate: null, viaSession: false};
+  private agentMessageRestriction(): ToolOutput | null {
+    const config = sandboxConfig(this.options);
+    if (!this.options.analysisOnly?.() && config.permissionMode !== 'plan' && !config.readOnly) return null;
+    return {
+      status: 'denied',
+      code: 'MODE_RESTRICTED',
+      content: 'Subagent messages are refused in Plan/Review or read-only mode. Nothing was sent.',
+    };
   }
 
-  private authorizeSearch(prepared: Extract<PreparedTool, {kind: 'search'}>, audit: Audit): ToolOutput | null {
-    const decision = readDecision(this.options, prepared.file.relative, prepared.file.absolute);
+  private async authorizeAgent(
+    call: ToolCall,
+    prepared: Extract<PreparedTool, {kind: 'agent'}>,
+    audit: Audit,
+    signal?: AbortSignal,
+  ): Promise<Authorization> {
+    if (call.name !== 'agent_message') {
+      audit({target: prepared.target, phase: 'decided', decision: 'allow', reason: 'subagent'});
+      return {gate: null, viaSession: false};
+    }
+    const restriction = this.agentMessageRestriction();
+    if (restriction) return {gate: restriction, viaSession: false};
+    const sessionId = this.options.sessionId?.();
+    const policy = this.options.toolPolicy?.(call.name);
+    const scopeKey = createHash('sha256')
+      .update(
+        JSON.stringify({
+          input: call.input,
+          sessionId,
+          workspace: this.options.workspace.root,
+        }),
+      )
+      .digest('hex');
+    audit({target: prepared.target, phase: 'decided', decision: 'ask', reason: 'subagent-message'});
+    const answer = await this.options.approve(
+      {
+        tool: call.name,
+        capability: 'agent.spawn',
+        target: prepared.target,
+        reason: 'subagent-message',
+        scopeKey,
+      },
+      signal,
+    );
+    signal?.throwIfAborted();
+    const currentPolicy = this.options.toolPolicy?.(call.name);
+    const changed =
+      sessionId !== this.options.sessionId?.() ||
+      currentPolicy === 'deny' ||
+      (currentPolicy === 'ask' && policy !== 'ask');
+    const denied = this.agentMessageRestriction();
+    audit({target: prepared.target, phase: 'decided', decision: answer, reason: 'user'});
+    return {
+      gate:
+        denied ??
+        (changed || !['once', 'session', 'always'].includes(answer)
+          ? {
+              status: 'denied',
+              code: 'DENIED',
+              content: 'Subagent message denied or its parent session changed. Nothing was sent.',
+            }
+          : null),
+      viaSession: false,
+    };
+  }
+
+  private async authorizeSearch(
+    tool: string,
+    prepared: Extract<PreparedTool, {kind: 'search'}>,
+    audit: Audit,
+    signal?: AbortSignal,
+  ): Promise<Authorization> {
+    const decision = readTargetDecision(this.options, prepared.file);
     if (decision.effect === 'deny') {
       audit({target: prepared.file.relative, phase: 'decided', decision: 'deny', reason: decision.reason});
       return {
-        status: 'denied',
-        code: 'DENIED',
-        content: `Access denied by policy (${decision.reason}).`,
-        target: prepared.file.relative,
+        gate: {
+          status: 'denied',
+          code: 'DENIED',
+          content: `Access denied by policy (${decision.reason}).`,
+          target: prepared.file.relative,
+        },
+        viaSession: false,
+        readDecision: decision,
       };
     }
+    if (outsideWorkingDirectories(this.options, prepared.file.absolute))
+      return this.authorizeRead(tool, prepared.file, audit, signal);
     // Listing returns names; grep independently authorizes every content read and skips asks.
     audit({target: prepared.file.relative, phase: 'decided', decision: 'allow', reason: prepared.reason});
-    return null;
+    return {gate: null, viaSession: false, readDecision: decision};
   }
 
   private async authorizePatch(
@@ -719,19 +834,33 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
   ): Promise<Authorization> {
     const {plan} = prepared;
+    const config = sandboxConfig(this.options);
+    if (config.readOnly || config.permissionMode === 'plan' || this.options.analysisOnly?.())
+      return {
+        gate: {
+          status: 'denied',
+          code: 'MODE_RESTRICTED',
+          content: 'Read-only mode refuses file changes. Nothing was written.',
+        },
+        viaSession: false,
+      };
     // Writes in the working directory follow the permission mode (acceptEdits approves them); a
     // read-only subagent profile has no writable root.
-    const workspaceWritable = !sandboxConfig(this.options).readOnly;
     const decisions = plan.changes.map(c => {
       const base = c.snapshot.base ?? this.options.workspace.root;
-      return evaluateWrite(c.snapshot.path, join(base, c.snapshot.path), {
+      const absolute = join(base, c.snapshot.path);
+      const decision = evaluateWrite(c.snapshot.path, absolute, {
         stateDirectory: this.options.stateDirectory,
-        writable: workspaceWritable,
+        writable: !outsideWorkingDirectories(this.options, absolute),
       });
+      const rule = this.options.writePolicy?.(c.snapshot.identity ?? c.snapshot.path, absolute);
+      if (decision.effect === 'deny') return decision;
+      return rule ? {effect: rule, reason: 'project-write-rule'} : decision;
     });
     const denied = decisions.find(d => d.effect === 'deny');
     const decision = denied ??
-      decisions.find(d => d.reason === 'outside-writable-roots') ?? {effect: 'ask' as const, reason: 'workspace-patch'};
+      decisions.find(d => d.effect === 'ask' && d.reason === 'outside-writable-roots') ??
+      decisions.find(d => d.effect === 'ask') ?? {effect: 'allow' as const, reason: 'project-write-rule'};
     const target = plan.changes
       .map(c => c.snapshot.identity ?? c.snapshot.path)
       .join(', ')
@@ -863,12 +992,20 @@ export class ToolOrchestrator {
       runtimeId,
       prepared.excluded ? `${prepared.executionKey}:excluded` : prepared.executionKey,
     );
-    const unsandboxed = prepared.sandbox?.unsandboxed === true;
-    const sandbox = unsandboxed
-      ? 'NO SANDBOX'
-      : prepared.sandbox
-        ? `${runtime.label} · ${prepared.sandbox.mode === 'read-only' ? 'read-only' : 'sandboxed'}`
-        : runtime.label;
+    let commandSandbox: ApprovalRequest['commandSandbox'];
+    let sandbox = runtime.label;
+    if (prepared.sandbox) {
+      if (prepared.escalation || prepared.excluded) {
+        commandSandbox = prepared.escalation ? 'escape' : 'excluded';
+        sandbox = 'NO SANDBOX';
+      } else if (prepared.sandbox.unsandboxed) {
+        commandSandbox = 'disabled';
+        sandbox = 'sandbox off';
+      } else {
+        commandSandbox = 'sandboxed';
+        sandbox = `${runtime.label} · ${prepared.sandbox.mode === 'read-only' ? 'read-only' : 'sandboxed'}`;
+      }
+    }
     const authorization = await this.permission(
       decision,
       {
@@ -877,6 +1014,7 @@ export class ToolOrchestrator {
         target: command,
         workdir: file.relative,
         sandbox,
+        ...(commandSandbox ? {commandSandbox} : {}),
         // The approval is bound to exactly this command, directory and sandbox (ADR 0055).
         scopeKey: grant,
         reason: decision.reason,

@@ -37,6 +37,22 @@ appearance rows are left in place but ignored. Restart uses user appearance. Thi
 keeps override precedence while removing SQLite/project-controlled appearance
 persistence. The config scope hint labels project scope as session-only.
 
+## TUI preferences (2026-11-22)
+
+The same user-only JSON store handles the optional SDK `UserPreferencesStore`.
+`autoCompact` (true), `verbose` (false), and `showTurnDuration` (true) are
+top-level booleans. Missing or invalid values use the defaults. Enter on the
+corresponding Config row applies the change live. Failed writes keep the
+requested preferences for the current client and use the existing notice path.
+SDK embeddings without the port keep their preferences in memory. Repository
+settings and the appearance scope toggle do not control these preferences.
+
+Auto-compact off skips the model and excerpt checkpoints at the automatic
+pressure threshold. Manual compaction and context size limits still apply.
+Verbose starts in the detailed transcript view with expanded tool rows.
+Ctrl+O remains a session view toggle. Show turn duration controls the completed
+turn timing line. Reduce motion retains the existing appearance key.
+
 ## File behavior
 
 Reads cache mtime/ctime, size, inode and mode; external permission-setting writes

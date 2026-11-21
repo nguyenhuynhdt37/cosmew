@@ -113,7 +113,7 @@ test('migrations v7 + v8 delete every runtime account and credential (Codex incl
     expect(state.reasoningPreferences).toEqual({[`${ID.openai}:gpt-5`]: 'low'});
     // User data beyond the removed providers is untouched.
     expect(app.db.query("SELECT id FROM conversations WHERE id='keep-me'").get()).toBeTruthy();
-    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(10);
+    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(11);
     // ADR 0081 adds the default-off notice after the two migration notices; all are one-time.
     const notices = app.takeStartupNotices();
     expect(notices).toHaveLength(3);

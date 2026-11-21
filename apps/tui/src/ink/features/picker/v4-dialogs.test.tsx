@@ -16,9 +16,7 @@ test('Settings slash enters search without filtering by slash; Space toggles out
   const fixture = dialogFixture();
   const view = renderInk(<SettingsDialog />, {fixture});
   await settle();
-  // First row is editor mode, deliberately unsupported; Space must explain the limit rather than filter it out.
   await key(view, ' ');
-  expect(view.lastFrame()).toContain('Not implemented');
   expect(view.lastFrame()).not.toContain('No matches');
   await key(view, '/');
   await key(view, 'tool calls');
@@ -33,6 +31,12 @@ test('settings list keeps Up/Down navigation after leaving the first row', async
   const fixture = dialogFixture();
   const view = renderInk(<SettingsDialog />, {fixture});
   await settle();
+  for (let row = 0; row < 8 && !view.lastFrame()?.includes('❯ Active directory'); row++) {
+    await key(view, '\u001b[B');
+  }
+  expect(view.lastFrame()).toContain('❯ Active directory');
+  await key(view, '\u001b[A');
+  expect(view.lastFrame()).toContain('❯ Workspace');
   await key(view, '\u001b[B');
   await key(view, '\r');
   expect(view.lastFrame()).toContain('Changing directory requires a new CLI launch');

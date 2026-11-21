@@ -1,3 +1,4 @@
+import {limitKindLabel, limitItemText, limitItemSnapshotText} from '../usage/logic';
 import {PERMISSION_MODE_LABELS, type AppearanceConfig} from '@cosmew/contracts';
 
 export interface SettingRow {
@@ -20,7 +21,7 @@ export function settingsRows(appearance: AppearanceConfig, effectiveMode: 'dark'
     {label: 'Animation Speed', value: `${a.speed.toFixed(2)}x`},
     {label: 'Cell Size / Density', value: `${a.cellSize}x`},
     {label: 'Readability Veil', value: `${Math.round(a.veil * 100)}%`},
-    {label: 'Reduced Motion', value: a.reducedMotion ? 'ON' : 'OFF'},
+    {label: 'Reduce motion', value: a.reducedMotion ? 'ON' : 'OFF'},
     {label: 'Pause When Unfocused', value: a.pauseUnfocused ? 'ON' : 'OFF'},
     {label: 'Reactive Agent Effects', value: a.reactiveEffects ? 'ON' : 'OFF'},
     {label: 'Syntax Highlighting', value: appearance.syntaxHighlighting ? 'ON' : 'OFF'},
@@ -50,6 +51,10 @@ export type ConfigurationAction =
   | 'context'
   | 'status'
   | 'mode'
+  | 'editor-mode'
+  | 'verbose'
+  | 'showTurnDuration'
+  | 'autoCompact'
   | 'budget-steps'
   | 'budget-calls'
   | 'budget-tokens'
@@ -89,8 +94,12 @@ export function configurationRows(
       ),
       ...(index === 2 ? {disabled: 'Wallpaper is unavailable for the current themes.'} : {}),
     }));
-  if (section === 'General')
+  if (section === 'General') {
+    const {autoCompact, verbose, showTurnDuration} = client.userPreferences();
     return [
+      {label: 'Auto-compact', value: autoCompact ? 'ON' : 'OFF', action: 'autoCompact', source: 'user'},
+      {label: 'Verbose', value: verbose ? 'ON' : 'OFF', action: 'verbose', source: 'user'},
+      {label: 'Show turn duration', value: showTurnDuration ? 'ON' : 'OFF', action: 'showTurnDuration', source: 'user'},
       {label: 'Workspace', value: status.workspace, source: 'launch directory'},
       {
         label: 'Active directory',
@@ -111,10 +120,12 @@ export function configurationRows(
       },
       {
         label: 'Editor mode',
-        value: 'Not implemented',
-        disabled: 'Not implemented: vim editing mode is not available; the prompt uses the default (emacs-style) keys.',
+        value: client.editorMode(),
+        action: 'editor-mode',
+        source: 'user',
       },
     ];
+  }
   if (section === 'Models & Providers')
     return [
       {
@@ -313,7 +324,9 @@ export function statsFields(client: import('@cosmew/sdk').FutrynClient): Fields 
   const last = usage.last?.usage;
   return [
     ['Session', ''],
-    ['Estimated cost', usage.costUSD == null ? NOT_REPORTED : `$${usage.costUSD.toFixed(4)}`],
+    ['API estimate', usage.estimatedCostUSD == null ? NOT_REPORTED : `$${usage.estimatedCostUSD.toFixed(4)}`],
+    ['Provider-reported USD', usage.reportedCostUSD == null ? NOT_REPORTED : `$${usage.reportedCostUSD.toFixed(4)}`],
+    ['Billing', 'API estimates and reported USD are not subscription bills.'],
     ['Total duration (API)', NOT_REPORTED],
     ['Total duration (wall)', NOT_REPORTED],
     [
@@ -341,14 +354,10 @@ export function usageMeters(client: import('@cosmew/sdk').FutrynClient): UsageMe
     account.items
       .filter(item => item.unit !== 'USD')
       .map(item => ({
-        label: item.label,
+        label: `${account.providerName} / ${account.alias} · ${limitKindLabel(item)} · ${item.label}`,
         percent: item.unlimited ? null : (item.usedPercent ?? null),
-        text: item.unlimited
-          ? 'unlimited'
-          : item.usedPercent == null
-            ? 'usage unknown'
-            : `${Math.round(item.usedPercent)}% used`,
-        reset: item.resetAt ? `Resets ${item.resetAt}` : undefined,
+        text: limitItemText(item),
+        reset: limitItemSnapshotText(account, item),
       })),
   );
 }

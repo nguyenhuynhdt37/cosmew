@@ -3,6 +3,10 @@
 Phạm vi implementation: `composer`, `autocomplete`, `history`, `paste`. Không
 thay SDK, dispatch/policy, composition root, keymap, dependency hay renderer cũ.
 
+Ô nhập hiển thị phím đang gán. Khi có gợi ý, **Tab** chèn mục đang chọn vào bản nháp,
+**↑/↓** đổi mục và **Esc** đóng danh sách. Khi gõ bình thường, dòng gợi ý hiển thị
+phím gửi, xuống dòng và đổi chế độ quyền. Gợi ý đổi theo `/keybindings`.
+
 ## Nối vào Pha 2
 
 - `Composer(props)` là component tự giữ state. Props bắt buộc `onSubmit(content)`;

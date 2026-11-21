@@ -108,21 +108,33 @@ refresh captured before consent cannot overwrite the enabled report. Empty repor
 show `No changes`; denied/error reports show their reason, including unavailable
 branch merge bases. The 110-column threshold is unchanged.
 
-## 9. Màu (đo từ `colors.json`; hai biến thể sáng/tối của theme user)
+## 9. Bảng màu sáng và tối
 
 | Vai trò | Sáng | Tối | Ví dụ |
 |---|---|---|---|
-| Brand (logo) | `#d77757` | `#d77757` | logo |
+| Logo, tiêu đề Markdown | `#995b49` | `#d7a38d` | logo, tiêu đề và đầu bảng |
 | Mờ / `⎿` / tóm tắt | `#6e7171` | `#a9abae` | `Ran 1 shell command`, `✻ … for 8s` |
-| Rule ô nhập / spinner | `#3465a4` | `#81a2be` | `────`, `Imagining…` |
+| Rule ô nhập / spinner đang xử lý | `#3465a4` | `#81a2be` | `────`, `Exploring…` |
 | Nhấn chọn `❯` | `#05727e` | `#8abeb7` | `❯ 1. Yes`, plan mode |
-| Path / tên file | `#5769f7` | `#b1b9f9` | `a.txt` |
+| Đường dẫn / liên kết | `#526486` | `#afb8d4` | `a.txt`, liên kết Markdown |
+| Lệnh / giá trị cấu hình | `#3d6875` | `#98c3cf` | `/config`, khóa TOML/JSON |
+| Chế độ shell | `#80586b` | `#cb9faf` | dấu `!`, nhãn `Bash` |
+| Nhãn thinking / từ khóa cú pháp | `#6c557a` | `#c0afd1` | `✻ Thinking…`, biến môi trường, giá trị boolean |
+| Mã nội dòng / chuỗi trong khối mã | `#49684d` | `#acc6a7` | `` `echo` ``, `"hello"` |
 | Nền tin user | `#f2f3f3` (chữ `#2e3434`) | `#353940` (chữ `#ffffff`) | `❯ prompt` |
 | Nền panel diff | `#f5f5f5` | `#262626` | panel phải |
-| Diff thêm / xoá (nền) | `#e4f0da` / `#f7d9d9` | `#3d423c` (chữ `#50c850`) / — | diff |
-| Cảnh báo | `#8e7700` | Needs verification | `Accessing workspace:` |
+| Diff thêm / xoá (nền) | `#e0e4e1` / `#e8e1e2` | `#3a403b` / `#423b3c` | diff |
+| Cảnh báo | `#795e37` | `#dfc290` | `Accessing workspace:` |
 
 `auto` phải chọn sáng/tối theo **nền terminal thật** (OSC 11, COLORFGBG), không theo macOS. Chỉ dùng token, không mã màu rời.
+
+Tên lệnh trong gợi ý và `/help` có màu riêng. Dòng nhập Bash, nội dung thinking và đầu ra công cụ dùng chữ trung tính với nhãn có màu. Lệnh shell nhiều dòng được tô cú pháp Bash khi mở rộng.
+
+Trong `/theme`, di chuyển con trỏ để xem màu lệnh, thinking, trạng thái, Bash và diff trên nền của theme. Màn hình hẹp giữ mẫu gọn. Chọn **Code colors** để bật hoặc tắt tô cú pháp ngay trong preview. **Enter** khi đứng ở tên theme sẽ lưu theme. **Esc** hủy theme đang xem trước. Preview cũng báo khả năng màu của terminal.
+
+**Midnight** dùng nền xanh đậm với màu cyan, tím và hổ phách. **Parchment** dùng nền giấy ấm với màu cobalt, mận và xanh lá đậm. Các màu chữ chính được kiểm thử ở mức tương phản 4,5:1 trên nền chính, panel và ô nhập. Terminal chỉ có 16 màu dùng bảng ANSI tương ứng. `NO_COLOR` bỏ màu chữ và nền, giữ nguyên nhãn và ký hiệu.
+
+Auto, Dark và Light dùng nền sẵn có của terminal cho toàn bộ vùng chat. Midnight và Parchment tô nền một lần cho cả khung TUI để khoảng trống, câu trả lời, Thinking và ô nhập cùng một màu. Tin nhắn người dùng và diff dùng màu nền riêng để dễ nhận biết.
 
 ## 10. Còn phải chụp (G0b)
 

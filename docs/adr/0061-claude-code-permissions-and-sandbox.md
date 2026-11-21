@@ -60,6 +60,35 @@ Futryn followed Codex: `sandbox_mode` (`read-only | workspace-write | danger-ful
 
 ## Live upstream documentation check
 
+### 2026-11-22: outside-working-directory boundary is not OS sandboxing
+
+Official documentation retrieved through Context7 on 2026-11-22:
+
+- <https://code.claude.com/docs/en/security> states that in Manual mode file
+  tools ask before reading/writing outside the starting folder, and that the
+  boundary is a permission prompt: an approved Bash command can write anywhere
+  the user's OS account can. OS-level path limits require sandboxing.
+- <https://code.claude.com/docs/en/permissions#working-directories> documents
+  optional `permissions.blockReadsOutsideWorkingDirectories` and
+  `permissions.blockWritesOutsideWorkingDirectories` for hard file-tool refusal,
+  including bypassPermissions. The write block requires v2.1.314 or later and
+  does not constrain Bash/MCP/hooks; the OS sandbox is a separate layer.
+- <https://code.claude.com/docs/en/settings-reference> documents those explicit
+  block settings and `sandbox.filesystem.allowWrite` for extra sandbox write paths.
+
+The installed executable reports **Claude Code 2.1.330** (`claude --version`).
+This check read documentation/version metadata only; actual Claude tool approval
+and outside-write behavior on this host remains **Needs verification**.
+
+**Documented parity deviation:** Cosmew's unconditional file-tool refusal outside
+the project plus trusted additional directories (ADR 0067 and current project
+instructions) is stricter than Claude's documented default permission boundary.
+Do not present that hard refusal as a consequence of disabling sandboxing or as
+Claude's universal behavior. Conversely, disabling the OS sandbox does not by
+itself approve a command or cancel deny rules. Approved unsandboxed Bash and
+the built-in file tools must be distinguished. No filesystem policy, settings
+trust or permission grant was changed by this documentation check.
+
 Checked 2026-11-21 against the current Claude Code documentation:
 
 - Settings and precedence: <https://code.claude.com/docs/en/settings> (accessed 2026-11-21). The current CLI documents managed settings, a per-session `--settings` overlay, hot reload of settings files, and `/status` source attribution.
@@ -68,3 +97,7 @@ Checked 2026-11-21 against the current Claude Code documentation:
 - Terminal configuration: <https://code.claude.com/docs/en/terminal-config> (accessed 2026-11-21). `/terminal-setup`, Vim editor mode, and terminal integration settings are documented there.
 
 Futryn's current implementation intentionally keeps the `.futryn` storage namespace and the four-mode permission contract from this ADR. `auto`, `dontAsk`, managed settings, `--settings`, Vim mode, and `/terminal-setup` remain separate parity work; they are not silently inferred from the documentation check.
+
+## Update 2026-11-22: outside-working-directory approval
+
+ADR 0092 supersedes the hard outside-root refusal of ADR 0067. External file access now asks instead of requiring additionalDirectories. Default/acceptEdits ask; explicit allow rules, exact grants and bypass may permit. Bash outside cwd uses ordinary command approval; OS sandbox write roots remain unchanged. Evidence: https://code.claude.com/docs/en/security and https://code.claude.com/docs/en/permissions#working-directories, retrieved 2026-11-22 through Context7 (`/websites/code_claude`); local CLI version 2.1.330. Docs distinguish manual file-tool approval from optional blockReadsOutsideWorkingDirectories/blockWritesOutsideWorkingDirectories hard refusal. Exact Claude runtime prompt/grant behavior: **Needs verification**; no Claude agent invocation was made.

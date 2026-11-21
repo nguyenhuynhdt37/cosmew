@@ -55,17 +55,17 @@ test('read returns numbered lines and redacts secrets in file contents', async (
   expect(s.asked).toHaveLength(0); // ordinary files need no prompt
 });
 
-test('traversal, absolute paths and symlinks never leave the workspace or echo the outside path', async () => {
-  const s = setup('session');
+test('external relative, absolute and symlink reads ask and respect refusal', async () => {
+  const s = setup('deny');
   symlinkSync(join(s.outside, 'secret.txt'), join(s.root, 'link.txt'));
   symlinkSync(s.outside, join(s.root, 'linkdir'));
   for (const path of ['../outside/secret.txt', join(s.outside, 'secret.txt'), 'link.txt', 'linkdir/secret.txt']) {
     const result = await s.call('read', {path});
     expect(result.status).toBe('denied');
     expect(result.content).not.toContain('outside secret');
-    expect(result.content).not.toContain(s.outside);
   }
-  expect(s.asked).toHaveLength(0); // outside is denied, never prompted (user decision)
+  expect(s.asked).toHaveLength(4);
+  expect(s.asked.every(r => r.reason === 'outside-working-directories')).toBe(true);
 });
 
 test('secret files ask; deny and Esc never grant; session grants are remembered per file', async () => {

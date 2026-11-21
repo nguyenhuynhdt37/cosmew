@@ -108,9 +108,11 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       'light-daltonized',
       'dark-ansi',
       'light-ansi',
+      'midnight',
+      'parchment',
     ]);
     expect(BUILTIN_LIVE_THEMES).toHaveLength(0);
-    expect(ALL_BUILTIN_THEMES).toHaveLength(7);
+    expect(ALL_BUILTIN_THEMES).toHaveLength(9);
     for (const manifest of ALL_BUILTIN_THEMES.slice(0, 3)) {
       expect(themeManifestSchema.safeParse(manifest).success).toBe(true);
       for (const tokens of [manifest.dark, manifest.light]) {
@@ -122,18 +124,41 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
           'syntaxKeyword',
           'syntaxString',
           'syntaxFunction',
+          'info',
+          'markdownCode',
+          'markdownHeading',
         ] as const)
           expect(contrastRatio(tokens.background, tokens[key])).toBeGreaterThan(4.5);
-        // `warning` and `info` (file paths) are kept as measured from the reference capture
-        // (light: #8e7700 = 4.39:1, #5769f7 = 4.40:1 on white; docs/delivery/tui-v4/spec.md section 9), so they get a slightly lower bar.
-        for (const key of ['warning', 'info'] as const)
-          expect(contrastRatio(tokens.background, tokens[key])).toBeGreaterThan(4.3);
-        expect(tokens.accent).toBe('#d77757');
-        expect(contrastRatio(tokens.background, tokens.accent)).toBeGreaterThan(3);
+        expect(contrastRatio(tokens.background, tokens.warning)).toBeGreaterThan(4.5);
+        expect(contrastRatio(tokens.background, tokens.accent)).toBeGreaterThan(4.5);
         expect(new Set([tokens.error, tokens.warning, tokens.success, tokens.info]).size).toBe(4);
         expect(tokens.background === '#000000' || tokens.background === '#ffffff').toBe(true);
       }
       expect(getThemeMiniSwatches(manifest, 'dark').background).toBe(manifest.dark.background);
+    }
+  });
+
+  test('Midnight and Parchment provide distinct readable colors on base, panel and prompt surfaces', () => {
+    for (const id of ['midnight', 'parchment']) {
+      const theme = BUILTIN_COLOR_THEMES.find(item => item.id === id)!;
+      const palette = theme[theme.defaultMode];
+      const roles = [
+        palette.foreground,
+        palette.foregroundMuted,
+        palette.syntaxFunction,
+        palette.syntaxKeyword,
+        palette.syntaxString,
+        palette.syntaxComment,
+        palette.markdownHeading,
+        palette.warning,
+        palette.error,
+      ];
+      expect(new Set(roles).size).toBe(roles.length);
+      for (const color of roles) {
+        for (const surface of [palette.background, palette.backgroundPanel, palette.composerBackground]) {
+          expect(contrastRatio(color, surface)).toBeGreaterThanOrEqual(4.5);
+        }
+      }
     }
   });
 
@@ -245,10 +270,12 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
         'light-daltonized',
         'dark-ansi',
         'light-ansi',
+        'midnight',
+        'parchment',
       ]);
       await expect(engine.setTheme('old-custom')).rejects.toThrow();
       await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
-      expect(engine.getActiveTokens().accent).toBe('#d77757');
+      expect(engine.getActiveTokens().accent).toBe(BUILTIN_COLOR_THEMES[0]!.light.accent);
     } finally {
       await rm(dir, {recursive: true, force: true});
     }
@@ -357,6 +384,7 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
     expect(detectTerminalColorCapability({NO_COLOR: '1'})).toBe('none');
     expect(detectTerminalColorCapability({COLORTERM: 'truecolor'})).toBe('truecolor');
     expect(detectTerminalColorCapability({TERM: 'xterm-256color'})).toBe('256');
+    expect(detectTerminalColorCapability({TERM: 'xterm-256color', TERM_PROGRAM: 'iTerm.app'})).toBe('truecolor');
     expect(detectTerminalColorCapability({TERM: 'xterm'})).toBe('16');
 
     expect(fgHex('#ff5500', 'none')).toBe('');

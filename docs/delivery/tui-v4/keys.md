@@ -32,7 +32,7 @@ có backend thì phải hiện `Not implemented` (không nuốt phím, không gi
 | Ctrl+X Ctrl+K | `chat:killAgents` | Dừng mọi subagent nền, bấm 2 lần trong 3 s | nối `/agents` stop |
 | Ctrl+B, Ctrl+X Ctrl+B | `task:background` | Đẩy lệnh/agent đang chạy xuống nền | cần SDK |
 | Ctrl+T | `app:toggleTodos` | Ẩn/hiện checklist todo (không phải task nền) | có |
-| Ctrl+O | `app:toggleTranscript` | Transcript chi tiết (giờ + model từng câu trả lời) | có |
+| Ctrl+O | `app:toggleTranscript` | Bật/tắt transcript chi tiết (giờ, model và tool output). `/config` → Verbose chọn chế độ ban đầu. | có |
 | Ctrl+R | `history:search` | Mở tìm lịch sử (panel fullscreen) | có |
 | ↑ / ↓ , Ctrl+P / Ctrl+N | `history:previous/next` | Nhiều dòng: di chuyển con trỏ trước, tới dòng đầu/cuối mới duyệt lịch sử. Có tin xếp hàng: ↑ ở dòng đầu **lấy lại** tin xếp hàng vào ô nhập | có; phần lấy lại cần SDK |
 | Tab | `autocomplete:accept` | Chấp nhận gợi ý; trên hộp quyền mở ô comment | có |
@@ -93,8 +93,14 @@ Ctrl+C, Ctrl+D, Ctrl+M (=Enter), Ctrl+[ (=Esc), Ctrl+I (=Tab), Ctrl+H (=Backspac
 
 ## 9. Vim mode (tuỳ chọn, `/config` → Editor mode)
 
-Chế độ INSERT/NORMAL/VISUAL với motion, operator, text object (doc: `interactive-mode#vim-editor-mode`). Esc ở vim = INSERT→NORMAL (không phải `chat:cancel`); NORMAL `?` mở help, `/` mở tìm lịch sử.
-Làm sau cùng (pha riêng) nếu user muốn; tới lúc đó `/config` hiện mục Editor mode = `Not implemented`.
+Chọn `normal` (mặc định, các phím soạn thảo hiện có) hoặc `vim`. Thay đổi áp dụng ngay
+và lưu ở `~/.cosmew/settings.json`. Vim có INSERT, NORMAL, VISUAL và VISUAL LINE.
+Esc rời INSERT/VISUAL hoặc huỷ lệnh chờ trong NORMAL. Ở NORMAL, `?` mở trợ giúp
+và `/` tìm lịch sử. Enter gửi từ INSERT/NORMAL. Ctrl+R tìm lịch sử khi đang INSERT
+hoặc khi NORMAL không còn thao tác redo.
+
+Motion, operator, text object, count và register dùng context `Vim`. Xem
+[bảng phím và bằng chứng Claude Code 2.1.330](vim-mode-parity.md). Esc được giữ cố định trong context này.
 
 ## 10. Keybindings tuỳ chỉnh
 

@@ -8,7 +8,13 @@ import {
   type AppearanceConfig,
   type PartialAppearanceConfig,
 } from '@cosmew/contracts';
-import type {AppearanceStore} from '@cosmew/sdk';
+import {
+  DEFAULT_USER_PREFERENCES,
+  type AppearanceStore,
+  type EditorMode,
+  type UserPreferences,
+  type UserPreferencesStore,
+} from '@cosmew/sdk';
 import {parseSettings} from '@cosmew/security';
 
 const KEYS = ['theme', 'themeMode', 'reducedMotion', 'syntaxHighlighting', 'animations', 'sidebar', 'wallpaper'];
@@ -60,13 +66,15 @@ export interface FileAppearanceOptions {
 }
 
 /** User file only. Repository settings are never read by this store. */
-export class FileAppearanceStore implements AppearanceStore {
+export class FileAppearanceStore implements AppearanceStore, UserPreferencesStore {
   readonly path: string;
   private value = defaultAppearance();
+  private editorMode: EditorMode = 'normal';
   private key = '';
   private raw: Record<string, unknown> = {};
   private corrupt: string | undefined;
   private blocked = false;
+  private unsavedPreferences: Partial<UserPreferences> = {};
   private readonly sessionSteps = new Set<string>();
   private messages: string[] = [];
 
@@ -89,6 +97,40 @@ export class FileAppearanceStore implements AppearanceStore {
   read(): AppearanceConfig {
     this.load();
     return structuredClone(this.value);
+  }
+
+  readPreferences(): UserPreferences {
+    this.load();
+    const preferences: UserPreferences = {...DEFAULT_USER_PREFERENCES};
+    if (!this.blocked && this.corrupt === undefined) {
+      for (const key of Object.keys(preferences) as (keyof UserPreferences)[]) {
+        const value = this.raw[key];
+        if (typeof value === 'boolean') preferences[key] = value;
+      }
+    }
+    return {...preferences, ...this.unsavedPreferences};
+  }
+
+  writePreferences(patch: Partial<UserPreferences>): void {
+    this.load();
+    const changes = {...this.unsavedPreferences};
+    for (const key of Object.keys(DEFAULT_USER_PREFERENCES) as (keyof UserPreferences)[]) {
+      const value = patch[key];
+      if (typeof value === 'boolean') changes[key] = value;
+    }
+    this.save({...this.raw, ...changes});
+    this.unsavedPreferences = this.messages.length ? changes : {};
+  }
+
+  readEditorMode(): EditorMode {
+    this.load();
+    return this.editorMode;
+  }
+
+  writeEditorMode(mode: EditorMode): void {
+    this.load();
+    this.editorMode = mode;
+    this.save({...this.raw, editorMode: mode});
   }
 
   onboardingState(): {completed: readonly string[]; hasStoredTheme: boolean} {
@@ -121,7 +163,7 @@ export class FileAppearanceStore implements AppearanceStore {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         this.blocked = true;
-        this.messages = ['Could not read user settings; appearance changes apply for this session only.'];
+        this.messages = ['Could not read user settings; changes apply for this session only.'];
         return;
       }
     }
@@ -132,6 +174,7 @@ export class FileAppearanceStore implements AppearanceStore {
     this.corrupt = undefined;
     this.raw = {};
     this.value = defaultAppearance();
+    this.editorMode = 'normal';
     if (!stat) return;
     if (
       !stat.isFile() ||
@@ -140,7 +183,7 @@ export class FileAppearanceStore implements AppearanceStore {
       (process.getuid && stat.uid !== process.getuid())
     ) {
       this.blocked = true;
-      this.messages = ['Unsafe user settings file; appearance changes apply for this session only.'];
+      this.messages = ['Unsafe user settings file; changes apply for this session only.'];
       return;
     }
     let text: string;
@@ -148,7 +191,7 @@ export class FileAppearanceStore implements AppearanceStore {
       text = readFileSync(this.path, 'utf8');
     } catch {
       this.blocked = true;
-      this.messages = ['Could not read user settings; appearance changes apply for this session only.'];
+      this.messages = ['Could not read user settings; changes apply for this session only.'];
       return;
     }
     try {
@@ -164,6 +207,7 @@ export class FileAppearanceStore implements AppearanceStore {
       ];
       return;
     }
+    this.editorMode = this.raw.editorMode === 'vim' ? 'vim' : 'normal';
     const candidate: Record<string, unknown> = {};
     for (const [disk, field] of [
       ['theme', 'theme'],
@@ -246,7 +290,7 @@ export class FileAppearanceStore implements AppearanceStore {
       this.key = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}:${stat.ino}:${stat.mode}`;
       this.messages = [];
     } catch {
-      this.messages = ['Could not save user settings; appearance changes apply for this session only.'];
+      this.messages = ['Could not save user settings; changes apply for this session only.'];
     } finally {
       try {
         rmSync(temporary, {force: true});

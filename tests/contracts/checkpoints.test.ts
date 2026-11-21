@@ -179,10 +179,11 @@ test('checkpoint storage rejects secret preimages and cannot expose foreign work
   }
 });
 
-test('restore revalidates trusted roots and protects git and state paths even for persisted snapshots', async () => {
+test('restore requires permission outside roots and protects git/state even for persisted snapshots', async () => {
   const h = await harness();
   try {
     await h.send('boundary checkpoint');
+    h.client.setPromptsAvailable(false); // An external restore cannot auto-write in acceptEdits.
     const checkpoint = h.client.checkpoints()[0]!;
     const store = new CheckpointStore(h.app.db);
     for (const path of ['../escape.txt', '.git/HEAD', 'state/private.txt']) {

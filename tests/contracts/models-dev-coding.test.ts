@@ -70,6 +70,8 @@ test('models.dev enriches old cached models, effort/toggle/budget/unknown and co
     expect(models.find(m => m.id === id)?.capabilities.reasoning).toBe('supported');
     expect(models.find(m => m.id === id)?.reasoningEfforts).toBeUndefined();
   }
+  expect(models.find(m => m.id === 'toggle')?.reasoningOptions).toEqual({toggle: true});
+  expect(models.find(m => m.id === 'budget')?.reasoningOptions).toEqual({budgetMin: 1024});
   expect(models.find(m => m.id === 'unknown')?.capabilities.reasoning).toBe('unknown');
 });
 test('user > advertised efforts > models.dev; explicit unsupported is retained', async () => {

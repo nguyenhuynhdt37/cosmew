@@ -13,14 +13,14 @@ import {EffortDialog} from '../features/models';
 import {RewindDialog} from '../features/panels';
 import {PermissionsDialog} from '../features/permissions';
 import {Diff} from '../features/diff';
-import {render, renderInk, settle} from './index';
+import {render, renderInk, settle, waitForFrame} from './index';
 
 afterEach(() => {
   cleanup();
   keymapStore.reset();
 });
 const untilReady = async (view: {lastFrame(): string | undefined}) => {
-  for (let wait = 0; wait < 100 && !view.lastFrame()?.includes('manual mode on'); wait++) await settle();
+  await waitForFrame(view, frame => frame.includes('manual mode on'), 4000);
   await settle();
 };
 const key = async (view: {stdin: {write(s: string): void}}, text: string) => {
@@ -467,4 +467,34 @@ test('transcript v without editor reports exact message without suspending', asy
     if (editor === undefined) delete process.env.EDITOR;
     else process.env.EDITOR = editor;
   }
+});
+
+test('/config switches the live composer between default and Vim editing', async () => {
+  const {f, view} = await readyApp();
+  const openEditorRow = async () => {
+    await key(view, '/config');
+    await key(view, '\r');
+    await waitForFrame(view, frame => frame.includes('Search settings'));
+    await key(view, '/');
+    await key(view, 'Editor mode');
+    await key(view, down);
+  };
+  await openEditorRow();
+  await waitForFrame(view, frame => /Editor mode.*normal/.test(frame));
+  await key(view, '\r');
+  await waitForFrame(view, frame => /Editor mode.*vim/.test(frame));
+  expect(f.client.editorMode()).toBe('vim');
+  await key(view, '\x1b');
+  if (view.lastFrame()?.includes('Search settings')) await key(view, '\x1b');
+  await waitForFrame(view, frame => frame.includes('-- INSERT --') && !frame.includes('Search settings'));
+  await key(view, 'keep me');
+  await key(view, '\x1b');
+  await key(view, '\x1b');
+  expect(view.lastFrame()).toContain('keep me');
+  expect(view.lastFrame()).not.toContain('-- INSERT --');
+  f.client.setEditorMode('normal');
+  await settle();
+  await key(view, '\x05');
+  await key(view, '!');
+  await waitForFrame(view, frame => frame.includes('keep me!'));
 });

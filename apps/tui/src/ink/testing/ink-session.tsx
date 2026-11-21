@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {render, settle, waitForFrame} from './wait';
+import {render, settle, waitForCondition, waitForFrame} from './wait';
 import type {FutrynClient} from '@cosmew/sdk';
 import {InkApp} from '../app';
 import {messagesToTranscript, type TranscriptItem} from '../features/transcript/logic';
@@ -9,7 +9,6 @@ export const ENTER = '\r';
 export const UP = '\x1b[A';
 export const DOWN = '\x1b[B';
 export const SHIFT_TAB = '\x1b[Z';
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
 
@@ -75,10 +74,12 @@ const KEYS: Record<string, string> = {
 export async function openInk(client: FutrynClient, options: InkSessionOptions = {}): Promise<InkSession> {
   for (const step of ['theme', 'auth', 'security']) client.completeOnboardingStep(step);
   let open = 0;
+  let started = 0;
   const send = client.sendMessage.bind(client);
   client.sendMessage = ((...args: Parameters<typeof send>) => {
     const source = send(...args);
     return (async function* () {
+      started++;
       open++;
       try {
         yield* source;
@@ -131,32 +132,28 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
       await settle();
     },
     async waitFor(text, ms = 8000) {
-      const end = Date.now() + ms;
       const match = (s: string) => (typeof text === 'string' ? s.includes(text) : text.test(s));
-      while (Date.now() < end) {
+      const result = await waitForCondition(() => {
         const now = frame();
         if (match(now)) return now;
         const all = session.frames();
-        if (match(all)) return all;
-        await sleep(10);
-      }
+        return match(all) ? all : undefined;
+      }, ms);
+      if (result !== undefined) return result;
       throw new Error(`Timed out waiting for ${String(text)}; last frame:\n${frame()}`);
     },
     async nextPermission(ms = 4000) {
-      const end = Date.now() + ms;
-      while (!client.listPendingPermissions().length && Date.now() < end) await sleep(5);
-      const pending = client.listPendingPermissions();
-      if (!pending.length) throw new Error(`No permission request arrived; last frame:\n${frame()}`);
+      const pending = await waitForCondition(() => client.listPendingPermissions()[0], ms);
+      if (!pending) throw new Error(`No permission request arrived; last frame:\n${frame()}`);
       await session.waitFor(
-        pending[0]!.capability === 'settings.trust' ? 'No, skip this settings file' : 'Esc to cancel · Tab to amend',
+        pending.capability === 'settings.trust' ? 'No, skip this settings file' : 'Esc to cancel · Tab to amend',
         3000,
       );
       await settle();
-      return pending[0]!;
+      return pending;
     },
     async idle(ms = 15000) {
-      const end = Date.now() + ms;
-      while (open > 0 && Date.now() < end) await sleep(10);
+      await waitForCondition(() => (open === 0 ? true : undefined), ms);
       await settle();
       if (open > 0) throw new Error('A turn is still running');
     },
@@ -170,12 +167,19 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
       await session.press(KEYS[name] ?? (ctrl ? String.fromCharCode(ctrl[1]!.toUpperCase().charCodeAt(0) - 64) : name));
     },
     async submitPrompt(text) {
+      const previous = started;
       await session.submit(text);
-      // Give a turn that starts asynchronously a moment to register, then wait for it unless a prompt blocks.
-      const started = Date.now();
-      while (open === 0 && Date.now() - started < 300) await sleep(10);
-      while (open > 0 && !client.listPendingPermissions().length && !client.listPendingQuestions().length)
-        await sleep(10);
+      // A short turn can start and finish before submit() has drained its paints.
+      await waitForCondition(() => (started !== previous || open > 0 ? true : undefined), 300);
+      const ready = await waitForCondition(
+        () =>
+          open === 0 || client.listPendingPermissions().length || client.listPendingQuestions().length
+            ? true
+            : undefined,
+        15000,
+      );
+      if (!ready) throw new Error(`A turn is still running; last frame:\n${frame()}`);
+      await settle();
     },
     async executeSlashCommand(text) {
       await session.submit(text);
@@ -199,9 +203,7 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
         await session.press(UP);
         await session.press(ENTER);
       }
-      const end = Date.now() + 10000;
-      while (Date.now() < end && !client.userInputReady()) await sleep(10);
-      if (!client.userInputReady())
+      if (!(await waitForCondition(() => (client.userInputReady() ? true : undefined), 10000)))
         throw new Error(
           `Startup gate did not open the composer:\n${frame()}\nhistory: ${session.frames().slice(-3000)}\nstderr: ${view.stderr.frames.join('\n')}`,
         );

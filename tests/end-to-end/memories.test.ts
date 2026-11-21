@@ -216,7 +216,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('fyn exec uses the same memory context and contract 1.42', async () => {
+test('fyn exec uses the same memory context and contract 1.48', async () => {
   const h = await setup();
   h.put();
   let stdout = '';
@@ -232,7 +232,7 @@ test('fyn exec uses the same memory context and contract 1.42', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.42"');
+  expect(stdout).toContain('"contractVersion":"1.48"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {

@@ -170,7 +170,7 @@ function convert(id: string, raw: unknown): HostProviderEntry {
   const reasoning = raw.reasoning === undefined ? undefined : providerReasoningSchema.safeParse(raw.reasoning);
   if (reasoning && !reasoning.success)
     fail(
-      'reasoning must use known keys, a boolean supported, and 1–20 unique effort strings (1–40 characters; default is reserved)',
+      'reasoning must use known keys, a boolean supported, 1–20 unique effort strings (1–40 characters; default is reserved), and positive integer budgets keyed by minimal, low, medium, high, xhigh or max',
     );
   const baseURL = validateBaseURL(raw.base_url);
   const protocol = protocolSchema.safeParse(raw.wire_api ?? 'chat');
@@ -529,10 +529,14 @@ export function renderProviderToml(entry: HostProviderEntry): string {
   table('query_params', provider.queryParams);
   table('http_headers', provider.httpHeaders);
   table('env_http_headers', provider.envHttpHeaders);
-  const declaration = (name: string, value: {supported?: boolean; efforts?: string[]}) => {
+  const declaration = (name: string, value: NonNullable<Provider['reasoning']>) => {
     lines.push('', `[${head}.${name}]`);
     if (value.supported !== undefined) lines.push(`supported = ${value.supported}`);
     if (value.efforts) lines.push(`efforts = [${value.efforts.map(tomlString).join(', ')}]`);
+    if (value.budgets) {
+      lines.push('', `[${head}.${name}.budgets]`);
+      for (const [level, tokens] of Object.entries(value.budgets)) lines.push(`${tomlKey(level)} = ${tokens}`);
+    }
   };
   if (provider.reasoning) {
     declaration('reasoning', provider.reasoning);

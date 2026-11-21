@@ -68,6 +68,12 @@ for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
     const generated = await adapter.generate(x.request);
     expect(generated.text).toBe('Hello fixture');
     expect(generated.usage.inputTokens).toBe(4);
+    expect(generated.usage.breakdown?.[0]).toMatchObject({
+      accountId: x.account.id,
+      providerId: x.provider.id,
+      modelId: x.request.modelId,
+      inputTokens: 4,
+    });
     const events = await Array.fromAsync(adapter.stream(x.request));
     expect(
       events
@@ -76,6 +82,12 @@ for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
         .join(''),
     ).toBe('Hello fixture');
     expect(events.at(-1)?.type).toBe('completed');
+    const completion = events.find(event => event.type === 'completed');
+    expect(completion?.type === 'completed' && completion.usage.breakdown?.[0]).toMatchObject({
+      accountId: x.account.id,
+      providerId: x.provider.id,
+      modelId: x.request.modelId,
+    });
     expect(
       x.f.requests.every(r =>
         protocol === 'anthropic' || protocol === 'gemini'
@@ -188,7 +200,21 @@ test('malformed responses reject and unavailable usage stays null', async () => 
   x.f.set({malformed: true});
   await expect(adapter.generate(x.request)).rejects.toBeInstanceOf(FutrynError);
   x.f.set({malformed: false, includeUsage: false});
-  expect((await adapter.generate(x.request)).usage).toEqual({inputTokens: null, outputTokens: null, costUSD: null});
+  expect((await adapter.generate(x.request)).usage).toMatchObject({
+    inputTokens: null,
+    outputTokens: null,
+    costUSD: null,
+    breakdown: [
+      {
+        accountId: x.account.id,
+        providerId: x.provider.id,
+        modelId: x.request.modelId,
+        inputTokens: null,
+        outputTokens: null,
+        costUSD: null,
+      },
+    ],
+  });
   x.db.close();
 });
 test('catalog pagination, manual entries, unknown metadata and account-isolated cache', async () => {
@@ -256,7 +282,7 @@ test('OpenAI-compatible chat sends an advertised reasoning effort through its na
   }
 });
 
-test('non-Chat protocols reject advertised reasoning efforts until a wire mapping exists', async () => {
+test('Anthropic and Gemini reject advertised effort levels when reasoning capability is unknown', async () => {
   for (const protocol of ['anthropic', 'gemini'] as const) {
     const x = setup(protocol);
     try {

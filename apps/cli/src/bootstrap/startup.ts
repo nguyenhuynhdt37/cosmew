@@ -36,9 +36,16 @@ import {
   type PlanState,
   type Provider,
   type SubagentNotice,
+  type SubagentEvent,
   type SubagentWorktreePort,
 } from '@cosmew/contracts';
-import {Conversation, SAFETY_LIMITS, summarizeCheckpointSpan} from '@cosmew/core';
+import {
+  Conversation,
+  SAFETY_LIMITS,
+  estimateInitialContext,
+  requestInstructions,
+  summarizeCheckpointSpan,
+} from '@cosmew/core';
 import {
   SubagentManager,
   SubagentScheduler,
@@ -98,6 +105,7 @@ import {
   CheckpointStore,
   SqliteToolOutputArchive,
   SqliteSettings,
+  SqliteBackgroundTaskHistory,
   ToolAuditStore,
   openPrivateDatabase,
 } from '@cosmew/persistence';
@@ -464,12 +472,10 @@ export function startup(
     const info = cachedModel(account, selection.modelId);
     if (!info) throw new FutrynError('NOT_FOUND');
     const baseModel: ModelPort = modelPort(account, selection, info);
-    const prepare = (request: ModelRequest): ModelRequest => ({
-      ...request,
-      ...([request.instructions, wiring.modeInstructions?.()].filter(Boolean).length
-        ? {instructions: [request.instructions, wiring.modeInstructions?.()].filter(Boolean).join('\n\n')}
-        : {}),
-    });
+    const prepare = (request: ModelRequest): ModelRequest => {
+      const instructions = requestInstructions(request.instructions, wiring.modeInstructions?.());
+      return instructions ? {...request, instructions} : request;
+    };
     const guidedModel: ModelPort = {
       stream: (request, signal) => baseModel.stream(prepare(request), signal),
       generate: (request, signal) => baseModel.generate(prepare(request), signal),
@@ -489,11 +495,13 @@ export function startup(
         skills: wiring.skills,
         memories: wiring.memories,
         contextNotes: wiring.contextNotes,
+        additionalInstructions: wiring.modeInstructions,
         budget: wiring.budget ?? (() => undefined),
         // Parallel `agent` calls must reach the scheduler, which rejects the one beyond max_threads like
         // Codex; the generic shared-slot cap must therefore admit max_threads + 1 (ADR 0033/0058).
         parallelSlots: () => hostLoaded.agents.maxThreads + 1,
         analysisOnly: wiring.analysisOnly ?? (() => false),
+        autoCompact: () => appearanceStore.readPreferences().autoCompact,
         contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
         outputLimit: () => cachedModel(account, selection.modelId)?.outputLimit ?? null,
         streamMaxRetries: () => registry.get(account.providerId).streamMaxRetries,
@@ -733,8 +741,10 @@ export function startup(
           ),
       }));
     const subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
+    const subagentEventListeners = new Set<(notice: {parentSessionId: string; event: SubagentEvent}) => void>();
 
     const backgroundTasks = new BackgroundTasks({
+      history: new SqliteBackgroundTaskHistory(db, text => terminalText(redactor.text(text))),
       runtime: () => commands(),
       currentSession: () => client?.activeSession()?.id ?? resolveRootConversation()?.id,
       redact: text => terminalText(redactor.text(text)),
@@ -758,7 +768,8 @@ export function startup(
               skills().userDirectories(),
             );
         commandRuntimes.add(commandRuntime);
-        commandRuntime.observeBackgroundTasks?.(event => backgroundTasks.accept(event));
+        const observedRuntime = commandRuntime;
+        commandRuntime.observeBackgroundTasks?.(event => backgroundTasks.accept(event, observedRuntime));
       }
       return commandRuntime;
     };
@@ -967,6 +978,17 @@ export function startup(
         onNotice: notice => {
           for (const listener of [...subagentNoticeListeners]) listener(notice);
         },
+        onBackgroundEvent: event => {
+          const owner = conversations.getSubagentSession(event.agentId)?.parentConversationId;
+          if (!owner) return;
+          for (const listener of [...subagentEventListeners]) {
+            try {
+              listener({parentSessionId: owner, event});
+            } catch {
+              /* observers cannot break child execution */
+            }
+          }
+        },
         redact: text => terminalText(redactor.text(text)),
         runChildTurn: async function* (runContext: ChildRunContext, childSignal: AbortSignal) {
           // Subagents inherit ONLY read grants from the parent session (Wave 2 S5a).
@@ -996,7 +1018,7 @@ export function startup(
                 )
             : commands();
           const stopChildTaskEvents = worktree
-            ? childCommands.observeBackgroundTasks?.(event => backgroundTasks.accept(event))
+            ? childCommands.observeBackgroundTasks?.(event => backgroundTasks.accept(event, childCommands))
             : undefined;
           const childDispatcher = new ToolDispatcher({
             workspace: childWorkspace,
@@ -1012,7 +1034,10 @@ export function startup(
             grants: childGrants,
             analysisOnly: () => runContext.profile.id === 'plan' || parentIsAnalysisOnly(),
             stateDirectory,
+            toolPolicy: tool => permissionRuleDecision(client?.permissionRules(), {tool: 'Tool', target: tool}),
             readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
+            writePolicy: relative =>
+              permissionRuleDecision(client?.permissionRules(), {tool: 'Edit', target: relative}),
             commands: childCommands,
             sandbox: () => effectiveSubagentSandbox(sandboxConfigNow(), runContext.profile),
             proxy: {ensure: () => sandboxProxy.start()},
@@ -1173,7 +1198,9 @@ export function startup(
         grants,
         analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
         stateDirectory,
+        toolPolicy: tool => permissionRuleDecision(client?.permissionRules(), {tool: 'Tool', target: tool}),
         readPolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}),
+        writePolicy: relative => permissionRuleDecision(client?.permissionRules(), {tool: 'Edit', target: relative}),
         commands: commands(),
         // The sandbox settings and permission mode are read for every call (ADR 0061).
         sandbox: sandboxConfigNow,
@@ -1486,6 +1513,26 @@ export function startup(
         }
       },
       getProjectContext: () => (toolsEnabled() && projectReport ? structuredClone(projectReport) : null),
+      previewContext: (selection, sessionId, draft) => {
+        const projectBytes = toolsEnabled() ? (projectReport?.usedBytes ?? 0) : 0;
+        const active = sessionId ? activeConversations.get(sessionId) : undefined;
+        if (active) return active.previewContext(draft, projectBytes);
+        if (!selection) return undefined;
+        const account = accounts.get(selection.accountId);
+        if (account.status === 'logged-out') return undefined;
+        if (sessionId) return openStoredConversation(sessionId).conv.previewContext(draft, projectBytes);
+        return estimateInitialContext(
+          draft ? [draft] : [],
+          modelTools(account, selection.modelId, wiring),
+          {
+            budget: wiring.budget,
+            analysisOnly: wiring.analysisOnly,
+            additionalInstructions: wiring.modeInstructions,
+            contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit,
+          },
+          projectBytes,
+        );
+      },
       ...(services.permissions?.mode ? {permissionMode: services.permissions.mode} : {}),
       permissionSettings,
       sandboxDependencies: () => sandboxDependencies(),
@@ -1499,9 +1546,24 @@ export function startup(
       inspectSubagent: agentId => rootSubagents.inspectSubagent(agentId),
       agentTypes: () => rootSubagents.agentTypes(),
       stopSubagent: agentId => rootSubagents.stopSubagent(agentId),
+      sendSubagentMessage: async (sessionId, agentId, message, signal) => {
+        if (
+          client?.activeSession()?.id !== sessionId ||
+          !rootSubagents
+            .listSubagents(sessionId)
+            .some(child => child.id === agentId && child.parentConversationId === sessionId)
+        )
+          throw new FutrynError('NOT_FOUND');
+        signal?.throwIfAborted();
+        return toolPort.invoke({id: crypto.randomUUID(), name: 'agent_message', input: {id: agentId, message}}, signal);
+      },
       observeSubagentNotices: listener => {
         subagentNoticeListeners.add(listener);
         return () => subagentNoticeListeners.delete(listener);
+      },
+      observeSubagentEvents: listener => {
+        subagentEventListeners.add(listener);
+        return () => subagentEventListeners.delete(listener);
       },
       backgroundTasks: sessionId => backgroundTasks.list(sessionId),
       stopBackgroundTask: (id, sessionId) => backgroundTasks.stop(id, sessionId),
@@ -1852,6 +1914,7 @@ export function startup(
 
       // Appearance
       appearanceStore,
+      userPreferencesStore: appearanceStore,
       loadCustomThemes: () => customThemes.loadAll(),
       saveCustomTheme: manifest => customThemes.save(manifest),
       removeCustomTheme: id => customThemes.remove(id),

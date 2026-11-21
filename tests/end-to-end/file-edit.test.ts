@@ -79,6 +79,7 @@ test('an edit without a prior read is refused before any approval prompt', async
   );
   writeFileSync(join(c.root, 'app.ts'), 'x = 1\n');
   await c.tui.submit('Change it');
+  await c.tui.waitFor('Read app.ts before changing it');
   await c.tui.idle();
   expect(c.client.listPendingPermissions()).toHaveLength(0);
   expect(c.tui.frames()).toContain('Read app.ts before changing it');

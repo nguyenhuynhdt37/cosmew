@@ -94,6 +94,13 @@ presence report, and current-turn SANDBOX_DENIED banner implemented. Binary
 containment remain Needs verification. Native/port-binding tests require the
 coordinator's environment; no e2e acceptance is claimed by the sandboxed worker.
 
+Bash permission prompts with the sandbox off focus **Yes** and show a muted
+`/sandbox` hint. Requested escapes and configured exclusions keep the warning
+and focus **No**. Fixture coverage exercises both 80 and 36 columns and sends
+Enter through the Ink harness to the dispatcher. Live provider and terminal
+verification of this prompt change **Needs verification**.
+[ADR 0081](../../adr/0081-sandbox-defaults-like-claude-code.md)
+
 ## First-run and first send — 2026-11-21
 
 | Flow | Status | Evidence |

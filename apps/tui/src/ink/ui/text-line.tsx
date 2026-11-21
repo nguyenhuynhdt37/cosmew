@@ -25,63 +25,43 @@ export function TextLine({children, width, ...props}: TextLineProps) {
   );
 }
 
-/** Terminal cell width of one code point (wide CJK/emoji = 2, combining/joiners = 0). */
-export function cellWidth(char: string): number {
-  const code = char.codePointAt(0) ?? 0;
-  if (code === 0) return 0;
-  if (
-    (code >= 0x300 && code <= 0x36f) ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0xfe00 && code <= 0xfe0f) ||
-    (code >= 0x1f3fb && code <= 0x1f3ff)
-  )
-    return 0;
-  if (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  )
-    return 2;
-  return 1;
-}
 export const graphemes = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
 /** Width of a terminal string, including joined emoji and combining sequences. */
 export function stringCells(text: string): number {
   return Bun.stringWidth(text);
 }
-export interface WrapRun {
+export interface WrapRun<Style = 'code' | 'command'> {
   text: string;
-  /** Presentation flag carried through wrapping (inline code in a user message). */
-  code?: boolean;
+  /** Presentation carried through wrapping in user messages. */
+  style?: Style;
+}
+/** Name of a slash command at the beginning of a draft, excluding its arguments. */
+export function leadingSlashCommand(text: string): RegExpExecArray | null {
+  return /^(\s*)(\/[^\s/]*)/.exec(text);
 }
 /**
  * Greedy word wrap of styled runs to `width` cells; `\n` always breaks. Words longer than a line are cut.
  * The output keeps every character (trailing spaces at a soft break are dropped).
  */
-export function wrapRuns(runs: readonly WrapRun[], width: number): WrapRun[][] {
+export function wrapRuns<Style>(runs: readonly WrapRun<Style>[], width: number): WrapRun<Style>[][] {
   const limit = Math.max(1, Math.floor(width));
-  const lines: WrapRun[][] = [];
-  let line: {ch: string; code: boolean}[] = [];
+  const lines: WrapRun<Style>[][] = [];
+  const cells = runs.flatMap(({text, style}) =>
+    Array.from(graphemes.segment(text), ({segment}) => ({ch: segment, width: stringCells(segment), style})),
+  );
+  let line: typeof cells = [];
   let used = 0;
   const flush = () => {
-    const merged: WrapRun[] = [];
+    const merged: WrapRun<Style>[] = [];
     for (const cell of line) {
       const last = merged.at(-1);
-      if (last && !!last.code === cell.code) last.text += cell.ch;
-      else merged.push({text: cell.ch, ...(cell.code ? {code: true} : {})});
+      if (last && last.style === cell.style) last.text += cell.ch;
+      else merged.push(cell.style !== undefined ? {text: cell.ch, style: cell.style} : {text: cell.ch});
     }
     lines.push(merged);
     line = [];
     used = 0;
   };
-  const cells = runs.flatMap(run => Array.from(run.text).map(ch => ({ch, code: !!run.code})));
   let at = 0;
   while (at < cells.length) {
     const cell = cells[at]!;
@@ -100,13 +80,14 @@ export function wrapRuns(runs: readonly WrapRun[], width: number): WrapRun[][] {
     }
     let end = at;
     let size = 0;
-    while (end < cells.length && cells[end]!.ch !== ' ' && cells[end]!.ch !== '\n') size += cellWidth(cells[end++]!.ch);
+    while (end < cells.length && cells[end]!.ch !== ' ' && cells[end]!.ch !== '\n') size += cells[end++]!.width;
     if (used + size > limit && used > 0) {
       while (line.at(-1)?.ch === ' ') line.pop();
-      flush();
+      if (line.length) flush();
+      else used = 0;
     }
     for (let index = at; index < end; index++) {
-      const width = cellWidth(cells[index]!.ch);
+      const width = cells[index]!.width;
       if (used + width > limit && used > 0) flush();
       line.push(cells[index]!);
       used += width;

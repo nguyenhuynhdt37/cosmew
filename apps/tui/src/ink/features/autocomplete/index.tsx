@@ -137,7 +137,7 @@ export function menuWindow(
     start++;
   }
 }
-/** Spec 2: name column 42 cells from the pointer, accent on the selected row, files as `+ path`. */
+/** Name column 42 cells from the pointer, accented selection, files as `+ path`. */
 export function Autocomplete({items, selected = 0, visibleRows = 5, width}: AutocompleteProps) {
   const ui = useUiTheme();
   const {columns} = useTerminalSize();
@@ -155,7 +155,7 @@ export function Autocomplete({items, selected = 0, visibleRows = 5, width}: Auto
           return (
             <Box key={`${item.kind}:${item.label}`} paddingLeft={2} minWidth={0}>
               <Pointer selected={active} />
-              <TextLine width={Math.max(1, room - 4)} color={tint} wrap="truncate-end">
+              <TextLine width={Math.max(1, room - 4)} color={active ? tint : ui.color('path')} wrap="truncate-end">
                 {`+ ${safeText(item.label.replace(/^@/, ''))}`}
               </TextLine>
             </Box>
@@ -163,7 +163,11 @@ export function Autocomplete({items, selected = 0, visibleRows = 5, width}: Auto
         return (
           <Box key={`${item.kind}:${item.label}`} paddingLeft={2} minWidth={0}>
             <Pointer selected={active} />
-            <TextLine width={nameWidth} color={tint} wrap="truncate-end">
+            <TextLine
+              width={nameWidth}
+              color={active ? tint : ui.color(item.kind === 'skill' ? 'thinking' : 'command')}
+              wrap="truncate-end"
+            >
               {safeText(item.label)}
             </TextLine>
             <Box flexDirection="column" width={descriptionWidth} minWidth={0}>

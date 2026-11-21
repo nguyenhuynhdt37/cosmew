@@ -2,7 +2,7 @@ import {afterEach, expect, test} from 'bun:test';
 import {existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {ToolDispatcher, type ApprovalDecision, type ApprovalRequest} from '@cosmew/tools';
+import {ToolDispatcher, DEFAULT_SANDBOX_CONFIG, type ApprovalDecision, type ApprovalRequest} from '@cosmew/tools';
 import {WorkspaceRoot} from '@cosmew/workspace';
 import {SessionGrants} from '@cosmew/security';
 import {replaceText} from '../../packages/tools/src/handlers/file-edit';
@@ -20,6 +20,7 @@ function fixture(approve: (r: ApprovalRequest) => Promise<ApprovalDecision> = as
     workspace: new WorkspaceRoot(root),
     grants: new SessionGrants(),
     stateDirectory: join(realpathSync.native(root), 'state'),
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false}),
     redact: s => s,
     approve: async r => {
       requests.push(r);
@@ -103,10 +104,10 @@ test('protected paths are denied and a user denial changes nothing', async () =>
   expect(state.status).toBe('denied');
   const outside = await f.call('write', {path: '../escape.txt', content: 'x'});
   expect(outside.status).not.toBe('ok');
-  expect(f.requests).toHaveLength(0);
+  expect(f.requests).toHaveLength(1);
   const denied = await f.call('write', {path: 'ok.ts', content: 'x'});
   expect(denied.status).toBe('denied');
-  expect(f.requests).toHaveLength(1);
+  expect(f.requests).toHaveLength(2);
   expect(existsSync(join(f.root, 'ok.ts'))).toBe(false);
   expect(readFileSync(join(f.root, '.env'), 'utf8')).toBe('TOKEN=1\n');
 });

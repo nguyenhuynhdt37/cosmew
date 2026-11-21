@@ -77,6 +77,30 @@ for (const protocol of ['chat', 'responses', 'anthropic'] as const)
     ).rejects.toMatchObject({code: 'PROTOCOL'});
     x.db.close();
   });
+test('a provider context rejection is classified without exposing the error body', async () => {
+  const x = setup();
+  try {
+    const fetchError = Object.assign(
+      async () =>
+        Response.json(
+          {error: {code: 'context_length_exceeded', message: 'private prompt returned by provider'}},
+          {status: 400},
+        ),
+      {preconnect: fetch.preconnect},
+    );
+    const transport = new ProviderTransport(x.provider, x.account, x.vault, new ConfiguredNetworkPolicy(), fetchError);
+    const adapter = new ProviderAdapter(transport, 'fixture-model');
+    try {
+      await Array.fromAsync(adapter.stream(request));
+      throw new Error('Expected rejection');
+    } catch (error) {
+      expect(error).toMatchObject({code: 'CONTEXT_LIMIT'});
+      expect(String(error)).not.toContain('private prompt');
+    }
+  } finally {
+    x.db.close();
+  }
+});
 test('bounded response rejects flood and redirects without credential forwarding', async () => {
   const x = setup();
   let forwarded = 0;

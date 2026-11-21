@@ -7,7 +7,7 @@ import {ThemeProvider} from '../theme';
 import {OverlayProvider} from '../core/overlay';
 import {createClientFixture, type ClientFixture} from './client-fixture';
 export * from './client-fixture';
-export {render, settle, waitForFrame} from './wait';
+export {render, settle, waitForCondition, waitForFrame} from './wait';
 export function renderInk(tree: ReactElement, options: {fixture?: ClientFixture; themeEngine?: ThemeEngine} = {}) {
   const fixture = options.fixture ?? createClientFixture();
   const engine = options.themeEngine ?? new ThemeEngine({env: {NO_COLOR: '1'}, systemDarkPreference: true});

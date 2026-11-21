@@ -16,6 +16,7 @@ export const permissionPromptRequestSchema = z.strictObject({
     'fs.read',
     'fs.write',
     'agent.state.write',
+    'agent.spawn',
     'process.execute',
     'network.connect',
     'network.search',
@@ -27,6 +28,8 @@ export const permissionPromptRequestSchema = z.strictObject({
   target: z.string().min(1).max(1024),
   riskLevel: z.enum(['low', 'medium', 'high']),
   reason: z.string().max(400),
+  /** Effective shell launch sandbox for display. Approval scope and policy are evaluated separately. */
+  commandSandbox: z.enum(['disabled', 'escape', 'excluded', 'sandboxed']).optional(),
   scopeHash: z.string().min(8).max(128),
   createdAt: z.string().datetime(),
   expiresAt: z.string().datetime(),
@@ -252,7 +255,17 @@ export function permissionRuleDecision(
   const paths = request.tool === 'Read' || request.tool === 'Edit';
   // Paths are judged normalised: `src/../../.ssh/key` is not under `src/**`.
   const rawPaths = paths ? request.target.split(', ').filter(Boolean) : [];
-  const normalPaths = rawPaths.map(normalizeRulePath);
+  const normalPaths = rawPaths.map(path => {
+    if (!path.startsWith('/')) return normalizeRulePath(path);
+    if (/[\u0000-\u001f\u007f]/.test(path)) return null;
+    const parts: string[] = [];
+    for (const part of path.split('/')) {
+      if (!part || part === '.') continue;
+      if (part === '..') parts.pop();
+      else parts.push(part);
+    }
+    return '/' + parts.join('/');
+  });
   // Chained commands are judged per sub-command: `npm test && rm -rf ~` must not ride on `Bash(npm test:*)`.
   const targets = paths
     ? [...rawPaths, ...normalPaths.filter((p): p is string => p !== null)]
@@ -267,7 +280,7 @@ export function permissionRuleDecision(
   if (bash && request.segments === null) return undefined;
   // Substitutions, redirects and control characters cannot be checked by prefix; they never auto-allow.
   if (bash && /\$\(|`|[<>]|[\u0000-\u0008\u000b-\u001f\u007f]/.test(request.target)) return undefined;
-  // A path that escapes the workspace (or is absolute outside it) is never allowed by a rule.
+  // Relative traversal cannot acquire authority. Absolute paths require an explicit //abs rule.
   if (paths && normalPaths.some(path => path === null)) return undefined;
   const allowTargets = bash
     ? (request.segments ?? shellSegments(request.target))
@@ -276,7 +289,13 @@ export function permissionRuleDecision(
       : targets;
   if (
     allowTargets.length &&
-    allowTargets.every(target => rules.allow.some(rule => permissionRuleMatches(rule, {tool: request.tool, target})))
+    allowTargets.every(target =>
+      rules.allow.some(
+        rule =>
+          (!paths || !target.startsWith('/') || rule.includes('(//')) &&
+          permissionRuleMatches(rule, {tool: request.tool, target}),
+      ),
+    )
   )
     return 'allow';
   return undefined;
@@ -519,7 +538,7 @@ export function suggestPermissionRule(request: {
   }
   if (request.tool === 'Edit' || request.tool === 'Read') {
     const path = clean(request.target);
-    const rule = path && !path.includes(', ') ? `${request.tool}(${path})` : null;
+    const rule = path && !path.includes(', ') ? `${request.tool}(${path.startsWith('/') ? '/' : ''}${path})` : null;
     return rule && isSafeAlwaysRule(rule) ? rule : null;
   }
   if (request.tool === 'WebFetch') {

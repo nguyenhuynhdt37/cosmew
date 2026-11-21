@@ -33,8 +33,8 @@ export interface CommandSandbox {
 }
 
 /**
- * One command to run in the sandbox. `cwd` is canonical and already inside a working
- * directory: the session project, or a trusted additional directory (`cwdRoots`).
+ * One authorized command. `cwd` is canonical; `cwdRoots` may include the exact external
+ * cwd approved for this invocation, independently of OS-sandbox writable roots.
  */
 export interface CommandRequest {
   command: string;
@@ -42,7 +42,8 @@ export interface CommandRequest {
   taskSessionId?: string;
   cwd: string;
   /**
-   * Trusted `permissions.additionalDirectories`. Set even when `sandbox.writableRoots` is
+   * Trusted additional directories plus an external cwd authorized for this invocation.
+   * Set even when `sandbox.writableRoots` is
    * omitted (sandbox off, read-only, or an excluded command). The runtime allows `cwd` in
    * the project or these directories. The OS sandbox does not read this field.
    */

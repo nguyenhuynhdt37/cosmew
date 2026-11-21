@@ -13,23 +13,23 @@ test('FORCE_COLOR=3 dialogs and panels use the measured colour roles (spec 9, da
   const RULE = '129;162;190';
   const SELECTED = '138;190;183';
   const MUTED = '169;171;174';
-  const WARNING = '255;193;7';
+  const WARNING = '223;194;144';
   // Trust frame: top rule and "Accessing workspace:" in the warning colour, choices in the selection colour.
   expect(frames.trust).toContain(fg(WARNING) + '─');
   expect(frames.trust).toContain('Accessing workspace:');
   expect(frames.trust).toContain(fg(SELECTED) + '❯ No, exit');
   expect(frames.trust).toContain(fg(MUTED) + 'Security guide');
   expect(frames.trust).toContain(fg(MUTED) + 'Enter to confirm · Esc to cancel');
-  // Permission dialog: rule colour title, muted path and rules, selected option, muted footer.
+  // Permission dialog: rule colour title, semantic path, muted rules and footer, and selected option.
   expect(frames.permission).toContain(fg(RULE) + '─');
   expect(frames.permission).toContain(fg(RULE) + 'Edit file');
-  expect(frames.permission).toContain(fg(MUTED) + 'a.txt');
+  expect(frames.permission).toContain(fg('175;184;212') + 'a.txt');
   expect(frames.permission).toContain(fg(MUTED) + '╌');
   expect(frames.permission).toContain(fg(SELECTED) + '❯ ');
   expect(frames.permission).toContain(fg(MUTED) + 'Esc to cancel · Tab to amend');
   // Diff rows carry a tinted background across the line (token-derived soft added/removed tints).
-  expect(frames.permission).toContain('\x1b[48;2;45;64;45m');
-  expect(frames.permission).toContain('\x1b[48;2;73;49;52m');
+  expect(frames.permission).toContain('\x1b[48;2;58;64;59m');
+  expect(frames.permission).toContain('\x1b[48;2;66;59;60m');
   // Question: the frame rule is muted (not the rule colour), the chip is reversed in the rule colour.
   expect(frames.question).toContain(fg(MUTED) + '─');
   expect(frames.question).toContain('\x1b[7m');

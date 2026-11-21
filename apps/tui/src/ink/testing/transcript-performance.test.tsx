@@ -94,7 +94,7 @@ for (const count of process.env.TRANSCRIPT_BENCH ? [300, 1000, 3000] : [3000]) {
       await ui.press('\x15');
       await ui.press('\x1b[1;5F');
       await ui.press('/context');
-      await measure('context', '\r', frame => frame.includes('Auto-compact window:'));
+      await measure('context', '\r', frame => frame.includes('Context window:'));
       await ui.press('/status');
       await measure('status', '\r', frame => frame.includes('Status') && frame.includes('Usage'));
       await measure('status details', 'd', frame => frame.includes('Status detail row 0'));

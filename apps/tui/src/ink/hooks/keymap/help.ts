@@ -1,4 +1,4 @@
-import type {KeyContext} from './defaults';
+import {DEFAULT_BINDINGS, type KeyContext} from './defaults';
 import {chordsFor, type Keymap} from './keymap';
 import {parseChord, displayChord} from './keystroke';
 
@@ -8,6 +8,7 @@ export interface HelpCapabilities {
   /** Option key is printed `opt` (macOS) rather than `alt`. */
   mac: boolean;
   transcriptItems?: boolean;
+  vim?: boolean;
 }
 /**
  * Actions exposed by the shortcut source. Transcript parity entries register the legend here;
@@ -102,8 +103,10 @@ export function shortcutColumns(keymap: Keymap, capabilities: HelpCapabilities):
   const columns: string[][] = [[], [], []];
   for (const line of LINES) {
     if (line.needs && !capabilities[line.needs]) continue;
+    if (capabilities.vim && line.fixed?.startsWith('esc esc')) continue;
     if (line.fixed) {
-      columns[line.column]!.push(line.fixed);
+      const label = capabilities.vim && line.column === 0 ? `Insert ${line.fixed}` : line.fixed;
+      columns[line.column]!.push(label);
       continue;
     }
     if (!IMPLEMENTED_ACTIONS.has(line.action!)) continue;
@@ -114,6 +117,40 @@ export function shortcutColumns(keymap: Keymap, capabilities: HelpCapabilities):
     label = line.alias?.[label] ?? label;
     if (capabilities.mac) label = label.replace(/\balt\+/g, 'opt+');
     columns[line.column]!.push(`${label} ${line.text}`);
+  }
+  if (capabilities.vim) {
+    const label = (token: string) => {
+      const action = `vim:${token}`;
+      const defaults = DEFAULT_BINDINGS.find(entry => entry.action === action)?.keys ?? [];
+      const chords = chordsFor(keymap, 'Vim', action);
+      const chord = chords.find(key => !defaults.includes(key)) ?? chords[0];
+      return chord?.replace(/^shift\+([a-z])$/, (_, letter: string) => letter.toUpperCase());
+    };
+    const groups = [
+      [['escape'], 'leave mode'],
+      [['enter'], 'submit'],
+      [['?', '/'], 'help / history'],
+      [['h', 'j', 'k', 'l'], 'move'],
+      [['w', 'b', 'e', 'W', 'B', 'E'], 'words'],
+      [['0', '^', '$', 'g', 'G', '%'], 'line / bracket'],
+      [['space', 'backspace'], 'across lines'],
+      [['f', 'F', 't', 'T', ';', ','], 'find / repeat'],
+      [['d', 'c', 'y'], 'operator'],
+      [['i', 'a', 'I', 'A', 'o', 'O'], 'insert'],
+      [['x', 'X'], 'delete character'],
+      [['D', 'C', 'Y', 's', 'S', 'R'], 'edit shortcuts'],
+      [['p', 'P'], 'put'],
+      [['u', 'ctrl+r', '.'], 'undo / redo / repeat'],
+      [['r', '~', 'U', 'J'], 'replace / case / join'],
+      [['v', 'V'], 'visual'],
+      [['<', '>'], 'indent'],
+      [['"', "'", '`', '(', ')', '[', ']', '{', '}'], 'objects'],
+      [['1', '2', '3', '4', '5', '6', '7', '8', '9'], 'counts'],
+    ] as const;
+    groups.forEach(([tokens, description], index) => {
+      const keys = tokens.map(label).filter(Boolean);
+      if (keys.length) columns[index % columns.length]!.push(`${keys.join(' ')} ${description}`);
+    });
   }
   return columns;
 }

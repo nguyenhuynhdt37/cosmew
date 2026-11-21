@@ -35,7 +35,7 @@ import {isDarkBackground, type Rgb} from './terminal-background';
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
 
-const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light']);
+const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light', 'midnight', 'parchment']);
 const MODE_THEME_IDS: Record<ThemeMode, string> = {system: 'auto', dark: 'dark', light: 'light'};
 const THEME_MODES: Record<string, ThemeMode> = {
   auto: 'system',
@@ -45,6 +45,8 @@ const THEME_MODES: Record<string, ThemeMode> = {
   'light-daltonized': 'light',
   'dark-ansi': 'dark',
   'light-ansi': 'light',
+  midnight: 'dark',
+  parchment: 'light',
 };
 
 /** Shared selection path for the picker and /config. */
@@ -80,21 +82,17 @@ export function detectTerminalColorCapability(
   const term = (env.TERM ?? '').toLowerCase();
   if (term === 'dumb') return 'none';
   if (
-    term.includes('256color') ||
+    env.WT_SESSION ||
+    env.TERM_PROGRAM === 'iTerm.app' ||
+    env.TERM_PROGRAM === 'WezTerm' ||
+    env.TERM_PROGRAM === 'vscode' ||
     term.includes('xterm-kitty') ||
     term.includes('alacritty') ||
     term.includes('wezterm')
   ) {
-    return colorterm ? 'truecolor' : '256';
-  }
-  if (
-    env.WT_SESSION ||
-    env.TERM_PROGRAM === 'iTerm.app' ||
-    env.TERM_PROGRAM === 'WezTerm' ||
-    env.TERM_PROGRAM === 'vscode'
-  ) {
     return 'truecolor';
   }
+  if (term.includes('256color')) return '256';
   if (
     term.includes('color') ||
     term.includes('xterm') ||
@@ -244,7 +242,7 @@ export class ThemeEngine {
   private previewAnimations: AnimationConfig | null = null;
   private readonly warnings: string[] = [];
   private readonly listeners = new Set<ThemeChangeListener>();
-  public readonly wallpaperEngine = new WallpaperEngine();
+  public readonly wallpaperEngine = new WallpaperEngine(() => this.getActiveTokens());
   public readonly colorCapability: TerminalColorCapability;
 
   public constructor(options: ThemeEngineOptions = {}) {
@@ -469,7 +467,10 @@ export class ThemeEngine {
   public getActiveTokens(): ThemeTokens {
     const manifest = this.getActiveThemeManifest();
     const mode = this.getEffectiveMode();
-    return mode === 'light' ? manifest.light : manifest.dark;
+    if (this.colorCapability === '16' && ['auto', 'light', 'dark', 'midnight', 'parchment'].includes(manifest.id)) {
+      return this.builtInMap.get(`${mode}-ansi`)?.[mode] ?? manifest[mode];
+    }
+    return manifest[mode];
   }
 
   public getActiveWallpaperPresetId(): string | null {

@@ -1,9 +1,13 @@
-/** Half blocks give the astronaut cat a 9×8 square-pixel grid in four terminal rows. */
+/** Half blocks give the cat a 9×8 square-pixel grid in four terminal rows. */
 export const COSMEW_MASCOT_FRAMES = [
-  [' ▄█▄ ▄█▄ ', '▄█▀█▀█▀█▄', '▀█▄▄▄▄▄█▀', '  ██▀██  '],
-  [' ▄█▄ ▄█▄ ', '▄█▀█▀█▀█▄', '▀█▄▄▄▄▄█▀', '  █▀▀▀█  '],
-  [' ▄█▄ ▄█▄ ', '▄█▀▀▀▀▀█▄', '▀█▄▄▄▄▄█▀', '  ██▀██  '],
+  [' █▄   ▄█ ', '▄███████▄', '██▄███▄██', ' ▀██▄██▀ '],
+  [' █▄   ▄█ ', '▄███████▄', '██▄█▀█▄██', ' ▀█████▀ '],
+  [' █▄   ▄█ ', '▄███████▄', '██▀███▀██', ' ▀██▄██▀ '],
 ] as const;
+
+export const COSMEW_MASCOT_FRAME_MS = 520;
+export const COSMEW_MASCOT_COLOR = 'accent';
+export const cosmewMascotWidth = (columns: number) => (columns < 32 ? 3 : 9);
 
 export interface CosmewMascotOptions {
   frame?: number;

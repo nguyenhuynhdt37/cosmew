@@ -21,11 +21,15 @@ function useEffortMetadata(accountId?: string, modelId?: string) {
   }, [client, accountId, modelId]);
   return loading;
 }
-const hasEffortMapping = (provider?: Provider | null) =>
-  provider?.protocol !== 'anthropic' && provider?.protocol !== 'gemini';
+const levelsFor = (model?: ModelInfo | null) => model?.reasoningEfforts ?? [];
+const budgetHint = (model?: ModelInfo | null, provider?: Provider | null) =>
+  (provider?.protocol === 'anthropic' || provider?.protocol === 'gemini') &&
+  levelsFor(model).some(level => level !== 'none') &&
+  model?.reasoningOptions?.budgetMin !== undefined &&
+  !model.reasoningOptions.efforts ? (
+    <TextLine wrap="truncate-end">Budget-based thinking: level sets the token budget</TextLine>
+  ) : null;
 const effortNotice = (model?: ModelInfo | null, provider?: Provider | null): string => {
-  if (!hasEffortMapping(provider))
-    return `Reasoning effort is unsupported for the ${provider!.protocol} protocol: no wire mapping is implemented. Using the provider default.`;
   return model?.reasoningEfforts?.length
     ? ''
     : `No effort levels known for ${model?.id ?? 'this model'}. Using the provider default. Declare them in ~/.cosmew/config.toml ([model_providers.${provider?.id ?? '<id>'}.reasoning...]).`;
@@ -59,7 +63,6 @@ export function ModelsDialog({accountId, onChanged, isStreaming = false, ...prop
       p =>
         p.id === client.listAccounts().find(a => a.id === (account ?? client.status().activeAccount?.id))?.providerId,
     );
-  const levelsFor = (model?: ModelInfo) => (hasEffortMapping(provider) ? (model?.reasoningEfforts ?? []) : []);
   /** Highlighted model and the effort ←/→ picked for it (the list's Enter applies both). */
   const [highlight, setHighlight] = useState<string>();
   const [effortPick, setEffortPick] = useState<Record<string, string>>({});
@@ -168,7 +171,9 @@ export function ModelsDialog({accountId, onChanged, isStreaming = false, ...prop
         ]}
         onHighlight={item => setChosenEffort(item.id)}
         onSelect={item => (item.id === 'back' ? setModel(null) : select(chosen.id, item.id))}
-      />
+      >
+        {budgetHint(chosen, provider)}
+      </PickerDialog>
     );
   return (
     <PickerDialog
@@ -186,11 +191,7 @@ export function ModelsDialog({accountId, onChanged, isStreaming = false, ...prop
         keywords: m.name,
         label: m.id,
         current: m.id === client.status().selection?.modelId,
-        description:
-          levelsFor(m).join(' · ') ||
-          (!hasEffortMapping(provider)
-            ? `${provider!.protocol}: no effort wire mapping`
-            : 'No effort levels known · provider default'),
+        description: levelsFor(m).join(' · ') || 'No effort levels known · provider default',
       }))}
       onHighlight={item => setHighlight(item.id)}
       onSelect={item => (effortPick[item.id] ? select(item.id, effortPick[item.id]) : setModel(item.id))}
@@ -199,6 +200,7 @@ export function ModelsDialog({accountId, onChanged, isStreaming = false, ...prop
         <TextLine>{`${hidden} non-coding models ${showAll ? 'shown · press a to hide' : 'hidden · press a to show all'}`}</TextLine>
       )}
       <TextLine>{`${client.listAccounts().find(a => a.id === (account ?? client.status().activeAccount?.id))?.alias ?? 'No account'} · Ctrl+R discover · Ctrl+A manual · Tab account · s session only`}</TextLine>
+      {budgetHint(highlighted, provider)}
       {highlighted && levelsFor(highlighted).length ? (
         <TextLine>{`←/→ effort: ${effortPick[highlighted.id] ?? client.status().reasoningEffort ?? 'default'}${note ? ' · ' + note : ''}`}</TextLine>
       ) : (
@@ -214,7 +216,7 @@ export function EffortDialog({onChanged, isStreaming = false, ...props}: ModelsD
   const loading = useEffortMetadata(status.activeAccount?.id, status.activeModel?.id);
   const router = useOverlay();
   const task = useDialogTask();
-  const efforts = hasEffortMapping(status.activeProvider) ? (status.activeModel?.reasoningEfforts ?? []) : [];
+  const efforts = levelsFor(status.activeModel);
   const levels = ['default', ...efforts];
   const [slider, setSlider] = useState(() => Math.max(0, levels.indexOf(status.reasoningEffort ?? 'default')));
   const apply = (id: string, sessionOnly = false) =>
@@ -277,6 +279,8 @@ export function EffortDialog({onChanged, isStreaming = false, ...props}: ModelsD
           router.close();
         })
       }
-    />
+    >
+      {budgetHint(status.activeModel, status.activeProvider)}
+    </PickerDialog>
   );
 }

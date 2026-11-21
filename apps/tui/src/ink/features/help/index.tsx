@@ -41,7 +41,7 @@ export function HelpDialog({onCommand, ...props}: HelpDialogProps) {
       ) : tab === 'Commands' ? (
         <ListPicker
           key="commands"
-          items={commandRows()}
+          items={commandRows().map(item => ({...item, labelTone: 'command' as const}))}
           filterable={false}
           visibleRows={size.visibleRows}
           hint={false}
@@ -55,7 +55,12 @@ export function HelpDialog({onCommand, ...props}: HelpDialogProps) {
       ) : skills.length ? (
         <ListPicker
           key="custom"
-          items={skills.map(skill => ({id: `/${skill.name}`, label: `/${skill.name}`, description: skill.description}))}
+          items={skills.map(skill => ({
+            id: `/${skill.name}`,
+            label: `/${skill.name}`,
+            labelTone: 'thinking' as const,
+            description: skill.description,
+          }))}
           filterable={false}
           visibleRows={size.visibleRows}
           hint={false}

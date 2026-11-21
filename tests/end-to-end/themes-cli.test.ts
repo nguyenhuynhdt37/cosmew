@@ -36,8 +36,13 @@ test('CLI exposes the Claude Code appearances and rejects retired color themes',
     'light-daltonized',
     'dark-ansi',
     'light-ansi',
+    'midnight',
+    'parchment',
   ]);
   expect(listed.mode).toBe('dark');
+  expect((await cli(dir, ['themes', 'set', 'parchment'])).code).toBe(0);
+  const selected = JSON.parse((await cli(dir, ['themes', 'list', '--json'])).stdout);
+  expect(selected.mode).toBe('light');
   expect((await cli(dir, ['themes', 'set', 'sakura'])).code).toBe(1);
   expect((await cli(dir, ['themes', 'wallpaper', 'neon-rain'])).code).toBe(1);
   const file = join(dir, 'old-theme.json');

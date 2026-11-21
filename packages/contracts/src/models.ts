@@ -2,7 +2,7 @@ import {turnBudgetSchema} from './telemetry';
 import {z} from 'zod';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.42' as const;
+export const CONTRACT_VERSION = '1.48' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
@@ -44,25 +44,29 @@ export const reasoningEffortsSchema = z
   .min(1)
   .max(20)
   .refine(values => new Set(values).size === values.length);
-const reasoningDeclarationSchema = z
-  .strictObject({
-    supported: z.boolean().optional(),
-    efforts: reasoningEffortsSchema.optional(),
-  })
-  .refine(value => value.supported !== false || value.efforts === undefined, {
-    message: 'unsupported reasoning cannot declare efforts',
-  });
+export const budgetEfforts = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const reasoningBudgetsSchema = z.partialRecord(z.enum(budgetEfforts), z.number().int().positive());
+const reasoningDeclarationFields = {
+  supported: z.boolean().optional(),
+  efforts: reasoningEffortsSchema.optional(),
+  budgets: reasoningBudgetsSchema.optional(),
+};
+const reasoningDeclaration = z.strictObject(reasoningDeclarationFields);
+const permitsReasoningDeclaration = (value: z.infer<typeof reasoningDeclaration>) =>
+  value.supported !== false || (value.efforts === undefined && value.budgets === undefined);
+const reasoningDeclarationSchema = reasoningDeclaration.refine(permitsReasoningDeclaration, {
+  message: 'unsupported reasoning cannot declare efforts or budgets',
+});
 export const providerReasoningSchema = z
   .strictObject({
-    supported: z.boolean().optional(),
-    efforts: reasoningEffortsSchema.optional(),
+    ...reasoningDeclarationFields,
     models: z
       .record(modelIdSchema, reasoningDeclarationSchema)
       .refine(models => Object.keys(models).length <= 500)
       .optional(),
   })
-  .refine(value => value.supported !== false || value.efforts === undefined, {
-    message: 'unsupported reasoning cannot declare efforts',
+  .refine(permitsReasoningDeclaration, {
+    message: 'unsupported reasoning cannot declare efforts or budgets',
   });
 export const providerSchema = z.strictObject({
   id: idSchema,
@@ -191,6 +195,14 @@ export const modelSchema = z.strictObject({
   /** Advisory models.dev evidence used only for listing, never capability claims (ADR 0078, contract 1.40). */
   codingEvidence: z.strictObject({text: capability, tools: capability}).optional(),
   reasoningEfforts: z.array(z.string().min(1).max(40)).max(20).optional(),
+  /** Advisory models.dev wire controls. Budget minimum applies to enabled thinking. */
+  reasoningOptions: z
+    .strictObject({
+      efforts: reasoningEffortsSchema.optional(),
+      toggle: z.literal(true).optional(),
+      budgetMin: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
   defaultReasoningEffort: z.string().max(40).optional(),
   contextLimit: z.number().int().positive().nullable(),
   outputLimit: z.number().int().positive().nullable(),

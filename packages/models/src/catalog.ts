@@ -1,6 +1,7 @@
 import {FutrynError, modelSchema, type ModelInfo, type SettingsStore} from '@cosmew/contracts';
 import {ProviderTransport} from './http';
 import {providerPresets} from './registry';
+import {selectableReasoningEfforts} from './effort-wire';
 
 export const providerFingerprint = (transport: ProviderTransport) => JSON.stringify(transport.provider);
 const object = (value: unknown): Record<string, unknown> => {
@@ -84,7 +85,7 @@ export class ModelCatalog {
     const local = config?.models?.[model.id];
     const supported =
       local?.supported ?? (local?.efforts ? true : (config?.supported ?? (config?.efforts ? true : undefined)));
-    const efforts = local?.efforts ?? config?.efforts;
+    const efforts = local?.efforts ?? config?.efforts ?? model.reasoningEfforts ?? model.reasoningOptions?.efforts;
     const resolved = {...model, capabilities: {...model.capabilities}};
     if (supported !== undefined) resolved.capabilities.reasoning = supported ? 'supported' : 'unsupported';
     if (resolved.capabilities.reasoning === 'unsupported') {
@@ -98,6 +99,12 @@ export class ModelCatalog {
     return resolved;
   }
   cached(): ModelInfo[] {
+    return this.rawCache().map(model => this.selectable(model));
+  }
+  private selectable(model: ModelInfo): ModelInfo {
+    return selectableReasoningEfforts(this.transport.provider, this.resolve(model));
+  }
+  private rawCache(): ModelInfo[] {
     return (
       this.store
         .read()
@@ -105,7 +112,7 @@ export class ModelCatalog {
           c =>
             c.accountId === this.transport.account.id && c.providerFingerprint === providerFingerprint(this.transport),
         )?.models ?? []
-    ).map(model => this.resolve(model));
+    );
   }
   private save(models: ModelInfo[]): void {
     const accountId = this.transport.account.id;
@@ -125,7 +132,7 @@ export class ModelCatalog {
   /** Remember that the provider rejected tool use for this model (ADR 0017); rediscovery resets it. */
   markToolsUnsupported(id: string): void {
     this.save(
-      this.cached().map(model =>
+      this.rawCache().map(model =>
         model.id === id
           ? modelSchema.parse({...model, capabilities: {...model.capabilities, tools: 'unsupported'}})
           : model,
@@ -133,20 +140,20 @@ export class ModelCatalog {
     );
   }
   manual(id: string): ModelInfo {
-    const model = this.resolve(normalizeModel(id, id, 'manual'));
+    const model = normalizeModel(id, id, 'manual');
     model.manualOrigin = 'user';
-    const cache = this.cached().filter(m => m.id !== id);
+    const cache = this.rawCache().filter(m => m.id !== id);
     this.save([...cache, model]);
-    return model;
+    return this.selectable(model);
   }
   /** Models listed in the host config (`models = [...]`) join the catalog as manual entries. */
   private configured(): ModelInfo[] {
-    const cached = this.cached();
+    const cached = this.rawCache();
     const missing = (this.transport.provider.models ?? []).filter(id => !cached.some(m => m.id === id));
     if (!missing.length) return cached;
     const merged = [
       ...cached,
-      ...missing.map(id => this.resolve({...normalizeModel(id, id, 'manual'), manualOrigin: 'provider-config'})),
+      ...missing.map(id => ({...normalizeModel(id, id, 'manual'), manualOrigin: 'provider-config' as const})),
     ];
     this.save(merged);
     return merged;
@@ -169,7 +176,10 @@ export class ModelCatalog {
     const chatgpt = this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses';
     if (this.transport.provider.catalog === 'manual' && !chatgpt)
       return {
-        models: await this.enriched(this.configured(), signal),
+        models: await this.enriched(
+          this.configured().map(model => this.selectable(model)),
+          signal,
+        ),
         stale: false,
         warning: 'Manual catalog; model availability is unverified until generation succeeds.',
       };
@@ -267,7 +277,7 @@ export class ModelCatalog {
         // ChatGPT's account catalog supersedes configured preset fallbacks. Keep explicit
         // user IDs, including legacy manual IDs that are not configured fallbacks.
         (chatgpt
-          ? this.cached().filter(
+          ? this.rawCache().filter(
               m =>
                 m.manualOrigin === 'user' ||
                 (m.manualOrigin === undefined && !this.transport.provider.models?.includes(m.id)),
@@ -285,10 +295,16 @@ export class ModelCatalog {
         }
         merged.set(model.id, model);
       }
-      const result = [...merged.values()].map(model => this.resolve(model));
+      const result = [...merged.values()];
       if (chatgpt && !result.length) throw new FutrynError('NOT_FOUND');
       this.save(result);
-      return {models: await this.enriched(result, signal), stale: false};
+      return {
+        models: await this.enriched(
+          result.map(model => this.selectable(model)),
+          signal,
+        ),
+        stale: false,
+      };
     } catch (error) {
       if (
         error instanceof FutrynError &&
@@ -336,7 +352,7 @@ export class ModelCatalog {
     const entries = object(object(provider).models);
     const positive = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null);
     this.save(
-      this.cached().map(model => {
+      this.rawCache().map(model => {
         const raw = entries[model.id];
         if (!raw) return model;
         const item = object(raw);
@@ -348,11 +364,20 @@ export class ModelCatalog {
         enriched.codingEvidence = {text: advisory.capabilities.text, tools: advisory.capabilities.tools};
         const options = Array.isArray(item.reasoning_options) ? item.reasoning_options : [];
         const efforts: string[] = [];
+        const controls: NonNullable<ModelInfo['reasoningOptions']> = {};
         let reasoning = item.reasoning === true;
         for (const option of options) {
           if (!option || typeof option !== 'object') continue;
           const entry = option as Record<string, unknown>;
           if (['effort', 'toggle', 'budget_tokens'].includes(String(entry.type))) reasoning = true;
+          if (entry.type === 'toggle') controls.toggle = true;
+          if (
+            entry.type === 'budget_tokens' &&
+            typeof entry.min === 'number' &&
+            Number.isSafeInteger(entry.min) &&
+            entry.min >= 0
+          )
+            controls.budgetMin = Math.max(controls.budgetMin ?? 0, entry.min);
           if (entry.type === 'effort' && Array.isArray(entry.values)) {
             for (const value of entry.values) {
               if (
@@ -365,30 +390,29 @@ export class ModelCatalog {
             }
           }
         }
-        if (enriched.capabilities.reasoning !== 'unsupported') {
-          if (reasoning) enriched.capabilities.reasoning = 'supported';
-          if (!enriched.reasoningEfforts?.length && efforts.length) enriched.reasoningEfforts = efforts;
-        }
+        if (efforts.length) controls.efforts = efforts;
+        if (Object.keys(controls).length) enriched.reasoningOptions = controls;
+        else delete enriched.reasoningOptions;
+        if (reasoning && enriched.capabilities.reasoning !== 'unsupported')
+          enriched.capabilities.reasoning = 'supported';
         const limit = item.limit ? object(item.limit) : {};
         const cost = item.cost ? object(item.cost) : {};
         const input =
           typeof cost.input === 'number' && Number.isFinite(cost.input) && cost.input >= 0 ? cost.input : null;
         const output =
           typeof cost.output === 'number' && Number.isFinite(cost.output) && cost.output >= 0 ? cost.output : null;
-        return this.resolve(
-          modelSchema.parse({
-            ...enriched,
-            // Advisory metadata fills gaps but never erases provider-reported values.
-            contextLimit: positive(limit.context) ?? model.contextLimit,
-            outputLimit: positive(limit.output) ?? model.outputLimit,
-            pricing:
-              input !== null && output !== null
-                ? {inputPerMillion: input, outputPerMillion: output, currency: 'USD'}
-                : model.pricing,
-            metadataSource: 'https://models.dev/api.json',
-            metadataFetchedAt: new Date().toISOString(),
-          }),
-        );
+        return modelSchema.parse({
+          ...enriched,
+          // Advisory metadata fills gaps but never erases provider-reported values.
+          contextLimit: positive(limit.context) ?? model.contextLimit,
+          outputLimit: positive(limit.output) ?? model.outputLimit,
+          pricing:
+            input !== null && output !== null
+              ? {inputPerMillion: input, outputPerMillion: output, currency: 'USD'}
+              : model.pricing,
+          metadataSource: 'https://models.dev/api.json',
+          metadataFetchedAt: new Date().toISOString(),
+        });
       }),
     );
   }

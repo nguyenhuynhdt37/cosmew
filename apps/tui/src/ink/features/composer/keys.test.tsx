@@ -3,7 +3,7 @@ import {afterEach, expect, setSystemTime, test} from 'bun:test';
 import {cleanup} from 'ink-testing-library';
 import {child, dialogFixture, selection} from '../picker/test-fixture';
 import {buildKeymap, keymapStore} from '../../hooks';
-import {renderInk, settle} from '../../testing';
+import {renderInk, settle, waitForFrame} from '../../testing';
 import {createPasteState} from '../paste';
 import {ComposerView, useComposer, type ComposerController, type ComposerOptions} from './index';
 
@@ -311,11 +311,31 @@ test('footer: Down on an empty input selects the running agent; arrows move, x s
 });
 test('Tab accepts the highlighted suggestion; unbound Tab never types', async () => {
   const view = await mount({initialValue: '/hel'});
+  expect(view.lastFrame()).toContain('tab complete');
   await key(view, '\t');
   expect(controller.content.startsWith('/help')).toBe(true);
   const plain = await mount({initialValue: 'text'});
   await key(plain, '\t');
   expect(controller.content).toBe('text');
+});
+test('completing inside a word replaces the whole token and the hint follows the remapped key', async () => {
+  keymapStore.set(
+    buildKeymap(
+      JSON.stringify({bindings: [{context: 'Autocomplete', bindings: {tab: null, 'alt+j': 'autocomplete:accept'}}]}),
+    ),
+  );
+  const commands: string[] = [];
+  const view = await mount({
+    initialValue: '/helx',
+    onCommand: command => {
+      commands.push(command);
+    },
+  });
+  await key(view, ARROW.left);
+  expect(view.lastFrame()).toContain('alt+j complete');
+  await key(view, '\u001bj');
+  expect(controller.content).toBe('/help');
+  expect(commands).toEqual([]);
 });
 test('Ctrl+R: Tab and Enter put the match in the input, Esc cancels and restores the draft', async () => {
   const view = await mount({initialHistory: ['alpha', 'beta'], initialValue: 'wip'});
@@ -629,4 +649,70 @@ test('clipboard completion cannot attach an image to a different session', async
   expect(fixture.client.imageAttachments()).toEqual([]);
   expect(controller.content).toBe('keep');
   expect(controller.notice).toContain('session changed');
+});
+
+test('Vim mode routes remapped edits, undo/redo, history and submission through the composer', async () => {
+  const fixture = dialogFixture();
+  // The backend preference changes while the same composer stays mounted.
+  const submitted: string[] = [];
+  const view = await mount(
+    {
+      width: 100,
+      onSubmit: content => {
+        submitted.push(content);
+      },
+    },
+    {fixture},
+  );
+  fixture.client.setEditorMode('vim');
+  await waitForFrame(view, frame => frame.includes('-- INSERT --'));
+  keymapStore.set(buildKeymap(JSON.stringify({bindings: [{context: 'Vim', bindings: {q: 'vim:x', x: null}}]})));
+  await keys(view, '👩🏽‍💻bc', '\x1b', '0', 'q');
+  expect(controller.content).toBe('bc');
+  await key(view, 'u');
+  expect(controller.content).toBe('👩🏽‍💻bc');
+  await key(view, '\x12');
+  expect(controller.content).toBe('bc');
+  await key(view, '/');
+  expect(controller.search).toBeTruthy();
+  await keys(view, '\x1b', '?');
+  await waitForFrame(view, frame => frame.includes('q X delete character'));
+  await keys(view, '\x1b', '\r');
+  expect(submitted).toEqual(['bc']);
+});
+
+test('Vim preserves Insert text, bracketed pastes, image paste and editor shortcuts', async () => {
+  const fixture = dialogFixture();
+  fixture.client.setEditorMode('vim');
+  let editorOpens = 0;
+  let imagePastes = 0;
+  const view = await mount(
+    {
+      onPasteImage: () => {
+        imagePastes++;
+      },
+      onEditor: () => {
+        editorOpens++;
+      },
+    },
+    {fixture},
+  );
+  keymapStore.set(buildKeymap(JSON.stringify({bindings: [{context: 'Vim', bindings: {'q q': 'vim:x'}}]})));
+  await keys(view, 'q', 'q', '界👩🏽‍💻é');
+  expect(controller.content).toBe('qq界👩🏽‍💻é');
+  const pasted = '文 👩🏽‍💻 é\n'.repeat(130);
+  await key(view, `\x1b[200~${pasted}\x1b[201~`);
+  expect(controller.draft.pastes).toHaveLength(1);
+  expect(controller.content).toBe('qq界👩🏽‍💻é' + pasted);
+  await keys(view, '\x1b', 'v');
+  await waitForFrame(view, frame => frame.includes('-- VISUAL --'));
+  await key(view, 'd');
+  expect(controller.content).toBe('qq界👩🏽‍💻é');
+  await key(view, 'u');
+  expect(controller.content).toBe('qq界👩🏽‍💻é' + pasted);
+  expect(controller.draft.pastes).toHaveLength(1);
+  await key(view, '\x07');
+  expect(editorOpens).toBe(1);
+  await key(view, '\x16');
+  expect(imagePastes).toBe(1);
 });

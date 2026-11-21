@@ -1,6 +1,6 @@
-import {WALLPAPER_PRESET_IDS, type AnimationConfig, type WallpaperPresetId} from '@cosmew/contracts';
-import {formatRgbHex, mixHex, parseHexRgb} from './presets';
-import {COSMEW_MASCOT_FRAMES} from './cosmew-mascot';
+import {WALLPAPER_PRESET_IDS, type AnimationConfig, type WallpaperPresetId, type ThemeTokens} from '@cosmew/contracts';
+import {BUILTIN_COLOR_THEMES, formatRgbHex, mixHex, parseHexRgb} from './presets';
+import {COSMEW_MASCOT_COLOR, COSMEW_MASCOT_FRAME_MS, renderCosmewMascot} from './cosmew-mascot';
 
 export interface SceneCell {
   ch: string;
@@ -32,6 +32,9 @@ export interface SceneSprite {
   glow?: {r: number; color: string; a: number};
 }
 
+const defaultPalette = BUILTIN_COLOR_THEMES[0]!.dark;
+type ScenePalette = Pick<ThemeTokens, 'background' | 'foreground' | 'accent' | 'foregroundMuted' | 'warning'>;
+
 export interface WallpaperSceneDefinition {
   id: WallpaperPresetId;
   name: string;
@@ -46,8 +49,16 @@ export interface WallpaperSceneDefinition {
     rows: number,
     t: number,
     eventKind?: string,
+    palette?: ScenePalette,
   ) => (Omit<SceneCell, 'ch'> & {ch?: string}) | undefined;
-  sprites?: (cols: number, rows: number, t: number, eventKind?: string) => SceneSprite[];
+  sprites?: (
+    cols: number,
+    rows: number,
+    t: number,
+    eventKind?: string,
+    palette?: ScenePalette,
+    frozen?: boolean,
+  ) => SceneSprite[];
 }
 
 const GLYPHS = 'St%;:X';
@@ -182,16 +193,6 @@ const MOONLIT_CLOUDS: [number, number, number, number][] = [
   [0.85, 0.8, 16, 0.7],
 ];
 const MOONLIT_NIGHT = tint('#7088d8', '#18214a', [0.35, 0.5, 0.65, 0.82]);
-
-// ============================================================================
-// 2. COSMEW SPARK SCENE (Original COSMEW branding/sentinel, inspired by clawd)
-// ============================================================================
-const COSMEW_BOT_FRAMES = COSMEW_MASCOT_FRAMES;
-const COSMEW_BOT_PAL: Record<string, PaletteTile> = {
-  '▀': {fg: '#d97757', a: 0.95, ch: '▀'},
-  '▄': {fg: '#d97757', a: 0.95, ch: '▄'},
-  '█': {fg: '#d97757', a: 0.95, ch: '█'},
-};
 
 // ============================================================================
 // 3. CLOUD DRIFT SCENE
@@ -696,18 +697,18 @@ export const WALLPAPER_SCENES: Record<WallpaperPresetId, WallpaperSceneDefinitio
   'futryn-spark': {
     id: 'futryn-spark',
     name: 'COSMEW Spark',
-    tagline: 'A turning amber spark, drifting embers, COSMEW sentinel on patrol',
-    defaultBg: '#1f1714',
-    defaultFg: '#f2e6df',
-    defaultAccent: '#d97757',
-    cell: (x, y, cols, rows, t) => {
+    tagline: 'A turning spark, drifting embers and the Cosmew cat',
+    defaultBg: defaultPalette.background,
+    defaultFg: defaultPalette.foreground,
+    defaultAccent: defaultPalette[COSMEW_MASCOT_COLOR],
+    cell: (x, y, cols, rows, t, _event, palette = defaultPalette) => {
       const cx = cols * 0.82;
       const cy = rows * 0.28;
       const dx = x + 0.5 - cx;
       const dy = y + 0.5 - cy;
       const r = Math.hypot(dx, dy);
       const ang = Math.atan2(dy, dx);
-      if (r <= 1.4) return {bg: '#f0883e', fg: '#3b1d12', alpha: 0.85, floor: 0.55};
+      if (r <= 1.4) return {bg: palette.warning, fg: palette.background, alpha: 0.85, floor: 0.55};
       for (let k = 0; k < 10; k++) {
         let da = Math.abs(ang - ((k * Math.PI * 2) / 10 + t * 0.06)) % (Math.PI * 2);
         da = Math.min(da, Math.PI * 2 - da);
@@ -716,21 +717,26 @@ export const WALLPAPER_SCENES: Record<WallpaperPresetId, WallpaperSceneDefinitio
         const along = r * Math.cos(da);
         const off = r * Math.sin(da);
         if (along <= len && off <= 0.4 + 0.5 * (1 - along / len) ** 0.7) {
-          return {bg: '#d97757', fg: '#3b1d12', alpha: 0.7 * (1 - Math.min(1, r / 11)), floor: 0.5};
+          return {
+            bg: palette[COSMEW_MASCOT_COLOR],
+            fg: palette.background,
+            alpha: 0.7 * (1 - Math.min(1, r / 11)),
+            floor: 0.5,
+          };
         }
       }
-      if (rising(x, y, t, 1.2, 0.007)) return {ch: '.', fg: '#e9a083', alpha: 0.5};
+      if (rising(x, y, t, 1.2, 0.007)) return {ch: '.', fg: palette.foregroundMuted, alpha: 0.5};
       const s = hash(x, y, 13);
       if (s < 0.008) {
         return {
           ch: '<>()=$/*'[Math.floor(s * 1000) % 8],
-          fg: '#d97757',
+          fg: palette[COSMEW_MASCOT_COLOR],
           alpha: 0.2 + 0.3 * (0.5 + 0.5 * Math.sin(t * 1.3 + s * 900)),
         };
       }
       return undefined;
     },
-    sprites: (cols, rows, t) => {
+    sprites: (cols, rows, t, _event, palette = defaultPalette, frozen) => {
       const lo = cols * 0.15;
       const hi = Math.max(lo + 4, cols * 0.88 - 9);
       const p = ((t * 2.2) / Math.max(1, hi - lo)) % 2;
@@ -741,11 +747,11 @@ export const WALLPAPER_SCENES: Record<WallpaperPresetId, WallpaperSceneDefinitio
           x: cols * 0.82 - 0.5,
           y: rows * 0.28 - 0.5,
           key: 2,
-          glow: {r: 10, color: '#d97757', a: 0.28 + 0.05 * Math.sin(t * 1.4)},
+          glow: {r: 10, color: palette[COSMEW_MASCOT_COLOR], a: 0.28 + 0.05 * Math.sin(t * 1.4)},
         },
         {
-          art: [...frame(COSMEW_BOT_FRAMES, t, 2.4)],
-          pal: COSMEW_BOT_PAL,
+          art: renderCosmewMascot({frame: Math.floor((t * 1000) / COSMEW_MASCOT_FRAME_MS), reducedMotion: frozen}),
+          pal: Object.fromEntries(Array.from('▀▄█', ch => [ch, {fg: palette[COSMEW_MASCOT_COLOR], a: 0.95, ch}])),
           x: lo + (hi - lo) * (p < 1 ? p : 2 - p),
           y: Math.max(2, rows - 7),
           key: 1,
@@ -1342,6 +1348,8 @@ export class WallpaperEngine {
   private lastRenderDurationMs = 0;
   private frameCounter = 0;
 
+  constructor(private readonly activePalette: () => ScenePalette = () => defaultPalette) {}
+
   setFocused(focused: boolean): void {
     this.focused = focused;
   }
@@ -1390,7 +1398,7 @@ export class WallpaperEngine {
    */
   renderFrame(presetId: string | null | undefined, options: RenderWallpaperOptions): (SceneCell | null)[][] {
     const start = performance.now();
-    const {cols, rows, config, backgroundHex} = options;
+    const {cols, rows, config} = options;
     const grid: (SceneCell | null)[][] = Array.from({length: Math.max(0, rows)}, () =>
       Array<SceneCell | null>(Math.max(0, cols)).fill(null),
     );
@@ -1402,14 +1410,10 @@ export class WallpaperEngine {
     }
 
     const focused = options.focused ?? this.focused;
-    if (config.pauseUnfocused && !focused && !config.reducedMotion) {
-      // Render static frame when unfocused
-    }
-
-    const effectiveTime =
-      config.reducedMotion || (config.pauseUnfocused && !focused)
-        ? 20
-        : options.timeSeconds * Math.max(0.1, Math.min(16, config.speed));
+    const frozen = config.reducedMotion || (config.pauseUnfocused && !focused);
+    const effectiveTime = frozen ? 20 : options.timeSeconds * Math.max(0.1, Math.min(16, config.speed));
+    const palette = scene.id === 'futryn-spark' ? this.activePalette() : undefined;
+    const backgroundHex = palette?.background ?? options.backgroundHex;
 
     const scale = Math.max(1, Math.min(4, Math.round(config.cellSize)));
     const sCols = Math.max(12, Math.ceil(cols / scale));
@@ -1467,7 +1471,7 @@ export class WallpaperEngine {
     if (scene.cell) {
       for (let sy = 0; sy < sRows; sy++) {
         for (let sx = 0; sx < sCols; sx++) {
-          const c = scene.cell(sx, sy, sCols, sRows, effectiveTime, options.eventKind);
+          const c = scene.cell(sx, sy, sCols, sRows, effectiveTime, options.eventKind, palette);
           if (c) {
             putCell(sx, sy, {ch: c.ch, fg: c.fg, bg: c.bg, a: c.alpha, floor: c.floor}, sx, sy);
           }
@@ -1475,7 +1479,7 @@ export class WallpaperEngine {
       }
     }
 
-    const sprites = scene.sprites?.(sCols, sRows, effectiveTime, options.eventKind) ?? [];
+    const sprites = scene.sprites?.(sCols, sRows, effectiveTime, options.eventKind, palette, frozen) ?? [];
     for (const s of sprites) {
       const rawX = isGrid ? Math.round(s.x) : s.x;
       const rawY = isGrid ? Math.round(s.y) : s.y;

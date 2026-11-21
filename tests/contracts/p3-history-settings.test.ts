@@ -144,12 +144,12 @@ test('schema 9 migration preserves known times and leaves unknown workspace prom
     );
     db.close();
     db = openPrivateDatabase(root);
-    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(10);
+    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(11);
     expect(new SqliteConversations(db).promptHistory({scope: 'project', workspace: '/arbitrary'})).toEqual([]);
     expect(new SqliteConversations(db).promptHistory({scope: 'everywhere', workspace: '/arbitrary'})).toEqual([]);
     db.close();
     const raw = new Database(join(root, 'provider-auth.sqlite'));
-    raw.exec('PRAGMA user_version=11');
+    raw.exec('PRAGMA user_version=12');
     raw.close();
     expect(() => openPrivateDatabase(root)).toThrow();
     db = new Database(':memory:');
@@ -310,9 +310,10 @@ test('Auto clears an effort even without declared levels; session reset never pe
   }
 });
 
-test('SDK names protocols without effort mappings but still permits Auto', () => {
+test('SDK uses the catalog’s selectable efforts and still permits Auto without a mapping', () => {
   for (const protocol of ['anthropic', 'gemini'] as const) {
-    const fixture = dialogFixture();
+    let current = {...model, reasoningEfforts: undefined as string[] | undefined};
+    const fixture = dialogFixture({cachedModels: () => [current]});
     fixture.settings.providers = fixture.settings.providers.map(provider => ({...provider, protocol}));
     try {
       fixture.client.setReasoningEffort('high');
@@ -321,5 +322,8 @@ test('SDK names protocols without effort mappings but still permits Auto', () =>
       expect(error).toMatchObject({code: 'UNSUPPORTED', message: expect.stringContaining(`${protocol} protocol`)});
     }
     expect(() => fixture.client.setReasoningEffort('default')).not.toThrow();
+    current = {...model, reasoningEfforts: ['high']};
+    fixture.client.setReasoningEffort('high');
+    expect(fixture.client.status().reasoningEffort).toBe('high');
   }
 });

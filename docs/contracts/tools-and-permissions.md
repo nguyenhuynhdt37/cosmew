@@ -1,5 +1,24 @@
 # Tools và permission contracts
 
+Contract **1.43** adds `agent.spawn` to permission-prompt capabilities for
+explicit `agent_message` control. The public SDK action routes through the
+existing ToolDispatcher, with `Tool(agent_message)` rules and approval scope
+bound to parent session, workspace, child and exact instruction. Plan/Review and
+read-only modes refuse it; cancellation, revoked grants, changed parent and
+tightened rules are rechecked before execution. Other agent operations retain
+their existing checks. No UI or SDK path directly invokes the manager. See
+[ADR 0089](../adr/0089-subagent-task-management.md).
+
+Contract **1.43** also has optional `PermissionPromptRequest.commandSandbox`
+for shell launches, including in SDK interaction events. `disabled` means
+effective settings turn the sandbox off. `escape` means the model requested
+`dangerouslyDisableSandbox` with the sandbox enabled. `excluded` means the
+launch matched `sandbox.excludedCommands`. `sandboxed` means the runtime
+applies containment. The field is display metadata. Permission decisions,
+approval scopes, and saved rules follow the existing policy. Legacy prompts
+and terminal input can omit the field and keep their existing presentation.
+[ADR 0081](../adr/0081-sandbox-defaults-like-claude-code.md)
+
 Contract **1.41** adds host-owned optional `ToolResult.evidenceDigest` and
 `evidenceOutputId` for canonical redacted evidence and its current archive handle
 ([ADR 0083](../adr/0083-context-evidence-dedup.md)). They never grant permission or
@@ -105,7 +124,7 @@ per-file OS sandbox for arbitrary third-party language servers.
 
 ## Working directories (ADR 0067, no contract bump)
 
-Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither stays refused. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` defaults to off (ADR 0081); autoAllowBashIfSandboxed defaults to false and allowUnsandboxedCommands to true. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
+Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither is normalized and asks for per-operation permission in default/acceptEdits; an explicit allow rule or bypass can permit it (ADR 0092). File-tool approval is independent of the OS sandbox. An external Bash cwd follows normal Bash approval and never enlarges sandbox write roots. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` defaults to off (ADR 0081); autoAllowBashIfSandboxed defaults to false and allowUnsandboxedCommands to true. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
 
 ## User MCP (ADR 0068, no contract bump)
 

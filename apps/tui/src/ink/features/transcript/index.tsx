@@ -18,11 +18,13 @@ import {keyLabels, keymapStore, useKeymap} from '../../hooks';
 import {useTheme} from '../../theme';
 import {
   Markdown,
+  CodeBlock,
   ResultLine,
   Spinner,
   TextLine,
   emphasizeDigits,
   formatElapsed,
+  leadingSlashCommand,
   safeText,
   turnVerb,
   wrapRuns,
@@ -105,12 +107,17 @@ export function ToolDot({
   );
 }
 const MAX_USER_ROWS = 200;
-/** `code` spans of a user prompt render in the path colour without their backticks (reference L01). */
+/** Preserve the command name and inline code styling through line wrapping. */
 function promptRuns(text: string): WrapRun[] {
-  return text
-    .split(/(`[^`\n]+`)/)
-    .filter(part => part !== '')
-    .map(part => (/^`[^`\n]+`$/.test(part) ? {text: part.slice(1, -1), code: true} : {text: part}));
+  const slash = leadingSlashCommand(text);
+  const runs: WrapRun[] = slash ? [{text: slash[1]!}, {text: slash[2]!, style: 'command'}] : [];
+  return runs.concat(
+    text
+      .slice(slash?.[0].length ?? 0)
+      .split(/(`[^`\n]+`)/)
+      .filter(part => part !== '')
+      .map(part => (/^`[^`\n]+`$/.test(part) ? {text: part.slice(1, -1), style: 'code' as const} : {text: part})),
+  );
 }
 /** Calls the user started with `!command` keep their own entry and output, as in Claude Code's bash mode. */
 const isUserShell = (callId: string) => callId.startsWith('shell-');
@@ -125,6 +132,8 @@ export function UserMessage({text, width = 80, queued = false}: UserMessageProps
   const theme = useTheme();
   const ui = useUiTheme();
   const bg = ui.color('userMessage');
+  const foreground = theme.color(queued ? 'foregroundMuted' : 'foreground');
+  const tint = {command: ui.color('command'), code: theme.color('markdownCode')};
   const lines = useMemo(() => wrapRuns(promptRuns(safeText(text)), Math.max(1, width - 2)), [text, width]);
   const shown = lines.slice(0, MAX_USER_ROWS);
   return (
@@ -135,7 +144,7 @@ export function UserMessage({text, width = 80, queued = false}: UserMessageProps
           <Text key={index} backgroundColor={bg}>
             <Text color={ui.color('dim')}>{index === 0 ? '❯ ' : '  '}</Text>
             {line.map((run, at) => (
-              <Text key={at} color={run.code ? ui.color('path') : queued ? ui.color('dim') : theme.color('foreground')}>
+              <Text key={at} color={run.style ? tint[run.style] : foreground}>
                 {run.text}
               </Text>
             ))}
@@ -217,6 +226,7 @@ const ToolEntry = memo(function ToolEntry({
   fullOutput,
 }: ToolEntryProps) {
   const {color} = useTheme();
+  const ui = useUiTheme();
   const navigation = useContext(ActivityNavigation);
   const display = useMemo(
     () => toolDisplay(call, result, streaming, expanded, streamed),
@@ -231,6 +241,7 @@ const ToolEntry = memo(function ToolEntry({
     [display, expanded],
   );
   const failed = display.status === 'error' || display.status === 'denied';
+  const shell = call.name === 'exec_command' || call.name === 'write_stdin';
   const fileChange = isFileChangeTool(call.name);
   const applied = fileChange && (result?.status === 'ok' || result?.code === 'PARTIAL_APPLY');
   const pending = fileChange && !result && streaming;
@@ -242,8 +253,10 @@ const ToolEntry = memo(function ToolEntry({
     <Text wrap="wrap">
       {focusedId === activityId ? '› ' : ''}
       <ToolDot status={display.status} animate={animate} />
-      <Text bold>{safeText(name)}</Text>
-      {safeText(argument)}
+      <Text bold color={shell ? ui.color('bashMode') : color('syntaxFunction')}>
+        {safeText(name)}
+      </Text>
+      {argument ? <Text color={shell ? ui.color('command') : ui.color('path')}>{safeText(argument)}</Text> : null}
       {expandHint ? <Text dimColor> {expandHint}</Text> : null}
     </Text>
   );
@@ -253,10 +266,7 @@ const ToolEntry = memo(function ToolEntry({
         key={at}
         line={safeText(line)}
         color={
-          failed &&
-          (display.status === 'denied' ||
-            !['exec_command', 'write_stdin'].includes(call.name) ||
-            line.startsWith('Error:'))
+          failed && (display.status === 'denied' || !shell || line.startsWith('Error:'))
             ? color('error')
             : plain
               ? undefined
@@ -300,7 +310,7 @@ const ToolEntry = memo(function ToolEntry({
       {pending ? null : (
         <ResultLine width={width}>
           {expanded && typeof command === 'string' && command.includes('\n') ? (
-            <TextLine width={Math.max(1, width - 5)}>{command}</TextLine>
+            <CodeBlock code={command} language="bash" label={false} width={Math.max(1, width - 5)} />
           ) : null}
           {call.name === 'update_plan' && result?.status === 'ok' ? (
             <TodoItems items={todosFromInput(call.input)} width={Math.max(1, width - 5)} />
@@ -428,6 +438,7 @@ export interface TranscriptItemProps {
   showSpinner?: boolean;
   /** Ctrl+O: every tool as `⏺ Bash(cmd)` with its full result, reasoning open and a `<time> <model>` header per answer. */
   detailed?: boolean;
+  showTurnDuration?: boolean;
   /** Model name for the detailed header when the item does not carry one. */
   searchMatch?: {id: string; start: number; end: number; text: string};
   model?: string;
@@ -443,6 +454,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   liveRows: liveRowBudget,
   showSpinner = true,
   detailed = false,
+  showTurnDuration = true,
   model,
   formatTime = formatClock,
   searchMatch,
@@ -490,7 +502,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           attached: detailed && !!stamp,
           node: (
             <Box minWidth={0}>
-              <Text color={color('foreground')}>⏺ </Text>
+              <Text color={color('markdownHeading')}>⏺ </Text>
               <Markdown text={item.streaming ? liveTail(block.text, liveRows) : block.text} width={bodyWidth} />
             </Box>
           ),
@@ -509,7 +521,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         const id = `${item.id}:reasoning:${block.index}`;
         const open = detailed || expandedIds.has(id);
         const title = (
-          <Text dimColor italic color={color('foregroundMuted')}>
+          <Text italic color={ui.color('thinking')}>
             {focusedId === id ? '› ' : ''}✻ Thinking… {open ? '▾' : '▸'}
             {!detailed && expansionHint
               ? open
@@ -532,7 +544,13 @@ export const TranscriptItem = memo(function TranscriptItem({
                 title
               )}
               {open ? (
-                <Markdown text={item.streaming ? liveTail(block.text, liveRows) : block.text} width={width} />
+                <Box paddingLeft={Math.max(0, Math.min(2, width - 1))} minWidth={0}>
+                  <Markdown
+                    text={item.streaming ? liveTail(block.text, liveRows) : block.text}
+                    width={bodyWidth}
+                    tone="thinking"
+                  />
+                </Box>
               ) : null}
             </Box>
           ),
@@ -661,7 +679,14 @@ export const TranscriptItem = memo(function TranscriptItem({
         key: 'notices',
         node: <Notices notices={item.notices.map((text, at) => ({id: `${at}`, text}))} width={width} />,
       });
-    if (!item.streaming && !item.interrupted && !item.errorText && item.durationMs !== undefined && item.finishedAt) {
+    if (
+      showTurnDuration &&
+      !item.streaming &&
+      !item.interrupted &&
+      !item.errorText &&
+      item.durationMs !== undefined &&
+      item.finishedAt
+    ) {
       const verb = turnVerb(item.startedAt ?? item.id).past;
       entries.push({
         key: 'done',
@@ -738,6 +763,7 @@ export interface TranscriptProps {
   showSpinner?: boolean;
   /** Ctrl+O detailed transcript (see `useDetailedTranscript`). */
   detailed?: boolean;
+  showTurnDuration?: boolean;
   showAll?: boolean;
   /** Virtual history owns its window and disables the legacy show-all window (B4/B7). */
   virtualScroll?: boolean;
@@ -760,6 +786,7 @@ export const Transcript = memo(function Transcript({
   showSpinner = true,
   liveRows,
   detailed = false,
+  showTurnDuration = true,
   showAll = false,
   virtualScroll = false,
   searchMatch,
@@ -825,6 +852,7 @@ export const Transcript = memo(function Transcript({
               animate={false}
               model={model}
               formatTime={formatTime}
+              showTurnDuration={showTurnDuration}
             />
           )}
         </Static>
@@ -844,6 +872,7 @@ export const Transcript = memo(function Transcript({
           showSpinner={showSpinner}
           animate={animate}
           detailed={detailed}
+          showTurnDuration={showTurnDuration}
           searchMatch={searchMatch?.id === item.id ? searchMatch : undefined}
           model={model}
           formatTime={formatTime}

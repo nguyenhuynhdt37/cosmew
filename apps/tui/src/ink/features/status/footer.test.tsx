@@ -37,19 +37,43 @@ test('context warning requires current measured usage, ignores estimates/stale/i
     measuredCurrentHistory: true,
     lastMeasured: {
       source: 'provider' as const,
-      usedTokens: 8100,
+      usedTokens: 7650,
       limitTokens: 10000,
       measuredAt: '2026-11-19T00:00:00.000Z',
     },
   };
   expect(contextLeft(context)).toBe(10);
+  const fixture = createClientFixture();
+  fixture.client.updateUserPreferences({autoCompact: false});
+  expect(contextLeft({...context, autoCompact: fixture.client.context().autoCompact})).toBeNull();
   expect(contextLeft({...context, measuredCurrentHistory: false})).toBeNull();
   expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, source: 'estimate'}})).toBeNull();
-  expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, usedTokens: 7200}})).toBeNull();
+  expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, usedTokens: 6800}})).toBeNull();
   expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, usedTokens: 10000}})).toBe(0);
   expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, limitTokens: null}})).toBeNull();
   expect(contextLeft({...context, lastMeasured: {...context.lastMeasured, usedTokens: NaN}})).toBeNull();
   expect(contextLeft({...context, outputReserve: 10000})).toBeNull();
+});
+
+test('footer shows the context bar and model limit, with a compact ratio on narrow terminals', async () => {
+  const context = {usedTokens: 42000, modelLimitTokens: 500000};
+  const view = renderInk(<ComposerFooter mode="default" width={100} context={context} />);
+  await settle();
+  expect(view.lastFrame()).toContain('Context [=---------] ~42k/500k · 8%');
+  view.rerender(<ComposerFooter mode="default" width={36} context={context} />);
+  await settle();
+  expect(view.lastFrame()).toMatch(/manual mode on +Ctx ~42k\/500k$/);
+  view.rerender(<ComposerFooter mode="default" width={24} context={context} />);
+  await settle();
+  expect(
+    view
+      .lastFrame()
+      ?.split('\n')
+      .map(line => line.trim()),
+  ).toEqual(['⏸ manual mode on', '~42k/500k']);
+  view.rerender(<ComposerFooter mode="default" width={100} context={{...context, modelLimitTokens: null}} />);
+  await settle();
+  expect(view.lastFrame()).toContain('Context ~42k/?');
 });
 
 test('compatibility status export does not reintroduce model, cost, context, or extra hint rows', async () => {

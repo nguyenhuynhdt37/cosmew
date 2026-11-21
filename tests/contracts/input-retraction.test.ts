@@ -86,7 +86,7 @@ test('schema v9 retraction receipts survive reopening without rewriting the jour
     s = new SqliteConversations(db);
     expect(s.listNextTurn(id)).toEqual([]);
     expect(db.query('SELECT id FROM input_retractions WHERE conversation=?').all(id)).toHaveLength(1);
-    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(10);
+    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(11);
   } finally {
     db.close();
     rmSync(root, {recursive: true, force: true});

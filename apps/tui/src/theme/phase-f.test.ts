@@ -46,20 +46,30 @@ test('auto never queries AppleInterfaceStyle; OSC 11 beats COLORFGBG, then Cosme
   }
 });
 
-test('light and dark presets carry exactly the measured reference colours (spec 9)', () => {
+test('light and dark presets retain reference surfaces and semantic colors', () => {
   const tokens = (mode: 'dark' | 'light') =>
     new ThemeEngine({env: {}, systemDarkPreference: mode === 'dark'}).getActiveTokens();
   const dark = tokens('dark'),
     light = tokens('light');
-  expect([light.accent, dark.accent]).toEqual(['#d77757', '#d77757']);
+  expect([light.accent, dark.accent]).toEqual(['#995b49', '#d7a38d']);
   expect([light.foregroundMuted, dark.foregroundMuted]).toEqual(['#6e7171', '#a9abae']);
   expect([light.border, dark.border]).toEqual(['#3465a4', '#81a2be']);
-  expect([light.info, dark.info]).toEqual(['#5769f7', '#b1b9f9']);
+  expect([light.info, dark.info]).toEqual(['#526486', '#afb8d4']);
   expect([light.composerBackground, dark.composerBackground]).toEqual(['#f2f3f3', '#353940']);
   expect([light.backgroundPanel, dark.backgroundPanel]).toEqual(['#f5f5f5', '#262626']);
   expect(light.foreground).toBe('#2e3434');
   expect(dark.foreground).toBe('#ffffff');
-  expect(light.warning).toBe('#8e7700');
+  expect(light.warning).toBe('#795e37');
+});
+
+test('Auto previews the ANSI palette on terminals limited to 16 colors', () => {
+  const engine = new ThemeEngine({env: {FORCE_COLOR: '1'}, systemDarkPreference: true});
+  expect(engine.getActiveThemeManifest().id).toBe('auto');
+  expect(engine.getActiveTokens()).toEqual(engine.getTheme('dark-ansi')!.dark);
+  engine.previewTheme('light');
+  expect(engine.getActiveTokens()).toEqual(engine.getTheme('light-ansi')!.light);
+  engine.cancelPreview();
+  expect(engine.getActiveTokens()).toEqual(engine.getTheme('dark-ansi')!.dark);
 });
 
 test('changing another appearance option keeps the auto default', async () => {

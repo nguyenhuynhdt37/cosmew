@@ -5,6 +5,7 @@ import {createGoogle} from '@ai-sdk/google';
 import {createOpenAICompatible} from '@ai-sdk/openai-compatible';
 import Ajv, {type ValidateFunction} from 'ajv';
 import {parseRateLimitHeaders} from './limits';
+import {resolveThinkingWire} from './effort-wire';
 import {
   FutrynError,
   requestSchema,
@@ -19,6 +20,7 @@ import {
   toolCallSchema,
   type Usage,
   usageSchema,
+  attributeUsage,
   GENERATION_LIMITS,
   codexBackoffMs,
 } from '@cosmew/contracts';
@@ -336,6 +338,13 @@ export class ProviderAdapter implements ModelPort {
     private readonly modelId: string,
     private readonly info?: ModelInfo,
   ) {}
+  private attributedUsage(value: Usage): Usage {
+    return attributeUsage(value, {
+      accountId: this.transport.account.id,
+      providerId: this.transport.provider.id,
+      modelId: this.modelId,
+    });
+  }
   private replayBinding() {
     const p = this.transport.provider;
     return {
@@ -391,7 +400,17 @@ export class ProviderAdapter implements ModelPort {
       throw new FutrynError('INVALID_INPUT');
     }
     if (request.modelId !== this.modelId) throw new FutrynError('INVALID_INPUT');
-    const maxOutputTokens = this.outputCap(request);
+    const p = this.transport.provider;
+    const effort = request.reasoningEffort;
+    const thinking =
+      effort && (p.protocol === 'anthropic' || p.protocol === 'gemini')
+        ? resolveThinkingWire(p, p.protocol, this.info, effort, request.maxOutputTokens)
+        : undefined;
+    const maxOutputTokens = thinking?.maxOutputTokens ?? this.outputCap(request);
+    // The Anthropic SDK adds the budget back to max_tokens. Keep the wire cap
+    // within the request/model ceiling and reserve at least one output token.
+    const sdkMaxOutputTokens =
+      maxOutputTokens === undefined ? undefined : maxOutputTokens - (thinking?.thinkingBudget ?? 0);
     // Unknown capability is tried (ADR 0017); only a model known to reject tools is refused up front.
     if (request.tools.length && this.info?.capabilities.tools === 'unsupported') throw new FutrynError('UNSUPPORTED');
     if (request.maxEstimatedCostUSD !== undefined) {
@@ -412,20 +431,15 @@ export class ProviderAdapter implements ModelPort {
       )
         throw new FutrynError('BUDGET');
     }
-    if (request.reasoningEffort) {
-      const protocol = this.transport.provider.protocol;
-      if (protocol === 'anthropic' || protocol === 'gemini')
-        throw new FutrynError('UNSUPPORTED', false, null, protocol);
-      if (
-        this.info?.capabilities.reasoning === 'unsupported' ||
-        !this.info?.reasoningEfforts?.includes(request.reasoningEffort)
-      )
-        throw new FutrynError('UNSUPPORTED', false, null, 'levels');
-    }
+    if (
+      effort &&
+      !thinking &&
+      (this.info?.capabilities.reasoning === 'unsupported' || !this.info?.reasoningEfforts?.includes(effort))
+    )
+      throw new FutrynError('UNSUPPORTED', false, null, 'levels');
     if (this.info?.contextLimit && maxOutputTokens !== undefined && maxOutputTokens >= this.info.contextLimit)
       throw new FutrynError('CONTEXT_LIMIT');
     const key = await this.transport.credential(signal);
-    const p = this.transport.provider;
     // Rate-limit headers of the latest response; read once the turn finishes.
     const responseHeaders: {value?: Headers} = {};
     const customFetch = ((url: string | URL | Request, init?: RequestInit) => {
@@ -513,11 +527,12 @@ export class ProviderAdapter implements ModelPort {
     // provider (`<id>.chat` -> `<id>`). This is the only generic Chat transport option we
     // pass through: model metadata must explicitly advertise the effort first (above).
     const providerOptionsByProtocol =
-      providerOptions === undefined
+      thinking?.providerOptions ??
+      (providerOptions === undefined
         ? undefined
         : p.protocol === 'responses'
           ? {openai: providerOptions}
-          : {[p.id]: providerOptions};
+          : {[p.id]: providerOptions});
     return {
       model,
       ...(request.instructions ? {system: request.instructions} : {}),
@@ -527,7 +542,7 @@ export class ProviderAdapter implements ModelPort {
         vision: this.info?.capabilities.vision,
         replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
       }),
-      ...(maxOutputTokens !== undefined ? {maxOutputTokens} : {}),
+      ...(sdkMaxOutputTokens !== undefined ? {maxOutputTokens: sdkMaxOutputTokens} : {}),
       ...(providerOptionsByProtocol ? {providerOptions: providerOptionsByProtocol} : {}),
       maxRetries: 0,
       abortSignal,
@@ -606,7 +621,9 @@ export class ProviderAdapter implements ModelPort {
           else yield {type: 'toolCallComplete', call};
         } else if (part.type === 'finish') {
           const quota = options.responseHeaders.value ? parseRateLimitHeaders(options.responseHeaders.value) : [];
-          const reported = usageSchema.parse({...usage(part.totalUsage, this.info), ...(quota.length ? {quota} : {})});
+          const reported = this.attributedUsage(
+            usageSchema.parse({...usage(part.totalUsage, this.info), ...(quota.length ? {quota} : {})}),
+          );
           yield {type: 'usage', usage: reported};
           if (part.finishReason === 'error' || ['other', 'interrupted'].includes(part.finishReason) || pending.size)
             throw new FutrynError('PROTOCOL');
@@ -667,11 +684,14 @@ export class ProviderAdapter implements ModelPort {
       )
         throw new FutrynError('PROTOCOL');
       const providerReplay = this.captureReplay(result.content);
+      const quota = options.responseHeaders.value ? parseRateLimitHeaders(options.responseHeaders.value) : [];
       return {
         ...(providerReplay ? {providerReplay} : {}),
         text: result.text,
         calls: result.toolCalls.map(call => normalizeToolCall(call.toolCallId, call.toolName, call.input)),
-        usage: usageSchema.parse(usage(result.totalUsage, this.info)),
+        usage: this.attributedUsage(
+          usageSchema.parse({...usage(result.totalUsage, this.info), ...(quota.length ? {quota} : {})}),
+        ),
         finishReason: result.finishReason.replaceAll('-', '_'),
       };
     } catch (e) {

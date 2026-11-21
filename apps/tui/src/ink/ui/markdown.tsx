@@ -1,17 +1,18 @@
 /** @jsxImportSource react */
-import {Box, Text} from 'ink';
-import {memo, useMemo, type ReactNode} from 'react';
+import {Box, Text, type TextProps} from 'ink';
+import {Fragment, memo, useMemo, type ReactNode} from 'react';
+import type {ThemeTokenKey} from '@cosmew/contracts';
 import {Lexer, type Token, type Tokens} from 'marked';
 import {WindowedRows} from '../screen';
 import {useTheme} from '../theme';
 import {DiffView} from './diff';
 import {CodeBlock} from './code-block';
-import {safeText, stringCells, TextLine} from './text-line';
+import {safeText, stringCells, TextLine, wrapRuns, type WrapRun} from './text-line';
 import {renderCache} from './render-cache';
-import {useUiTheme} from './ui-theme';
 export interface MarkdownProps {
   text: string;
   width?: number;
+  tone?: 'thinking';
 }
 function decode(text: string): string {
   return text.replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (whole, entity: string) => {
@@ -21,80 +22,78 @@ function decode(text: string): string {
     return Number.isFinite(code) && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
   });
 }
-function Inline({tokens, depth = 0}: {tokens: Token[]; depth?: number}) {
+type InlineStyle = Pick<TextProps, 'bold' | 'italic' | 'strikethrough' | 'underline'> & {colorToken?: ThemeTokenKey};
+
+function inlineRuns(tokens: Token[], style?: InlineStyle, depth = 0): WrapRun<InlineStyle>[] {
+  if (depth > 24) return [{text: '…', style}];
+  return tokens.flatMap(token => {
+    const nested = (tone = style) =>
+      'tokens' in token && token.tokens
+        ? inlineRuns(token.tokens, tone, depth + 1)
+        : [{text: safeText(decode('text' in token ? token.text : token.raw)), style: tone}];
+    switch (token.type) {
+      case 'strong':
+        return nested({...style, bold: true});
+      case 'em':
+        return nested({...style, italic: true});
+      case 'del':
+        return nested({...style, strikethrough: true});
+      case 'codespan':
+        return nested({...style, colorToken: 'markdownCode'});
+      case 'link': {
+        const link = {...style, underline: true, colorToken: 'info'} as const;
+        return [...nested(link), {text: ` (${safeText(token.href)})`, style: link}];
+      }
+      case 'image':
+        return [
+          {text: `[image: ${safeText(token.text)}] (${safeText(token.href)})`, style: {...style, colorToken: 'info'}},
+        ];
+      case 'br':
+        return [{text: '\n', style}];
+      default:
+        return nested();
+    }
+  });
+}
+
+function Inline({tokens, width}: {tokens: Token[]; width?: number}) {
   const {color} = useTheme();
-  const ui = useUiTheme();
-  if (depth > 24) return <Text>…</Text>;
-  return (
-    <>
-      {tokens.map((token, index) => {
-        const children =
-          'tokens' in token && token.tokens ? (
-            <Inline tokens={token.tokens} depth={depth + 1} />
-          ) : (
-            safeText(decode('text' in token ? token.text : token.raw))
-          );
-        switch (token.type) {
-          case 'strong':
-            return (
-              <Text key={index} bold>
-                {children}
-              </Text>
-            );
-          case 'em':
-            return (
-              <Text key={index} italic>
-                {children}
-              </Text>
-            );
-          case 'del':
-            return (
-              <Text key={index} strikethrough>
-                {children}
-              </Text>
-            );
-          case 'codespan':
-            return (
-              <Text key={index} color={ui.color('path')}>
-                {safeText(decode(token.text))}
-              </Text>
-            );
-          case 'link':
-            return (
-              <Text key={index} underline color={color('accent')}>
-                {children} ({safeText(token.href)})
-              </Text>
-            );
-          case 'image':
-            return (
-              <Text key={index}>
-                [image: {safeText(token.text)}] ({safeText(token.href)})
-              </Text>
-            );
-          case 'br':
-            return <Text key={index}>{'\n'}</Text>;
-          default:
-            return <Text key={index}>{children}</Text>;
-        }
+  const lines = useMemo(() => {
+    const runs = inlineRuns(tokens);
+    return width === undefined ? [runs] : wrapRuns(runs, width);
+  }, [tokens, width]);
+  return lines.map((line, row) => (
+    <Fragment key={row}>
+      {row ? '\n' : null}
+      {line.map(({text, style}, index) => {
+        const {colorToken, ...modifiers} = style ?? {};
+        return (
+          <Text key={index} {...modifiers} color={colorToken ? color(colorToken) : undefined}>
+            {text}
+          </Text>
+        );
       })}
-    </>
-  );
+    </Fragment>
+  ));
 }
 function Blocks({
   tokens,
   width,
   depth = 0,
   explicitSpacing = false,
+  tone,
 }: {
   tokens: (Token | null)[];
   width: number;
   depth?: number;
   explicitSpacing?: boolean;
+  tone?: MarkdownProps['tone'];
 }) {
   const {color} = useTheme();
+  const prose = color(tone === 'thinking' ? 'foregroundMuted' : 'foreground');
   if (depth > 24) return <Text>…</Text>;
   const inline = (token: Tokens.Paragraph | Tokens.Heading | Tokens.Text): ReactNode => (
-    <Inline tokens={token.tokens ?? Lexer.lexInline(token.text)} />
+    <Inline tokens={token.tokens ?? Lexer.lexInline(token.text)} width={width} />
   );
   const last = tokens.findLastIndex(token => token !== null && token.type !== 'space');
   return (
@@ -106,18 +105,22 @@ function Blocks({
           case 'space':
             return null;
           case 'heading':
-            content = <Text bold>{inline(token as Tokens.Heading)}</Text>;
+            content = (
+              <Text bold color={color('markdownHeading')}>
+                {inline(token as Tokens.Heading)}
+              </Text>
+            );
             break;
           case 'paragraph':
           case 'text':
-            content = <Text>{inline(token as Tokens.Paragraph)}</Text>;
+            content = <Text color={prose}>{inline(token as Tokens.Paragraph)}</Text>;
             break;
           case 'code':
             content =
               token.lang === 'diff' || token.lang === 'patch' ? (
                 <DiffView diff={token.text} width={width ?? 80} showHunks />
               ) : (
-                <CodeBlock code={token.text} language={token.lang} width={width} label={false} />
+                <CodeBlock code={token.text} language={token.lang} width={width} label={false} foreground={prose} />
               );
             break;
           case 'blockquote':
@@ -131,25 +134,35 @@ function Blocks({
                 borderColor={color('border')}
                 paddingLeft={1}
               >
-                <Blocks tokens={token.tokens ?? []} width={Math.max(1, width - 2)} depth={depth + 1} />
+                <Blocks tokens={token.tokens ?? []} width={Math.max(1, width - 2)} depth={depth + 1} tone={tone} />
               </Box>
             );
             break;
           case 'list': {
             const list = token as Tokens.List;
+            const start = Number(list.start || 1);
+            const markerWidth = String(start + list.items.length - 1).length;
             content = (
               <Box flexDirection="column">
-                {list.items.map((item, at) => (
-                  <Box key={at}>
-                    <Text>
-                      {list.ordered ? `${Number(list.start || 1) + at}. ` : '- '}
-                      {item.task ? `[${item.checked ? 'x' : ' '}] ` : ''}
-                    </Text>
-                    <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                      <Blocks tokens={item.tokens} width={Math.max(1, width - 3)} depth={depth + 1} />
+                {list.items.map((item, at) => {
+                  const marker = list.ordered ? `${String(start + at).padStart(markerWidth)}. ` : '- ';
+                  const prefix = item.task ? `${marker}[${item.checked ? 'x' : ' '}] ` : marker;
+                  return (
+                    <Box key={at}>
+                      <Box flexShrink={0}>
+                        <Text color={color(item.task && item.checked ? 'success' : 'info')}>{prefix}</Text>
+                      </Box>
+                      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                        <Blocks
+                          tokens={item.tokens}
+                          width={Math.max(1, width - stringCells(prefix))}
+                          depth={depth + 1}
+                          tone={tone}
+                        />
+                      </Box>
                     </Box>
-                  </Box>
-                ))}
+                  );
+                })}
               </Box>
             );
             break;
@@ -162,9 +175,11 @@ function Blocks({
                   {table.rows.map((cells, at) => (
                     <Box key={at} flexDirection="column" marginBottom={1}>
                       {cells.map((cell, col) => (
-                        <Text key={col}>
-                          <Text bold>{safeText(decode(table.header[col]?.text ?? ''))}</Text>:{' '}
-                          <Inline tokens={cell.tokens} />
+                        <Text key={col} color={prose}>
+                          <Text bold color={color('markdownHeading')}>
+                            {safeText(decode(table.header[col]?.text ?? ''))}
+                          </Text>
+                          : <Inline tokens={cell.tokens} />
                         </Text>
                       ))}
                     </Box>
@@ -178,8 +193,8 @@ function Blocks({
               <Box key={key}>
                 {cells.map((cell, at) => (
                   <Box key={at} width={cellWidth} marginRight={1} minWidth={0}>
-                    <Text bold={bold}>
-                      <Inline tokens={cell.tokens} />
+                    <Text bold={bold} color={bold ? color('markdownHeading') : prose}>
+                      <Inline tokens={cell.tokens} width={cellWidth} />
                     </Text>
                   </Box>
                 ))}
@@ -200,7 +215,7 @@ function Blocks({
             content = <Text color={color('border')}>{'─'.repeat(width)}</Text>;
             break;
           default:
-            content = <TextLine>{decode(token.raw)}</TextLine>;
+            content = <TextLine color={prose}>{decode(token.raw)}</TextLine>;
         }
         return (
           <Box
@@ -248,7 +263,7 @@ function singleLineBlocks(tokens: Token[], width: number): (Token | null)[] | un
   return rows;
 }
 const markdownTokens = renderCache<string, Token[]>(32);
-export const Markdown = memo(function Markdown({text, width = 80}: MarkdownProps) {
+export const Markdown = memo(function Markdown({text, width = 80, tone}: MarkdownProps) {
   const tokens = useMemo(() => {
     const source = safeText(text.slice(0, 262144));
     return markdownTokens(source, () => {
@@ -265,10 +280,10 @@ export const Markdown = memo(function Markdown({text, width = 80}: MarkdownProps
     <Box width={columns} flexDirection="column" minWidth={0}>
       {rows ? (
         <WindowedRows count={rows.length}>
-          {(first, end) => <Blocks tokens={rows.slice(first, end)} width={columns} explicitSpacing />}
+          {(first, end) => <Blocks tokens={rows.slice(first, end)} width={columns} explicitSpacing tone={tone} />}
         </WindowedRows>
       ) : (
-        <Blocks tokens={tokens} width={columns} />
+        <Blocks tokens={tokens} width={columns} tone={tone} />
       )}
       {text.length > 262144 ? <Text>… Markdown truncated at 262144 characters</Text> : null}
     </Box>

@@ -161,3 +161,39 @@ test('real SQLite import is read-only and the permission parser retains unknown 
     db.close();
   }
 });
+
+test('user preferences default for existing settings and round-trip independently of appearance', () => {
+  const f = fixture();
+  const other = {theme: 'light', permissions: {deny: ['Read(secret)']}, verbose: 'invalid'};
+  writeFileSync(f.path, JSON.stringify(other));
+  const store = new FileAppearanceStore({stateDirectory: f.directory});
+  const {client} = createClientFixture({userPreferencesStore: store});
+  expect(client.userPreferences()).toEqual({autoCompact: true, verbose: false, showTurnDuration: true});
+  client.updateUserPreferences({autoCompact: false, verbose: true});
+  client.updateUserPreferences({showTurnDuration: false});
+  const restarted = new FileAppearanceStore({stateDirectory: f.directory});
+  expect(restarted.readPreferences()).toEqual({autoCompact: false, verbose: true, showTurnDuration: false});
+  expect(JSON.parse(readFileSync(f.path, 'utf8'))).toMatchObject({
+    ...other,
+    autoCompact: false,
+    verbose: true,
+    showTurnDuration: false,
+  });
+});
+
+test('editor mode defaults, cycles live and persists independently of appearance and permissions', () => {
+  const f = fixture();
+  writeFileSync(f.path, JSON.stringify({editorMode: 'invalid', permissions: {deny: ['Bash(*)']}}));
+  const {client} = createClientFixture({appearanceStore: new FileAppearanceStore({stateDirectory: f.directory})});
+  const changes: string[] = [];
+  const unsubscribe = client.subscribeEditorMode(() => changes.push(client.editorMode()));
+  expect(client.editorMode()).toBe('normal');
+  client.setEditorMode('vim');
+  expect(changes).toEqual(['vim']);
+  const restored = new FileAppearanceStore({stateDirectory: f.directory});
+  expect(restored.readEditorMode()).toBe('vim');
+  expect(JSON.parse(readFileSync(f.path, 'utf8')).permissions).toEqual({deny: ['Bash(*)']});
+  client.setEditorMode('normal');
+  expect(restored.readEditorMode()).toBe('normal');
+  unsubscribe();
+});

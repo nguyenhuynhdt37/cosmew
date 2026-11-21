@@ -10,6 +10,7 @@ import type {
   UserInputOutcome,
   UserQuestion,
   PermissionDecision,
+  PermissionPromptRequest,
   SubagentExecutionPort,
 } from '@cosmew/contracts';
 import {evaluateRead, type SessionGrants} from '@cosmew/security';
@@ -27,6 +28,7 @@ export interface ApprovalRequest {
   tool: string;
   capability:
     | 'agent.state.write'
+    | 'agent.spawn'
     | 'fs.read'
     | 'fs.write'
     | 'process.execute'
@@ -39,11 +41,13 @@ export interface ApprovalRequest {
   /** For commands: the canonical working directory (workspace-relative) and the sandbox. */
   workdir?: string;
   sandbox?: string;
+  /** Why a shell launch has its effective sandbox. Absent for terminal input. */
+  commandSandbox?: PermissionPromptRequest['commandSandbox'];
   scopeKey?: string;
   diffPreview?: string;
   /** The command asks to run once WITHOUT the sandbox (`dangerouslyDisableSandbox`, ADR 0061). */
   unsandboxed?: boolean;
-  /** The command runs outside the sandbox because settings exclude it or the sandbox is disabled. */
+  /** The command runs outside the sandbox because it matches a configured exclusion. */
   excluded?: boolean;
   /** True when the command matched the dangerous-command heuristic (`forced-rm`), for display. */
   dangerous?: boolean;
@@ -102,6 +106,10 @@ export interface ToolDispatcherOptions {
   stateDirectory?: string;
   /** Pure current project read-rule decision; hard builtin deny/secret gates always remain. */
   readPolicy?(relative: string, absolute: string): 'allow' | 'ask' | 'deny' | undefined;
+  /** Current Edit rule, including canonical external targets; hard path restrictions remain. */
+  writePolicy?(relative: string, absolute: string): 'allow' | 'ask' | 'deny' | undefined;
+  /** Current named-tool rule, rechecked after agent_message approval. */
+  toolPolicy?(tool: string): 'allow' | 'ask' | 'deny' | undefined;
   /** Search deadline; defaults to 30 s. */
   searchDeadlineMs?: number;
   /**

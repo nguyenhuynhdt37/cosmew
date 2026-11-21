@@ -43,17 +43,29 @@ const safeMessages: Record<ErrorCode, string> = {
 const reasoningMessages = {
   levels:
     'No effort levels known for this model. Declare them in ~/.cosmew/config.toml (model_providers.<id>.reasoning).',
-  anthropic: 'Reasoning effort is unsupported for the anthropic protocol: no wire mapping is implemented.',
-  gemini: 'Reasoning effort is unsupported for the gemini protocol: no wire mapping is implemented.',
+} as const;
+const reasoningWireMessages = {
+  unknown: 'reasoning capability is unknown.',
+  unsupported: 'reasoning capability is unsupported for this model.',
+  mapping: 'no wire mapping for the requested effort is supported by the model metadata and installed SDK.',
+  disable: 'thinking cannot be disabled with the available model settings.',
+  budget: 'there is no room for the minimum thinking budget under the output limit, or the output limit is unknown.',
 } as const;
 export class CosmewError extends Error {
   constructor(
     public readonly code: ErrorCode,
     public readonly retryable = false,
     public readonly retryAfterMs: number | null = null,
-    reasoningDetail?: keyof typeof reasoningMessages,
+    reasoningDetail?: keyof typeof reasoningMessages | 'anthropic' | 'gemini',
+    reasoningWireDetail: keyof typeof reasoningWireMessages = 'mapping',
   ) {
-    super(code === 'UNSUPPORTED' && reasoningDetail ? reasoningMessages[reasoningDetail] : safeMessages[code]);
+    super(
+      code !== 'UNSUPPORTED' || !reasoningDetail
+        ? safeMessages[code]
+        : reasoningDetail === 'levels'
+          ? reasoningMessages[reasoningDetail]
+          : `Reasoning effort is unsupported for the ${reasoningDetail} protocol: ${reasoningWireMessages[reasoningWireDetail]}`,
+    );
     this.name = 'CosmewError';
   }
   toJSON() {

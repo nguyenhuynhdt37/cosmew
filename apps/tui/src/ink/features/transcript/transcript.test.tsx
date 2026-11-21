@@ -4,6 +4,7 @@ import {cleanup} from 'ink-testing-library';
 import {Box, Text} from 'ink';
 import {InputScope} from '../../hooks';
 import {renderInk, settle} from '../../testing';
+import {Markdown, wrapText} from '../../ui';
 import {
   Transcript,
   TranscriptItem,
@@ -19,6 +20,16 @@ afterEach(cleanup);
 const citation =
   '<oai-mem-citation>\n<citation_entries>\nproject-map.md:1-3|note=[architecture]\n</citation_entries>\n</oai-mem-citation>';
 const call = {id: 'read-1', name: 'read', input: {path: 'src/main.ts'}};
+test('chat wrapping keeps joined emoji and accents intact at the wrap edge', () => {
+  expect(wrapText('👨‍👩‍👧‍👦é 漢', 3)).toEqual(['👨‍👩‍👧‍👦é', '漢']);
+  expect(wrapText('ăbc', 2)).toEqual(['ăb', 'c']);
+});
+
+test('ordered list continuation starts under its text as item numbers grow', async () => {
+  const view = renderInk(<Markdown text={'9. first item wraps\n10. next item wraps'} width={13} />);
+  await settle();
+  expect(view.lastFrame()?.split('\n')).toEqual([' 9. first', '    item', '    wraps', '10. next item', '    wraps']);
+});
 function start(): TranscriptState {
   return reduceTranscript({items: []}, {type: 'begin', id: 'turn', prompt: 'hello', now: 10});
 }

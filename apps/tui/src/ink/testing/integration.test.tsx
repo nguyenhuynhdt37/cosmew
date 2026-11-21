@@ -8,11 +8,11 @@ import {openInk} from './ink-session';
 import {dialogFixture, selection, account} from '../features/picker/test-fixture';
 import {routeCommand, type CommandHost} from '../features/commands';
 import {ListPicker} from '../ui';
-import {render, renderInk, settle, waitForFrame} from './index';
+import {render, renderInk, settle, waitForCondition, waitForFrame} from './index';
 afterEach(cleanup);
 /** Consent and composer setup take a few frames; wait for the ready composer before typing. */
 const untilReady = async (view: {lastFrame(): string | undefined}) => {
-  for (let wait = 0; wait < 100 && !view.lastFrame()?.includes('manual mode on'); wait++) await settle();
+  await waitForFrame(view, frame => frame.includes('manual mode on'), 4000);
   await settle(); // input handlers register one commit after the frame
 };
 const key = async (view: {stdin: {write(s: string): void}}, text: string) => {
@@ -307,7 +307,8 @@ test('picker remembers selection across overlay mounts and themes preview on hig
   await key(view, 't');
   await key(view, '\x1b[B');
   expect(engine.isPreviewing()).toBe(true);
-  await key(view, '\x1b');
+  view.stdin.write('\x1b');
+  await waitForCondition(() => (!engine.isPreviewing() ? true : undefined), 2000);
   expect(engine.isPreviewing()).toBe(false);
 });
 

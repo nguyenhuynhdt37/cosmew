@@ -130,13 +130,21 @@ test('"Allow for session" reads the secret once approved and is remembered until
   await c.tui.handleKey('Escape');
 });
 
-test('paths outside the workspace are denied without a prompt or any outside path in the reply', async () => {
-  const c = await make({name: 'read', args: '{"path":"../../etc/passwd"}'});
-  await c.tui.submitPrompt('read passwd');
+test('external reads show an approval prompt; refusal exposes no content', async () => {
+  const external = mkdtempSync(join(tmpdir(), 'cosmew-external-e2e-'));
+  cleanup.push(() => rmSync(external, {recursive: true, force: true}));
+  const path = join(external, 'notes.txt');
+  writeFileSync(path, 'EXTERNAL_CONTENT_CANARY_92');
+  const c = await make({name: 'read', args: JSON.stringify({path})});
+  await c.tui.submitPrompt('read hosts');
+  await c.tui.nextPermission();
+  expect(c.client.listPendingPermissions()).toHaveLength(1);
+  expect(c.client.listPendingPermissions()[0]!.reason).toContain('outside the working directories');
+  await c.tui.handleKey('Escape');
+  await c.tui.idle();
   const result = c.tui.getTranscript().at(-1)!.toolResults?.[0];
   expect(result).toMatchObject({status: 'denied', code: 'DENIED'});
-  expect(c.client.listPermissions()).toHaveLength(0);
-  expect(JSON.stringify(c.server.requests)).not.toContain('root:');
+  expect(JSON.stringify(c.server.requests)).not.toContain('EXTERNAL_CONTENT_CANARY_92');
 });
 
 test('a provider that rejects tools marks the model unsupported and the next turn chats without tools', async () => {

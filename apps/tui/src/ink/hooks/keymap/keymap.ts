@@ -84,7 +84,10 @@ export function buildKeymap(userText?: string): Keymap {
         warnings.push(`${context}: ${chord.error}`);
         continue;
       }
-      if (chord.value.length === 1 && isReserved(chord.value[0]!)) {
+      if (
+        chord.value.length === 1 &&
+        (isReserved(chord.value[0]!) || (context === 'Vim' && formatChord(chord.value) === 'escape'))
+      ) {
         warnings.push(`${context}: "${keys}" is reserved and cannot be rebound.`);
         continue;
       }

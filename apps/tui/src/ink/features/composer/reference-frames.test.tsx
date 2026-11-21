@@ -44,20 +44,23 @@ test('idle frame matches reference 01-ready rows 24-29 (effort row, rules, place
   const {view} = await mount();
   const want = await reference('01-ready', 24, 29);
   const got = tail(view.lastFrame()!, 6);
-  // `low` is shorter than `medium`: only the effort row differs, and it stays right aligned two cells from the edge.
+  // `low` is shorter than `medium` and stays right aligned two cells from the edge.
   expect(got[0]).toBe(' '.repeat(100 - 2 - '◐ low · /effort'.length) + '◐ low · /effort');
-  expect(got.slice(1, 5)).toEqual([want[1]!, want[2]!, want[3]!, '']);
-  expect(got[5]).toBe('  ⏸ manual mode on');
+  expect(got.slice(1, 4)).toEqual([want[1]!, want[2]!, want[3]!]);
+  expect(got[4]).toContain('shift+tab permissions');
+  expect(got[5]).toMatch(/^  ⏸ manual mode on +Context \[----------\] ~0\/100k · 0%$/);
   expect(want[5]).toBe('  ⏸ manual mode on · ← 1 agent');
 });
 
 test('footer modes and suffixes: busy adds esc to interrupt, running agents add ← N agent(s)', async () => {
   const {view, fixture} = await mount({busy: true, backgroundShells: 2});
-  expect(tail(view.lastFrame()!, 1)).toEqual(['  ⏸ manual mode on · esc to interrupt · 2 shells · ↓ to manage']);
+  expect(tail(view.lastFrame()!, 1)[0]).toMatch(
+    /^  ⏸ manual mode on · esc to interrupt · 2 shells · ↓ to manage +Context \[----------\] ~0\/100k · 0%$/,
+  );
   fixture.client.setPermissionMode('acceptEdits');
   await settle();
-  expect(tail(view.lastFrame()!, 1)[0]).toBe(
-    '  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · 2 shells · ↓ to manage',
+  expect(tail(view.lastFrame()!, 1)[0]).toMatch(
+    /^  ⏵⏵ accept edits on \(shift\+tab to cycle\) · esc to interrupt · 2 shells · ↓ to manage +(?:Ctx )?~0\/100k$/,
   );
 });
 
@@ -163,7 +166,7 @@ test('# keeps the dispatch prefix but uses the normal prompt and footer (referen
   const {view} = await mount({initialValue: '#'});
   const got = tail(view.lastFrame()!, 6);
   expect(got[2]).toBe('❯ #');
-  expect(got[5]).toBe('  ⏸ manual mode on');
+  expect(got[5]).toMatch(/^  ⏸ manual mode on +Context \[----------\] ~0\/100k · 0%$/);
 });
 
 test('a running turn shows an empty prompt without the rotating example', async () => {

@@ -3,7 +3,7 @@ import {Box, Text} from 'ink';
 import {useEffect, useRef, useState} from 'react';
 import {isPrintable, useKeybindings, type Keystroke} from '../hooks';
 import {useTheme} from '../theme';
-import {useUiTheme} from './ui-theme';
+import {useUiTheme, type UiThemeToken} from './ui-theme';
 import {Pointer} from './pointer';
 import {SearchBox} from './search-box';
 import {useDialogRows} from './dialog-layout';
@@ -13,7 +13,9 @@ import {useMouseTarget} from '../hooks/use-terminal-wheel';
 export interface PickerItem {
   id: string;
   label: string;
+  labelTone?: UiThemeToken;
   description?: string;
+  descriptionTone?: UiThemeToken;
   keywords?: string;
   disabled?: boolean;
   current?: boolean;
@@ -199,14 +201,18 @@ export function ListPicker<T extends PickerItem>({
               <Pointer selected={active} />
               {markerSlot ? item.current ? <Text color={color('success')}>{'✔ '}</Text> : '  ' : null}
               {numbered ? <Text color={muted}>{`${top + offset + 1}. `}</Text> : null}
-              <Text color={active ? ui.color('selected') : undefined} dimColor={item.disabled}>
+              <Text
+                color={active ? ui.color('selected') : item.labelTone ? ui.color(item.labelTone) : undefined}
+                dimColor={item.disabled}
+              >
                 {label}
                 {item.disabled ? ' (unavailable)' : ''}
               </Text>
               {item.description && !compact ? (
-                <Text
-                  color={muted}
-                >{`${' '.repeat(Math.max(2, labelWidth - Array.from(label).length + 2))}${safeText(item.description)}`}</Text>
+                <>
+                  {' '.repeat(Math.max(2, labelWidth - Array.from(label).length + 2))}
+                  <Text color={ui.color(item.descriptionTone ?? 'dim')}>{safeText(item.description)}</Text>
+                </>
               ) : null}
             </Text>
           </MouseRow>

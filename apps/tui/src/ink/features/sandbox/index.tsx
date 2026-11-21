@@ -5,10 +5,12 @@ import {MouseRow} from '../../ui/mouse-row';
 import {useMouseTarget} from '../../hooks/use-terminal-wheel';
 import {useFutrynClient, useKeybindings} from '../../hooks';
 import {Panel, PanelTabs, TextLine} from '../../ui';
+import {useTheme} from '../../theme';
 import {useDialogRefresh, useDialogSize, type DialogProps} from '../picker';
 import {SANDBOX_TABS, SANDBOX_MODES, activeSandboxMode, dependencyRows} from './logic';
 export function SandboxDialog(props: DialogProps) {
   const client = useFutrynClient();
+  const {color} = useTheme();
   const {refresh} = useDialogRefresh();
   const size = useDialogSize(props);
   const sandbox = client.permissionSettings().sandbox;
@@ -96,12 +98,18 @@ export function SandboxDialog(props: DialogProps) {
         <Box ref={mouseRef} flexDirection="column">
           {rows.map((row, at) => (
             <MouseRow key={at} onHighlight={() => setCursor(at)} isActive={tab === 0 || tab === 2}>
-              <TextLine>{row}</TextLine>
+              <TextLine
+                color={tab === 3 ? color(row.startsWith('  ') ? 'syntaxFunction' : 'markdownHeading') : undefined}
+              >
+                {row}
+              </TextLine>
             </MouseRow>
           ))}
         </Box>
-        {error ? <TextLine>{error}</TextLine> : null}
-        <TextLine>Tab to switch · ↑/↓ to choose · Enter to apply · Esc to close</TextLine>
+        {error ? <TextLine color={color('error')}>{error}</TextLine> : null}
+        <TextLine color={color('foregroundMuted')}>
+          Tab to switch · ↑/↓ to choose · Enter to apply · Esc to close
+        </TextLine>
       </Box>
     </Panel>
   );

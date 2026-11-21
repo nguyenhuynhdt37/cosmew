@@ -43,6 +43,7 @@ export function statusError(status: number, retry: string | null): FutrynError {
 
 const billingMarker =
   /\b(?:insufficient[ -](?:quota|credits|balance)|credit[ -]balance|out of credits|spending[ -]limit|billing|payment[ -]required|subscription (?:is )?required|needs? a [\w -]*subscription)\b/i;
+const contextErrorCodes = new Set(['context_length_exceeded', 'context_window_exceeded']);
 
 function errorFields(value: unknown) {
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -192,10 +193,13 @@ export class ProviderTransport {
     }
     onActivity?.();
     if (!response.ok) {
-      if ([402, 403, 429].includes(response.status)) {
+      const contextStatus = response.status === 400 || response.status === 413;
+      if (contextStatus || [402, 403, 429].includes(response.status)) {
         const {message, markers} = await readErrorFields(response, onActivity);
         if (init.signal?.aborted) throw normalizeError(null, init.signal);
-        if (
+        if (contextStatus) {
+          if (markers.some(marker => contextErrorCodes.has(marker))) throw new FutrynError('CONTEXT_LIMIT');
+        } else if (
           response.status === 402 ||
           [...markers, message].some(text => billingMarker.test(text.replaceAll('_', ' ')))
         ) {

@@ -103,7 +103,9 @@ export class KeyRouter {
     const list: Entry[] = [];
     for (const registration of this.registrations) {
       if (!registration.active) continue;
-      for (const context of Object.keys(registration.handlers) as KeyContext[]) list.push({registration, context});
+      for (const context of Object.keys(registration.handlers) as KeyContext[]) {
+        if (registration.handlers[context]) list.push({registration, context});
+      }
     }
     // Innermost context first; among equals the most recently registered component wins.
     return list.sort(

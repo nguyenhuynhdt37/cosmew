@@ -13,6 +13,8 @@ exports[`onboarding resumes at Connect and goes through security before trust at
       Light (colorblind-friendly)
       Dark (ANSI)
       Light (ANSI)
+      Midnight
+      ↓ 1 more
 
   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
    1   function greet() {
@@ -79,6 +81,8 @@ exports[`onboarding resumes at Connect and goes through security before trust at
       Light (colorblind-friendly)
       Dark (ANSI)
       Light (ANSI)
+      Midnight
+      ↓ 1 more
 
   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
    1   function greet() {

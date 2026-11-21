@@ -14,3 +14,4 @@
    3. No
 
  Esc to cancel · Tab to amend
+ sandbox off · /sandbox to turn it on

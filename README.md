@@ -1,6 +1,8 @@
 # Cosmew CLI
 
-Cosmew is a TypeScript/Bun coding-agent harness under development. The **Provider & Authentication slice is implemented and fixture-tested**: persistent providers/accounts, OS keyring or environment-reference authentication, dynamic/manual catalogs, model selection, streamed multi-turn chat and diagnostics. **The full Product MVP is not accepted yet**: commercial generation has not been live-verified, and authenticated-provider/interactive acceptance remains limited. Subscription backend ownership and opt-in rules are described in [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
+<img src="docs/assets/cosmew-pixel-logo.png" width="144" height="144" alt="Cosmew mascot, an orange pixel-art tabby face">
+
+Cosmew is a TypeScript/Bun coding-agent harness under development. The **Provider & Authentication slice is implemented and fixture-tested**: persistent providers/accounts, OS keyring or environment-reference authentication, dynamic/manual catalogs, model selection, streamed multi-turn chat and diagnostics. **The full Product MVP is not accepted yet**: authenticated-provider acceptance is limited to documented cases, and interactive acceptance remains incomplete. Subscription backend ownership and opt-in rules are described in [ADR 0029](docs/adr/0029-hannes-owned-agent-and-delegated-backends.md).
 
 Repository: [nguyenhuynhdt37/cosmew](https://github.com/nguyenhuynhdt37/cosmew).
 
@@ -11,10 +13,22 @@ agents, including retained finished tasks. **Enter** opens output, **↑/↓** s
 footer's **↓ to manage** shortcut opens the same panel. Tasks belong to the active
 session and do not continue after Cosmew exits.
 Agent inspection opens a full-screen conversation using the main chat renderer;
-**Ctrl+O** expands tool details, and **Esc** returns to the task list. It reads the
+**Ctrl+O** expands tool details, and **Esc** returns to the task list or parent
+chat according to the entry point. It reads the
 recorded child history without switching away from the parent session.
+The selected footer task now opens directly; **←/→** switch sibling agents and
+**Alt+↑/↓**, **Alt+Enter** focus and expand individual tool activity. In the child
+view, **i** composes an instruction and **Enter** sends it through normal tool
+permissions. Failed sends retain the draft. Finished task history remains
+inspectable after restarting; previously running work is shown as stopped or
+interrupted and is never restarted automatically.
 
 Requires Bun **1.4.4**. No application build is required; Bun runs the TypeScript workspace.
+
+`/review` and `/plan` keep the agent in read-only analysis; use `/chat` to return
+to implementation. Switching off `/sandbox` does not exit analysis mode. File
+tools ask for access outside the working directories; approved unsandboxed shell
+commands can read/write anywhere your OS user can (ADR 0092).
 
 ```sh
 bun install --frozen-lockfile --ignore-scripts
@@ -25,7 +39,7 @@ cosmew
 
 The package registers `cosmew` and compatibility aliases `fyn`, `futryn`, and `hannes` in Bun's global bin directory (normally `~/.bun/bin`, which must be on PATH). None changes your working directory: `cd /path/to/project` then run `cosmew`.
 
-Start the full-screen Cosmew interface with `cosmew` in any project folder. From this checkout, use `bun run cosmew`. Approve the current folder for this session, then the app checks the selected account/model with a small request (which may incur cost); select another account or sign in if the check fails. Use `/theme` or the Theme row in `/config` to select Auto, Dark, Light, or a colorblind-friendly/ANSI palette; dark/light surfaces retain color for status and syntax. Enter **`/login`** for searchable providers and supported authentication methods, then choose a model and chat. OpenRouter additionally supports its official browser/headless **OAuth PKCE** flow. `/logout` opens account management with Add, Switch, Rename, Reconnect, Remove and sign-out. `/config`, `/theme`, `/model`, `/resume`, `/status`, `/doctor` and `/help` open the corresponding real flows; unsupported backend commands explain their limits. Existing command names remain aliases.
+Start the full-screen Cosmew interface with `cosmew` in any project folder. From this checkout, use `bun run cosmew`. Approve the current folder for this session, then the app checks the selected account/model with a small request (which may incur cost); select another account or sign in if the check fails. Use `/theme` or the Theme row in `/config` to preview Auto, Dark, Light, Midnight, Parchment, and the colorblind-friendly or ANSI palettes. The composer shows shortcuts for the current input, including Tab to complete a suggestion and Shift+Tab to cycle permissions. Enter **`/login`** for searchable providers and supported authentication methods, then choose a model and chat. OpenRouter additionally supports its official browser/headless **OAuth PKCE** flow. `/logout` opens account management with Add, Switch, Rename, Reconnect, Remove and sign-out. `/config`, `/theme`, `/model`, `/resume`, `/status`, `/doctor` and `/help` open the corresponding real flows; unsupported backend commands explain their limits. Existing command names remain aliases.
 
 The account/model selection and custom endpoints persist across restart. API keys use the OS keyring or explicit environment references. Failed/cancelled new connections remove their stored credentials. Live authenticated provider acceptance is pending the user's local configuration; fixture, actual PTY and native-keyring evidence is in [Provider Connect acceptance](docs/delivery/provider-connect-acceptance.md), with the [contract/migration decision](docs/adr/0007-provider-connect-and-commands.md).
 
@@ -64,7 +78,7 @@ supported = true
 efforts = ["low", "high"]
 ```
 
-The optional `reasoning` table above sets provider-wide effort levels. Per-model declarations override provider defaults; user config overrides discovery. `supported = false` explicitly disables effort selection; absent metadata stays unknown. Lists must contain 1–20 unique strings of 1–40 characters, without whitespace; `default` is reserved. Workspace config is ignored. `/effort` Auto always resets to the provider default; Enter saves, `s` applies only to this session. Anthropic/Gemini have no effort wire mapping. **Needs verification:** whether grok-4.7 accepts the example levels. See [ADR 0078](docs/adr/0078-user-declared-reasoning-efforts.md).
+The optional `reasoning` table above sets provider-wide effort levels. Per-model declarations override provider defaults; user config overrides discovery. `supported = false` explicitly disables effort selection; absent metadata stays unknown. Lists must contain 1–20 unique strings of 1–40 characters, without whitespace; `default` is reserved. Workspace config is ignored. `/effort` Auto always resets to the provider default; Enter saves, `s` applies only to this session. Anthropic and Gemini list the levels resolved by the SDK. Budget-based models use the selected level to set the thinking token budget. **Needs verification** applies to live provider acceptance and whether grok-4.7 accepts the example levels. [ADR 0078](docs/adr/0078-user-declared-reasoning-efforts.md) · [ADR 0090](docs/adr/0090-anthropic-gemini-reasoning-efforts.md)
 
 For a gateway such as your 9Router configuration, enter its URL, protocol and model ID:
 
@@ -124,3 +138,11 @@ Repository appearance settings are ignored; project appearance edits last for th
 current session. Failed saves keep the appearance in memory and show a notice.
 See [ADR 0080](docs/adr/0080-user-settings-appearance.md) for recovery and palette
 verification limits.
+
+`/config` saves Auto-compact (`autoCompact`, on by default), Verbose
+(`verbose`, off) and Show turn duration (`showTurnDuration`, on) in the same
+user file. Turning Auto-compact off skips automatic context checkpoints.
+`/compact` remains available. Verbose opens the Ctrl+O transcript view and
+expands tool rows. Show turn duration toggles the completed-turn timing line.
+Reduce motion uses the existing `reducedMotion` preference and freezes the
+Cosmew mascot while preserving terminal layout.

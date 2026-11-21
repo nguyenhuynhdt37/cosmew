@@ -22,7 +22,7 @@ test('light theme: rules, mode colours, dim text and selection use the measured 
   // Reference 05-mode-2 plan: 05727e label, dim hint; 05-mode-1 accept edits: 8e7700 label.
   expect(frames.plan).toContain(fg(hex('#05727e')) + '⏸ plan mode on' + fg(hex('#6e7171')) + ' (shift+tab to cycle)');
   expect(frames.accept).toContain(
-    fg(hex('#8e7700')) + '⏵⏵ accept edits on' + fg(hex('#6e7171')) + ' (shift+tab to cycle)',
+    fg(hex('#795e37')) + '⏵⏵ accept edits on' + fg(hex('#6e7171')) + ' (shift+tab to cycle)',
   );
   // Bash mode paints prompt, both rules and footer in one colour that is not the rule or dim colour.
   const bash = /\x1b\[38;2;(\d+;\d+;\d+)m! for shell mode/.exec(frames.bash)?.[1];

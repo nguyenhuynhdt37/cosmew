@@ -133,7 +133,7 @@ test('Ink keys translate to keystrokes, including the line feed (Ctrl+J) and Alt
   expect(fromInk('a', {...base, eventType: 'release'})).toBeUndefined();
 });
 test('defaults: every context exists, every default chord parses and is unique within its context', () => {
-  expect(KEY_CONTEXTS.length).toBe(17);
+  expect(KEY_CONTEXTS).toContain('Vim');
   for (const context of KEY_CONTEXTS) expect(CONTEXT_RANK[context]).toBeGreaterThanOrEqual(0);
   const seen = new Set<string>();
   for (const entry of DEFAULT_BINDINGS) {

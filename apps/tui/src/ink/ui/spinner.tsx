@@ -103,20 +103,25 @@ export function Spinner({
   }, [moving, elapsedMs]);
   const elapsed = Math.max(0, elapsedMs ?? now - (startedAt ?? start));
   const label = `${safeText(verb ?? turnVerb(seed ?? startedAt ?? start).present)}…`;
-  const details =
-    Math.floor(elapsed / 1000) >= SPINNER_DETAIL_AFTER_SECONDS
-      ? [
-          formatElapsed(elapsed) + spinnerTokens(tokens),
-          ...(thinking && effort ? [`thinking with ${safeText(effort)} effort`] : []),
-        ].join(' · ')
-      : '';
+  const showDetails = Math.floor(elapsed / 1000) >= SPINNER_DETAIL_AFTER_SECONDS;
   return (
     <Box flexDirection="column" width={width} minWidth={0}>
       <Text>
-        <Text color={ui.color('rule')}>
+        <Text color={ui.color(thinking ? 'thinking' : 'rule')}>
           {moving ? SPINNER_FRAMES[Math.floor(elapsed / 100) % SPINNER_FRAMES.length] : '✻'} {label}
         </Text>
-        {details ? <Text color={ui.color('dim')}>{` (${details})`}</Text> : null}
+        {showDetails ? (
+          <Text color={ui.color('dim')}>
+            {` (${formatElapsed(elapsed)}${spinnerTokens(tokens)}`}
+            {thinking && effort ? (
+              <>
+                {' '}
+                · <Text color={ui.color('thinking')}>{`thinking with ${safeText(effort)} effort`}</Text>
+              </>
+            ) : null}
+            {')'}
+          </Text>
+        ) : null}
       </Text>
       {tip ? (
         <ResultLine width={width}>

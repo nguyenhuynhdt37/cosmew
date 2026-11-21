@@ -1,6 +1,6 @@
 # Agent events và commands
 
-Current shared contract: **1.42** (background task command overlay; [ADR 0088](../adr/0088-background-task-display.md)). Previous shared contract: **1.41** (provider-bound opaque reasoning replay and host evidence digests; [ADR 0082](../adr/0082-provider-reasoning-replay.md), [ADR 0083](../adr/0083-context-evidence-dedup.md), [ADR 0084](../adr/0084-mcp-tool-execution-correctness.md)). Previous shared contract: **1.40** (Cosmew rename and optional user-declared provider reasoning metadata; [ADR 0076](../adr/0076-cosmew-project-rename.md), [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md)). Previous shared contract: **1.39** (P3: diff bases, editable plan approval, summarize rewind, selective retract and session/history scopes; [ADR 0074](../adr/0074-p3-review-and-session-controls.md); SQLite 10). Previous contract: **1.38** (P1: background tasks, queued input, plan approval, images, checkpoints and hook/MCP status; [delivery](../delivery/tui-v4/p1-backend.md); SQLite 9). Historical versions: **1.37** (1.37: bounded session-scoped tool-output archive and mediated retrieval; [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md)). **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
+Current shared contract: **1.48** (source-attributed usage and typed quota; [ADR 0094](../adr/0094-provider-usage-and-quota-attribution.md)). Previous shared contract: **1.47** (request context and per-request diagnostics; [ADR 0093](../adr/0093-request-context-telemetry.md)). Previous shared contract: **1.46** (external file/cwd approval; [ADR 0092](../adr/0092-outside-workspace-approval.md)). Previous shared contract: **1.44** (user editor preference; [ADR 0091](../adr/0091-vim-prompt-editor.md)). Previous shared contract: **1.43** (explicit subagent messaging and agent approval prompt capability; [ADR 0089](../adr/0089-subagent-task-management.md); SQLite 11). Previous shared contract: **1.42** (background task command overlay; [ADR 0088](../adr/0088-background-task-display.md)). Previous shared contract: **1.41** (provider-bound opaque reasoning replay and host evidence digests; [ADR 0082](../adr/0082-provider-reasoning-replay.md), [ADR 0083](../adr/0083-context-evidence-dedup.md), [ADR 0084](../adr/0084-mcp-tool-execution-correctness.md)). Previous shared contract: **1.40** (Cosmew rename and optional user-declared provider reasoning metadata; [ADR 0076](../adr/0076-cosmew-project-rename.md), [ADR 0078](../adr/0078-user-declared-reasoning-efforts.md)). Previous shared contract: **1.39** (P3: diff bases, editable plan approval, summarize rewind, selective retract and session/history scopes; [ADR 0074](../adr/0074-p3-review-and-session-controls.md); SQLite 10). Previous contract: **1.38** (P1: background tasks, queued input, plan approval, images, checkpoints and hook/MCP status; [delivery](../delivery/tui-v4/p1-backend.md); SQLite 9). Historical versions: **1.37** (1.37: bounded session-scoped tool-output archive and mediated retrieval; [ADR 0063](../adr/0063-retrievable-tool-evidence-and-context-continuation.md)). **1.31** (1.31: memory mutation capability and edit policy; 1.30: MemoryInfo usage/unused, display citation parser và ranked index context; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.29: user-scoped MemoriesPort/schema, memory tool, SDK và /memory; [ADR 0057](../adr/0057-user-scoped-project-memories.md). 1.28: skills catalog/port, optional `ToolResult.skillDirectory`, instructions tổng ≤32.768 ký tự với budget metadata skill riêng 8.000; [ADR 0056](../adr/0056-skills-discovery-and-mediated-invocation.md). 1.27: `CommandSandbox.mode` `'danger-full-access'`, `PermissionResolutionScope` `'always'`, `PermissionPromptRequest` `decisions`/`alwaysRule`/`approved_always`, `Network`/`Unsandboxed` rule tools and Codex presets; [ADR 0055](../adr/0055-codex-approval-decisions-network-and-full-access.md). 1.26: `context.compacted` model event, model-written `ContextSnapshot.strategy`, `CompactionOutcome`, optional `ConversationStore.addUsage`; [ADR 0054](../adr/0054-model-compaction.md). 1.25: optional `ModelRequest.cacheKey`, `CommandSandbox.unsandboxed`; [ADR 0053](../adr/0053-codex-sandbox-and-approval-alignment.md)). [ADR 0052](../adr/0052-headless-exec-and-sdk-interactions.md)
 adds headless exec JSONL and typed SDK interaction subscriptions. [ADR 0050](../adr/0050-chatgpt-invalid-grant-recovery.md) adds
 the optional non-secret `Settings.chatgptHostID`.
 [ADR 0051](../adr/0051-uat-diagnostics-usage-and-execution-evidence.md) versions additive headless UAT
@@ -79,9 +79,17 @@ use ToolDispatcher. No new execution authority, persistence schema, dependency o
 - Model event `context.compacted` `{trigger: 'auto' | 'manual', strategy: 'model' | 'excerpt', tokensBefore, tokensAfter, fallback?}`: older model-visible history was replaced by a handoff summary (`model`) or, when the model call failed, by the extractive checkpoint (`fallback: true`). Token counts are conservative estimates. It is emitted before the request that uses the compacted context and is not journaled; the durable record is the `ContextSnapshot` (`strategy: 'model'` carries `retainedUserRequests` = recent user messages up to 20,000 tokens, and `summary` = handoff text). Recovery after restart renders it; source history is never changed. `fyn exec --json` forwards it like other model events.
 - Auto compaction starts at 85% of the usable window, before tool withdrawal (ADR 0063 supersedes the earlier 90% trigger); `/compact [instructions]` / `CosmewClient.compact(instructions?, {signal})` → `CompactionOutcome {compacted, strategy?, tokensBefore, tokensAfter, usage, fallback?, reason?}` runs it while idle and throws `POLICY` during a turn. Usage of the summary call is counted in the turn (auto) or added to the latest agent turn receipt (`ConversationStore.addUsage`, manual).
 
+The optional SDK `UserPreferencesStore` and `context().autoCompact` report are
+additive within 1.43. `autoCompact` defaults to true. When false, automatic
+model and excerpt checkpoints are skipped, and manual compaction and context
+size limits still apply. The preference adds no event or receipt field.
+[ADR 0080](../adr/0080-user-settings-appearance.md)
+
 ## Implemented execution evidence (contract 1.12)
 
 The [ADR 0030](../adr/0030-durable-conversation-recovery.md) SQLite journal persists user.accepted, model.requested, assistant.text, tool.call, tool.intent, tool.result and turn.finished with stable turn IDs and per-conversation sequences. This is a private recovery projection of public domain events, not an implementation of every proposed envelope above. Provider reasoning is transient. Lifecycle states are pending/running → completed/failed/cancelled/interrupted; terminal events cannot reopen execution. Unknown tool outcomes are explicit protocol outputs, never successful audit receipts. STALLED is a public error/stop reason for bounded no-progress termination.
+
+Contract 1.47 adds the optional local context estimate to `model.requested` and the matching `model.finished` record with outcome, error code and nullable provider token counts. The turn receipt can include `errorCode` for the final failure, cancellation or process exit. Recovery still uses `model.completed` to determine whether response text was committed. [ADR 0093](../adr/0093-request-context-telemetry.md)
 
 ## Execution streaming (contract 1.13)
 
@@ -273,6 +281,19 @@ thiếu optional port phải trả UNSUPPORTED/empty snapshot có cờ hỗ tr�
 
 ### Background tasks (contract 1.38, ADR 0070)
 
+Contract 1.43 ([ADR 0089](../adr/0089-subagent-task-management.md)) adds SDK
+`sendSubagentMessage(agentId, message, signal?): Promise<ToolResult>` and the
+optional composition ports `sendSubagentMessage(parentSessionId, agentId,
+message, signal?)` and `observeSubagentEvents(listener)`. The latter emits
+`{parentSessionId, event: SubagentEvent}` for out-of-turn child lifecycle updates;
+the parent ID is resolved from stored child ownership. Streamed and out-of-turn
+events use the same SDK projection; they do not create another execution loop.
+The messaging port invokes `agent_message` through ToolDispatcher and its normal
+permission path. SQLite 11 retains redacted bounded shell task snapshots; history
+is observer data, not process authority. Restored running shells show stopped;
+children without live scheduler ownership show interrupted/PROCESS_EXIT. No
+automatic replay/resume/reattachment occurs.
+
 `BackgroundTask` là snapshot shell unified-exec hoặc projection background child:
 `{id, kind: shell|agent, description, status: running|done|failed|stopped, startedAt, exitCode?, outputTail}`.
 SDK `backgroundTasks(sessionId?)`, `stopBackgroundTask(id): Promise<boolean>` và
@@ -320,3 +341,18 @@ and model. This call does not add a turn or an event.
 exits with status 3 and, in JSON mode, emits the existing `turn.failed` event with
 `error.code: "PROVIDER_BILLING"` and the safe diagnostic in `error.message`.
 The error and event envelopes retain their existing fields.
+
+### Prompt editor preference (contract 1.44, ADR 0091)
+
+The optional user-settings port adds editor-mode reads and writes. The SDK provides
+`editorMode()`, `setEditorMode(mode)`, and `subscribeEditorMode(listener)`.
+Headless envelopes carry the current contract version with the existing event
+payloads and SQLite schema.
+
+### External file and cwd approval (contract 1.46, ADR 0092)
+
+`CommandRequest.cwdRoots` can include an external canonical cwd authorized for one invocation. It never extends OS-sandbox writable roots. SDK permission inputs support `requiresApproval` so outside file requests ask in acceptEdits unless a rule or bypass permits them. Event envelopes are unchanged.
+
+### Source-attributed usage (contract 1.48, ADR 0094)
+
+`Usage.breakdown` optionally partitions aggregate counters by known provider/account/model/session/agent. `breakdownTruncated` marks source attribution coalesced into an unknown bucket. Quota entries optionally add `kind` and `windowMinutes`; missing identity/kind stays unknown. SDK summaries add byProvider/byAccount and source-aware byModel/byAgent, with partial coverage and separate estimated/reported USD. Account limits add typed kind, observation/model scope, availability and stale status. Event envelopes and SQLite schema are unchanged.

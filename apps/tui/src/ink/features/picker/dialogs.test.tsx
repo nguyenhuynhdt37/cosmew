@@ -5,7 +5,7 @@ import {useEffect, type ReactNode} from 'react';
 import {FutrynError, BYPASS_PERMISSIONS_WARNING, type MemoryInfo, type UserQuestion} from '@cosmew/contracts';
 import {InkApp} from '../../app';
 import {useOverlay} from '../../core';
-import {renderInk, settle} from '../../testing';
+import {renderInk, settle, waitForFrame} from '../../testing';
 import {ThemeEngine} from '../../../theme/theme';
 import {PickerDialog, TextEntry, Detail, useDialogTask, useDialogRefresh} from './index';
 import {PermissionsDialog, PermissionRulesDialog, usePermissions} from '../permissions';
@@ -385,9 +385,12 @@ test('theme preview rolls back on close and applies only after confirmation', as
   const target = original === 'light' ? 'dark' : 'light';
   const view = renderInk(<ThemesDialog />, {themeEngine: engine});
   await settle();
+  expect(view.lastFrame()).toContain('Preview · Auto');
+  expect(view.lastFrame()).toContain('Terminal colors Off');
   await key(view, target); // highlighting a theme previews it
   expect(engine.isPreviewing()).toBe(true);
   expect(engine.getCommittedAppearance().theme).toBe(original);
+  expect(view.lastFrame()).toContain(`Preview · ${target === 'light' ? 'Light' : 'Dark'}`);
   view.unmount();
   expect(engine.isPreviewing()).toBe(false);
   const applied = renderInk(<ThemesDialog />, {themeEngine: engine});
@@ -395,6 +398,19 @@ test('theme preview rolls back on close and applies only after confirmation', as
   await key(applied, target);
   await key(applied, enter); // Enter applies; there is no second confirmation step
   expect(engine.getCommittedAppearance().theme).toBe(target);
+});
+
+test('theme picker can change code colors without applying the previewed theme', async () => {
+  const engine = new ThemeEngine({env: {NO_COLOR: '1'}, systemDarkPreference: true});
+  const view = renderInk(<ThemesDialog width={34} />, {themeEngine: engine});
+  await settle();
+  await key(view, 'code colors');
+  expect(view.lastFrame()).toContain('Code colors On');
+  expect(view.lastFrame()).toContain('echo "$HOME"');
+  await key(view, enter);
+  expect(view.lastFrame()).toContain('Code colors Off');
+  expect(engine.getCommittedAppearance()).toMatchObject({theme: 'auto', syntaxHighlighting: false});
+  view.unmount();
 });
 const memory: MemoryInfo = {
   name: 'layout',
@@ -888,24 +904,32 @@ test('effort Auto without levels explains configuration and resets with Enter or
   }
 });
 
-test('model panel and effort panel identify protocols with no effort wire mapping', async () => {
-  for (const protocol of ['anthropic', 'gemini'] as const) {
-    const fixture = dialogFixture();
-    fixture.settings.providers = [{...provider, protocol}];
-    const view = routed(<EffortDialog />, fixture);
-    await settle();
-    expect(view.lastFrame()).toContain(`${protocol} protocol`);
-    expect(view.lastFrame()).toContain('no wire mapping');
-    expect(view.lastFrame()).not.toContain('←/→ to adjust');
-    await key(view, enter);
-    expect(view.lastFrame()).not.toContain('Action failed');
-    view.unmount();
-    const models = routed(<ModelsDialog />, fixture);
-    await settle();
-    await key(models, enter);
-    expect(models.lastFrame()).toContain(`${protocol} protocol`);
-    models.unmount();
-  }
+test.each([
+  {protocol: 'anthropic' as const, reasoningOptions: {efforts: ['low', 'xhigh'] as ('low' | 'xhigh')[]}},
+  {protocol: 'gemini' as const, reasoningOptions: {budgetMin: 128}},
+])('effort and model panels show SDK levels for $protocol', async ({protocol, reasoningOptions}) => {
+  const reasoningEfforts = ['low', 'xhigh'];
+  const fixture = dialogFixture({
+    listProviders: () => [{...provider, protocol}],
+    cachedModels: () => [{...model, reasoningEfforts, reasoningOptions}],
+  });
+  fixture.settings.providers = [{...provider, protocol}];
+  const budgetHint = 'Budget-based thinking: level sets the token budget';
+  const assertLevels = (frame: string) => {
+    expect(frame).toContain('low');
+    expect(frame).toContain('xhigh');
+    expect(frame).not.toMatch(/no wire mapping|No effort levels known|medium/);
+    if ('budgetMin' in reasoningOptions) expect(frame).toContain(budgetHint);
+    else expect(frame).not.toContain(budgetHint);
+  };
+  const view = routed(<EffortDialog />, fixture);
+  assertLevels(await waitForFrame(view, frame => frame.includes('Auto · provider default')));
+  view.unmount();
+  const models = routed(<ModelsDialog />, fixture);
+  assertLevels(await waitForFrame(models, frame => frame.includes(model.id)));
+  await key(models, enter);
+  assertLevels(await waitForFrame(models, frame => frame.includes('Auto · provider default')));
+  models.unmount();
 });
 
 test('model panel explains unknown levels and its Auto option closes without error', async () => {

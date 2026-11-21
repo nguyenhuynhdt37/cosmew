@@ -85,6 +85,7 @@ for (const width of [80, 36])
       action: 'exec_command',
       target: 'bun test',
       reason: 'Run tests',
+      commandSandbox: 'disabled',
       decisions: ['once', 'session'],
     });
     const actual =

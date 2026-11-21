@@ -47,6 +47,9 @@ export function permissionChoices(request: PermissionPromptRequest, mode?: Permi
   return choices.map((choice, index) => ({...choice, key: String(index + 1)}));
 }
 export function isEscalation(request: PermissionPromptRequest): boolean {
+  if (request.commandSandbox !== undefined)
+    return request.commandSandbox === 'escape' || request.commandSandbox === 'excluded';
+  // Older callers and terminal-input prompts may still use the display strings.
   return /NO SANDBOX|dangerouslyDisableSandbox|WITHOUT (?:the )?sandbox/i.test(`${request.action} ${request.reason}`);
 }
 /** A write whose diff starts from `/dev/null` creates the file. */

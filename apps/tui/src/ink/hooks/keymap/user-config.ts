@@ -100,7 +100,8 @@ export function keybindingsTemplate(): string {
   const blocks = contexts.map(context => ({
     context,
     $docs: DEFAULT_BINDINGS.filter(entry => entry.context === context).map(
-      entry => `${entry.keys.join(' | ')}: ${entry.action} - ${entry.description}`,
+      entry =>
+        `${entry.keys.join(' | ')}: ${entry.action} - ${entry.description}${entry.action === 'vim:escape' ? ' (Esc is reserved in Vim)' : ''}`,
     ),
     bindings: {},
   }));

@@ -2,11 +2,12 @@
 import {useTerminalSize} from '../hooks/use-terminal-size';
 import {afterEach, expect, test} from 'bun:test';
 import {EventEmitter} from 'node:events';
+import {existsSync} from 'node:fs';
 import {mkdtemp, readFile, rm, stat, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {cleanup} from 'ink-testing-library';
-import {settle, trackFrames} from './wait';
+import {noteInput, settle, trackFrames, waitForCondition, waitForFrame} from './wait';
 import {Text, renderToString, render as inkRender} from 'ink';
 import type {ModelEvent} from '@cosmew/contracts';
 import {ThemeEngine} from '../../theme/theme';
@@ -48,6 +49,7 @@ class SizedStream extends EventEmitter {
     if (this.listenerCount('readable') > 0) {
       this.pending.push(frame);
       this.emit('readable');
+      noteInput(frame, true);
     }
     return true;
   };
@@ -202,9 +204,8 @@ function openSized(
 }
 
 async function waitFor(read: () => string, text: string) {
-  const deadline = Date.now() + 4000;
-  while (!read().includes(text) && Date.now() < deadline) await settle();
-  expect(read(), text).toContain(text);
+  const frame = await waitForFrame({lastFrame: read}, value => value.includes(text), 4000);
+  expect(frame, text).toContain(text);
 }
 
 /** Opens the app past the startup gate, then returns the ready view. */
@@ -245,7 +246,7 @@ for (const [columns, rows, rule] of [
       expect(isRule(frame[rule]), frame.join('\n')).toBe(true);
       expect(frame[rule + 1]).toContain('❯ ');
       expect(isRule(frame[rule + 2])).toBe(true);
-      expect(frame[rule + 3]!.trim()).toBe('');
+      expect(frame[rule + 3]).toContain('enter send · ctrl+j new line · shift+tab permissions');
       expect(frame.at(-1)).toContain('manual mode on');
       expect(frame.at(-1)).toBe(frame[rule + 4]);
     } finally {
@@ -297,7 +298,7 @@ test('scrolling with PgUp/PgDn keeps the bottom block pinned, shows the jump chi
     pinned(scrolled);
     expect(scrolled.join('\n')).not.toContain('answer line 50');
     view.stdin.write('\u001b[6~');
-    for (let wait = 0; wait < 100 && view.fullFrame().includes('Jump to bottom'); wait++) await settle();
+    await waitForFrame({lastFrame: view.fullFrame}, frame => !frame.includes('Jump to bottom'), 4000);
     expect(view.fullFrame()).not.toContain('Jump to bottom');
     expect(view.fullFrame()).toContain('answer line 50');
     pinned(view.rows());
@@ -807,7 +808,7 @@ test('detailed transcript: { and } jump between prompts, Ctrl+Home/Ctrl+End go t
       await settle();
       view.stdin.write('\r');
       await waitFor(view.fullFrame, 'answer line 40');
-      for (let wait = 0; wait < 50 && !view.fullFrame().includes('manual mode on'); wait++) await settle();
+      await waitFor(view.fullFrame, 'manual mode on');
     }
     view.stdin.write('\x0f'); // Ctrl+O
     await waitFor(view.fullFrame, 'Showing detailed transcript');
@@ -878,8 +879,7 @@ test.skipIf(process.platform === 'win32')(
       const start = view.stdout.frames.length;
       view.stdin.write('v');
       await waitFor(() => view.stdout.frames.slice(start).join(''), 'Showing detailed transcript');
-      const deadline = Date.now() + 3000;
-      while (!(await stat(copy).catch(() => undefined)) && Date.now() < deadline) await settle();
+      await waitForCondition(() => (existsSync(copy) ? true : undefined), 3000);
       const exported = await readFile(copy, 'utf8');
       expect(exported).toContain('> history 0 needle');
       expect(exported).toContain('history 999 needle');
@@ -1061,10 +1061,18 @@ test('detailed transcript search owns text, keeps on Enter, cycles and cancels b
     view.stdin.write('\r');
     await waitFor(view.fullFrame, 'n/N to navigate');
     view.stdin.write('N');
-    await waitFor(view.fullFrame, '80 of 80');
+    await waitForFrame(
+      {lastFrame: view.fullFrame},
+      frame => frame.includes('80 of 80') && frame.includes('answer line 80'),
+    );
+    expect(view.fullFrame()).toContain('80 of 80');
     expect(view.fullFrame()).toContain('answer line 80');
     view.stdin.write('n');
-    await waitFor(view.fullFrame, '1 of 80');
+    await waitForFrame(
+      {lastFrame: view.fullFrame},
+      frame => frame.includes('1 of 80') && /answer line 1\b/.test(frame),
+    );
+    expect(view.fullFrame()).toContain('1 of 80');
     expect(view.fullFrame()).toContain('answer line 1');
     view.stdin.write('/');
     await waitFor(view.fullFrame, 'enter to keep');
@@ -1111,8 +1119,7 @@ test('detailed transcript search keeps a 5000-item history responsive while warm
       view.stdout.frames
         .slice(printedAt)
         .some(text => text.includes('history 0 needle') && text.includes('history 4999 needle'));
-    const deadline = Date.now() + 4000;
-    while (!printed() && Date.now() < deadline) await settle();
+    await waitForCondition(() => (printed() ? true : undefined), 4000);
     expect(printed()).toBe(true);
     await settle();
     view.stdin.write('G');

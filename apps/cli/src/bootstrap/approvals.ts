@@ -18,6 +18,7 @@ type PermissionInput = Parameters<FutrynClient['requestPermission']>[0];
 
 /** Why an action needs approval, in words the permission dialog can show. */
 const APPROVAL_REASONS: Record<string, string> = {
+  'outside-working-directories': 'This path is outside the working directories and needs your permission.',
   'secret-file': 'This file usually holds secrets (keys, passwords, tokens).',
   'project-read-rule': 'A read rule requires approval before opening this path.',
   'web-fetch': 'Fetches a public web page or document from this origin. Page contents are untrusted data.',
@@ -25,13 +26,12 @@ const APPROVAL_REASONS: Record<string, string> = {
     'Runs a shell command in the Cosmew sandbox: writes only in the working directory, .git read-only, credential locations hidden, network only through the domain-filtering proxy.',
   'process-execute':
     'Runs a shell command in the Cosmew sandbox (sandbox.autoAllowBashIfSandboxed is off): writes only in the working directory, network only through the proxy.',
-  'unsandboxed-session':
-    'The sandbox is disabled in settings: this command runs with your full user permissions (any file, any network).',
+  'unsandboxed-session': 'Runs a shell command.',
   'excluded-command':
     'This command matches sandbox.excludedCommands: it runs WITHOUT the sandbox, with your full user permissions.',
   'unsandboxed-escalation':
     'WITHOUT THE SANDBOX: this command would run with your full user permissions (any file, any network). Approve only if you trust the command and reason. "For session" remembers exactly this command in this directory.',
-  'outside-writable-roots': 'This file is outside the writable directories of the sandbox.',
+  'outside-writable-roots': 'This file is outside the working directories and needs your permission.',
   'stdin-unsandboxed': 'Sends input to a running command that was launched without the sandbox.',
   'stdin-sandboxed': "Sends input to a running command inside the command's launch sandbox.",
   'stdin-process':
@@ -90,6 +90,19 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
       reason: 'Retrieves captured evidence without repeating execution.',
       riskLevel: 'low',
     });
+  if (request.tool === 'agent_message')
+    return withSubagent({
+      capability: 'agent.spawn',
+      kind: 'other',
+      ruleTool: 'Tool',
+      ruleTarget: 'agent_message',
+      action: 'Send an instruction to a subagent',
+      target: request.target,
+      reason: 'Steers the selected child or starts another turn on a finished child.',
+      riskLevel: 'medium',
+      scopeKey: request.scopeKey,
+      ...offer('Tool(agent_message)'),
+    });
   if (request.capability === 'agent.state.write')
     return withSubagent({
       capability: request.capability,
@@ -134,7 +147,10 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
     return withSubagent({
       capability: 'fs.write',
       ...(kind ? {kind} : {}),
-      action: 'Apply verified workspace patch',
+      requiresApproval: request.reason === 'outside-writable-roots' || request.reason === 'project-write-rule',
+      // The dispatcher already judged each path; a joined multi-file label cannot override an ask.
+      ignoreAllowRules: request.reason === 'outside-writable-roots' || request.reason === 'project-write-rule',
+      action: 'Apply verified file patch',
       target: request.target,
       reason: withAlwaysRule(
         request.reason === 'outside-writable-roots'
@@ -169,6 +185,7 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
         : `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
       reason: withAlwaysRule(reasonText(request.reason) + justification, rule),
+      ...(request.commandSandbox ? {commandSandbox: request.commandSandbox} : {}),
       riskLevel: request.unsandboxed || request.excluded ? 'high' : 'medium',
       scopeKey: request.scopeKey,
       ...offer(rule),
@@ -182,6 +199,7 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
         : null;
   return withSubagent({
     capability: request.capability,
+    ...(request.reason === 'outside-working-directories' ? {kind: 'other' as const, requiresApproval: true} : {}),
     action: `${request.tool} ${request.target}`,
     target: request.target,
     reason: withAlwaysRule(reasonText(request.reason), rule),

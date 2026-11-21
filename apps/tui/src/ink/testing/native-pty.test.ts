@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test';
 import {resolve} from 'node:path';
-import {settle, trackFrames} from './wait';
+import {settle, trackFrames, waitForFrame} from './wait';
 
 test.skipIf(process.platform === 'win32')(
   'synthetic native PTY: replay, consent, permission, tasks, resize and confirmed exit in the alternate screen',
@@ -23,18 +23,17 @@ test.skipIf(process.platform === 'win32')(
     });
     const plain = () => outputView.lastFrame().replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
     const wait = async (text: string, from = 0) => {
-      const end = Date.now() + 4000;
-      while (!plain().slice(from).includes(text) && Date.now() < end) await Bun.sleep(10);
-      expect(plain().slice(from), `waiting for ${text}`).toContain(text);
+      const frame = await waitForFrame({lastFrame: () => plain().slice(from)}, value => value.includes(text), 4000);
+      expect(frame, `waiting for ${text}`).toContain(text);
     };
     const send = async (keys: string) => {
       terminal.write(keys);
-      await settle();
+      await settle(0, 2000, {quietMs: 45});
     };
     try {
       await wait('Accessing workspace:');
       await wait('NATIVE_INPUT_READY');
-      await settle(); // Wait for raw input effects after the first paint.
+      await settle(0, 2000, {quietMs: 45}); // Wait for raw input effects after the first paint.
       await send('\x1b[A');
       await send('\r');
       await wait('manual mode on');

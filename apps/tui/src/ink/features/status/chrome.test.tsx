@@ -15,7 +15,7 @@ test('terminal welcome displays the Cosmew mascot beside the product name', asyn
   const view = renderInk(<Welcome status={fixture.client.status()} width={80} />, {fixture});
   await settle();
   expect(view.lastFrame()).toContain('Cosmew v');
-  expect(view.lastFrame()).toContain('▄█▀█▀█▀█▄');
+  expect(view.lastFrame()).toContain('█▄   ▄█');
 });
 test('compact header, welcome and status render without color and wrap narrow paths', async () => {
   const fixture = createClientFixture();

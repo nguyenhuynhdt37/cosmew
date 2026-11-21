@@ -153,12 +153,12 @@ test('/context grid is 20x7 cells whose categories add up to the grid, from real
   for (const cell of block.rows.flat()) counts.set(cell, (counts.get(cell) ?? 0) + 1);
   expect([...counts.values()].reduce((a, b) => a + b, 0)).toBe(CONTEXT_COLUMNS * CONTEXT_ROWS);
   expect(block.categories.map(c => c.kind)).toEqual(['instructions', 'messages', 'free', 'buffer']);
-  // The model window of the fixture is 100000 tokens: the buffer is the last tenth (compaction at 90%).
+  // The model window of the fixture is 100000 tokens; automatic compaction starts at 85%.
   expect(block.limitTokens).toBe(100000);
-  expect(block.categories.find(c => c.kind === 'buffer')?.tokens).toBe(10000);
+  expect(block.categories.find(c => c.kind === 'buffer')?.tokens).toBe(15000);
   const text = contextText(block);
   expect(text[1]).toContain('Estimated usage by category');
-  expect(text.join('\n')).toContain('Auto-compact window:  100k tokens');
+  expect(text.join('\n')).toContain('Context window:  100k tokens');
   expect(text.join('\n')).toContain('MCP tools · /mcp\n└ User mcp.json');
   expect(text.join('\n')).toContain('System prompt and tool schemas are not measured.');
 });
@@ -171,7 +171,7 @@ test('the /context view draws the grid with the legend', async () => {
   await settle();
   expect(view.lastFrame()).toContain('⛶ ⛶ ⛶');
   expect(view.lastFrame()).toContain('Estimated usage by category');
-  expect(view.lastFrame()).toContain('Free space: 90k tokens (90%)');
+  expect(view.lastFrame()).toContain('Free space: 85k tokens (85%)');
   expect(view.lastFrame()).not.toContain('▔');
 });
 

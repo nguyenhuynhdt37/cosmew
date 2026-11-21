@@ -175,9 +175,9 @@ test.skipIf(process.env.FORCE_COLOR !== '3')('panel and diff backgrounds follow 
   const ansi = (hex: string) =>
     `\x1b[48;2;${[0, 2, 4].map(at => Number.parseInt(hex.slice(at, at + 2), 16)).join(';')}m`;
   const lightPanel = light.find(run => run[7].includes('source: Current'))![3];
-  const lightAdd = 'dce8df'; // Soft tint derived from active theme tokens.
-  const lightRemove = 'f0dcdd';
-  const darkAdd = '2d402d';
+  const lightAdd = 'e0e4e1'; // Soft tint derived from active theme tokens.
+  const lightRemove = 'e8e1e2';
+  const darkAdd = '3a403b';
   expect(dark.some(run => /1 \+/.test(run[7]))).toBe(true);
   for (const dark of [false, true]) {
     const engine = new ThemeEngine({env: {FORCE_COLOR: '3'}, systemDarkPreference: dark});
@@ -186,7 +186,7 @@ test.skipIf(process.env.FORCE_COLOR !== '3')('panel and diff backgrounds follow 
     const frame = view.lastFrame()!;
     expect(frame).toContain(dark ? '\x1b[48;2;38;38;38m' : ansi(lightPanel));
     expect(frame).toContain(ansi(dark ? darkAdd : lightAdd));
-    expect(frame).toContain(dark ? '\x1b[48;2;73;49;52m' : ansi(lightRemove));
+    expect(frame).toContain(ansi(dark ? '423b3c' : lightRemove));
     view.unmount();
   }
 });

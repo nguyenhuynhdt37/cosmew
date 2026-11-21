@@ -158,12 +158,16 @@ test.skipIf(process.env.FORCE_COLOR !== '3')('colour terminal paints outcome dot
     toolCalls: [c],
     toolResults: [result('read', '1\tline')],
   };
-  const view = renderInk(<TranscriptItem item={item} animate={false} />, {themeEngine: engine});
+  const view = renderInk(<TranscriptItem item={item} animate={false} detailed />, {themeEngine: engine});
   await settle();
   const okDot = /\x1b\[38;2;[\d;]+m⏺/.exec(view.lastFrame()!)?.[0];
   expect(okDot).toBeDefined();
   view.rerender(
-    <TranscriptItem item={{...item, toolResults: [{...result('read', 'failed'), status: 'error'}]}} animate={false} />,
+    <TranscriptItem
+      item={{...item, toolResults: [{...result('read', 'failed'), status: 'error'}]}}
+      animate={false}
+      detailed
+    />,
   );
   await settle();
   const errorDot = /\x1b\[38;2;[\d;]+m⏺/.exec(view.lastFrame()!)?.[0];

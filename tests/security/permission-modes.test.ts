@@ -8,6 +8,7 @@ import {
   type CommandRequest,
   type CommandRuntime,
   type PermissionMode,
+  type PermissionPromptRequest,
   type PermissionResolutionScope,
 } from '@cosmew/contracts';
 import {SessionGrants} from '@cosmew/security';
@@ -138,6 +139,7 @@ async function chain(
     stateDirectory: options.stateDirectory ?? join(home, 'state-not-in-ws'),
     ...(options.codeIntel ? {codeIntel: options.codeIntel} : {}),
     readPolicy: relative => permissionRuleDecision(client.permissionRules(), {tool: 'Read', target: relative}),
+    writePolicy: relative => permissionRuleDecision(client.permissionRules(), {tool: 'Edit', target: relative}),
     sandbox: () => sandboxConfigFromSettings(client.permissionSettings(), client.permissionMode(), root, home),
     redact: t => t,
     audit: record => audits.push(record),
@@ -147,7 +149,7 @@ async function chain(
   async function attempt(name: string, input: unknown, answer: PermissionResolutionScope = 'deny') {
     let settled = false;
     let prompts = 0;
-    let prompt: {action: string; reason: string; decisions: string[]; alwaysRule?: string} | undefined;
+    let prompt: PermissionPromptRequest | undefined;
     const pending = dispatcher.invoke({id: crypto.randomUUID(), name, input}).finally(() => (settled = true));
     const end = Date.now() + 3000;
     while (!settled && Date.now() < end) {
@@ -155,12 +157,7 @@ async function chain(
       if (waiting.length) {
         prompts++;
         const request = waiting[0]!;
-        prompt = {
-          action: request.action,
-          reason: request.reason,
-          decisions: [...request.decisions],
-          alwaysRule: request.alwaysRule,
-        };
+        prompt = request;
         if (answer === 'deny') client.dismissPermissionDialog(request.approvalId);
         else client.resolvePermission(request.approvalId, request.scopeHash, answer);
       }
@@ -210,9 +207,23 @@ describe('mode matrix on real tools', () => {
       // `.env.example` is a template, not a secret.
       writeFileSync(join(c.root, '.env.example'), 'TOKEN=\n');
       expect((await c.attempt('read', {path: '.env.example'})).outcome).toBe('ran');
-      // Outside the working directory is denied by every mode, bypass included, without a prompt.
-      expect((await c.attempt('write', {path: '../escape.md', content: 'x'})).outcome).toBe('refused');
-      expect((await c.attempt('exec_command', {cmd: 'ls', workdir: '..'})).outcome).toBe('refused');
+      // External writes ask in default/acceptEdits; bypass permits and plan refuses.
+      const external = join(c.root, '..', `${crypto.randomUUID()}.md`);
+      cleanup.push(() => rmSync(external, {force: true}));
+      expect((await c.attempt('write', {path: external, content: 'x'})).outcome).toBe(
+        mode === 'plan' ? 'refused' : mode === 'bypassPermissions' ? 'ran' : 'prompt',
+      );
+      expect((await c.attempt('exec_command', {cmd: 'ls', workdir: '..'})).outcome).toBe(want.command);
+      const externalRead = join(c.home, 'external.txt');
+      writeFileSync(externalRead, 'EXTERNAL_MODE_CANARY');
+      expect((await c.attempt('read', {path: externalRead})).outcome).toBe(
+        mode === 'bypassPermissions' ? 'ran' : 'prompt',
+      );
+      if (mode !== 'plan') {
+        const approved = await c.attempt('write', {path: external, content: 'approved'}, 'once');
+        expect(approved.status).toBe('ok');
+        expect(readFileSync(external, 'utf8')).toBe('approved');
+      }
     });
 
   test('sandboxed commands launch inside the sandbox; plan mode launches nothing', async () => {
@@ -354,6 +365,7 @@ describe('sandbox.excludedCommands', () => {
     const asked = await c.attempt('exec_command', exec('git status'), 'once');
     expect(asked.outcome).toBe('prompt');
     expect(asked.prompt?.reason).toContain('sandbox.excludedCommands');
+    expect(asked.prompt).toMatchObject({commandSandbox: 'excluded', riskLevel: 'high', alwaysRule: 'Bash(git status)'});
     expect(c.launches.at(-1)!.sandbox).toMatchObject({unsandboxed: true, mode: 'danger-full-access'});
     // Denied: nothing runs.
     const before = c.ran.length;
@@ -403,6 +415,7 @@ describe('dangerouslyDisableSandbox', () => {
     expect(asked.outcome).toBe('prompt');
     expect(asked.prompt?.action).toContain('WITHOUT SANDBOX');
     expect(asked.prompt?.reason).toContain('needs the real network');
+    expect(asked.prompt).toMatchObject({commandSandbox: 'escape', riskLevel: 'high'});
     // No `always`: an escape is never saved as a rule.
     expect(asked.prompt?.decisions).toEqual(['once', 'session']);
     expect(c.launches.at(-1)!.sandbox).toMatchObject({unsandboxed: true, mode: 'danger-full-access'});
@@ -435,7 +448,9 @@ describe('dangerouslyDisableSandbox', () => {
     expect((await bypass.attempt('exec_command', escape('touch x'))).outcome).toBe('ran');
     expect(bypass.launches.at(-1)!.sandbox?.unsandboxed).toBe(true);
     const plan = await chain({mode: 'plan'});
-    expect((await plan.attempt('exec_command', escape('touch x'))).outcome).toBe('refused');
+    const refused = await plan.attempt('exec_command', escape('touch x'));
+    expect(refused).toMatchObject({outcome: 'refused', prompts: 0});
+    expect(plan.launches).toEqual([]);
     // Untrusted repository settings can only tighten: `true` is ignored, `false` applies.
     const repo = await chain({
       user: {sandbox: {allowUnsandboxedCommands: false}},
@@ -450,12 +465,29 @@ describe('dangerouslyDisableSandbox', () => {
     const c = await chain({user: {sandbox: {enabled: false}}});
     const asked = await c.attempt('exec_command', exec('make'), 'once');
     expect(asked.outcome).toBe('prompt');
-    expect(asked.prompt?.reason).toContain('sandbox is disabled');
+    expect(asked.prompt).toMatchObject({
+      commandSandbox: 'disabled',
+      riskLevel: 'medium',
+      decisions: ['once', 'session', 'always'],
+      alwaysRule: 'Bash(make:*)',
+    });
+    expect(asked.prompt?.reason).not.toContain('full user permissions');
     expect(c.launches.at(-1)!.sandbox?.unsandboxed).toBe(true);
     // A repository cannot switch the sandbox off.
     const repo = await chain({project: {sandbox: {enabled: false}}});
     expect((await repo.attempt('exec_command', exec('make'))).outcome).toBe('ran');
     expect(repo.launches.at(-1)!.sandbox?.unsandboxed).toBeUndefined();
+  });
+
+  test('sandboxed commands requiring approval keep their regular Bash rule', async () => {
+    const c = await chain({user: noAutoAllow});
+    const asked = await c.attempt('exec_command', exec('make'), 'once');
+    expect(asked.prompt).toMatchObject({
+      commandSandbox: 'sandboxed',
+      riskLevel: 'medium',
+      alwaysRule: 'Bash(make:*)',
+    });
+    expect(c.launches.at(-1)?.sandbox).toMatchObject({mode: 'workspace-write', network: false});
   });
 
   test('a runtime that cannot run unsandboxed refuses; nothing runs', async () => {
@@ -642,7 +674,7 @@ function fakeLsp(outsideFile: string): LspManager {
 const quote = (path: string) => `'${path.replaceAll("'", `'\\''`)}'`;
 
 describe('trusted additional directories and sandbox off', () => {
-  test('read, edit, write, apply_patch, glob and grep reach a granted directory and refuse the rest', async () => {
+  test('trusted directories allow file tools; other directories ask', async () => {
     const {granted, third, state} = outsideDirs();
     const marker = 'granted-marker-7f3a';
     const grantedFile = join(granted, 'only-here.txt');
@@ -660,7 +692,7 @@ describe('trusted additional directories and sandbox off', () => {
     const read = await c.attempt('read', {path: grantedFile});
     expect(read.outcome).toBe('ran');
     expect(read.content).toContain(marker);
-    expect((await c.attempt('read', {path: join(third, 'nope.txt')})).outcome).toBe('refused');
+    expect((await c.attempt('read', {path: join(third, 'nope.txt')})).outcome).toBe('prompt');
     expect((await c.attempt('read', {path: join(granted, '.git', 'config')})).outcome).toBe('refused');
     expect((await c.attempt('read', {path: join(state, 'session.json')})).outcome).toBe('refused');
     expect((await c.attempt('read', {path: join(granted, '.env')})).outcome).toBe('prompt');
@@ -717,7 +749,7 @@ describe('trusted additional directories and sandbox off', () => {
     const c = await chain({
       project: {sandbox: {enabled: false}, permissions: {additionalDirectories: [granted]}},
     });
-    expect((await c.attempt('read', {path: join(granted, 'only-here.txt')})).outcome).toBe('refused');
+    expect((await c.attempt('read', {path: join(granted, 'only-here.txt')})).outcome).toBe('prompt');
     const command = await c.attempt('exec_command', exec('ls'));
     expect(command.outcome).toBe('ran');
     expect(command.prompts).toBe(0);
@@ -769,7 +801,7 @@ describe('trusted additional directories and sandbox off', () => {
     expect(c.launches.at(-1)!.sandbox?.mode).toBe('workspace-write');
   });
 
-  test('bypassPermissions still refuses .git, Futryn state, deny rules and paths outside working directories', async () => {
+  test('bypassPermissions permits external paths but preserves Git, state and deny rules', async () => {
     const {granted, third, state} = outsideDirs();
     const blocked = join(granted, 'blocked.txt');
     writeFileSync(blocked, 'keep\n');
@@ -783,7 +815,7 @@ describe('trusted additional directories and sandbox off', () => {
       user: {
         permissions: {
           additionalDirectories: [granted, state],
-          deny: [`Edit(//${blocked})`],
+          deny: [`Edit(/${blocked})`],
         },
       },
     });
@@ -802,11 +834,11 @@ describe('trusted additional directories and sandbox off', () => {
     );
     expect(readFileSync(join(state, 'session.json'), 'utf8')).toBe('keep-state\n');
     const outsider = join(third, 'nope.txt');
-    expect((await c.attempt('write', {path: outsider, content: 'x\n'})).outcome).toBe('refused');
-    expect(existsSync(outsider)).toBe(false);
+    expect((await c.attempt('write', {path: outsider, content: 'x\n'})).outcome).toBe('ran');
+    expect(readFileSync(outsider, 'utf8')).toBe('x\n');
   });
 
-  test('lsp hover and rename stay inside the project and granted directories', async () => {
+  test('lsp hover and rename ask before changing external targets', async () => {
     const {granted, third} = outsideDirs();
     const projectFile = (root: string) => join(root, 'a.ts');
     const grantedFile = join(granted, 'b.ts');
@@ -839,10 +871,18 @@ describe('trusted additional directories and sandbox off', () => {
       character: 1,
       newName: 'Outside',
     });
-    expect(refused.outcome).toBe('refused');
-    expect(refused.content).toContain('outside the workspace');
+    expect(refused.outcome).toBe('prompt');
+    expect(refused.status).toBe('denied');
     expect(readFileSync(grantedFile, 'utf8')).toBe('renamed\n');
     expect(readFileSync(outsideFile, 'utf8')).toBe('value\n');
+    const approved = await c.attempt(
+      'lsp_rename',
+      {path: grantedFile, line: 1, character: 1, newName: 'Outside'},
+      'once',
+    );
+    expect(approved.outcome).toBe('prompt');
+    expect(approved.status).toBe('ok');
+    expect(readFileSync(outsideFile, 'utf8')).toBe('renamed\n');
   });
 
   test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'))(
@@ -879,9 +919,11 @@ describe('trusted additional directories and sandbox off', () => {
       expect(seen.at(-1)?.cwdRoots).toEqual([granted]);
 
       const outside = await off.attempt('exec_command', {cmd: 'echo no > nope.txt', workdir: third}, 'once');
-      expect(outside.outcome).toBe('refused');
-      expect(outside.status).toBe('denied');
-      expect(existsSync(join(third, 'nope.txt'))).toBe(false);
+      expect(outside.outcome).toBe('prompt');
+      expect(outside.status).toBe('ok');
+      expect(readFileSync(join(third, 'nope.txt'), 'utf8')).toBe('no\n');
+      expect(seen.at(-1)?.sandbox?.writableRoots).toBeUndefined();
+      expect(seen.at(-1)?.cwdRoots).toEqual([granted, third]);
 
       const bypass = await chain({
         mode: 'bypassPermissions',
@@ -956,4 +998,34 @@ test('new defaults ask for shell approval, while plan and deny still refuse', as
   const deny = await chain({defaults: true, user: {permissions: {deny: ['Bash']}}});
   expect((await deny.attempt('exec_command', exec('ls'))).outcome).toBe('refused');
   expect(deny.launches).toEqual([]);
+});
+
+test('a broad Edit allow cannot hide a per-file ask inside a multi-file patch', async () => {
+  const c = await chain({mode: 'acceptEdits'});
+  c.client.addPermissionRule('allow', 'Edit');
+  c.client.addPermissionRule('ask', 'Edit(./ask.txt)');
+  const result = await c.attempt('apply_patch', {
+    patch: '*** Begin Patch\n*** Add File: ask.txt\n+ASK\n*** Add File: other.txt\n+OTHER\n*** End Patch',
+  });
+  expect(result.outcome).toBe('prompt');
+  expect(result.status).toBe('denied');
+  expect(existsSync(join(c.root, 'ask.txt'))).toBe(false);
+  expect(existsSync(join(c.root, 'other.txt'))).toBe(false);
+});
+
+test('explicit external file rules permit only their targets without granting the directory', async () => {
+  const c = await chain({user: {sandbox: {enabled: false}}});
+  const {third} = outsideDirs();
+  const readPath = join(third, 'read.txt');
+  const writePath = join(third, 'write.txt');
+  writeFileSync(readPath, 'RULE_READ');
+  c.client.addPermissionRule('allow', `Read(/${readPath})`);
+  c.client.addPermissionRule('allow', `Edit(/${writePath})`);
+  expect((await c.attempt('read', {path: readPath})).outcome).toBe('ran');
+  expect((await c.attempt('write', {path: writePath, content: 'RULE_WRITE'})).outcome).toBe('ran');
+  expect(readFileSync(writePath, 'utf8')).toBe('RULE_WRITE');
+  c.client.addPermissionRule('allow', 'Edit');
+  expect((await c.attempt('write', {path: join(third, 'other.txt'), content: 'NO'})).outcome).toBe('prompt');
+  expect(existsSync(join(third, 'other.txt'))).toBe(false);
+  expect(c.client.permissionSettings().additionalDirectories).not.toContain(third);
 });

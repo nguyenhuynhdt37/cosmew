@@ -45,6 +45,7 @@ export function useTranscriptViewport(
   back: number,
   anchors: ReadonlyMap<string, DOMElement>,
   highlightedId?: string,
+  showTurnDuration = true,
 ) {
   const enabled = rows !== undefined && items.length > MIN_VIRTUAL_ITEMS;
   const caches = useMemo(
@@ -53,7 +54,7 @@ export function useTranscriptViewport(
         heights: new WeakMap<TranscriptItem, number>(),
         estimates: new WeakMap<TranscriptItem, number>(),
       })),
-    [width],
+    [width, showTurnDuration],
   );
   const {heights, estimates} = caches[detailed ? 1 : 0]!;
   const [revision, remeasure] = useReducer(n => n + 1, 0);

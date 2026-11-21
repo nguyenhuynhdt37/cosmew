@@ -83,6 +83,7 @@ import {SkillsDialog} from './features/skills';
 import {Usage, contextBlock, useUsage, type ReportKind} from './features/usage';
 import {DiffSidePanel, useDiff, diffPanelLayout, DIFF_PANEL_RESIZE_MESSAGE, changeReceipt} from './features/diff';
 import {BackgroundTasksDialog} from './features/background-tasks';
+import {TaskNotifications} from './features/background-tasks/notifications';
 import {PlanApprovalDialog} from './features/plan-approval';
 import {routeCommand, type CommandHost} from './features/commands';
 import {ScrollViewport, useLiveRows, useScrollback} from './screen';
@@ -143,6 +144,7 @@ function HistoryDialog({
   initialOffset?: number;
   width?: number;
 }) {
+  const {showTurnDuration} = useFutrynClient().userPreferences();
   const [offset, setOffset] = useState(initialOffset);
   useTextInput((_input, key) => {
     if (key.pageUp || key.home)
@@ -151,7 +153,14 @@ function HistoryDialog({
   });
   return (
     <Panel title="Transcript history" width={width}>
-      <Transcript items={items} historyOffset={offset} liveItems={8} isActive animate={false} />
+      <Transcript
+        items={items}
+        historyOffset={offset}
+        liveItems={8}
+        isActive
+        animate={false}
+        showTurnDuration={showTurnDuration}
+      />
       <TextLine>PgUp/PgDn Home/End · page · ↑↓ focus · Ctrl+O expand · Esc close</TextLine>
     </Panel>
   );
@@ -163,7 +172,11 @@ function requestFailure(error: unknown): string {
       ? 'No active provider account or model selected. Run /login or /model.'
       : error.code === 'UNSUPPORTED'
         ? 'This model does not accept workspace tools. Tools are now off for it; send your message again.'
-        : '';
+        : error.code === 'CONTEXT_LIMIT'
+          ? 'The request exceeded the model context window. Use /compact before continuing.'
+          : error.code === 'TIMEOUT'
+            ? 'The provider request timed out.'
+            : '';
   return `Request failed [${error.code}].${hint ? ' ' + hint : ''}`;
 }
 /** Owns SDK tasks; feature views never start a second agent loop or grant permissions. */
@@ -180,13 +193,18 @@ export function IntegratedShell({
   const router = useKeyRouter();
   const anchors = useRef(new Map<string, DOMElement>());
   const dialogPress = useRef<{key: string; at: number} | null>(null);
-  const {engine} = useTheme();
+  const {engine, color} = useTheme();
+  const theme = engine.getActiveAppearance().theme;
+  const canvasColor = theme === 'midnight' || theme === 'parchment' ? color('background') : undefined;
   const {columns} = useTerminalSize();
   const screenRows = useLiveRows(requestedRows);
   const fullscreen = screenRows !== undefined;
   const width = Math.max(1, requestedWidth ?? columns);
   const transcript = useTranscript();
-  const detail = useDetailedTranscript();
+  const {verbose, showTurnDuration} = client.userPreferences();
+  const detail = useDetailedTranscript(verbose);
+  const {setDetailed} = detail;
+  useEffect(() => setDetailed(verbose), [setDetailed, verbose]);
   const activityAnchors = useRef(new Map<string, ActivityAnchor>());
   const [focusedActivity, setFocusedActivity] = useState<string>();
   const [expandedByItem, setExpandedByItem] = useState(new Map<string, ReadonlySet<string>>());
@@ -238,7 +256,8 @@ export function IntegratedShell({
     if (!diffOpen || !diffLayout.visible) setDiffFocused(false);
   }, [diffOpen, diffLayout.visible]);
   const autoDiffOpened = useRef(false);
-  const notices = useNotices();
+  const notices = useNotices(16, {subscribeSubagents: false});
+  const taskNotifications = useRef(new TaskNotifications());
   const plan = usePlan();
   const permissions = usePermissions();
   const [ready, setReady] = useState(false);
@@ -272,6 +291,7 @@ export function IntegratedShell({
   const current = useRef<{shutdown(): Promise<void>; command(raw: string): Promise<boolean | void>} | null>(null);
   const reset = () => {
     transcript.reset();
+    taskNotifications.current.reset(client.status().activeSessionId ?? undefined);
     setExpandedByItem(new Map());
     setFocusedActivity(undefined);
     revealOnToggle.current = undefined;
@@ -335,7 +355,11 @@ export function IntegratedShell({
             width={width}
             initialSection={section}
             onSectionChange={setSection}
-            onNavigate={action => open(action)}
+            onNavigate={action => {
+              if (action === 'editor-mode') {
+                client.setEditorMode(client.editorMode() === 'vim' ? 'normal' : 'vim');
+              } else open(action);
+            }}
             isStreaming={busy}
           />,
         );
@@ -498,7 +522,9 @@ export function IntegratedShell({
           transcript.finish({cancelled: abort.signal.aborted || sendNow.current});
         } catch (error) {
           transcript.finish(
-            abort.signal.aborted || sendNow.current ? {cancelled: true} : {error: requestFailure(error)},
+            abort.signal.aborted || sendNow.current || (error instanceof FutrynError && error.code === 'CANCELLED')
+              ? {cancelled: true}
+              : {error: requestFailure(error)},
           );
         }
         session.current = client.status().activeSessionId ?? undefined;
@@ -821,17 +847,13 @@ export function IntegratedShell({
     interaction: () => setInteraction(n => n + 1),
     plan: () => setInteraction(n => n + 1),
     background: event => {
-      if (event.parentSessionId && event.parentSessionId !== (client.status().activeSessionId ?? undefined)) return;
-      if (event.type === 'task.finished' && event.task.kind === 'shell' && event.delivery) {
-        const task = event.task;
-        transcript.addNotification(
-          `background:${client.status().activeSessionId ?? undefined}:${task.id}`,
-          `Background command "${task.description}" ${task.status === 'done' ? 'completed' : task.status}${task.exitCode === undefined ? '' : ` (exit code ${task.exitCode})`}`,
-        );
-      }
+      const notice = taskNotifications.current.background(client.status().activeSessionId ?? undefined, event);
+      if (notice) transcript.addNotification(notice.id, notice.text);
     },
     // Idle parent: a queued <subagent> result becomes the next turn so the model can act on it (Codex wakes the parent).
     subagent: notice => {
+      const notification = taskNotifications.current.subagent(client.status().activeSessionId ?? undefined, notice);
+      if (notification) transcript.addNotification(notification.id, notification.text);
       if (notice.delivery !== 'queued' || !ready || closing.current || turn.current || shellCall.current) return;
       if ((client.status().activeSessionId ?? undefined) !== notice.parentSessionId) return;
       const next = client.takeQueuedMessage();
@@ -930,6 +952,10 @@ export function IntegratedShell({
     if (ready) closeOverlay();
     else overlay.close();
   };
+  // The agents conversation owns Select cancel for returning to the child
+  // menu. Other dialog contexts rank above Select, even on its overlay.
+  const otherDialogCancel = () =>
+    overlay.active?.fullScreen || overlay.active?.id === 'agents' ? false : dialogCancel();
   const viewing = ready && detail.detailed && !overlay.active;
   // Task 6 supplies the search bar state; transcript keys yield while its query owns focus.
   const [searchOpen, setSearchOpen] = useState(false);
@@ -1002,6 +1028,7 @@ export function IntegratedShell({
     scroll.back,
     searchAnchors.current,
     highlight?.id,
+    showTurnDuration,
   );
   const revealedMatch = useRef<typeof highlight>(undefined);
   useEffect(() => {
@@ -1144,13 +1171,13 @@ export function IntegratedShell({
       },
     },
     // Dialogs that do not bind their own cancel key fall back to the shell (it prints the `cancelled` result).
-    Select: {'select:cancel': () => dialogCancel()},
-    Confirmation: {'confirm:no': () => dialogCancel()},
-    Settings: {'settings:close': () => dialogCancel()},
-    Help: {'help:dismiss': () => dialogCancel()},
-    EffortSlider: {'effort:cancel': () => dialogCancel()},
-    MessageSelector: {'rewind:cancel': () => dialogCancel()},
-    DiffDialog: {'diff:back': () => dialogCancel()},
+    Select: {'select:cancel': () => (overlay.active?.fullScreen ? false : dialogCancel())},
+    Confirmation: {'confirm:no': otherDialogCancel},
+    Settings: {'settings:close': otherDialogCancel},
+    Help: {'help:dismiss': otherDialogCancel},
+    EffortSlider: {'effort:cancel': otherDialogCancel},
+    MessageSelector: {'rewind:cancel': otherDialogCancel},
+    DiffDialog: {'diff:back': otherDialogCancel},
     Scroll: {
       'scroll:pageUp': () => (scrolling ? scroll.pageUp() : false),
       'scroll:pageDown': () => (scrolling ? scroll.pageDown() : false),
@@ -1263,6 +1290,7 @@ export function IntegratedShell({
                   width={contentWidth}
                   liveRows={Math.max(1, (screenRows ?? 24) - 6)}
                   detailed={detail.detailed}
+                  showTurnDuration={showTurnDuration}
                   showAll={showAll || !!currentMatch}
                   searchMatch={highlight}
                   virtualScroll={virtualScrollActive}
@@ -1283,6 +1311,7 @@ export function IntegratedShell({
       width={width}
       minWidth={0}
       height={screenRows}
+      backgroundColor={canvasColor}
       overflow={fullscreen ? 'hidden' : undefined}
     >
       <InputScope active={!overlay.active}>

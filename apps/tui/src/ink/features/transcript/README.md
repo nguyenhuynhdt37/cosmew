@@ -3,6 +3,10 @@
 Exports are public through each feature's `index.tsx`. No SDK, security, core,
 shared Ink API, dependencies or legacy renderer changed in this phase.
 
+Prose wraps by terminal cell width and keeps accents and joined emoji together.
+Continuation lines in numbered and task lists align with their text. Expanded
+thinking uses the same two-cell inset as assistant prose.
+
 - `transcript`: `Transcript({items, width?, isActive?, liveItems?, historyKey?,
 focusedId?, onFocusChange?, animate?, historyOffset?})`, memoized
   `TranscriptItem({item, width?, focusedId?, expandedIds?, animate?})` and

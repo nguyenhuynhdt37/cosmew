@@ -69,7 +69,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.close();
   const db = openPrivateDatabase(dir);
   cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(10);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(11);
   expect(
     (db.query('PRAGMA table_info(messages)').all() as {name: string}[]).some(column => column.name === 'parts'),
   ).toBe(true); // v3 tool parts
@@ -77,7 +77,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   expect(store.get(legacyId)?.messages.map(message => message.content)).toEqual(['Old question', 'Old answer']);
   expect(store.get(legacyId)?.turns).toEqual([]);
   const selection = {accountId: crypto.randomUUID(), modelId: 'fixture-model'};
-  for (const code of ['CANCELLED', 'TRANSPORT'] as const) {
+  for (const code of ['CANCELLED', 'TRANSPORT', 'TIMEOUT', 'CONTEXT_LIMIT', 'PROTOCOL'] as const) {
     const model: ModelPort = {
       generate: async () => {
         throw new Error();
@@ -85,7 +85,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
       async *stream() {
         yield {type: 'started', requestId: crypto.randomUUID()};
         yield {type: 'usage', usage: {inputTokens: 9, outputTokens: null, costUSD: null}};
-        throw new FutrynError(code);
+        if (code !== 'PROTOCOL') throw new FutrynError(code);
       },
     };
     const conv = new Conversation(selection, model, store);
@@ -101,13 +101,23 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
     ).rejects.toMatchObject({code});
     const record = store.get(conv.id)!;
     expect(record.turns![0]!.outcome).toBe(code === 'CANCELLED' ? 'cancelled' : 'failed');
+    expect(record.turns![0]!.stopReason).toBe(
+      code === 'CANCELLED' ? 'cancelled' : code === 'CONTEXT_LIMIT' ? 'context_window' : 'failed',
+    );
+    expect(record.turns![0]!.errorCode).toBe(code);
+    expect(record.recovery?.turns[0]?.events.map(event => event.data)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({type: 'model.finished', errorCode: code, inputTokens: 9, outputTokens: null}),
+        expect.objectContaining({type: 'turn.finished', errorCode: code}),
+      ]),
+    );
     expect(record.turns![0]!.usage?.inputTokens).toBe(9);
     expect(JSON.stringify(record.turns)).not.toContain('Private prompt');
     expect(record.messages[0]!.state).toBe('interrupted');
   }
   const future = directory();
   const invalid = new Database(join(future, 'provider-auth.sqlite'));
-  invalid.exec('PRAGMA user_version=11');
+  invalid.exec('PRAGMA user_version=12');
   invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });

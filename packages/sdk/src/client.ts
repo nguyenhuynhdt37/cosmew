@@ -33,7 +33,9 @@ import {
   type MemoryInfo,
   type MemoryWrite,
   memoryWriteSchema,
+  agentMessageInputSchema,
   type ProjectContextReport,
+  type RequestContext,
   type Integration,
   type ProviderAuthChallenge,
   type ProviderAuthProgress,
@@ -86,6 +88,7 @@ import {
   type SteerOutcome,
   type AgentTypesReport,
   type SubagentNotice,
+  type SubagentEvent,
   type SubagentPromptAttribution,
   type SubagentSummaryView,
   type ThemeManifest,
@@ -186,15 +189,38 @@ export type AccountVerification =
   | {ok: false; reason: 'no-account' | 'auth' | 'network' | 'model'}
   | {ok: false; reason: 'billing'; providerHint?: string};
 
+export type EditorMode = 'normal' | 'vim';
+
 export interface AppearanceStore {
   read(): AppearanceConfig;
   write(patch: PartialAppearanceConfig): void;
   notices?(): readonly string[];
+  readEditorMode?(): EditorMode;
+  writeEditorMode?(mode: EditorMode): void;
   onboardingState?(): {completed: readonly string[]; hasStoredTheme: boolean};
   completeOnboardingStep?(id: string): void;
 }
 
+export const DEFAULT_USER_PREFERENCES = Object.freeze({
+  autoCompact: true,
+  verbose: false,
+  showTurnDuration: true,
+});
+
+export interface UserPreferences {
+  autoCompact: boolean;
+  verbose: boolean;
+  showTurnDuration: boolean;
+}
+
+export interface UserPreferencesStore {
+  readPreferences(): UserPreferences;
+  writePreferences(patch: Partial<UserPreferences>): void;
+}
+
 export interface FutrynBackendPorts {
+  /** User-only preferences; embeddings without a store apply changes in memory. */
+  userPreferencesStore?: UserPreferencesStore;
   /** Host-owned user appearance storage; absent ports retain legacy embedding behavior. */
   appearanceStore?: AppearanceStore;
   workspace: string;
@@ -230,6 +256,11 @@ export interface FutrynBackendPorts {
     context?: {sessionId: string; callId: string},
   ): Promise<ToolResult>;
   getProjectContext?(): ProjectContextReport | null;
+  previewContext?(
+    selection: Selection | null,
+    sessionId: string | undefined,
+    draft?: Message,
+  ): (RequestContext & {prepared?: true}) | undefined;
   /**
    * Mode this launch starts in (`--permission-mode`, `--dangerously-skip-permissions`). Without it
    * `permissions.defaultMode` of the settings applies, else `default` (ADR 0061).
@@ -257,8 +288,12 @@ export interface FutrynBackendPorts {
   agentTypes?(): AgentTypesReport;
   /** Abort a running subagent on the user's behalf; false when it is not running. */
   stopSubagent?(agentId: string): boolean;
+  /** Explicit user follow-up, mediated by agent_message under the owning active parent. */
+  sendSubagentMessage?(sessionId: string, agentId: string, message: string, signal?: AbortSignal): Promise<ToolResult>;
   /** Out-of-turn notices of background subagents (S5b); returns the unsubscribe function. */
   observeSubagentNotices?(listener: (notice: SubagentNotice) => void): () => void;
+  /** Background child lifecycle independent of the parent's send iterator. */
+  observeSubagentEvents?(listener: (notice: {parentSessionId: string; event: SubagentEvent}) => void): () => void;
   backgroundTasks?(sessionId: string): BackgroundTask[];
   stopBackgroundTask?(id: string, sessionId: string): Promise<boolean>;
   backgroundCurrentTask?(sessionId: string): BackgroundTask | undefined;
@@ -461,6 +496,7 @@ export class FutrynClient {
   constructor(private readonly ports: FutrynBackendPorts) {
     this.turnBudgetValue = ports.settings.read().agentPreferences?.turnBudget;
     ports.observeSubagentNotices?.(notice => this.handleSubagentNotice(notice));
+    ports.observeSubagentEvents?.(notice => this.handleSubagentEvent(notice.parentSessionId, notice.event));
     ports.observeBackgroundTasks?.(event => this.handleBackgroundTaskEvent(event));
     this.settingsPort = ports.permissionSettings ?? memoryPermissionSettings();
     this.permissionModeValue = this.initialPermissionMode();
@@ -572,6 +608,7 @@ export class FutrynClient {
 
   /** Revoke every session tool grant; the next read asks again. */
   revokeToolGrants(): void {
+    for (const controller of this.subagentMessages.keys()) controller.abort();
     // Both stores: the dispatcher's grants and the prompt cache that answers 'session' without
     // asking. Clearing only the first let a revoked file or command be re-granted silently.
     this.ports.toolGrants?.clear();
@@ -1000,6 +1037,23 @@ export class FutrynClient {
   }
 
   private readonly backgroundTaskListeners = new Set<(event: BackgroundTaskEvent) => void>();
+  private handleSubagentEvent(parentSessionId: string, event: SubagentEvent): void {
+    // The immutable parent attribution comes from stored child metadata, never the current UI session.
+    this.notify(event.type, `${event.agentType}: ${event.description}`);
+    if (!event.background) return;
+    const task = this.backgroundTasks(parentSessionId).find(task => task.id === event.agentId);
+    if (!task) return;
+    this.handleBackgroundTaskEvent({
+      type:
+        event.type === 'subagent.started'
+          ? 'task.started'
+          : event.type === 'subagent.finished'
+            ? 'task.finished'
+            : 'task.updated',
+      task,
+      parentSessionId,
+    });
+  }
   onBackgroundTaskEvent(listener: (event: BackgroundTaskEvent) => void): () => void {
     this.backgroundTaskListeners.add(listener);
     return () => this.backgroundTaskListeners.delete(listener);
@@ -1043,6 +1097,33 @@ export class FutrynClient {
   stopSubagent(agentId: string): boolean {
     if (!this.toolsEnabled() || !this.ports.stopSubagent) throw new FutrynError('UNSUPPORTED');
     return this.ports.stopSubagent(agentId);
+  }
+
+  private readonly subagentMessages = new Map<AbortController, string>();
+
+  /** Explicitly steer a running child or resume a finished child through the tool dispatcher. */
+  async sendSubagentMessage(agentId: string, message: string, signal?: AbortSignal): Promise<ToolResult> {
+    const sessionId = this.currentSession?.id;
+    if (!this.toolsEnabled() || !this.ports.sendSubagentMessage) throw new FutrynError('UNSUPPORTED');
+    const input = agentMessageInputSchema.safeParse({id: agentId, message});
+    if (!input.success || !message.trim()) throw new FutrynError('INVALID_INPUT');
+    if (
+      !sessionId ||
+      !this.subagents(sessionId).some(child => child.id === agentId && child.parentConversationId === sessionId)
+    )
+      throw new FutrynError('NOT_FOUND');
+    signal?.throwIfAborted();
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, {once: true});
+    this.subagentMessages.set(controller, sessionId);
+    try {
+      return await this.ports.sendSubagentMessage(sessionId, agentId, message, controller.signal);
+    } finally {
+      signal?.removeEventListener('abort', abort);
+      this.subagentMessages.delete(controller);
+      this.notifyStateChange();
+    }
   }
 
   private readonly subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
@@ -1338,6 +1419,9 @@ export class FutrynClient {
   }
 
   private notifyStateChange(): void {
+    for (const [controller, sessionId] of this.subagentMessages) {
+      if (this.currentSession?.id !== sessionId || !this.toolsEnabled()) controller.abort();
+    }
     this.statusUsage = null;
     this.guardElevation();
     this.emitReactiveEvent(this.sending ? this.latestEvent.kind : 'idle');
@@ -2151,21 +2235,7 @@ export class FutrynClient {
           case 'subagent.started':
           case 'subagent.progress':
           case 'subagent.finished':
-            this.notify(event.type, `${event.agentType}: ${event.description}`);
-            if (event.background) {
-              const task = this.backgroundTasks(session.id).find(task => task.id === event.agentId);
-              if (task)
-                this.handleBackgroundTaskEvent({
-                  type:
-                    event.type === 'subagent.started'
-                      ? 'task.started'
-                      : event.type === 'subagent.finished'
-                        ? 'task.finished'
-                        : 'task.updated',
-                  task,
-                  parentSessionId: session.id,
-                });
-            }
+            this.handleSubagentEvent(session.id, event);
             break;
           case 'completed': {
             this.lastUsage = event.usage;
@@ -2398,46 +2468,105 @@ export class FutrynClient {
    */
   limits(): AccountLimits[] {
     const providers = new Map(this.ports.listProviders().map(p => [p.id, p]));
-    const sessions = this.ports.listSessions();
-    return this.ports
-      .listAccounts()
-      .filter(account => account.status !== 'logged-out')
-      .map(account => {
-        const providerName = providers.get(account.providerId)?.name ?? account.providerId;
-        const base = {accountId: account.id, alias: account.alias, providerId: account.providerId, providerName};
-        const live = this.liveLimits.get(account.id);
-        const checking = this.limitsPending.has(account.id) || undefined;
-        if (live && (live.items.length || live.error)) return {...live, checking};
-        for (const summary of sessions.filter(s => s.selection.accountId === account.id).slice(0, 20)) {
-          const turn = this.ports
-            .getSession(summary.id)
-            ?.turns?.filter(t => t.accountId === account.id && t.usage?.quota?.length)
-            .at(-1);
-          const quota = turn?.usage?.quota;
-          if (quota?.length)
-            return {
-              ...base,
-              source: 'last-turn' as const,
-              observedAt: quota[0]!.observedAt,
-              items: quotaItems(quota),
-              checking,
-            };
+    const accounts = this.ports.listAccounts().filter(account => account.status !== 'logged-out');
+    const knownAccounts = new Map(accounts.map(account => [account.id, account]));
+    type QuotaItem = NonNullable<Usage['quota']>[number] & {modelId?: string};
+    const snapshots = new Map<string, Map<string, QuotaItem>>();
+    const collect = (
+      accountId: string | undefined,
+      providerId: string | undefined,
+      quota?: Usage['quota'],
+      modelId?: string,
+    ) => {
+      if (!accountId || !knownAccounts.has(accountId)) return;
+      if (providerId && knownAccounts.get(accountId)!.providerId !== providerId) return;
+      const items = snapshots.get(accountId) ?? new Map<string, QuotaItem>();
+      for (const item of quota ?? []) {
+        const key = JSON.stringify([
+          item.kind ?? 'unknown',
+          item.name,
+          item.kind === 'rate-limit' ? modelId : undefined,
+        ]);
+        const previous = items.get(key);
+        if (
+          Number.isFinite(Date.parse(item.observedAt)) &&
+          (!previous || Date.parse(item.observedAt) > Date.parse(previous.observedAt))
+        )
+          items.set(key, {...item, modelId});
+      }
+      snapshots.set(accountId, items);
+    };
+    // Session selection changes and sort order do not identify the account that made a request.
+    // Scan all saved turns, including child/compaction sources; never borrow their quota for a parent.
+    for (const summary of this.ports.listSessions()) {
+      for (const turn of this.ports.getSession(summary.id)?.turns ?? []) {
+        if (turn.usage?.breakdown) {
+          for (const source of turn.usage.breakdown)
+            collect(source.accountId, source.providerId, source.quota, source.modelId);
         }
+        // Legacy aggregate quota has no trustworthy source: a child could have supplied it.
+        // Keep it in history, but do not advertise it as the parent account's allowance.
+      }
+    }
+    return accounts.map(account => {
+      const providerName = providers.get(account.providerId)?.name ?? account.providerId;
+      const base = {accountId: account.id, alias: account.alias, providerId: account.providerId, providerName};
+      const live = this.liveLimits.get(account.id);
+      const checking = this.limitsPending.has(account.id) || undefined;
+      const quota = [...(snapshots.get(account.id)?.values() ?? [])];
+      const reported = quotaItems(quota).map((item, index) => ({
+        ...item,
+        ...(quota[index]?.modelId ? {modelId: quota[index]!.modelId} : {}),
+        label:
+          item.kind === 'rate-limit' && quota[index]?.modelId ? `${item.label} (${quota[index]!.modelId})` : item.label,
+      }));
+      const items = [...(live?.items ?? []), ...reported];
+      if (items.length) {
+        const observed = [live?.items.length ? live.observedAt : null, ...quota.map(q => q.observedAt)]
+          .filter((at): at is string => Boolean(at))
+          .sort((a, b) => Date.parse(b) - Date.parse(a));
         return {
           ...base,
-          source: 'unavailable' as const,
-          observedAt: live?.observedAt ?? null,
-          items: [],
+          source: live?.items.length
+            ? reported.length
+              ? ('mixed' as const)
+              : ('live' as const)
+            : ('last-turn' as const),
+          status: live?.error ? ('error' as const) : ('available' as const),
+          observedAt: observed[0] ?? null,
+          items,
+          stale: Boolean(
+            live?.stale || live?.error || items.some(item => item.resetAt && Date.parse(item.resetAt) <= Date.now()),
+          ),
           note: live?.note,
+          error: live?.error,
           checking,
         };
-      });
+      }
+      const supportsHeaders = ['openai', 'anthropic', 'chatgpt-api'].includes(account.providerId);
+      return {
+        ...base,
+        source: 'unavailable' as const,
+        status: live?.error
+          ? ('error' as const)
+          : (live?.status ?? (supportsHeaders ? ('unavailable' as const) : ('unsupported' as const))),
+        observedAt: live?.observedAt ?? null,
+        items: [],
+        note:
+          live?.note ??
+          (supportsHeaders
+            ? 'No provider-reported snapshot yet. Limits appear only when returned in response headers; no supported account quota refresh endpoint.'
+            : 'Account quota refresh is unsupported for this provider. No provider-reported limits are available.'),
+        error: live?.error,
+        checking,
+      };
+    });
   }
 
   /** Ask providers that have a balance/quota API for fresh numbers. Concurrent calls share one refresh. */
   refreshLimits(signal?: AbortSignal): Promise<void> {
     const fetchLimits = this.ports.fetchAccountLimits;
-    if (!fetchLimits) return Promise.resolve();
+    if (!fetchLimits || signal?.aborted) return Promise.resolve();
     this.limitsRefresh ??= (async () => {
       const providers = new Map(this.ports.listProviders().map(p => [p.id, p]));
       await Promise.allSettled(
@@ -2445,33 +2574,49 @@ export class FutrynClient {
           .listAccounts()
           .filter(account => account.status !== 'logged-out')
           .map(async account => {
+            if (signal?.aborted) return;
             const base = {
               accountId: account.id,
               alias: account.alias,
               providerId: account.providerId,
               providerName: providers.get(account.providerId)?.name ?? account.providerId,
             };
-            const request = fetchLimits(account, signal);
-            if (!request) {
-              this.liveLimits.delete(account.id);
-              return;
-            }
-            this.limitsPending.add(account.id);
             try {
+              const request = fetchLimits(account, signal);
+              if (!request) return;
+              this.limitsPending.add(account.id);
+              this.notifyStateChange();
               const result = await request;
+              if (signal?.aborted) return;
               this.liveLimits.set(account.id, {
                 ...base,
                 source: 'live',
+                status: result.items.length ? 'available' : 'unavailable',
                 observedAt: new Date().toISOString(),
-                items: result.items,
+                items: result.items.map(item => ({
+                  ...item,
+                  source: 'live' as const,
+                  observedAt: new Date().toISOString(),
+                })),
                 note: result.note,
+                stale: false,
               });
             } catch (error) {
+              if (
+                signal?.aborted ||
+                (error instanceof FutrynError && error.code === 'CANCELLED') ||
+                (error instanceof Error && error.name === 'AbortError')
+              )
+                return;
+              const previous = this.liveLimits.get(account.id);
               this.liveLimits.set(account.id, {
                 ...base,
                 source: 'live',
-                observedAt: new Date().toISOString(),
-                items: [],
+                status: 'error',
+                observedAt: previous?.observedAt ?? null,
+                items: previous?.items ?? [],
+                note: previous?.note,
+                stale: true,
                 error: error instanceof FutrynError ? error.code : 'PROTOCOL',
               });
             } finally {
@@ -2495,6 +2640,20 @@ export class FutrynClient {
     const pending = this.sending ? record?.messages.filter(message => message.state === 'pending').at(-1) : undefined;
     const trimmedDraft = draft.trim();
     const requestDraft = /^[\/!]/.test(trimmedDraft) ? '' : trimmedDraft;
+    const images = this.pendingImages;
+    const draftContent = [requestDraft, ...images.map(image => image.view.label)].filter(Boolean).join('\n');
+    const draftMessage: Message | undefined = draftContent
+      ? {
+          role: 'user',
+          content: draftContent,
+          ...(images.length ? {attachments: images.map(image => image.attachment)} : {}),
+        }
+      : undefined;
+    const preview = this.ports.previewContext?.(
+      status.selection,
+      this.currentSession?.id,
+      pending ? {role: pending.role, content: pending.content} : draftMessage,
+    );
     const tail: Message[] = [
       ...(pending ? [{role: pending.role, content: pending.content}] : []),
       ...(pending ? this.streamingSteps : []),
@@ -2505,7 +2664,7 @@ export class FutrynClient {
     // The SDK replaces messages on recovery/rewind and appends new objects when committing a turn.
     const count = history.length + tail.length;
     let bytes = 2 + Math.max(0, count - 1);
-    for (const message of [...history, ...tail]) {
+    for (const message of preview ? [] : [...history, ...tail]) {
       let length = this.contextMessageBytes.get(message);
       if (length === undefined) {
         length = Buffer.byteLength(JSON.stringify(message), 'utf8');
@@ -2514,21 +2673,35 @@ export class FutrynClient {
       bytes += length;
     }
     const instructionBytes = this.projectContext()?.usedBytes ?? 0;
-    const messageCount = count + (instructionBytes ? 1 : 0);
-    const estimate = messageCount ? Math.ceil((bytes + instructionBytes) / 4) + messageCount * 16 + 64 : 0;
-    const latest = this.usageFromRecord(record).last;
-    const observation = record?.turns?.findLast(turn => turn.context && turn.context.source !== 'estimate');
+    const messageCount = preview?.messages ?? count + (instructionBytes ? 1 : 0);
+    const estimate =
+      preview?.estimateTokens ??
+      (messageCount ? Math.ceil((bytes + instructionBytes) / 4) + messageCount * 16 + 64 : 0);
+    const latest = record?.turns?.findLast(turn => turn.kind !== 'user-shell');
+    const observation = record?.turns?.findLast(
+      turn =>
+        turn.accountId === status.selection?.accountId &&
+        turn.modelId === status.selection?.modelId &&
+        turn.context &&
+        turn.context.source !== 'estimate',
+    );
     const last = observation?.context ?? null;
-    const limit = last?.limitTokens ?? status.activeModel?.contextLimit ?? null;
-    const reserve = Math.min(4096, status.activeModel?.outputLimit ?? 4096);
+    const limit = preview?.limitTokens ?? last?.limitTokens ?? status.activeModel?.contextLimit ?? null;
+    const reserve = preview?.outputReserve ?? 0;
     return {
+      autoCompact: this.userPreferences().autoCompact,
       estimateTokens: estimate,
-      estimateMethod: 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
+      estimateMethod: preview
+        ? 'Cosmew request estimate (about 3 UTF-8 bytes/token)'
+        : 'UTF-8 bytes / 4 + message overhead; no exact tokenizer',
+      estimateSource: preview?.prepared ? 'prepared' : preview ? 'preview' : 'history',
       limitTokens: limit,
       outputReserve: reserve,
       outputLimit: status.activeModel?.outputLimit ?? null,
       estimatedPercent: limit ? Math.round((estimate / limit) * 1000) / 10 : null,
       measuredCurrentHistory:
+        !preview &&
+        !!observation &&
         observation?.requestId === latest?.requestId &&
         !requestDraft.trim() &&
         (!this.sending || latest?.outcome === 'pending') &&
@@ -2557,11 +2730,18 @@ export class FutrynClient {
     const account = status.activeAccount;
     if (!model || !account) throw new FutrynError('UNSUPPORTED');
     if (value !== 'default') {
-      const protocol = status.activeProvider?.protocol;
-      if (protocol === 'anthropic' || protocol === 'gemini')
-        throw new FutrynError('UNSUPPORTED', false, null, protocol);
-      if (!model.reasoningEfforts?.length || model.capabilities.reasoning === 'unsupported')
+      if (!model.reasoningEfforts?.length || model.capabilities.reasoning === 'unsupported') {
+        const protocol = status.activeProvider?.protocol;
+        if (protocol === 'anthropic' || protocol === 'gemini')
+          throw new FutrynError(
+            'UNSUPPORTED',
+            false,
+            null,
+            protocol,
+            model.capabilities.reasoning === 'supported' ? 'mapping' : model.capabilities.reasoning,
+          );
         throw new FutrynError('UNSUPPORTED', false, null, 'levels');
+      }
       if (!model.reasoningEfforts.includes(value)) throw new FutrynError('INVALID_INPUT');
     }
     const sessionKey = `${this.currentSession?.id ?? 'pending'}:${account.id}:${model.id}`;
@@ -2643,6 +2823,18 @@ export class FutrynClient {
   }
 
   private projectAppearance: PartialAppearanceConfig | undefined;
+  private sessionPreferences: UserPreferences = {...DEFAULT_USER_PREFERENCES};
+
+  userPreferences(): UserPreferences {
+    return {...(this.ports.userPreferencesStore?.readPreferences() ?? this.sessionPreferences)};
+  }
+
+  updateUserPreferences(patch: Partial<UserPreferences>): UserPreferences {
+    if (this.ports.userPreferencesStore) this.ports.userPreferencesStore.writePreferences(patch);
+    else this.sessionPreferences = {...this.sessionPreferences, ...patch};
+    this.notifyStateChange();
+    return this.userPreferences();
+  }
 
   onboardingState() {
     return this.ports.appearanceStore?.onboardingState?.();
@@ -2650,6 +2842,26 @@ export class FutrynClient {
 
   completeOnboardingStep(id: string): void {
     this.ports.appearanceStore?.completeOnboardingStep?.(id);
+  }
+
+  private sessionEditorMode: EditorMode = 'normal';
+  private readonly editorModeListeners = new Set<() => void>();
+
+  editorMode(): EditorMode {
+    return this.ports.appearanceStore?.readEditorMode?.() ?? this.sessionEditorMode;
+  }
+
+  setEditorMode(mode: EditorMode): void {
+    if (mode !== 'normal' && mode !== 'vim') throw new TypeError('Invalid editor mode.');
+    if (this.editorMode() === mode) return;
+    this.ports.appearanceStore?.writeEditorMode?.(mode);
+    this.sessionEditorMode = mode;
+    for (const listener of this.editorModeListeners) listener();
+  }
+
+  subscribeEditorMode(listener: () => void): () => void {
+    this.editorModeListeners.add(listener);
+    return () => this.editorModeListeners.delete(listener);
   }
 
   appearanceNotices(): readonly string[] {
@@ -2812,6 +3024,7 @@ export class FutrynClient {
     target: string;
     riskLevel?: PermissionPromptRequest['riskLevel'];
     reason: string;
+    commandSandbox?: PermissionPromptRequest['commandSandbox'];
     diffPreview?: string;
     ttlMs?: number;
     scopeKey?: string;
@@ -2852,6 +3065,7 @@ export class FutrynClient {
       target: this.ports.sanitizeText(input.target),
       riskLevel: input.riskLevel ?? 'medium',
       reason: this.ports.sanitizeText(input.reason),
+      ...(input.commandSandbox ? {commandSandbox: input.commandSandbox} : {}),
       scopeHash: scopeHash.length >= 8 ? scopeHash : scopeHash.padEnd(8, '_'),
       createdAt: now.toISOString(),
       expiresAt: expires.toISOString(),
@@ -2955,9 +3169,12 @@ export class FutrynClient {
       target: string;
       reason: string;
       riskLevel?: PermissionPromptRequest['riskLevel'];
+      commandSandbox?: PermissionPromptRequest['commandSandbox'];
       scopeKey?: string;
       diffPreview?: string;
       kind?: PermissionKind;
+      /** External file access asks even in acceptEdits unless a rule permits it. */
+      requiresApproval?: boolean;
       /** Approvals offered (ADR 0055); default once + session. */
       decisions?: PermissionPromptRequest['decisions'];
       /** The rule (or `domain:host`) an `always` answer saves. */
@@ -2978,7 +3195,15 @@ export class FutrynClient {
     if (signal?.aborted) return Promise.resolve('deny');
     this.reviewSettingsTrust();
     // The mode answers only what policy left as `ask`; a fs.read that reaches here is a secret file.
-    const {kind: explicitKind, ruleTarget, ruleSegments, ruleTool, ignoreAllowRules, ...prompt} = input;
+    const {
+      kind: explicitKind,
+      ruleTarget,
+      ruleSegments,
+      ruleTool,
+      ignoreAllowRules,
+      requiresApproval,
+      ...prompt
+    } = input;
     const kind: PermissionKind =
       explicitKind ??
       (
@@ -3030,7 +3255,9 @@ export class FutrynClient {
     if (ruled === 'deny') decision = 'deny';
     // Plan mode refuses writes and execution whatever an allow rule says.
     else if (mode === 'plan' && PLAN_REFUSED_KINDS.has(kind)) decision = 'deny';
-    else decision = ruled ?? permissionModeDecision(mode, kind);
+    else
+      decision =
+        ruled ?? (requiresApproval && mode !== 'bypassPermissions' ? 'ask' : permissionModeDecision(mode, kind));
     // bypassPermissions means no prompts: even an ask rule is answered (deny rules and plan are not).
     if (decision === 'ask' && mode === 'bypassPermissions') decision = 'allow';
     if (decision !== 'ask') {

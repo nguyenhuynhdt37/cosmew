@@ -1,5 +1,5 @@
 import type {PromptHistoryEntry, PromptHistoryScope} from '@cosmew/sdk';
-import {useEffect, useMemo, useReducer, useRef, useState} from 'react';
+import {useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore} from 'react';
 import {usePaste, type Key} from 'ink';
 import {FutrynError} from '@cosmew/contracts';
 import {SLASH_COMMANDS, acceptSlashSelection, type FutrynClient} from '@cosmew/sdk';
@@ -9,9 +9,12 @@ import {
   useInputEnabled,
   useKeybindings,
   useStatus,
+  VIM_COMMANDS,
+  isPrintable,
   type Keystroke,
 } from '../../hooks';
 import {safeText} from '../../ui';
+import {createVimState, reconcileVim, stepVim, vimSelection} from './vim';
 import {completionContext, getCompletions, useAutocomplete, type Completion} from '../autocomplete';
 import {recordHistory, useHistory} from '../history';
 import {createPasteState, expandPastes, insertPaste, replaceRange, type PasteState} from '../paste';
@@ -91,9 +94,13 @@ function sessionHistory(client: FutrynClient): string[] {
 export function useComposer(options: ComposerOptions) {
   const client = useFutrynClient();
   const status = useStatus();
+  const vimEnabled = useSyncExternalStore(
+    listener => client.subscribeEditorMode(listener),
+    () => client.editorMode() === 'vim',
+  );
+  const vim = useRef(createVimState());
+  const insertUndo = useRef(false);
   const reactiveRevision = client.currentReactiveEvent();
-  // The footer uses measured context for the accepted history. Editing or scrolling does not change it.
-  const contextEstimate = useMemo(() => client.context(), [client, reactiveRevision]);
   const [shortcuts, setShortcuts] = useState(false);
   const shortcutsRef = useRef(false);
   const dismissShortcuts = () => {
@@ -120,6 +127,7 @@ export function useComposer(options: ComposerOptions) {
   const [selectedImage, setSelectedImage] = useState<number | null>(null);
   const attaching = useRef(false);
   const undo = useRef<PasteState[]>([]);
+  const redo = useRef<PasteState[]>([]);
   const stash = useRef<PasteState | null>(null);
   const escapeAt = useRef<number | null>(null);
   const exitAt = useRef<number | null>(null);
@@ -129,6 +137,12 @@ export function useComposer(options: ComposerOptions) {
     draftRef.current = next;
     setDraft(next);
   };
+  useEffect(() => {
+    vim.current = createVimState();
+    insertUndo.current = false;
+    if (draftRef.current.selectionAnchor !== undefined) update({...draftRef.current, selectionAnchor: undefined});
+    rerender();
+  }, [vimEnabled]);
   const [initialEntries] = useState(() => options.initialHistory ?? sessionHistory(client));
   const history = useHistory(initialEntries);
   const entriesRef = useRef(history.entries);
@@ -152,6 +166,8 @@ export function useComposer(options: ComposerOptions) {
   const sessionId = useRef(status.activeSessionId ?? undefined);
   const menu = useAutocomplete();
   const busy = !!options.busy || shellBusy;
+  // Refresh when the request ends. Editing or scrolling does not change the context already in use.
+  const contextEstimate = useMemo(() => client.context(), [client, reactiveRevision, busy]);
   useEffect(() => client.onBackgroundTaskEvent(() => rerender()), [client]);
   useEffect(() => {
     mounted.current = true;
@@ -191,7 +207,8 @@ export function useComposer(options: ComposerOptions) {
   };
   const context = useMemo(() => completionContext(draft.value, draft.cursor), [draft.value, draft.cursor]);
   const completionData = useMemo(() => {
-    if (!context || menu.dismissed || search) return {items: [] as Completion[], error: ''};
+    if (!context || menu.dismissed || search || (vimEnabled && vim.current.mode !== 'INSERT'))
+      return {items: [] as Completion[], error: ''};
     try {
       const files = context.prefix === '@' && options.workspaceAccess ? client.listWorkspaceFiles(context.query) : [];
       return {
@@ -202,16 +219,27 @@ export function useComposer(options: ComposerOptions) {
     } catch {
       return {items: [] as Completion[], error: 'Workspace suggestions unavailable from this SDK backend.'};
     }
-  }, [client, context, menu.dismissed, search, options.workspaceAccess]);
+  }, [client, context, menu.dismissed, search, options.workspaceAccess, vimEnabled, vim.current.mode]);
   const items = completionData.items;
   const selected = Math.min(menu.selected, Math.max(0, items.length - 1));
-  const change = (next: PasteState, showMenu = true, keepYank = false, keepKill = false) => {
+  const rememberUndo = (previous: PasteState, groupInsert: boolean) => {
+    redo.current = [];
+    if (groupInsert && insertUndo.current) return;
+    undo.current.push(previous);
+    if (undo.current.length > 100) undo.current.shift();
+    insertUndo.current = groupInsert;
+  };
+  const change = (next: PasteState, showMenu = true, keepYank = false, keepKill = false, fromVim = false) => {
     if (!keepYank) yank.current = null;
     if (!keepKill) lastKill.current = false;
     const previous = draftRef.current;
     if (previous.value !== next.value || previous.pastes !== next.pastes) {
-      undo.current.push(previous);
-      if (undo.current.length > 100) undo.current.shift();
+      rememberUndo(previous, vimEnabled && vim.current.mode === 'INSERT');
+    }
+    if (vimEnabled && !fromVim) {
+      const reconciled = reconcileVim(vim.current, previous, next);
+      vim.current = reconciled.state;
+      next = reconciled.draft;
     }
     escapeAt.current = null;
     if (previous.value !== next.value) setDeletedHint(false);
@@ -225,7 +253,13 @@ export function useComposer(options: ComposerOptions) {
       searchQuery(searchRef.current.query + safeText(text.replace(/\r\n?/g, '\n')));
       return;
     }
-    change(insertPaste(draftRef.current, text), false);
+    const current = draftRef.current;
+    const selection = vimEnabled ? vimSelection(vim.current, current) : undefined;
+    if (selection) vim.current = {...vim.current, mode: 'NORMAL', anchor: undefined, pending: undefined, count: 0};
+    change(
+      insertPaste(selection ? {...current, selectionAnchor: selection[0], cursor: selection[1]} : current, text),
+      false,
+    );
   };
   const searchEntries = () => searchRef.current?.entries ?? [];
   const matchesFor = (query: string) =>
@@ -291,14 +325,32 @@ export function useComposer(options: ComposerOptions) {
     menu.setDismissed(true);
   };
   const acceptCompletion = (item: Completion) => {
-    const active = completionContext(draftRef.current.value, draftRef.current.cursor);
-    if (active) change(replaceRange(draftRef.current, active.start, draftRef.current.cursor, item.replacement), false);
+    const draft = draftRef.current;
+    const active = completionContext(draft.value, draft.cursor);
+    if (!active) return;
+    const tail = draft.value.slice(draft.cursor);
+    const suffix = (active.prefix === '/' ? /^\S*/ : /^[^\s@$]*/).exec(tail)?.[0] ?? '';
+    const end = draft.cursor + suffix.length;
+    const separator = draft.value[end] ?? '';
+    const replacement = /\s/.test(separator) ? item.replacement.trimEnd() : item.replacement;
+    const completed = replaceRange(draft, active.start, end, replacement);
+    const advance = item.replacement.endsWith(' ') && (separator === ' ' || separator === '\t');
+    change(advance ? moveTo(completed, completed.cursor + 1) : completed, false);
   };
   const accepted = (snapshot: PasteState, content: string) => {
     if (!mounted.current) return;
     acceptanceSequence.current++;
     history.record(content);
     undo.current = [];
+    redo.current = [];
+    insertUndo.current = false;
+    if (vimEnabled)
+      vim.current = {
+        ...createVimState(),
+        mode: vim.current.mode,
+        register: vim.current.register,
+        find: vim.current.find,
+      };
     setNotice('');
     if (draftRef.current === snapshot) update(createPasteState());
   };
@@ -454,12 +506,12 @@ export function useComposer(options: ComposerOptions) {
     void submit();
   };
   const queued = () => client.queuedInput().map(input => input.content);
-  const navigate = (direction: -1 | 1) => {
+  const navigate = (direction: -1 | 1, historyOnly = false) => {
     const current = draftRef.current;
     // Multi-line input: the caret moves between lines first; history starts at the first/last line.
-    const vertical = verticalMove(current, direction, options.inputWidth ?? 74);
+    const vertical = historyOnly ? null : verticalMove(current, direction, options.inputWidth ?? 74);
     if (vertical) {
-      update(vertical);
+      update(vimEnabled ? reconcileVim(vim.current, current, vertical).draft : vertical);
       return;
     }
     const waiting = queued();
@@ -485,7 +537,9 @@ export function useComposer(options: ComposerOptions) {
     const nav = navigation.current ?? {index: entries.length, draft: current};
     const index = Math.max(0, Math.min(entries.length, nav.index + direction));
     navigation.current = index === entries.length ? null : {...nav, index};
-    update(index === entries.length ? nav.draft : createPasteState(entries[index]!));
+    const next = index === entries.length ? nav.draft : createPasteState(entries[index]!);
+    vim.current = {...vim.current, column: undefined};
+    update(vimEnabled ? reconcileVim(vim.current, current, next).draft : next);
     menu.setDismissed(true);
   };
   const pushKill = (text: string, backward = false) => {
@@ -524,12 +578,19 @@ export function useComposer(options: ComposerOptions) {
     yank.current = {start: last.start, length: ring[index]!.length, index};
   };
   const nowMs = () => Date.now();
-  const undoEdit = () => {
-    const previous = undo.current.pop();
-    if (previous) {
-      update(previous);
-      menu.setDismissed(true);
-    }
+  const undoEdit = (forward = false) => {
+    const source = forward ? redo.current : undo.current;
+    const destination = forward ? undo.current : redo.current;
+    const previous = source.pop();
+    if (!previous) return false;
+    const current = draftRef.current;
+    destination.push(current);
+    insertUndo.current = false;
+    if (vimEnabled) vim.current = {...vim.current, insert: undefined, column: undefined};
+    update(vimEnabled ? reconcileVim(vim.current, current, previous).draft : previous);
+    navigation.current = null;
+    menu.setDismissed(true);
+    return true;
   };
   const stashPrompt = () => {
     const current = draftRef.current;
@@ -656,6 +717,48 @@ export function useComposer(options: ComposerOptions) {
     if (!items.length || searchRef.current) return false;
     fn();
   };
+  const applyVim = (token: string) => {
+    if (!vimEnabled || searchRef.current || footer !== null) return false;
+    if (dismissShortcuts()) return true;
+    const current = draftRef.current;
+    const before = vim.current;
+    if (before.mode === 'INSERT' && token !== 'escape' && token !== 'enter') return false;
+    const result = stepVim(before, current, token, options.inputWidth);
+    vim.current = result.state;
+    if (result.state.mode !== 'INSERT' || before.mode !== 'INSERT') insertUndo.current = false;
+    if (result.draft !== current) change(result.draft, false, false, false, true);
+    else if (result.state !== before) rerender();
+    if (token === 'escape') {
+      setSelectedImage(null);
+      menu.setDismissed(true);
+    }
+    switch (result.effect) {
+      case 'submit':
+        void enter();
+        break;
+      case 'undo':
+        undoEdit();
+        break;
+      case 'redo':
+        if (!undoEdit(true)) searchOpen();
+        break;
+      case 'history':
+        searchOpen();
+        break;
+      case 'older':
+        navigate(-1, true);
+        break;
+      case 'newer':
+        if (!current.value && !navigation.current && runningAgents().length) setFooter(0);
+        else navigate(1, true);
+        break;
+      case 'help':
+        shortcutsRef.current = true;
+        setShortcuts(true);
+        break;
+    }
+    return true;
+  };
   /** Everything no binding wants: typing, cursor keys and the readline-style editing keys. Returns true when consumed. */
   const onKey = (text: string, key: Key): boolean => {
     if (key.eventType === 'release') return true;
@@ -690,7 +793,17 @@ export function useComposer(options: ComposerOptions) {
       return true;
     }
     if (key.super || key.hyper) return true;
-    if (!key.ctrl && !key.meta && text === '?' && !current.value) {
+    if (vimEnabled && vim.current.mode !== 'INSERT' && footer === null && !key.ctrl && !key.meta) {
+      // The router has already tried remappable commands. Only character arguments
+      // and coalesced text that cannot represent a single key reach this fallback.
+      const pending = vim.current.pending?.kind;
+      if (pending === 'replace' || pending === 'find') applyVim(safeText(text));
+      else if (text && !key.shift && !key.return && !key.escape && !key.tab && [...text].length > 1) paste(text);
+      else if (vim.current.pending || vim.current.count) applyVim('');
+      return true;
+    }
+
+    if (!vimEnabled && !key.ctrl && !key.meta && text === '?' && !current.value) {
       shortcutsRef.current = true;
       setShortcuts(true);
       return true;
@@ -721,8 +834,11 @@ export function useComposer(options: ComposerOptions) {
       else if (key.ctrl && letter === 'w') kill('killWord');
       return true;
     }
-    if (key.leftArrow || key.rightArrow) change(moveCursor(current, key.leftArrow ? -1 : 1, key.shift), false);
-    else if (key.home || key.end) {
+    if (key.leftArrow || key.rightArrow) {
+      const next = moveCursor(current, key.leftArrow ? -1 : 1, key.shift);
+      const cursorInsideWord = /^\S/.test(next.value.slice(next.cursor));
+      change(next, !key.shift && cursorInsideWord);
+    } else if (key.home || key.end) {
       if (key.shift) change(moveTo(current, lineEdge(current, key.home ? 'start' : 'end'), true), false);
       else if (!current.value) options.onEmptyHomeEnd?.(key.home ? 'start' : 'end');
       else change(edit(current, key.home ? 'start' : 'end'), false);
@@ -754,6 +870,28 @@ export function useComposer(options: ComposerOptions) {
       report('Not implemented: this backend cannot stop subagents.');
     }
   });
+  const modalBindings = Object.fromEntries(
+    VIM_COMMANDS.map(({token}) => [
+      `vim:${token === ' ' ? 'space' : token}`,
+      (stroke: Keystroke) => {
+        // Find/replace consume the actual character even if that key has a remap.
+        const pending = vim.current.pending?.kind;
+        if (
+          (pending === 'replace' || pending === 'find') &&
+          !stroke.ctrl &&
+          !stroke.alt &&
+          !stroke.super &&
+          stroke.key !== 'escape' &&
+          stroke.key !== 'enter'
+        ) {
+          const char = stroke.key === 'space' ? ' ' : stroke.shift ? stroke.key.toUpperCase() : stroke.key;
+          return applyVim(isPrintable(stroke) ? char : '');
+        }
+        return applyVim(token);
+      },
+    ]),
+  );
+  const insertBindings = {'vim:escape': modalBindings['vim:escape']!, 'vim:enter': modalBindings['vim:enter']!};
   useKeybindings(
     {
       Global: {
@@ -761,6 +899,10 @@ export function useComposer(options: ComposerOptions) {
           if (!dismissShortcuts()) searchOpen();
         },
         'app:toggleTodos': guarded(() => bridge(options.onToggleTasks, 'task visibility is not connected')),
+      },
+      get Vim() {
+        if (!vimEnabled) return undefined;
+        return vim.current.mode === 'INSERT' ? insertBindings : modalBindings;
       },
       Chat: {
         'chat:submit': guarded(() => enter()),
@@ -783,7 +925,7 @@ export function useComposer(options: ComposerOptions) {
           flashSlot('Not implemented: extended-thinking toggle (use /effort for the reasoning effort)'),
         ),
         'chat:clearInput': guarded(() => bridge(options.onRedraw, 'screen redraw bridge')),
-        'chat:undo': guarded(undoEdit),
+        'chat:undo': guarded(() => undoEdit()),
         'chat:externalEditor': guarded(() => bridge(options.onEditor, '$EDITOR bridge')),
         'chat:stash': guarded(stashPrompt),
         'chat:imagePaste': guarded(() => {
@@ -889,6 +1031,7 @@ export function useComposer(options: ComposerOptions) {
   /** Wire to InkApp.onInterrupt; Shell is the sole owner of Esc. */
   const interrupt = () => {
     if (dismissShortcuts()) return true;
+    if (applyVim('escape')) return true;
     if (selectedImage !== null) {
       setSelectedImage(null);
       return true;
@@ -928,7 +1071,13 @@ export function useComposer(options: ComposerOptions) {
     status,
     context: contextEstimate,
     shortcuts,
-    shortcutColumns: footerShortcutColumns(!!status.activeModel?.reasoningEfforts?.length, options.transcriptItems),
+    vimMode: vimEnabled ? vim.current.mode : undefined,
+    vimRange: vimEnabled ? vimSelection(vim.current, draft) : undefined,
+    shortcutColumns: footerShortcutColumns(
+      !!status.activeModel?.reasoningEfforts?.length,
+      options.transcriptItems,
+      vimEnabled,
+    ),
     /** Shell must call this before exit; its startup/teardown lifecycle stays authoritative. */
     confirmExit: () => {
       dismissShortcuts();

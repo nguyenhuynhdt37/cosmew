@@ -214,7 +214,8 @@ test('file suggestions stay gated before consent, replace only mention, and keep
   await settle();
   await key(view, '\t');
   expect(reads).toBeGreaterThan(0);
-  expect(controller.content).toBe('read @src/main.ts  tail');
+  expect(controller.content).toBe('read @src/main.ts tail');
+  expect(controller.draft.cursor).toBe('read @src/main.ts '.length);
 });
 test('skill slash and dollar completion come from the public SDK catalog', async () => {
   const fixture = createClientFixture({

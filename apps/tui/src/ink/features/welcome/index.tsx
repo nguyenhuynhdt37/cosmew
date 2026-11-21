@@ -5,6 +5,7 @@ import {safeText, useUiTheme} from '../../ui';
 import type {FutrynClient} from '@cosmew/sdk';
 import {version} from '../../../../package.json';
 import {CosmewMascot} from '../../ui/cosmew-mascot';
+import {cosmewMascotWidth} from '../../../theme/cosmew-mascot';
 export const useWelcome = () => useStatus();
 export interface WelcomeProps {
   status: ReturnType<FutrynClient['status']>;
@@ -20,7 +21,7 @@ export function welcomePath(path: string, width: number): string {
 }
 export function Welcome({status, width = 80}: WelcomeProps) {
   const {color} = useUiTheme();
-  const mascotWidth = width < 32 ? 3 : 9;
+  const mascotWidth = cosmewMascotWidth(width);
   const textWidth = Math.max(1, width - mascotWidth - 2);
   const effort = status.reasoningEffort;
   const model = status.selection?.modelId ?? 'No model selected';
@@ -33,8 +34,10 @@ export function Welcome({status, width = 80}: WelcomeProps) {
         <Text bold wrap="truncate-end">{`Cosmew v${version}`}</Text>
         <Text color={color('dim')} wrap="truncate-end">
           {safeText(
-            `${model}${effort ? ` with ${effort} effort` : ''} · ${status.activeAccount?.alias ?? 'no account'}`,
-          )}
+            mascotWidth === 3
+              ? model
+              : `${model}${effort ? ` with ${effort} effort` : ''} · ${status.activeAccount?.alias ?? 'no account'}`,
+          ).replace(/\n/g, ' ')}
         </Text>
         <Text color={color('dim')} wrap="truncate-end">
           {welcomePath(status.workspace, textWidth)}

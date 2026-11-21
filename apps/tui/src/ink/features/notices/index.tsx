@@ -31,7 +31,7 @@ export function subagentNotice(notice: SubagentNotice): string {
 export function hookNotice(name: string, text: string): string {
   return `${name} says: ${text}`;
 }
-export function useNotices(limit = 16) {
+export function useNotices(limit = 16, {subscribeSubagents = true}: {subscribeSubagents?: boolean} = {}) {
   const [notices, setNotices] = useState<TranscriptNotice[]>([]);
   const addNotice = useCallback(
     (notice: string | Omit<TranscriptNotice, 'id'>) =>
@@ -48,7 +48,10 @@ export function useNotices(limit = 16) {
     [limit],
   );
   useEvents({
-    subagent: notice => addNotice({text: subagentNotice(notice), kind: 'event', ok: notice.status === 'completed'}),
+    subagent: notice => {
+      if (subscribeSubagents)
+        addNotice({text: subagentNotice(notice), kind: 'event', ok: notice.status === 'completed'});
+    },
   });
   return {notices, addNotice, clearNotices: useCallback(() => setNotices([]), [])};
 }

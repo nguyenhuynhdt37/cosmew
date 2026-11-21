@@ -357,7 +357,11 @@ describe('escape hatch (dangerouslyDisableSandbox)', () => {
       const result = await h.exec({cmd: `touch ${outside}`});
       expect(result.status).toBe('ok');
       expect(existsSync(outside)).toBe(true);
-      expect(h.prompts[0]).toMatchObject({reason: 'unsandboxed-session', sandbox: 'NO SANDBOX'});
+      expect(h.prompts[0]).toMatchObject({
+        reason: 'unsandboxed-session',
+        commandSandbox: 'disabled',
+        sandbox: 'sandbox off',
+      });
     },
   );
 });

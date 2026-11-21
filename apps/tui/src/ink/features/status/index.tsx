@@ -3,10 +3,11 @@ import {Box, Text} from 'ink';
 import {TextLine} from '../../ui';
 import {useFutrynClient, useStatus, useClientEvents} from '../../hooks';
 import {useReducer} from 'react';
-import type {PermissionMode} from '@cosmew/contracts';
+import {CONTEXT_COMPACTION_FRACTION, type PermissionMode} from '@cosmew/contracts';
 import {useUiTheme} from '../../ui/ui-theme';
 import {useTheme} from '../../theme';
 import type {FutrynClient} from '@cosmew/sdk';
+import {textWidth} from '../../../input/text';
 /** Ten cells, same marks as the context report, so a percent is a bar instead of a buried number. */
 export function contextCells(percent: number | null, cells = 10): string {
   const room = Math.max(1, cells);
@@ -92,6 +93,7 @@ export function shortcutWidths(contentWidth: number): [number, number, number] {
 export function contextLeft(context: ReturnType<FutrynClient['context']>): number | null {
   const measured = context.lastMeasured;
   if (
+    context.autoCompact === false ||
     !context.measuredCurrentHistory ||
     measured?.source === 'estimate' ||
     measured?.usedTokens == null ||
@@ -102,7 +104,7 @@ export function contextLeft(context: ReturnType<FutrynClient['context']>): numbe
     return null;
   const usable = measured.limitTokens - context.outputReserve;
   if (usable <= 0) return null;
-  const threshold = usable * 0.9;
+  const threshold = usable * CONTEXT_COMPACTION_FRACTION;
   const left = Math.max(0, Math.min(100, Math.floor(((threshold - measured.usedTokens) / threshold) * 100)));
   return left < 20 ? left : null;
 }
@@ -114,6 +116,7 @@ export function ComposerFooter({
   shells = 0,
   message,
   remaining,
+  context,
   transcriptHint,
   shortcuts,
   width,
@@ -126,6 +129,7 @@ export function ComposerFooter({
   shells?: number;
   message?: string;
   remaining?: number | null;
+  context?: {usedTokens: number; modelLimitTokens: number | null};
   transcriptHint?: string;
   shortcuts?: readonly (readonly string[])[];
   width: number;
@@ -156,7 +160,7 @@ export function ComposerFooter({
         <TextLine width={contentWidth}>{message}</TextLine>
       </Box>
     );
-  if (remaining != null)
+  if (remaining != null && !context)
     return (
       <Box width={width} paddingLeft={2} justifyContent="flex-end">
         <Text color={color('dim')}>{`Context left until auto-compact: ${remaining}%`}</Text>
@@ -181,12 +185,36 @@ export function ComposerFooter({
           : color('dim');
   const suffix = footerSuffix({busy, agents, shells});
   if (transcriptHint) suffix.push(transcriptHint);
+  const details = hint + suffix.map(part => ` · ${part}`).join('');
+  const modelLimit = context?.modelLimitTokens;
+  const percent = context && modelLimit ? (context.usedTokens / modelLimit) * 100 : null;
+  const ratio = context ? `~${formatTokens(context.usedTokens)}/${formatTokens(modelLimit)}` : '';
+  const fullMeter =
+    percent == null ? `Context ${ratio}` : `Context [${contextCells(percent)}] ${ratio} · ${Math.round(percent)}%`;
+  const available = contentWidth - 3 - textWidth(label + details);
+  const meter = [fullMeter, `Ctx ${ratio}`, ratio].find(text => textWidth(text) <= available) ?? ratio;
+  const stacked = !!context && textWidth(label + ratio) > contentWidth - 3;
+  const meterColor =
+    percent != null && percent >= 100
+      ? theme.color('error')
+      : percent != null && percent >= CONTEXT_COMPACTION_FRACTION * 100
+        ? theme.color('warning')
+        : color('dim');
   return (
-    <Box paddingLeft={2} width={width}>
-      <Text wrap="truncate-end">
-        <Text color={labelColor}>{label}</Text>
-        <Text color={color('dim')}>{hint + suffix.map(part => ` · ${part}`).join('')}</Text>
-      </Text>
+    <Box paddingLeft={2} paddingRight={context ? 2 : 0} width={width} flexDirection={stacked ? 'column' : 'row'}>
+      <Box flexGrow={1} minWidth={0}>
+        <Text wrap="truncate-end">
+          <Text color={labelColor}>{label}</Text>
+          <Text color={color('dim')}>{details}</Text>
+        </Text>
+      </Box>
+      {context ? (
+        <Box paddingLeft={stacked ? 0 : 1} flexShrink={0} alignSelf={stacked ? 'flex-end' : undefined}>
+          <Text color={meterColor} wrap="truncate-end">
+            {meter}
+          </Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }
@@ -195,4 +223,17 @@ export function ComposerFooter({
 export function SandboxBanner({enabled, count}: {enabled: boolean; count: number}) {
   if (!enabled || count <= 0) return null;
   return <TextLine>{`⧈ Sandbox blocked ${count} ${count === 1 ? 'operation' : 'operations'}`}</TextLine>;
+}
+
+/** Session analysis mode is independent of permission mode and the OS sandbox switch. */
+export function SessionModeBanner({mode, width}: {mode: 'chat' | 'plan' | 'review'; width: number}) {
+  const ui = useUiTheme();
+  if (mode === 'chat') return null;
+  return (
+    <TextLine
+      width={width}
+      color={ui.color('planMode')}
+      wrap="truncate-end"
+    >{`${mode === 'review' ? 'Review' : 'Plan'} · read-only · /chat to implement`}</TextLine>
+  );
 }
