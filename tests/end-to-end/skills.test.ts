@@ -170,7 +170,7 @@ test('TUI slash skill reaches a model turn and /skills lists source and errors w
   expect(h.server.requests.length).toBe(before);
 });
 
-test('headless fyn exec resolves a dollar mention through the same dispatcher', async () => {
+test('headless cosmew exec resolves a dollar mention through the same dispatcher', async () => {
   const h = await setup();
   const lines: string[] = [];
   const stdout = spyOn(process.stdout, 'write').mockImplementation(value => {

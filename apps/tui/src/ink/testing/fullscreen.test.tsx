@@ -425,7 +425,7 @@ test('interactive runtime enters the alternate screen, leaves it before the resu
   expect(output).toContain('\x1b[?1049h');
   expect(output.lastIndexOf('\x1b[?1049l')).toBeGreaterThan(output.indexOf('\x1b[?1049h'));
   expect(output.lastIndexOf('\x1b[?1049l')).toBeLessThan(
-    output.indexOf('Resume this session with: fyn --resume session-1'),
+    output.indexOf('Resume this session with: cosmew --resume session-1'),
   );
 });
 

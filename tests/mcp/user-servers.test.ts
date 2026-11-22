@@ -186,7 +186,7 @@ async function cli(home: string, cwd: string, args: string[]) {
   return {stdout, stderr, code};
 }
 
-test('fyn mcp connects the user file, ignores project files, and status does not spawn', async () => {
+test('cosmew mcp connects the user file, ignores project files, and status does not spawn', async () => {
   const home = mkdtempSync(join(tmpdir(), 'futryn-mcp-home-'));
   const project = mkdtempSync(join(tmpdir(), 'futryn-mcp-project-'));
   cleanup.push(() => {

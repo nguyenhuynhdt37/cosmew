@@ -57,7 +57,7 @@ announced as pending. Observer exceptions grant nothing. Existing `onReactiveEve
 remain compatible and need no migration. `status().approvalPolicy` reports the current policy.
 UAT now subscribes to these events instead of polling the pending lists; pending-list APIs remain.
 
-`fyn exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
+`cosmew exec --json` emits one serialized `HeadlessEvent` per line: existing `ModelEvent` fields at
 the top level, typed interaction events, then exactly one terminal `turn.completed` or
 `turn.failed` (`error: {code, message}`). Each line includes `contractVersion: "1.28"`, `seq`
 starting at 1. Provider `completed` can occur within a multi-request turn; only `turn.completed`
@@ -76,7 +76,7 @@ use ToolDispatcher. No new execution authority, persistence schema, dependency o
 
 [ADR 0054](../adr/0054-model-compaction.md). Additive for older consumers:
 
-- Model event `context.compacted` `{trigger: 'auto' | 'manual', strategy: 'model' | 'excerpt', tokensBefore, tokensAfter, fallback?}`: older model-visible history was replaced by a handoff summary (`model`) or, when the model call failed, by the extractive checkpoint (`fallback: true`). Token counts are conservative estimates. It is emitted before the request that uses the compacted context and is not journaled; the durable record is the `ContextSnapshot` (`strategy: 'model'` carries `retainedUserRequests` = recent user messages up to 20,000 tokens, and `summary` = handoff text). Recovery after restart renders it; source history is never changed. `fyn exec --json` forwards it like other model events.
+- Model event `context.compacted` `{trigger: 'auto' | 'manual', strategy: 'model' | 'excerpt', tokensBefore, tokensAfter, fallback?}`: older model-visible history was replaced by a handoff summary (`model`) or, when the model call failed, by the extractive checkpoint (`fallback: true`). Token counts are conservative estimates. It is emitted before the request that uses the compacted context and is not journaled; the durable record is the `ContextSnapshot` (`strategy: 'model'` carries `retainedUserRequests` = recent user messages up to 20,000 tokens, and `summary` = handoff text). Recovery after restart renders it; source history is never changed. `cosmew exec --json` forwards it like other model events.
 - Auto compaction starts at 85% of the usable window, before tool withdrawal (ADR 0063 supersedes the earlier 90% trigger); `/compact [instructions]` / `CosmewClient.compact(instructions?, {signal})` → `CompactionOutcome {compacted, strategy?, tokensBefore, tokensAfter, usage, fallback?, reason?}` runs it while idle and throws `POLICY` during a turn. Usage of the summary call is counted in the turn (auto) or added to the latest agent turn receipt (`ConversationStore.addUsage`, manual).
 
 The optional SDK `UserPreferencesStore` and `context().autoCompact` report are
@@ -192,7 +192,7 @@ Metadata model 8.000 ký tự, ẩn disabled entries, cảnh báo khi rút/bỏ;
 của lượt gọi; không trở thành system authority. `$name` bỏ qua common environment variables
 (case-insensitive) và fenced/inline code; `/name` giữ nguyên.
 `SkillsPort` được inject vào core (`instructions`, `loadPrompt`), không thêm package dependency hay
-persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũng hoạt động ở `fyn exec`.
+persistence schema. Canonical `/skills` và `/name args` trong TUI; `$name` cũng hoạt động ở `cosmew exec`.
 `allowed-tools` không có semantics cấp quyền. Consumer JSONL dùng version 1.28; không thêm agent event.
 
 ## Memories (contract 1.29)
@@ -214,7 +214,7 @@ SDK `client.memories()` trả metadata clone; `client.readMemory(name)`/`deleteM
 
 `~/.cosmew/projects/<sha256(canonical workspace)>/memory/MEMORY.md` được nạp tối đa 200 dòng/25.000 byte
 vào user/project-context có nhãn untrusted và nhắc kiểm chứng, không vào `ModelRequest.instructions`.
-Không có ký ức thì không thêm context; `fyn exec` dùng cùng cơ chế S3. `COSMEW_MEMORY=0` hoặc
+Không có ký ức thì không thêm context; `cosmew exec` dùng cùng cơ chế S3. `COSMEW_MEMORY=0` hoặc
 `[memories] enabled = false` ở host config user tắt loading/tool; không đọc config repo.
 Port context optional của core phải được bỏ khi S5 tạo subagent. Không thêm event hay migration SQLite;
 headless envelopes/consumers dùng 1.29.
@@ -250,7 +250,7 @@ Tool `agent` (`agent.spawn`, parallel) và ba sự kiện: `subagent.started {ca
 `subagent.progress {…, currentTool?, toolCount, usage, steps?}` (gộp theo `callId`, có thể bị bỏ khi hàng đợi đầy) và
 `subagent.finished {…, status: completed|failed|cancelled, toolCount, usage, durationMs, summary?, errorCode?, steps?}`.
 Thứ tự: started → progress* → finished, trước tool result của cha. Chỉ Cosmew phát; provider stream phát `subagent.*` là lỗi `PROTOCOL`.
-`steps` đã redact và bounded. `fyn exec --json` phát cùng envelope (`contractVersion` 1.32). SDK: `client.subagents(sessionId?)`,
+`steps` đã redact và bounded. `cosmew exec --json` phát cùng envelope (`contractVersion` 1.32). SDK: `client.subagents(sessionId?)`,
 `client.inspectSubagent(agentId)`, `ReactiveAgentEventKind` thêm ba kind. Prompt quyền có `subagent {agentId, agentType, description}`.
 Persistence: bảng `subagent_sessions` (SQLite vẫn 8). Con ẩn khỏi `listSessions()`.
 
@@ -261,7 +261,7 @@ Tool mới (chỉ offer khi phiên đã có con; `agent.spawn`, parallel): `agen
 
 ### Subagents S5c (contract 1.34, ADR 0058)
 
-`agent` nhận `isolation: "worktree"`: con chạy trong Git worktree riêng (xem ADR). Kết quả tool/thông báo nền thêm dòng `Worktree kept with changes: <path> (branch <branch>)` hoặc `The isolated worktree had no changes and was removed.`. Mã lỗi mới: `AGENT_BUDGET_EXHAUSTED` (cap/ngân sách lượt cha đã hết, từ `agent`/`agent_message`). `[agents] max_child_tokens|max_child_duration_ms|max_child_cost_usd` trong `~/.cosmew/config.toml`. `SubagentSessionRecord.isolation?: 'worktree'` (cột SQLite `isolation`, SQLite vẫn 8). `fyn exec` chờ con nền và chạy các lượt thông báo.
+`agent` nhận `isolation: "worktree"`: con chạy trong Git worktree riêng (xem ADR). Kết quả tool/thông báo nền thêm dòng `Worktree kept with changes: <path> (branch <branch>)` hoặc `The isolated worktree had no changes and was removed.`. Mã lỗi mới: `AGENT_BUDGET_EXHAUSTED` (cap/ngân sách lượt cha đã hết, từ `agent`/`agent_message`). `[agents] max_child_tokens|max_child_duration_ms|max_child_cost_usd` trong `~/.cosmew/config.toml`. `SubagentSessionRecord.isolation?: 'worktree'` (cột SQLite `isolation`, SQLite vẫn 8). `cosmew exec` chờ con nền và chạy các lượt thông báo.
 
 ## P1 SDK (contract 1.38)
 
@@ -337,7 +337,7 @@ with reason `no-account | auth | network | model | billing`. The `billing` resul
 a safe `providerHint`. The SDK client caches verification by account, credential generation
 and model. This call does not add a turn or an event.
 
-`PROVIDER_BILLING` is an additive error code. If verification fails for billing, `fyn exec`
+`PROVIDER_BILLING` is an additive error code. If verification fails for billing, `cosmew exec`
 exits with status 3 and, in JSON mode, emits the existing `turn.failed` event with
 `error.code: "PROVIDER_BILLING"` and the safe diagnostic in `error.message`.
 The error and event envelopes retain their existing fields.

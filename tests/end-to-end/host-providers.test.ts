@@ -243,7 +243,7 @@ refresh_interval_ms = 600000
   expect(slow.server.requests).toHaveLength(0);
 });
 
-test('fyn providers add writes the same config.toml a user edits by hand, and refuses credentials', async () => {
+test('cosmew providers add writes the same config.toml a user edits by hand, and refuses credentials', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'futryn-cli-host-'));
   cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
   const cli = async (...args: string[]) => {

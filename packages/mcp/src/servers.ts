@@ -4,7 +4,7 @@ import {FutrynError} from '@cosmew/contracts';
 import {McpClient, MCP_TIMEOUT_MS, clip, MAX_MCP_OUTPUT_BYTES, type McpTextResult} from './client';
 import {qualifiedMcpName, type McpServerSpec} from './config';
 
-/** What `fyn mcp` and `/mcp` may show. No command, arguments, environment, URL or headers. */
+/** What `cosmew mcp` and `/mcp` may show. No command, arguments, environment, URL or headers. */
 export interface McpServerStatus {
   name: string;
   transport: 'stdio' | 'http';

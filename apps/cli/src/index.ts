@@ -70,7 +70,7 @@ Canonical TUI commands follow Claude Code: /login, /logout, /model, /status,
   /usage (/cost /stats), /context [all], /effort <level|auto|status>,
   /clear [name], /compact [focus], /code-review (/review), /help, /doctor (/checkup), /exit.
   Commands unavailable in this build stay parseable and report an explicit diagnostic.
-Start Cosmew in any project: cosmew (or fyn, futryn, hannes). From source: bun run cosmew. Existing administration commands remain supported.
+Start Cosmew in any project: cosmew. From source: bun run cosmew. Existing administration commands remain supported.
 Sign in via /login: one row per vendor, then subscription or API key. Account names
 are automatic. ChatGPT signs in through the API (OAuth); Cosmew runs every request itself,
 no external agent runtime is started. Claude subscription

@@ -78,7 +78,7 @@ test.skipIf(process.platform === 'win32')(
       expect(child.exitCode).toBeNull();
       await send('\x03');
       expect(await child.exited).toBe(0);
-      expect(plain()).toContain('Resume this session with: fyn --resume synthetic-resume');
+      expect(plain()).toContain('Resume this session with: cosmew --resume synthetic-resume');
       // Fullscreen repaints the viewport, so history is not written once; the alternate screen frames the run.
       expect(output).toContain('\x1b[?1049h');
       expect(output.lastIndexOf('\x1b[?1049l')).toBeGreaterThan(output.indexOf('\x1b[?1049h'));

@@ -753,7 +753,7 @@ test('child usage is accumulated into parent turn usage, child errors become too
   expect(failSub.status).toBe('failed');
 });
 
-test('subagent events emit in order (started -> progress -> finished), render in TUI (collapsed & expanded), recover after restart, and stream in fyn exec --json', async () => {
+test('subagent events emit in order (started -> progress -> finished), render in TUI (collapsed & expanded), recover after restart, and stream in cosmew exec --json', async () => {
   const h = await setup({
     files: {'src/index.ts': 'export const app = "futryn";\n'},
     script: view => {
@@ -824,7 +824,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(resumedFrame).toContain('Task(check entrypoint)');
   expect(resumedFrame).toContain('read src/index.ts [ok]');
 
-  // Headless `fyn exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.38.
+  // Headless `cosmew exec --json` emits subagent.started, subagent.progress, subagent.finished with contractVersion 1.38.
   const lines: string[] = [];
   const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
     lines.push(String(chunk));
@@ -971,7 +971,7 @@ test('S5c: a child turn inherits the parent turn output cap', async () => {
   expect(caps.child!).toBeLessThanOrEqual(4000);
 });
 
-test('S5c: fyn exec waits for a background child and gives its result to the parent as the next turn', async () => {
+test('S5c: cosmew exec waits for a background child and gives its result to the parent as the next turn', async () => {
   const h = await setup({
     files: {'a.txt': 'x\n'},
     script: view => {

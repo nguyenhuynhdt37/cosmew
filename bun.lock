@@ -39,9 +39,6 @@
       "version": "0.1.0",
       "bin": {
         "cosmew": "./src/index.ts",
-        "fyn": "./src/index.ts",
-        "futryn": "./src/index.ts",
-        "hannes": "./src/index.ts",
       },
       "dependencies": {
         "@cosmew/agents": "workspace:*",

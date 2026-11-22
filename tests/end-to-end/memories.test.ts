@@ -216,7 +216,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('fyn exec uses the same memory context and contract 1.48', async () => {
+test('cosmew exec uses the same memory context and contract 1.48', async () => {
   const h = await setup();
   h.put();
   let stdout = '';

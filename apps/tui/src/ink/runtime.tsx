@@ -112,7 +112,7 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
     }
     const sessionId = options.client.activeSession()?.id;
     if (sessionId) {
-      const line = `Resume this session with: fyn --resume ${sessionId}`;
+      const line = `Resume this session with: cosmew --resume ${sessionId}`;
       stdout.write((engine.colorCapability === 'none' ? line : `\x1b[2m${line}\x1b[22m`) + '\n');
     }
   }

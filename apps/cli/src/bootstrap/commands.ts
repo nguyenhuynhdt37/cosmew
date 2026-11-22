@@ -4,7 +4,7 @@ import {splitRuleList} from '@cosmew/security';
 import {UnsupportedRuntime, commandBackendFromEnv, platformCommandRuntime, type CommandRuntime} from '@cosmew/tools';
 
 /**
- * Claude Code launch flags shared by the interactive TUI/CLI entry points and `fyn exec`
+ * Claude Code launch flags shared by the interactive TUI/CLI entry points and `cosmew exec`
  * (`claude --permission-mode`, `--dangerously-skip-permissions`, `--allowedTools`, `--disallowedTools`;
  * ADR 0061). They apply to the launched session only and never touch a settings file.
  */

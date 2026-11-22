@@ -253,7 +253,7 @@ export function startup(
   );
   for (const value of Object.values(webKeys)) if (value) redactor.register(value);
   const webSearch = new WebSearchClient({keys: webKeys, redact: text => redactor.text(text), fetch: services.fetch});
-  // User mcp.json only. Connect is explicit (fyn mcp, TUI, exec, chat), never status or doctor.
+  // User mcp.json only. Connect is explicit (cosmew mcp, TUI, exec, chat), never status or doctor.
   const mcpHub = openUserMcp(
     directory,
     text => redactor.text(text),

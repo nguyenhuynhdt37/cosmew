@@ -89,7 +89,7 @@ export type InteractionEvent =
   | {type: 'permission.requested'; request: import('./permissions').PermissionPromptRequest}
   | {type: 'question.asked'; request: import('./tools').PendingQuestion};
 
-/** One JSON object per line from `fyn exec --json`; seq orders the entire run. */
+/** One JSON object per line from `cosmew exec --json`; seq orders the entire run. */
 export type HeadlessEvent = {contractVersion: typeof import('./models').CONTRACT_VERSION; seq: number} & (
   | import('./models').ModelEvent
   | InteractionEvent

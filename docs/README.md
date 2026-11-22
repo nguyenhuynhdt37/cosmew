@@ -26,7 +26,7 @@ Resumable first-run theme, optional sign-in and security notes: [ADR 0086](adr/0
 
 Latest execution milestone: [ADR 0062](adr/0062-remove-docker-command-backend.md) — Docker backend removed; native containment is optional under ADR 0081. The Docker backend of [ADR 0032](adr/0032-contained-command-sessions.md), [ADR 0034](adr/0034-unified-exec-terminal-parity.md) and [ADR 0035](adr/0035-native-sandbox-default.md) is gone. Historical gate descriptions below do not enable it.
 
-Project/repository rename: [ADR 0076](adr/0076-cosmew-project-rename.md). Cosmew is the product; `fyn` is the short CLI command. Historical documents retain legacy product names where recording earlier decisions.
+Project/repository rename: [ADR 0076](adr/0076-cosmew-project-rename.md). Cosmew is the product and `cosmew` is the sole CLI command ([ADR 0103](adr/0103-cosmew-only-cli-and-repository.md)). Historical documents retain legacy product names where recording earlier decisions.
 
 The [Cosmew pixel logo](assets/cosmew-pixel-logo.png) depicts an orange tabby face with coral, violet, and cyan accents. The terminal header, welcome screen, and Spark wallpaper share the compact block-pixel silhouette. The original mascot drew inspiration from the `mv02EPDXpKtDwbJ8` source image, accessed 2026-11-22. [Source image](https://assets.zyrosite.com/cdn-cgi/image/format=auto,w=1024,h=1024,fit=crop/YKb6x106rRUvXpar/uning-astronot-jalan-1.png-mv02EPDXpKtDwbJ8.png)
 

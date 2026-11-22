@@ -146,7 +146,7 @@ A host with a redactor may surface an optional hint from a recognized JSON error
 The transport inspects at most 8 KiB of the error response, strips URL query strings, fragments
 and credentials, and limits the sanitized hint to 200 characters. Request bodies and headers
 are excluded from diagnostics. Error serialization includes the hint in the existing
-`message` field when available. The host uses the same diagnostic for `fyn model doctor --generate`.
+`message` field when available. The host uses the same diagnostic for `cosmew model doctor --generate`.
 
 ## Anthropic and Gemini reasoning effort (additive contract 1.43)
 

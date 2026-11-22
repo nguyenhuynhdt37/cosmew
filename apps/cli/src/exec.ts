@@ -31,7 +31,7 @@ export interface ExecOptions {
   outputLastMessage?: string;
 }
 
-const HELP = `fyn exec <prompt|-> [--cd|-C <dir>] [--json]
+const HELP = `cosmew exec <prompt|-> [--cd|-C <dir>] [--json]
   [--permission-mode default|acceptEdits|plan|bypassPermissions] [--dangerously-skip-permissions]
   [--allowedTools <rules>] [--disallowedTools <rules>]
   [--output-last-message|-o <file>] [--account <id-or-alias>] [--model <id>]

@@ -1,6 +1,6 @@
 # ADR 0076 — Cosmew project rename and astronaut-cat brand
 
-Status: Accepted  
+Status: Accepted; executable aliases superseded by [ADR 0103](0103-cosmew-only-cli-and-repository.md)
 Date: 2026-11-21  
 Decision owner: Futryn project maintainers
 

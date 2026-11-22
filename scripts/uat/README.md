@@ -5,7 +5,7 @@ Chạy agent thật (cùng đường code với TUI: `startup` → `createFutryn
 ## Chạy một lượt bằng CLI (S1, contract 1.24)
 
 ```sh
-bun run fyn exec "Đọc README và tóm tắt" --cd /path/to/project --json -o answer.txt
+bun run cosmew exec "Đọc README và tóm tắt" --cd /path/to/project --json -o answer.txt
 cat prompt.txt | bun run cosmew exec - -C /path/to/project --approval never --sandbox read-only
 ```
 

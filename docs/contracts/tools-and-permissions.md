@@ -128,7 +128,7 @@ Trusted `permissions.additionalDirectories` (the user settings file, or a reposi
 
 ## User MCP (ADR 0068, no contract bump)
 
-`fyn mcp` reads only the user file `<state>/mcp.json` (`mcpServers` stdio or HTTP). Project `.cosmew/mcp.json` and `.mcp.json` are not started. Each remote tool is `mcp__server__tool` and goes through ToolDispatcher (`mcp.call`): `default` and `acceptEdits` ask, `plan` and a read-only agent deny without a prompt, an exact tool name may be saved as Always. Results are untrusted, bounded and redacted. Stdio servers from that user file run unsandboxed. OAuth, project launch, `tool_search` and `mcp_resource` are not in this slice. See [ADR 0068](../adr/0068-user-mcp-connect.md).
+`cosmew mcp` reads only the user file `<state>/mcp.json` (`mcpServers` stdio or HTTP). Project `.cosmew/mcp.json` and `.mcp.json` are not started. Each remote tool is `mcp__server__tool` and goes through ToolDispatcher (`mcp.call`): `default` and `acceptEdits` ask, `plan` and a read-only agent deny without a prompt, an exact tool name may be saved as Always. Results are untrusted, bounded and redacted. Stdio servers from that user file run unsandboxed. OAuth, project launch, `tool_search` and `mcp_resource` are not in this slice. See [ADR 0068](../adr/0068-user-mcp-connect.md).
 
 ## Captured tool evidence (contract 1.37)
 
