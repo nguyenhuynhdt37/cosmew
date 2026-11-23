@@ -54,7 +54,7 @@ test('P1 hooks truthfully report unsupported and MCP exposes management capabili
   const {client} = await direct('supported');
   expect(client.hooks()).toEqual({supported: false, hooks: []});
   const report = client.mcpServers();
-  expect(report.supported).toEqual({stdioManagement: false, oauthManagement: false});
+  expect(report.supported).toEqual({stdioManagement: true, oauthManagement: true});
   expect(report.servers.every(server => typeof server.toolCount === 'number')).toBe(true);
   expect(client.sendQueuedNow()).toBe('idle');
   expect(client.retractQueuedInput()).toBe('');

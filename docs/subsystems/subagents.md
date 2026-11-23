@@ -22,6 +22,13 @@ Input task spec, parentRunId, profile, context snapshot, allowed capabilities, t
 
 Validate task/dependencies → derive grants bằng giao với parent → reserve budget → enqueue → lease worker → launch isolated context → collect receipts/results → review merge → settle reservation. Task states queued/running/waiting_approval/completed/failed/cancelled/recovery_required. Child output không tự merge files.
 
+Current worktree handoff: [ADR 0097](../adr/0097-worktree-review-handoff.md).
+Completion distinguishes committed and uncommitted edits and supplies bounded,
+guarded `apply_patch` JSON for parent review and ordinary permission approval.
+Conflicts preserve parent content; binary/mode/symlink/unsupported text changes
+stay available for manual integration. Changed worktrees are never automatically
+removed after a handoff; verify all changes before explicitly cleaning up.
+
 ## 6. Dependencies và interface boundaries
 
 Chỉ contracts; RunLauncher, WorkspacePort, StorePort inject. Core gọi DelegationPort; không agents↔core imports. Context transfer là explicit immutable snapshot + provenance; branch/worktree requests qua workspace tool path.

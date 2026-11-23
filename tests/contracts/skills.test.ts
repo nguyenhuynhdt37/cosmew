@@ -60,7 +60,7 @@ test('missing, malformed, wrong typed, unsafe, overlong and oversize skills fail
   ])
     expect(() => parseSkillDocument(text)).toThrow();
   const f = fixture();
-  f.put(f.project, '.futryn/skills/bad/SKILL.md', 'bad');
+  f.put(f.project, '.cosmew/skills/bad/SKILL.md', 'bad');
   f.put(f.home, '.agents/skills/good/SKILL.md');
   const report = f.catalog().report();
   expect(report.skills.some(s => s.name === 'demo')).toBe(true);
@@ -69,7 +69,7 @@ test('missing, malformed, wrong typed, unsafe, overlong and oversize skills fail
 
 test('project precedence, nearest repo scopes, compatibility roots, duplicates and system creator', () => {
   const f = fixture();
-  f.put(f.home, '.futryn/skills/demo/SKILL.md');
+  f.put(f.home, '.cosmew/skills/demo/SKILL.md');
   f.put(f.project, '.agents/skills/demo/SKILL.md');
   const child = join(f.project, 'sub');
   mkdirSync(child);
@@ -80,26 +80,28 @@ test('project precedence, nearest repo scopes, compatibility roots, duplicates a
   expect(report.skills.find(s => s.name === 'skill-creator')?.source).toBe('system');
 });
 
-test('canonical Cosmew skill roots take precedence over legacy project roots', () => {
+test('legacy futryn and hannes skill roots are not discovered', () => {
   const f = fixture();
   f.put(f.project, '.futryn/skills/demo/SKILL.md', document('demo', '', 'legacy'));
-  f.put(f.project, '.cosmew/skills/demo/SKILL.md', document('demo', '', 'cosmew'));
+  f.put(f.project, '.hannes/skills/old/SKILL.md', document('old'));
+  f.put(f.project, '.cosmew/skills/kept/SKILL.md', document('kept'));
   const report = f.catalog().report();
-  expect(report.skills.find(s => s.name === 'demo')?.shortPath).toBe('.cosmew/skills/demo/SKILL.md');
-  expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(1);
+  expect(report.skills.some(s => s.name === 'demo' || s.name === 'old')).toBe(false);
+  expect(report.skills.find(s => s.name === 'kept')?.shortPath).toBe('.cosmew/skills/kept/SKILL.md');
 });
 
 test('catalog budget shortens descriptions before dropping entries, hides disabled skills', () => {
   const f = fixture();
-  f.put(f.project, '.futryn/skills/hidden/SKILL.md', document('hidden', 'disable-model-invocation: true\n'));
+  f.put(f.project, '.cosmew/skills/hidden/SKILL.md', document('hidden', 'disable-model-invocation: true\n'));
   const report = f.catalog().report();
   expect(renderSkillCatalog(report.skills).instructions).not.toContain('hidden');
   const many = Array.from({length: 70}, (_, n) => ({
     ...report.skills[0]!,
     name: `skill-${n}`,
     disableModelInvocation: false,
+    visibility: 'on' as const,
     description: 'd'.repeat(1024),
-    shortPath: `.futryn/skills/${n}/SKILL.md`,
+    shortPath: `.cosmew/skills/${n}/SKILL.md`,
   }));
   const short = renderSkillCatalog(many);
   expect(short.instructions.length).toBeLessThanOrEqual(8000);
@@ -116,7 +118,7 @@ test('model exposure requires an invocable project or user skill; explicit loads
     if (source !== 'none')
       f.put(
         source === 'user' ? f.home : f.project,
-        '.futryn/skills/demo/SKILL.md',
+        '.cosmew/skills/demo/SKILL.md',
         document('demo', source === 'disabled' ? 'disable-model-invocation: true\n' : ''),
       );
     const catalog = f.catalog();
@@ -132,14 +134,53 @@ test('model exposure requires an invocable project or user skill; explicit loads
     expect(!!catalog.instructions()).toBe(exposed);
     expect(catalog.report().skills.some(s => s.source === 'system')).toBe(true);
     const name = source === 'disabled' ? 'demo' : 'skill-creator';
-    expect((await dispatcher.invoke({id: source, name: 'skill', input: {name}})).status).toBe('ok');
+    expect((await dispatcher.invokeUserSkill(name)).status).toBe('ok');
+    if (source === 'disabled')
+      expect(await dispatcher.invoke({id: source, name: 'skill', input: {name}})).toMatchObject({
+        status: 'denied',
+        code: 'SKILL_HIDDEN',
+      });
   }
   expect(renderSkillCatalog([])).toEqual({instructions: '', warnings: []});
 });
 
+test('skill overrides affect catalog, chained commands and both invocation paths', async () => {
+  const f = fixture();
+  for (const name of ['brief', 'manual', 'disabled'])
+    f.put(f.project, `.agents/skills/${name}/SKILL.md`, document(name));
+  const catalog = new SkillCatalog({
+    workspace: new WorkspaceRoot(f.project),
+    home: f.home,
+    overrides: () => ({brief: 'name-only', manual: 'user-invocable-only', disabled: 'off'}),
+  });
+  const skills = catalog.report().skills;
+  const instructions = catalog.instructions();
+  expect(instructions).toContain('{"name":"brief"}');
+  expect(instructions).not.toContain('"name":"manual"');
+  expect(instructions).not.toContain('"name":"disabled"');
+  expect(skillInvocations('/brief /manual inspect src', skills)).toEqual([
+    {name: 'brief', args: 'inspect src'},
+    {name: 'manual', args: 'inspect src'},
+  ]);
+  expect(skillInvocations('/disabled $disabled', skills)).toEqual([]);
+  const dispatcher = new ToolDispatcher({
+    workspace: new WorkspaceRoot(f.project),
+    skills: catalog,
+    grants: new SessionGrants(),
+    approve: async () => 'deny',
+    redact: s => s,
+  });
+  expect(await dispatcher.invoke({id: 'model', name: 'skill', input: {name: 'manual'}})).toMatchObject({
+    status: 'denied',
+    code: 'SKILL_HIDDEN',
+  });
+  expect((await dispatcher.invokeUserSkill('manual')).status).toBe('ok');
+  expect(await dispatcher.invokeUserSkill('disabled')).toMatchObject({status: 'denied', code: 'SKILL_HIDDEN'});
+});
+
 test('slash arguments and dollar mentions select once, including hidden skills', () => {
   const f = fixture();
-  f.put(f.project, '.futryn/skills/demo/SKILL.md', document('demo', 'disable-model-invocation: true\n'));
+  f.put(f.project, '.cosmew/skills/demo/SKILL.md', document('demo', 'disable-model-invocation: true\n'));
   const skills = f.catalog().report().skills;
   expect(skillInvocations('Ignore \\$demo', skills)).toEqual([]);
   expect(skillInvocations('/demo src/a.ts', skills)).toEqual([{name: 'demo', args: 'src/a.ts'}]);
@@ -151,7 +192,7 @@ test('slash arguments and dollar mentions select once, including hidden skills',
 
 test('dollar mentions exclude common environment variables and Markdown code', () => {
   const f = fixture();
-  f.put(f.project, '.futryn/skills/demo/SKILL.md', document('demo'));
+  f.put(f.project, '.cosmew/skills/demo/SKILL.md', document('demo'));
   const demo = f
     .catalog()
     .report()
@@ -183,7 +224,7 @@ test('skill dispatcher permits only discovered files, audits/redacts and never g
   const f = fixture();
   const file = f.put(
     f.home,
-    '.futryn/skills/demo/SKILL.md',
+    '.cosmew/skills/demo/SKILL.md',
     document('demo', 'allowed-tools: [Bash]\n', 'secret body'),
   );
   const catalog = f.catalog(),
@@ -213,9 +254,9 @@ test('skill dispatcher permits only discovered files, audits/redacts and never g
 
 test('discovery refuses symlink roots/files and skips vendored and gitignored trees', () => {
   const f = fixture();
-  f.put(f.home, '.futryn/skills/demo/SKILL.md');
-  mkdirSync(join(f.project, '.futryn'));
-  symlinkSync(join(f.home, '.futryn/skills'), join(f.project, '.futryn/skills'));
+  f.put(f.home, '.cosmew/skills/demo/SKILL.md');
+  mkdirSync(join(f.project, '.cosmew'));
+  symlinkSync(join(f.home, '.cosmew/skills'), join(f.project, '.cosmew/skills'));
   f.put(f.project, '.agents/skills/vendor/x/SKILL.md', document('vendored'));
   const report = f.catalog().report();
   expect(report.skills.find(s => s.name === 'demo')?.source).toBe('user');
@@ -230,7 +271,7 @@ test('64 KiB is inclusive and the tool returns the complete file without clippin
     '\\"'.repeat(Math.floor((65536 - Buffer.byteLength(prefix)) / 2)) +
     'x'.repeat((65536 - Buffer.byteLength(prefix)) % 2);
   expect(Buffer.byteLength(content)).toBe(65536);
-  f.put(f.home, '.futryn/skills/demo/SKILL.md', content);
+  f.put(f.home, '.cosmew/skills/demo/SKILL.md', content);
   const d = new ToolDispatcher({
     workspace: new WorkspaceRoot(f.project),
     skills: f.catalog(),
@@ -246,7 +287,7 @@ test('64 KiB is inclusive and the tool returns the complete file without clippin
 
 test('read deny, cancelled approval and a symlink swap during approval never disclose skill body', async () => {
   const f = fixture();
-  const file = f.put(f.home, '.futryn/skills/demo/SKILL.md', document());
+  const file = f.put(f.home, '.cosmew/skills/demo/SKILL.md', document());
   const catalog = f.catalog();
   let prompts = 0;
   let policy: 'allow' | 'ask' | 'deny' = 'deny';
@@ -277,18 +318,18 @@ test('read deny, cancelled approval and a symlink swap during approval never dis
 test('ignored skill roots and ignored nested scope cannot contribute project skills', () => {
   const f = fixture();
   expect(Bun.spawnSync(['git', 'init', '-q', f.project]).exitCode).toBe(0);
-  f.put(f.project, '.gitignore', '.futryn/\nignored/\n');
-  f.put(f.project, '.futryn/skills/demo/SKILL.md');
+  f.put(f.project, '.gitignore', '.cosmew/\nignored/\n');
+  f.put(f.project, '.cosmew/skills/demo/SKILL.md');
   f.put(f.project, 'ignored/.agents/skills/ignored/SKILL.md', document('ignored'));
   const catalog = new SkillCatalog({workspace: new WorkspaceRoot(join(f.project, 'ignored')), home: f.home});
   expect(catalog.report().skills.map(s => s.name)).toEqual(['skill-creator']);
 });
 
-test('default ~/.futryn state keeps all files hidden except the exact discovered user SKILL.md', async () => {
+test('default ~/.cosmew state keeps all files hidden except the exact discovered user SKILL.md', async () => {
   const f = fixture();
-  const file = f.put(f.home, '.futryn/skills/demo/SKILL.md');
-  const state = join(f.home, '.futryn');
-  f.put(f.home, '.futryn/credentials.db', 'STATE_SECRET');
+  const file = f.put(f.home, '.cosmew/skills/demo/SKILL.md');
+  const state = join(f.home, '.cosmew');
+  f.put(f.home, '.cosmew/credentials.db', 'STATE_SECRET');
   const catalog = f.catalog();
   const grants = new SessionGrants();
   const options = {
@@ -309,14 +350,14 @@ test('default ~/.futryn state keeps all files hidden except the exact discovered
     expect((await d.invoke({id: crypto.randomUUID(), name: 'read', input: {path}})).status).not.toBe('ok');
   const inside = new ToolDispatcher({...options, workspace: new WorkspaceRoot(f.home)});
   expect(
-    (await inside.invoke({id: 'state-is-workspace', name: 'read', input: {path: '.futryn/credentials.db'}})).status,
+    (await inside.invoke({id: 'state-is-workspace', name: 'read', input: {path: '.cosmew/credentials.db'}})).status,
   ).toBe('denied');
   expect(grants.list()).toHaveLength(0);
 });
 
 test('a newly required Read approval cannot be bypassed between authorization and skill execution', async () => {
   const f = fixture();
-  f.put(f.home, '.futryn/skills/demo/SKILL.md');
+  f.put(f.home, '.cosmew/skills/demo/SKILL.md');
   let policy: 'allow' | 'ask' = 'allow',
     prompts = 0;
   const d = new ToolDispatcher({

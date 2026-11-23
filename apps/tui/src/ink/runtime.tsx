@@ -84,6 +84,7 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
       exitOnCtrlC: false,
       patchConsole: false,
       maxFps: 30,
+      incrementalRendering: true,
     });
   } catch (error) {
     stopKeybindings();

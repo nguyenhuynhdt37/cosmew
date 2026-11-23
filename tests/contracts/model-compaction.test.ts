@@ -13,6 +13,7 @@ import {
   type ModelPort,
   type ModelRequest,
   type ToolPort,
+  type TurnBudget,
   type Usage,
 } from '@cosmew/contracts';
 import {
@@ -47,7 +48,13 @@ const SUMMARY_USAGE = usage(1000, 100);
 
 type Brain = (request: ModelRequest, summaryCalls: number) => ModelEvent[] | Error | Promise<ModelEvent[] | Error>;
 
-function harness(options: {contextLimit: number; brain?: Brain; toolBytes?: number; modelCompaction?: boolean}) {
+function harness(options: {
+  contextLimit: number;
+  brain?: Brain;
+  toolBytes?: number;
+  modelCompaction?: boolean;
+  budget?: TurnBudget;
+}) {
   const home = mkdtempSync(join(tmpdir(), 'hannes-compaction-'));
   const app = startup(home, {vault: memoryVault()});
   cleanup.push(() => {
@@ -84,6 +91,7 @@ function harness(options: {contextLimit: number; brain?: Brain; toolBytes?: numb
     new Conversation(selection, model, app.conversations, existing, tools, undefined, undefined, {
       contextLimit: () => options.contextLimit,
       modelCompaction: options.modelCompaction,
+      budget: () => options.budget,
       sleep: async () => {},
     });
   const conversation = make();
@@ -101,6 +109,7 @@ function harness(options: {contextLimit: number; brain?: Brain; toolBytes?: numb
   const filler = (tag: string) => `${tag} please continue the investigation`;
   return {
     app,
+    home,
     requests,
     send,
     receipts,
@@ -643,4 +652,209 @@ test('SDK Auto-compact OFF skips automatic checkpoints under pressure and keeps 
   const requests = journal.flatMap(({data}) => (data.type === 'model.requested' ? [data.context?.estimateTokens] : []));
   expect(requests).toEqual(liveEstimates.slice(-2));
   expect(summaries).toBe(2);
+});
+
+test.each(['length', 'empty', 'stream-error', 'cancelled', 'success'] as const)(
+  '/compact retains reported usage exactly once for %s, including after reopening SQLite',
+  async mode => {
+    const {attributeUsage} = await import('@cosmew/contracts');
+    const {openPrivateDatabase, SqliteConversations} = await import('@cosmew/persistence');
+    const source = {providerId: 'fixture-provider', accountId: crypto.randomUUID(), modelId: 'actual-summary-model'};
+    const billed = attributeUsage({...SUMMARY_USAGE, costUSD: 0.123}, source);
+    const controller = new AbortController();
+    const h = harness({contextLimit: 100_000});
+    for (let i = 0; i < 4; i++) await h.send(h.filler(`paid-${i}`));
+    const original = h.model.stream;
+    h.model.stream = async function* (request, signal) {
+      if (!isSummary(request)) return yield* original(request, signal);
+      yield {type: 'textDelta', text: mode === 'empty' ? '  ' : 'INVALID-OR-VALID-SUMMARY'};
+      yield {type: 'usage', usage: billed};
+      yield {type: 'usage', usage: billed};
+      if (mode === 'stream-error') throw new FutrynError('TRANSPORT');
+      if (mode === 'cancelled') {
+        controller.abort();
+        signal?.throwIfAborted();
+      }
+      yield {type: 'completed', finishReason: mode === 'length' ? 'length' : 'stop', usage: billed};
+    };
+    if (mode === 'cancelled') await expect(h.conversation.compact(undefined, controller.signal)).rejects.toBeDefined();
+    else {
+      const outcome = await h.conversation.compact();
+      expect(outcome.usage?.inputTokens).toBe(1000);
+      expect(outcome.strategy).toBe(mode === 'success' ? 'model' : 'excerpt');
+    }
+    const saved = h.app.conversations.get(h.conversation.id)!;
+    const summary = saved.turns!.at(-1)!.usage!;
+    expect(saved.turns!.reduce((n, r) => n + (r.usage?.inputTokens ?? 0), 0)).toBe(1040);
+    expect(summary.breakdown?.find(b => b.providerId === source.providerId)?.costUSD).toBe(0.123);
+    expect(summary.breakdown?.find(b => b.providerId === source.providerId)).toMatchObject({
+      ...source,
+      sessionId: h.conversation.id,
+      inputTokens: 1000,
+      outputTokens: 100,
+      costUSD: 0.123,
+    });
+    const checkpoint = h.app.conversations.recover(h.conversation.id).compaction;
+    if (mode === 'cancelled') expect(checkpoint).toBeUndefined();
+    else if (mode !== 'success') expect(checkpoint?.summary).not.toContain('INVALID-OR-VALID-SUMMARY');
+    // Separate connection exercises the persisted receipt, rather than the in-memory Conversation.
+    const reopened = openPrivateDatabase(h.home);
+    try {
+      const store = new SqliteConversations(reopened);
+      expect(store.get(h.conversation.id)!.turns!.at(-1)!.usage).toEqual(summary);
+    } finally {
+      reopened.close();
+    }
+  },
+);
+
+test.each(['length', 'empty', 'stream-error', 'cancelled'] as const)(
+  'automatic compaction retains billed usage on %s in its durable turn receipt',
+  async mode => {
+    const controller = new AbortController();
+    const h = harness({contextLimit: AUTO_WINDOW});
+    const original = h.model.stream;
+    let summaries = 0;
+    h.model.stream = async function* (request, signal) {
+      if (!isSummary(request)) return yield* original(request, signal);
+      summaries++;
+      yield {type: 'textDelta', text: mode === 'empty' ? '' : 'INVALID-HANDOFF'};
+      yield {type: 'usage', usage: {...SUMMARY_USAGE, costUSD: 0.123}};
+      if (mode === 'stream-error') throw new FutrynError('TRANSPORT');
+      if (mode === 'cancelled') {
+        controller.abort();
+        signal?.throwIfAborted();
+      }
+      yield {
+        type: 'completed',
+        finishReason: mode === 'length' ? 'length' : 'stop',
+        usage: {...SUMMARY_USAGE, costUSD: 0.123},
+      };
+    };
+    for (let i = 0; i < autoCompactionTurnBound && !summaries; i++) {
+      if (mode === 'cancelled') {
+        try {
+          await h.send(h.filler(`auto-paid-${i}`), controller.signal);
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+        }
+      } else await h.send(h.filler(`auto-paid-${i}`));
+    }
+    expect(summaries).toBe(1);
+    const receipt = h.receipts().at(-1)!;
+    expect(receipt.usage.inputTokens).toBe(mode === 'cancelled' ? 1000 : 1010);
+    expect(receipt.usage.breakdown?.find((b: Usage) => b.costUSD === 0.123)).toBeDefined();
+    expect(JSON.stringify(h.app.conversations.recover(h.conversation.id).compaction) ?? '').not.toContain(
+      'INVALID-HANDOFF',
+    );
+  },
+);
+
+test.each(['length', 'stream-error', 'cancelled', 'success'] as const)(
+  'rewind records %s billing before fork publication, once, with source attribution',
+  async mode => {
+    const {summarizeCheckpointSpan} = await import('@cosmew/core');
+    const {attributeUsage} = await import('@cosmew/contracts');
+    const {accountModelUsage} = await import('../../apps/cli/src/bootstrap/usage-model');
+    const h = harness({contextLimit: 100_000});
+    await h.send('original request');
+    const controller = new AbortController();
+    const source = {providerId: 'rewind-fixture', accountId: crypto.randomUUID(), modelId: 'actual-rewind-model'};
+    const billed = attributeUsage({...SUMMARY_USAGE, costUSD: 0.123}, source);
+    const model: ModelPort = {
+      generate: async () => {
+        throw new FutrynError('UNSUPPORTED');
+      },
+      async *stream(_request, signal) {
+        yield {type: 'textDelta', text: 'POTENTIALLY-INVALID-REWIND'};
+        yield {type: 'usage', usage: billed};
+        yield {type: 'usage', usage: billed};
+        if (mode === 'stream-error') throw new FutrynError('TRANSPORT');
+        if (mode === 'cancelled') {
+          controller.abort();
+          signal?.throwIfAborted();
+        }
+        yield {type: 'completed', finishReason: mode === 'length' ? 'length' : 'stop', usage: billed};
+      },
+    };
+    const run = summarizeCheckpointSpan({
+      model: accountModelUsage(model, u =>
+        h.app.conversations.addUsage(h.conversation.id, attributeUsage(u, {sessionId: h.conversation.id})),
+      ),
+      selection: h.selection,
+      messages: h.app.conversations.recover(h.conversation.id).messages,
+      window: 100_000,
+      signal: controller.signal,
+    });
+    if (mode === 'cancelled') await expect(run).rejects.toBeDefined();
+    else {
+      const summary = await run;
+      expect(summary.strategy).toBe(mode === 'success' ? 'model' : 'excerpt');
+      expect(summary.usage?.inputTokens).toBe(1000);
+      if (mode !== 'success') expect(summary.message.content).not.toContain('POTENTIALLY-INVALID-REWIND');
+    }
+    const saved = h.app.conversations.get(h.conversation.id)!;
+    expect(saved.turns!.at(-1)!.usage!.inputTokens).toBe(1010);
+    expect(saved.turns!.at(-1)!.usage!.breakdown?.find(b => b.providerId === source.providerId)).toMatchObject({
+      ...source,
+      sessionId: h.conversation.id,
+      inputTokens: 1000,
+      costUSD: 0.123,
+    });
+    expect(h.app.conversations.recover(h.conversation.id).compaction).toBeUndefined();
+  },
+);
+
+test.each(['tokens', 'cost'] as const)(
+  'failed compaction billing exhausts the %s work budget before more tools',
+  async kind => {
+    const h = harness({contextLimit: AUTO_WINDOW, budget: kind === 'tokens' ? {maxTokens: 1000} : {maxCostUSD: 0.1}});
+    const original = h.model.stream;
+    let summaries = 0;
+    h.model.stream = async function* (request, signal) {
+      if (!isSummary(request)) return yield* original(request, signal);
+      summaries++;
+      yield {type: 'usage', usage: {...SUMMARY_USAGE, costUSD: 0.123}};
+      throw new FutrynError('TRANSPORT');
+    };
+    for (let i = 0; i < autoCompactionTurnBound && !summaries; i++) await h.send(h.filler(`budget-${i}`));
+    expect(summaries).toBe(1);
+    expect(h.requests.at(-1)!.tools).toEqual([]);
+    expect(h.receipts().at(-1)!.stopReason).toBe(kind === 'tokens' ? 'budget_tokens' : 'budget_cost');
+  },
+);
+
+test('compaction cannot publish a fallback when recording reported billing fails', async () => {
+  const h = harness({contextLimit: 100_000});
+  for (let i = 0; i < 4; i++) await h.send(h.filler(`storage-${i}`));
+  h.app.conversations.addUsage = () => {
+    throw new FutrynError('STORAGE');
+  };
+  await expect(h.conversation.compact()).rejects.toMatchObject({code: 'STORAGE'});
+  expect(h.app.conversations.recover(h.conversation.id).compaction).toBeUndefined();
+});
+
+test('known failed-summary cost exhausts the budget even when earlier round pricing is unknown', async () => {
+  let round = 0;
+  const h = harness({
+    contextLimit: AUTO_WINDOW,
+    budget: {maxCostUSD: 0.1},
+    brain: request => {
+      if (isSummary(request))
+        return answer('length-cut', {...SUMMARY_USAGE, costUSD: 0.123}).map(e =>
+          e.type === 'completed' ? {...e, finishReason: 'length'} : e,
+        );
+      if (++round > 1) return answer('Budget is exhausted');
+      return [
+        {type: 'toolCallComplete', call: {id: 'pressure-cost', name: 'read', input: {path: 'source'}}},
+        {type: 'completed', finishReason: 'tool_calls', usage: usage(3480, 0)},
+      ];
+    },
+  });
+  await h.send('Investigate within the cost budget');
+  expect(h.summaryCalls()).toBe(1);
+  expect(h.requests.at(-1)!.tools).toEqual([]);
+  const receipt = h.receipts().at(-1)!;
+  expect(receipt.usage.costUSD).toBeNull();
+  expect(receipt.stopReason).toBe('budget_cost');
 });

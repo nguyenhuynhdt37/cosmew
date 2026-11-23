@@ -20,7 +20,7 @@ Reference (read-only clones, read 2026-11-17; text is not copied):
 3. **Replacement shape (Codex `build_compacted_history`)**: most recent user messages up to 20,000 estimated tokens (oldest overflowing one cut; earlier handoffs are never retained as user text), then one user message `SUMMARY_PREFIX + summary` that says it is historical data, never a new request or permission grant. The host appends facts the model cannot be trusted with: the current plan (`loadPlan`) and a list of file-change receipts (paths, diffs omitted). Tool outputs of the span are dropped. AGENTS/project context is re-injected on every request by the loop, so it survives unchanged; nested AGENTS text read through tools is part of the dropped span (limit).
 4. **Two scopes.** Before the first tool round of a turn (and `/compact`): a durable `ContextSnapshot` with `strategy: 'model'` (`retainedUserRequests` + `summary`, `throughRevision`/`sourceHash` as for the deterministic snapshot); recovery after a restart loads it (`useContextSnapshot` renders it), no new summary call. Mid-turn (tool rounds above the window): the running turn's rounds are folded into an **in-memory** handoff for the rest of that turn only. The journal is intact and the next turn compacts durably if still needed. Deviation: Codex persists mid-turn replacement history; Futryn cannot, because a snapshot indexes committed messages and the turn's messages are only committed at its end.
 5. **No gain, no compaction.** If the replacement is not smaller than what it replaces, it is discarded (`not_needed` for `/compact`; a failure for auto). One failed or useless attempt disables further model attempts for the rest of the turn.
-6. **Fallback, never data loss.** Model error, malformed/empty/length-cut summary or no fitting request → the existing extractive checkpoint (needs three user turns). Cancellation rethrows: the turn ends cancelled, nothing is changed or persisted. The journal/message history is never modified by compaction.
+6. **Fallback, never data loss.** Model error, malformed/empty/length-cut summary or no fitting request → the existing extractive checkpoint (needs three user turns). Cancellation rethrows: the turn ends cancelled without publishing a context checkpoint; already reported billing is still persisted. The journal/message history is never modified by compaction.
 7. **Usage.** Compaction calls are billed: inside a turn they are folded into the turn receipt (so turn usage, budgets and session totals count them); a manual `/compact` adds its usage to the latest agent turn's receipt (`ConversationStore.addUsage`, receipt rows are keyed by message revision, and a compaction has none). Unreported counters stay `null` (`combineUsage`, moved to contracts).
 8. **Event.** `ModelEvent` `context.compacted` `{trigger: auto|manual, strategy: model|excerpt, tokensBefore, tokensAfter, fallback?}` (estimates, not provider measurements). Live only; the durable record is the snapshot. It reaches `fyn exec --json` as is; plain exec prints one stderr line. Contract **1.26** (additive: new event, `ContextSnapshot.strategy` accepts `model`, `CompactionOutcome`, optional `ConversationStore.addUsage`).
 9. **`/compact [instructions]`**: canonical slash command (handler `compact`), SDK `client.compact(instructions?, {signal})` → `CompactionOutcome`. Idle only: the command router refuses it while a turn runs (as for other session changes) and the SDK/`Conversation.compact` throw `POLICY`. The optional text is appended to the checkpoint prompt as user focus. TUI: banner plus a one-line dim transcript notice; auto compaction adds the same line to the running turn's notices.
@@ -32,3 +32,27 @@ Reference (read-only clones, read 2026-11-17; text is not copied):
 - Token figures are the conservative 3-bytes-per-token estimate. With a very small window the excerpt fallback may be unable to shrink enough; the turn then ends with `context_window` as before.
 - Live authenticated behavior against a real provider is not verified; evidence is fixture providers (`tests/contracts/model-compaction.test.ts`). The e2e recovery test lowers its model window to 20k because compaction now starts at 90% instead of 75%.
 - Codex features not ported: remote/server-side compaction, pre/post-compact hooks, goal/world-state fragments.
+
+
+## Failed-request accounting correction (2026-11-22)
+
+Audit item 2 found that summary validation discarded usage from length-cut/empty
+responses and streams failing after billing was reported. The private summarizer
+now finalizes its last non-null usage snapshot once, independently of validation,
+transport errors and cancellation. Usage/completed events are request snapshots,
+not increments. Manual compaction records it in the source session; automatic
+compaction records it in the active receipt and rechecks the work budget before
+more tools are offered. A known source-cost subtotal can exhaust the cap even
+when another request has unknown pricing; the aggregate still stays unknown.
+Invalid summaries never become model checkpoints. Rewind
+records billing in its source session before any fork transaction, including when
+cancellation prevents a fork. Storage failures propagate instead of publishing a
+fallback with unrecorded usage. The initial correction had no public contract/schema changes; receiptless
+session accounting subsequently adds contract 1.50/schema 12 under
+[ADR 0098](0098-standalone-summary-billing.md). No new dependencies.
+
+Regression evidence: `tests/contracts/model-compaction.test.ts` exercises real
+SQLite receipts, reopening, source attribution, token/cost budgets, cancellation,
+empty/length summaries, transport errors after usage and success without double
+counting. `tests/contracts/checkpoints.test.ts` covers the SDK rewind composition
+with a fixture HTTP provider. These are fixture tests, not live billing evidence.

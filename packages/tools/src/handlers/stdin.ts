@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import type {ToolDispatcherOptions, ToolOutput} from '../context';
-import {resolveWorkspacePath} from '../working-roots';
+import {outsideWorkingDirectories, resolveWorkspacePath} from '../working-roots';
 import {EXEC_LIMITS, clampYield} from '../exec/command';
 import {commandOutcomeResult} from '../runtimes/process';
 import type {ToolHandler} from './types';
@@ -98,6 +98,7 @@ export function stdinHandler(options: ToolDispatcherOptions): ToolHandler {
         toolName: 'write_stdin',
         file,
         workdir: file.relative,
+        outsideCwd: outsideWorkingDirectories(options, file.absolute),
         command,
         label: options.redact(command).slice(0, 1024),
         runtime,

@@ -122,8 +122,14 @@ export class SessionGrants {
   readonly scopeId = crypto.randomUUID();
   private readonly grants = new Set<string>();
   private revocationGeneration = 0;
+  private globalGeneration = 0;
+  private readonly capabilityGenerations = new Map<string, number>();
   get generation(): number {
     return this.revocationGeneration;
+  }
+  /** Unrelated capability revocations do not invalidate a pending approval. */
+  generationFor(capability: string): number {
+    return this.capabilityGenerations.get(capability) ?? this.globalGeneration;
   }
   private readonly children = new Set<SessionGrants>();
 
@@ -140,7 +146,7 @@ export class SessionGrants {
   }
 
   revoke(capability: string, target: string): void {
-    this.revocationGeneration++;
+    this.capabilityGenerations.set(capability, ++this.revocationGeneration);
     this.grants.delete(this.key(capability, target));
     for (const child of this.children) child.revoke(capability, target);
   }
@@ -152,10 +158,17 @@ export class SessionGrants {
     });
   }
 
-  clear(): void {
-    this.revocationGeneration++;
-    this.grants.clear();
-    for (const child of this.children) child.clear();
+  clear(capability?: string): void {
+    const generation = ++this.revocationGeneration;
+    if (capability === undefined) {
+      this.globalGeneration = generation;
+      this.capabilityGenerations.clear();
+      this.grants.clear();
+    } else {
+      this.capabilityGenerations.set(capability, generation);
+      for (const entry of this.grants) if (entry.startsWith(`${capability}\0`)) this.grants.delete(entry);
+    }
+    for (const child of this.children) child.clear(capability);
   }
 
   /**

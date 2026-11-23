@@ -2,14 +2,14 @@ import {useOverlay} from '../../core';
 import {ThemesDialog} from '../themes';
 import {SandboxDialog} from '../sandbox';
 /** @jsxImportSource react */
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text} from 'ink';
 import {useFutrynClient, useKeybindings, useTextInput} from '../../hooks';
 import {useTheme} from '../../theme';
 import {useTerminalSize} from '../../hooks/use-terminal-size';
 import {ListPicker, Panel, PanelTabs, safeText, TextLine, useUiTheme} from '../../ui';
 import {useDialogRefresh, useDialogSize, useDialogTask, type DialogProps} from '../picker';
-import {reportRows} from '../usage/logic';
+import {reportRows, usageSummaryRows} from '../usage/logic';
 import {
   configurationRows,
   SETTINGS_SECTIONS,
@@ -44,7 +44,7 @@ export function SettingsDialog({
   const ui = useUiTheme();
   const {rows: terminalRows} = useTerminalSize();
   const size = useDialogSize(props);
-  const {refresh} = useDialogRefresh();
+  const {refresh, revision} = useDialogRefresh();
   const task = useDialogTask();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [focus, setFocus] = useState<'tabs' | 'list'>(initialTab === 'Config' ? 'list' : 'tabs');
@@ -52,17 +52,34 @@ export function SettingsDialog({
   const [scope, setScope] = useState<'global' | 'project'>('global');
   const [details, setDetails] = useState(false);
   const [offset, setOffset] = useState(0);
-  useEffect(() => {
-    if (tab !== 'Usage') return;
+  const quotaRequest = useRef<AbortController | null>(null);
+  const refreshQuota = useCallback(() => {
+    if (quotaRequest.current) return;
     const abort = new AbortController();
+    quotaRequest.current = abort;
     void client
       .refreshLimits(abort.signal)
       .catch(() => {})
       .finally(() => {
+        if (quotaRequest.current === abort) quotaRequest.current = null;
         if (!abort.signal.aborted) refresh();
       });
-    return () => abort.abort();
-  }, [client, tab, refresh]);
+  }, [client, refresh]);
+  useEffect(
+    () => () => {
+      quotaRequest.current?.abort();
+      quotaRequest.current = null;
+    },
+    [client],
+  );
+  useEffect(() => {
+    if (tab === 'Usage') refreshQuota();
+  }, [tab, refreshQuota]);
+  useEffect(() => {
+    if (tab !== 'Usage') return;
+    const timer = setInterval(refresh, 30_000);
+    return () => clearInterval(timer);
+  }, [tab, refresh]);
   const switchTab = (delta: number) => {
     const next = SETTINGS_TABS[(SETTINGS_TABS.indexOf(tab) + delta + SETTINGS_TABS.length) % SETTINGS_TABS.length]!;
     setTab(next);
@@ -76,7 +93,7 @@ export function SettingsDialog({
     else if (!key.ctrl && !key.meta && input.toLowerCase() === 'd' && (tab === 'Status' || tab === 'Usage')) {
       setDetails(v => !v);
       setOffset(0);
-    }
+    } else if (!key.ctrl && !key.meta && input.toLowerCase() === 'r' && tab === 'Usage') refreshQuota();
   });
   // Tabs: Tab/Shift+Tab always; ←/→ when the tab row has focus or the tab is not the editable Config list.
   const arrowsSwitch = focus === 'tabs' || tab !== 'Config';
@@ -98,7 +115,7 @@ export function SettingsDialog({
           }
           return false;
         }
-        if (details) {
+        if (details || tab === 'Usage') {
           setOffset(n => Math.max(0, n - 1));
           return;
         }
@@ -109,7 +126,7 @@ export function SettingsDialog({
           setFocus('list');
           return;
         }
-        if (details) {
+        if (details || tab === 'Usage') {
           setOffset(n => n + 1);
           return;
         }
@@ -117,9 +134,22 @@ export function SettingsDialog({
       },
     },
   });
-  const rows = SETTINGS_SECTIONS.flatMap(section =>
-    configurationRows(client, section, engine.getActiveAppearance(), mode),
+  const usage = useMemo(
+    () =>
+      tab === 'Usage' && !details ? {meters: usageMeters(client), summary: usageSummaryRows(client.usage())} : null,
+    [client, tab, details, revision],
   );
+  const detail = useMemo(
+    () =>
+      details && (tab === 'Status' || tab === 'Usage')
+        ? reportRows(client, tab === 'Status' ? 'status' : 'usage', '', true)
+        : null,
+    [client, tab, details, revision],
+  );
+  const rows =
+    tab === 'Config'
+      ? SETTINGS_SECTIONS.flatMap(section => configurationRows(client, section, engine.getActiveAppearance(), mode))
+      : [];
   const activate = (index: number) =>
     void task.run(async () => {
       const row = rows[index];
@@ -271,29 +301,27 @@ export function SettingsDialog({
         </>
       ) : (
         <>
-          {details && (tab === 'Status' || tab === 'Usage') ? (
-            <DetailRows
-              rows={reportRows(client, tab === 'Status' ? 'status' : 'usage', '', true)}
-              offset={offset}
-              room={listRows}
-            />
+          {detail ? (
+            <DetailRows rows={detail} offset={offset} room={listRows} />
           ) : tab === 'Status' ? (
             lines(statusFields(client))
           ) : tab === 'Stats' ? (
             lines(statsFields(client))
-          ) : (
+          ) : usage ? (
             <UsageMeters
-              meters={usageMeters(client)}
-              rest={reportRows(client, 'usage')}
+              meters={usage.meters}
+              summary={usage.summary}
+              offset={offset}
+              room={listRows}
               width={size.width}
               rule={ui.color('rule')}
               track={ui.color('userMessage')}
             />
-          )}
+          ) : null}
           <Box height={1} />
           <TextLine
             color={muted}
-          >{`←/→ to switch · ${tab === 'Usage' || (tab === 'Status' && details) ? `d for ${details ? 'summary' : 'details'} · ` : ''}Esc to close`}</TextLine>
+          >{`←/→ to switch · ${tab === 'Usage' || (tab === 'Status' && details) ? `d for ${details ? 'summary' : 'details'} · ` : ''}Esc to close${tab === 'Usage' ? ' · ↑/↓ scroll · r refresh quota' : ''}`}</TextLine>
         </>
       )}
     </Panel>
@@ -309,49 +337,57 @@ function DetailRows({rows, offset, room}: {rows: string[]; offset: number; room:
     </>
   );
 }
-/** Provider-reported limits as bars (`Current session` / `██████▌ … 13% used` / `Resets …`). */
+/** Keep the normal Usage view within the terminal and show bars only for current windows. */
 function UsageMeters({
   meters,
-  rest,
+  summary,
+  offset,
+  room,
   width,
   rule,
   track,
 }: {
   meters: ReturnType<typeof usageMeters>;
-  rest: string[];
+  summary: string[];
+  offset: number;
+  room: number;
   width: number;
   rule?: string;
   track?: string;
 }) {
   const {color} = useTheme();
-  const bar = Math.max(10, Math.min(50, width - 14));
-  if (!meters.length)
-    return (
-      <>
-        {rest.map((row, at) => (
-          <TextLine key={at}>{row}</TextLine>
-        ))}
-      </>
-    );
-  return (
-    <>
-      {meters.map((meter, at) => {
-        const cells = meter.percent == null ? 0 : (Math.min(100, meter.percent) / 100) * bar;
-        const full = Math.floor(cells);
-        const half = cells - full >= 0.5;
-        return (
-          <Box key={at} flexDirection="column" marginBottom={1}>
-            <Text bold>{meter.label}</Text>
-            <Text>
-              <Text color={rule} backgroundColor={track}>
-                {'█'.repeat(full) + (half ? '▌' : '') + ' '.repeat(Math.max(0, bar - full - (half ? 1 : 0)))}
-              </Text>
-              <Text>{`  ${meter.text}`}</Text>
-            </Text>
-            {meter.reset ? <Text color={color('foregroundMuted')}>{meter.reset}</Text> : null}
-          </Box>
-        );
-      })}
-    </>
-  );
+  const bar = Math.max(4, Math.min(16, width - 12));
+  const rows = [
+    ...summary.map(line => <TextLine key={line}>{line}</TextLine>),
+    <TextLine key="quota-heading" bold>
+      Provider quota
+    </TextLine>,
+    ...(meters.length
+      ? meters.flatMap((meter, at) => {
+          const cells = meter.percent == null ? null : Math.round((Math.min(100, meter.percent) / 100) * bar);
+          return [
+            <Text key={`value-${at}`} wrap="truncate-end">
+              <Text bold>{safeText(meter.label)}</Text>
+              {' · '}
+              {cells === null ? null : (
+                <Text color={rule} backgroundColor={track}>
+                  {'█'.repeat(cells) + ' '.repeat(bar - cells)}
+                </Text>
+              )}
+              {cells === null ? '' : '  '}
+              {safeText(meter.text)}
+            </Text>,
+            ...(meter.reset
+              ? [
+                  <TextLine key={`snapshot-${at}`} color={color('foregroundMuted')} wrap="truncate-end">
+                    {meter.historical ? 'Current quota unknown · historical value above' : 'Last reported by provider'}
+                  </TextLine>,
+                ]
+              : []),
+          ];
+        })
+      : [<TextLine key="no-accounts">No connected accounts.</TextLine>]),
+  ];
+  const start = Math.min(offset, Math.max(0, rows.length - room));
+  return <>{rows.slice(start, start + room)}</>;
 }

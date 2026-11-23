@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync} from 'node:fs';
+import {mkdtempSync, writeFileSync, readFileSync, realpathSync, rmSync, existsSync, mkdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -8,7 +8,7 @@ import {providerSchema, type CheckpointFile} from '@cosmew/contracts';
 import {CheckpointStore} from '@cosmew/persistence';
 
 async function harness() {
-  const root = mkdtempSync(join(tmpdir(), 'fyn-checkpoint-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-checkpoint-')));
   let nextPatch: string | undefined;
   let summarize: ((body: Record<string, unknown>) => 'ok' | 'fail') | undefined;
   const summaries: Record<string, unknown>[] = [];
@@ -169,10 +169,11 @@ test('checkpoint storage rejects secret preimages and cannot expose foreign work
     expect(() => store.restoration(checkpoint.id, checkpoint.sessionId, join(h.root, 'foreign'))).toThrow();
     mkdirSync(join(h.root, 'foreign'));
     const foreign = h.app.createFutrynClient(join(h.root, 'foreign'));
-    foreign.resumeSession(checkpoint.sessionId);
+    expect(() => foreign.resumeSession(checkpoint.sessionId)).toThrow();
+    expect(foreign.activeSession()).toBeNull();
     expect(foreign.checkpoints()).toEqual([]);
     await expect(foreign.rewind({checkpointId: checkpoint.id, scope: 'conversation'})).rejects.toMatchObject({
-      code: 'NOT_FOUND',
+      code: 'INVALID_INPUT',
     });
   } finally {
     await h.cleanup();
@@ -267,6 +268,13 @@ test('summarize rewind falls back extractively on model failure even for a singl
     expect(summary).not.toContain('preserved prefix');
     expect(summary).not.toContain('Checkpoint suffix handoff');
     expect(JSON.stringify(h.app.conversations.recover(original.id).messages)).toBe(journal);
+    const usage = h.app.conversations.get(original.id)!.turns!.at(-1)!.usage!;
+    expect(usage.inputTokens).toBe(20); // The last turn plus the failed summary, each once.
+    expect(usage.breakdown?.find(b => b.inputTokens === 20)).toMatchObject({
+      providerId: 'fixture',
+      modelId: 'fixture-model',
+      sessionId: original.id,
+    });
   } finally {
     await h.cleanup();
   }

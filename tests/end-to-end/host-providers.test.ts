@@ -248,7 +248,7 @@ test('cosmew providers add writes the same config.toml a user edits by hand, and
   cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
   const cli = async (...args: string[]) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, FUTRYN_HOME: dir},
+      env: {...process.env, COSMEW_HOME: dir},
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -326,6 +326,7 @@ test('/login custom provider form writes config.toml, validates it, and rejects 
   await tui.waitFor('Custom provider'); // the provider list of the shared connect dialog
   for (let i = 0; i < 7; i++) await tui.handleKey('Down'); // last row: the custom provider
   await tui.handleKey('Enter');
+  await tui.handleKey('Tab'); // switch from quick setup to advanced custom provider form
   await type('gw1');
   await tui.handleKey('Enter');
   await type(`${server.url}/gw/v1`);

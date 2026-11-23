@@ -1,6 +1,6 @@
 import {afterEach, expect, test} from 'bun:test';
 import {Database} from 'bun:sqlite';
-import {mkdtempSync, rmSync} from 'node:fs';
+import {mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {FutrynError, type ModelPort} from '@cosmew/contracts';
@@ -47,6 +47,7 @@ test('unknown usage stays unknown; old history is not backfilled with zero consu
   expect(c.client.usage().inputTokens).toBeNull();
   expect(c.client.usage().costUSD).toBeNull();
   const old = c.app.conversations.create({accountId: c.account.id, modelId: 'fixture-model'});
+  c.app.conversations.bindWorkspace(old, realpathSync(c.dir));
   c.app.conversations.append(old, {role: 'user', content: 'Historical'}, 'committed');
   c.app.conversations.append(old, {role: 'assistant', content: 'Historical response'}, 'committed');
   c.client.resumeSession(old);
@@ -69,7 +70,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   legacy.close();
   const db = openPrivateDatabase(dir);
   cleanup.push(() => db.close());
-  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(11);
+  expect((db.query('PRAGMA user_version').get() as any).user_version).toBe(13);
   expect(
     (db.query('PRAGMA table_info(messages)').all() as {name: string}[]).some(column => column.name === 'parts'),
   ).toBe(true); // v3 tool parts
@@ -117,7 +118,7 @@ test('SQLite v1 migration preserves conversations; cancelled/failed usage persis
   }
   const future = directory();
   const invalid = new Database(join(future, 'provider-auth.sqlite'));
-  invalid.exec('PRAGMA user_version=12');
+  invalid.exec('PRAGMA user_version=14');
   invalid.close();
   expect(() => openPrivateDatabase(future)).toThrow();
 });

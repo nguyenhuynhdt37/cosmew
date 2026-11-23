@@ -80,13 +80,13 @@ test('custom agent discovery: nearer scope wins, .futryn before .claude before .
   const {root, home, put} = repo();
   put('.claude/agents/dup.md', 'dup', 'repo-root claude');
   put('pkg/.agents/agents/dup.md', 'dup', 'nearer agents');
-  put('pkg/.futryn/agents/dup.md', 'dup', 'nearer futryn');
+  put('pkg/.cosmew/agents/dup.md', 'dup', 'nearer futryn');
   put('pkg/.claude/agents/only-claude.md', 'only-claude');
-  put('.futryn/agents/explore.md', 'explore', 'CLASH');
+  put('.cosmew/agents/explore.md', 'explore', 'CLASH');
   put('home/.claude/agents/userish.md', 'userish');
-  put('home/.futryn/agents/dup.md', 'dup', 'user dup');
-  writeFileSync(join(root, 'pkg/.futryn/agents/broken.md'), 'not frontmatter');
-  symlinkSync(join(root, '.claude/agents/dup.md'), join(root, 'pkg/.futryn/agents/link.md'));
+  put('home/.cosmew/agents/dup.md', 'dup', 'user dup');
+  writeFileSync(join(root, 'pkg/.cosmew/agents/broken.md'), 'not frontmatter');
+  symlinkSync(join(root, '.claude/agents/dup.md'), join(root, 'pkg/.cosmew/agents/link.md'));
   const catalog = new AgentDefinitionCatalog({
     workspace: new WorkspaceRoot(join(root, 'pkg', 'sub')),
     home,
@@ -99,39 +99,40 @@ test('custom agent discovery: nearer scope wins, .futryn before .claude before .
     'userish:user',
   ]);
   expect(report.definitions[0]!.description).toBe('nearer futryn');
-  expect(report.definitions[0]!.shortPath).toBe('pkg/.futryn/agents/dup.md');
+  expect(report.definitions[0]!.shortPath).toBe('pkg/.cosmew/agents/dup.md');
   expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(3);
-  expect(report.warnings.some(w => w.code === 'BUILTIN_NAME_CLASH' && w.path === '.futryn/agents/explore.md')).toBe(
+  expect(report.warnings.some(w => w.code === 'BUILTIN_NAME_CLASH' && w.path === '.cosmew/agents/explore.md')).toBe(
     true,
   );
   expect(report.errors.map(e => e.code).sort()).toEqual(['INVALID_OR_UNREADABLE_AGENT', 'UNSAFE_AGENT_PATH']);
   // load() re-reads and re-validates at spawn time.
   expect(catalog.load('DUP')?.body).toBe('Body text.');
-  writeFileSync(join(root, 'pkg/.futryn/agents/dup.md'), 'now broken');
+  writeFileSync(join(root, 'pkg/.cosmew/agents/dup.md'), 'now broken');
   expect(() => catalog.load('dup')).toThrow();
   expect(catalog.load('missing')).toBeUndefined();
 });
 
-test('canonical Cosmew agent roots take precedence over legacy project roots', () => {
+test('legacy futryn and hannes agent roots are not discovered', () => {
   const {root, home, put} = repo();
   put('.futryn/agents/demo.md', 'demo', 'legacy');
-  put('.cosmew/agents/demo.md', 'demo', 'cosmew');
+  put('.hannes/agents/old.md', 'old');
+  put('.cosmew/agents/kept.md', 'kept');
   const report = new AgentDefinitionCatalog({workspace: new WorkspaceRoot(root), home}).report();
-  expect(report.definitions.find(d => d.name === 'demo')?.shortPath).toBe('.cosmew/agents/demo.md');
-  expect(report.warnings.filter(w => w.code === 'DUPLICATE_NAME')).toHaveLength(1);
+  expect(report.definitions.some(d => d.name === 'demo' || d.name === 'old')).toBe(false);
+  expect(report.definitions.find(d => d.name === 'kept')?.shortPath).toBe('.cosmew/agents/kept.md');
 });
 
 test('Read deny rules hide an agent file from discovery', () => {
   const {root, home, put} = repo();
-  put('.futryn/agents/secret.md', 'secret');
-  put('.futryn/agents/open.md', 'open');
+  put('.cosmew/agents/secret.md', 'secret');
+  put('.cosmew/agents/open.md', 'open');
   const catalog = new AgentDefinitionCatalog({
     workspace: new WorkspaceRoot(root),
     home,
     canRead: relative => !relative.endsWith('secret.md'),
   });
   expect(catalog.report().definitions.map(d => d.name)).toEqual(['open']);
-  expect(catalog.report().errors).toEqual([{path: '.futryn/agents/secret.md', code: 'DENIED'}]);
+  expect(catalog.report().errors).toEqual([{path: '.cosmew/agents/secret.md', code: 'DENIED'}]);
 });
 
 const D = (name: string, capability: ToolDescriptor['capability'] = 'fs.read'): ToolDescriptor => ({

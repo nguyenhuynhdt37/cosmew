@@ -18,7 +18,7 @@ async function setup(config = '') {
   cleanup.push(() => rmSync(root, {recursive: true, force: true}));
   const project = join(root, 'project'),
     home = join(root, 'home'),
-    state = join(home, '.futryn');
+    state = join(home, '.cosmew');
   mkdirSync(project);
   mkdirSync(state, {recursive: true, mode: 0o700});
   if (config) writeFileSync(join(state, 'config.toml'), config, {mode: 0o600});
@@ -163,11 +163,11 @@ test('main session loads only index as labelled project data, never host instruc
   expect(h.store.list()).toEqual([]);
 });
 test('env and user config disable loading, SDK and offered memory tools', async () => {
-  const previous = process.env.FUTRYN_MEMORY;
+  const previous = process.env.COSMEW_MEMORY;
   try {
     for (const config of ['', '[memories]\nenabled = false\n']) {
-      if (!config) process.env.FUTRYN_MEMORY = '0';
-      else delete process.env.FUTRYN_MEMORY;
+      if (!config) process.env.COSMEW_MEMORY = '0';
+      else delete process.env.COSMEW_MEMORY;
       const h = await setup(config);
       h.put();
       h.client.setToolsEnabled(true);
@@ -180,8 +180,8 @@ test('env and user config disable loading, SDK and offered memory tools', async 
       expect(h.store.list()).toHaveLength(1);
     }
   } finally {
-    if (previous === undefined) delete process.env.FUTRYN_MEMORY;
-    else process.env.FUTRYN_MEMORY = previous;
+    if (previous === undefined) delete process.env.COSMEW_MEMORY;
+    else process.env.COSMEW_MEMORY = previous;
   }
 });
 test('/memory Modal lists, reads and deletes through SDK dispatcher', async () => {
@@ -216,7 +216,7 @@ test('/memory Modal lists, reads and deletes through SDK dispatcher', async () =
   expect(h.opened).toEqual([h.store.directory]);
   expect(tui.computeFrameSnapshot().plainText).not.toContain('Not implemented');
 });
-test('cosmew exec uses the same memory context and contract 1.48', async () => {
+test('cosmew exec uses the same memory context and contract 1.63', async () => {
   const h = await setup();
   h.put();
   let stdout = '';
@@ -232,7 +232,7 @@ test('cosmew exec uses the same memory context and contract 1.48', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.48"');
+  expect(stdout).toContain('"contractVersion":"1.63"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {

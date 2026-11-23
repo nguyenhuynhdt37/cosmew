@@ -36,3 +36,7 @@ to the preserved prompt. Existing modified keys remain available. Actions and fo
 labels use the central user keymap. No public SDK/event contract or dependency changes.
 Static Claude Code artifact evidence, checked component inventory and runtime limits:
 [diff interaction parity](../delivery/tui-v4/diff-interaction-parity.md).
+
+## Native selection extension — 2026-11-22
+
+[ADR 0110](0110-native-terminal-text-selection.md) adds Ctrl+Q to release mouse capture for native drag selection/copy without leaving the app. The same key restores wheel/click interaction; terminal-specific modifier overrides remain available.

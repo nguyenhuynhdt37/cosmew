@@ -52,3 +52,33 @@ test('command help does not advertise stale shortcuts that collide with the cent
     expect(SLASH_COMMANDS.find(command => command.command === name)?.shortcut).toBeUndefined();
   }
 });
+
+test('project and session commands are discoverable and resolve to their real handlers', () => {
+  for (const name of ['init', 'export', 'copy', 'rename'] as const) {
+    const parsed = parseSlashCommand(`/${name}`);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.definition?.handler).toBe(name);
+    expect(parsed.definition?.autocomplete).not.toBe(false);
+    expect(parsed.definition?.help).not.toBe(false);
+  }
+});
+
+test('Claude uses editor shortcuts and the rewind picker instead of /editor and /redo', () => {
+  expect(parseSlashCommand('/editor').error).toBeDefined();
+  expect(parseSlashCommand('/redo').error).toBeDefined();
+  expect(parseSlashCommand('/copy 2').args).toBe('2');
+});
+
+test('implemented MCP and rewind panels expose usable canonical overlay routes', () => {
+  for (const [command, overlay] of [
+    ['/mcp', 'mcp'],
+    ['/rewind', 'rewind'],
+    ['/checkpoint', 'rewind'],
+    ['/undo', 'rewind'],
+  ]) {
+    const parsed = parseSlashCommand(command!);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.definition).toMatchObject({handler: 'overlay', overlay});
+    expect(parsed.definition?.unavailable).toBeUndefined();
+  }
+});

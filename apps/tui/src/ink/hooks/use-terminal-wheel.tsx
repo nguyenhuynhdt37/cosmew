@@ -68,3 +68,12 @@ export function useMouseTarget(handler: (event: TerminalMouseEvent) => void, isA
   }, [source]);
   return ref;
 }
+
+/** Native terminal selection owns the mouse while keyboard input remains with Ink. */
+export function useTerminalMouseCapture(enabled: boolean): void {
+  const source = useContext(MouseContext);
+  useEffect(() => {
+    source?.setCaptureEnabled?.(enabled);
+    return () => source?.setCaptureEnabled?.(true);
+  }, [source, enabled]);
+}

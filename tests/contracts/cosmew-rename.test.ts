@@ -9,7 +9,7 @@ import {providerPresets} from '@cosmew/models';
 import {defaultAppearance, type TurnReceipt} from '@cosmew/contracts';
 
 for (const legacyName of ['.futryn', '.hannes']) {
-  test(`${legacyName} state opens in place with accounts, selection, settings and journal intact`, async () => {
+  test(`${legacyName} state moves to .cosmew with accounts, selection, settings and journal intact`, async () => {
     const home = mkdtempSync(join(tmpdir(), 'cosmew-legacy-migration-'));
     const legacy = join(home, legacyName);
     const vault = memoryVault();
@@ -40,10 +40,10 @@ for (const legacyName of ['.futryn', '.hannes']) {
       const journal = app.conversations.recover(id);
       await app.shutdownCommands();
       app.db.close();
-      const database = join(legacy, 'provider-auth.sqlite');
-      const before = databaseBytes(database);
-      const inode = statSync(database).ino;
-      expect(defaultStateDirectory({}, home)).toBe(legacy);
+      const database = join(home, '.cosmew', 'provider-auth.sqlite');
+      const before = databaseBytes(join(legacy, 'provider-auth.sqlite'));
+      const inode = statSync(join(legacy, 'provider-auth.sqlite')).ino;
+      expect(defaultStateDirectory({}, home)).toBe(join(home, '.cosmew'));
       app = startup(defaultStateDirectory({}, home), {vault});
       expect(app.accounts.get(account.id).alias).toBe('legacy-account');
       expect(app.accounts.get('legacy-account').id).toBe(account.id);
@@ -54,7 +54,7 @@ for (const legacyName of ['.futryn', '.hannes']) {
       expect(app.conversations.get(id)?.messages).toContainEqual(expect.objectContaining(message));
       expect(app.conversations.recover(id).messages).toContainEqual(expect.objectContaining(message));
       expect(app.conversations.recover(id)).toEqual(journal);
-      expect(existsSync(join(home, '.cosmew'))).toBe(false);
+      expect(existsSync(legacy)).toBe(false);
       expect(statSync(database).ino).toBe(inode);
       await app.shutdownCommands();
       app.db.close();
@@ -65,7 +65,7 @@ for (const legacyName of ['.futryn', '.hannes']) {
       expect(app.settings.read().selection).toBeNull();
       expect(app.conversations.list()).toEqual([]);
       expect(databaseBytes(database)).toEqual(before);
-      expect(existsSync(join(home, '.cosmew'))).toBe(false);
+      expect(existsSync(join(home, '.cosmew'))).toBe(true);
     } finally {
       await app.shutdownCommands();
       app.db.close();

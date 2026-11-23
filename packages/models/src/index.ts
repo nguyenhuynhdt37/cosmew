@@ -6,3 +6,4 @@ export * from './adapter';
 export * from './router';
 export * from './limits';
 export * from './host-config';
+export * from './custom-probe';

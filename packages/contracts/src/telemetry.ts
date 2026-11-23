@@ -210,3 +210,8 @@ export function combineUsage(previous: UsageValue | null, next: UsageValue): Usa
   }
   return {...total, breakdown, ...(truncated ? {breakdownTruncated: true} : {})};
 }
+
+/** Known cost is a lower bound when unpriced requests keep the aggregate unknown. */
+export function knownCostUSD(usage: UsageValue | null | undefined): number {
+  return usage?.costUSD ?? usage?.breakdown?.reduce((sum, source) => sum + (source.costUSD ?? 0), 0) ?? 0;
+}

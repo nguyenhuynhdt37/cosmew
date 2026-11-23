@@ -319,7 +319,7 @@ test('two successful edits merge into `Made 2 edits +a -r`; a refused edit never
   const frame = frameLines(view.lastFrame()).join('\n');
   expect(frame).toContain('⏺ Update(a.ts)');
   expect(frame).toContain('⏺ Update(b.ts)');
-  expect(frame).toContain('User rejected Update');
+  expect(frame).toContain('Update denied');
   expect(frame).toContain('Permission refused by the user');
   expect(frame).not.toContain('Made 2 edits');
 });

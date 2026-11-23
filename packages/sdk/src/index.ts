@@ -22,3 +22,14 @@ export type {WorkspaceDiffBase, WorkspaceDiffOptions, WorkspaceDiffReport} from 
 export type {PromptHistoryScope, PromptHistoryEntry, RetractQueuedOptions, QueuedInputEntry} from '@cosmew/contracts';
 
 export type {WorkspaceDiffFile, ToolResult} from '@cosmew/contracts';
+
+export type {
+  McpConnectionState,
+  McpServerConfiguration,
+  McpCatalogRecipe,
+  McpCatalogItem,
+  McpManagedServer,
+  McpManagerSnapshot,
+  McpManagementAction,
+  McpManagementResult,
+} from '@cosmew/contracts';

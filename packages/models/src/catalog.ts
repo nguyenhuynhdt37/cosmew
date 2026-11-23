@@ -1,4 +1,4 @@
-import {FutrynError, modelSchema, type ModelInfo, type SettingsStore} from '@cosmew/contracts';
+import {FutrynError, modelSchema, type ModelInfo, type Provider, type SettingsStore} from '@cosmew/contracts';
 import {ProviderTransport} from './http';
 import {providerPresets} from './registry';
 import {selectableReasoningEfforts} from './effort-wire';
@@ -8,8 +8,25 @@ const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new FutrynError('PROTOCOL');
   return value as Record<string, unknown>;
 };
+const record = (value: unknown): Record<string, unknown> | undefined =>
+  value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
 const positiveInteger = (value: unknown): number | null =>
-  typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+const firstPositiveInteger = (...values: unknown[]): number | null => {
+  for (const value of values) {
+    const parsed = positiveInteger(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+};
+const nonNegativeNumber = (value: unknown): number | null => {
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  }
+  return null;
+};
 const capability = (value: unknown): ModelInfo['capabilities'][keyof ModelInfo['capabilities']] | null => {
   if (value === true || value === 'supported') return 'supported';
   if (value === false || value === 'unsupported') return 'unsupported';
@@ -18,12 +35,19 @@ const capability = (value: unknown): ModelInfo['capabilities'][keyof ModelInfo['
 };
 /** Apply only capabilities explicitly advertised by a provider catalog. Model ids are not evidence. */
 const applyAdvertisedCapabilities = (model: ModelInfo, item: Record<string, unknown>): void => {
-  const advertised = item.capabilities;
-  if (advertised && typeof advertised === 'object' && !Array.isArray(advertised)) {
+  const advertised = record(item.capabilities);
+  if (advertised) {
     for (const key of ['text', 'tools', 'streaming', 'vision', 'reasoning'] as const) {
-      const value = capability((advertised as Record<string, unknown>)[key]);
+      const value = capability(advertised[key]);
       if (value) model.capabilities[key] = value;
     }
+    const controls: NonNullable<ModelInfo['reasoningOptions']> = {...model.reasoningOptions};
+    if (advertised.thinkingCanDisable === true) controls.toggle = true;
+    const range = record(advertised.thinkingRange);
+    if (range && typeof range.min === 'number' && Number.isSafeInteger(range.min) && range.min >= 0) {
+      controls.budgetMin = controls.budgetMin === undefined ? range.min : Math.max(controls.budgetMin, range.min);
+    }
+    if (Object.keys(controls).length) model.reasoningOptions = controls;
   }
   const input = Array.isArray(item.input_modalities) ? item.input_modalities : [];
   if (input.some(value => typeof value === 'string' && value.toLowerCase() === 'image'))
@@ -37,11 +61,8 @@ const applyAdvertisedCapabilities = (model: ModelInfo, item: Record<string, unkn
   if (names.has('tools') || names.has('tool_choice')) model.capabilities.tools = 'supported';
   if (names.has('reasoning') || names.has('reasoning_effort') || names.has('reasoning_efforts'))
     model.capabilities.reasoning = 'supported';
-  const modalities = item.modalities;
-  const output =
-    modalities && typeof modalities === 'object'
-      ? (modalities as Record<string, unknown>).output
-      : item.output_modalities;
+  const modalities = record(item.modalities);
+  const output = modalities ? modalities.output : item.output_modalities;
   if (Array.isArray(output)) model.capabilities.text = output.includes('text') ? 'supported' : 'unsupported';
   if (['image', 'embedding', 'video', 'transcription', 'speech', 'reranking', 'realtime'].includes(String(item.type)))
     model.capabilities.text = 'unsupported';
@@ -55,6 +76,139 @@ const applyAdvertisedCapabilities = (model: ModelInfo, item: Record<string, unkn
     }
   }
 };
+/**
+ * Apply explicitly advertised limits, capabilities and pricing from any provider `/models` entry.
+ * Only documented/explicit provider fields are read; model IDs are never guessed (ADR 0078, ADR 0113).
+ */
+export function applyCatalogMetadata(
+  model: ModelInfo,
+  item: Record<string, unknown>,
+  baseURL: string,
+  kind?: Provider['catalog'],
+): void {
+  applyAdvertisedCapabilities(model, item);
+  if (kind === 'gemini' && Array.isArray(item.supportedGenerationMethods)) {
+    if (item.supportedGenerationMethods.includes('generateContent') && model.capabilities.text !== 'unsupported')
+      model.capabilities.text = 'supported';
+    else model.capabilities.text = 'unsupported';
+  }
+  const caps = record(item.capabilities);
+  const limits = record(item.limits);
+  const limit = record(item.limit);
+  const top = record(item.top_provider);
+
+  const contextLimit = firstPositiveInteger(
+    item.context_length,
+    item.context_window,
+    item.max_context_length,
+    item.input_token_limit,
+    item.inputTokenLimit,
+    item.max_input_tokens,
+    caps?.contextWindow,
+    caps?.context_window,
+    limits?.context,
+    limit?.context,
+    top?.context_length,
+  );
+  if (contextLimit !== null) model.contextLimit = contextLimit;
+
+  const outputLimit = firstPositiveInteger(
+    item.max_completion_tokens,
+    item.max_output_tokens,
+    item.output_token_limit,
+    item.outputTokenLimit,
+    caps?.maxOutput,
+    caps?.max_output_tokens,
+    limits?.output,
+    limit?.output,
+    top?.max_completion_tokens,
+    top?.max_output_tokens,
+  );
+  if (outputLimit !== null) model.outputLimit = outputLimit;
+
+  const pricing = record(item.pricing);
+  if (pricing) {
+    const promptPerToken = nonNegativeNumber(pricing.prompt);
+    const completionPerToken = nonNegativeNumber(pricing.completion);
+    if (promptPerToken !== null && completionPerToken !== null) {
+      const inputPerMillion = promptPerToken * 1_000_000;
+      const outputPerMillion = completionPerToken * 1_000_000;
+      if (Number.isFinite(inputPerMillion) && Number.isFinite(outputPerMillion))
+        model.pricing = {inputPerMillion, outputPerMillion, currency: 'USD'};
+    } else {
+      const inputPerMillion = nonNegativeNumber(pricing.input);
+      const outputPerMillion = nonNegativeNumber(pricing.output);
+      if (inputPerMillion !== null && outputPerMillion !== null)
+        model.pricing = {inputPerMillion, outputPerMillion, currency: 'USD'};
+    }
+  }
+
+  if (model.contextLimit !== null || model.outputLimit !== null || model.pricing !== null) {
+    model.metadataSource = (baseURL.replace(/\/$/, '') + '/models').slice(0, 2048);
+    model.metadataFetchedAt = model.fetchedAt;
+  }
+}
+
+/** Parse one `/models` (or `/api/tags`) JSON response page into normalized `ModelInfo` records. */
+export function parseCatalogPage(
+  raw: unknown,
+  kind: Provider['catalog'],
+  baseURL: string,
+  chatgpt = false,
+): {models: ModelInfo[]; data: Record<string, unknown>} {
+  const data = object(raw);
+  const items = chatgpt || kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
+  if (!Array.isArray(items) || items.length > 10000) throw new FutrynError('PROTOCOL');
+  const models: ModelInfo[] = [];
+  for (const value of items) {
+    const item = object(value);
+    // Compatible ChatGPT endpoints may omit visibility; hide only an explicit non-list entry.
+    if (chatgpt && item.visibility !== undefined && item.visibility !== 'list') continue;
+    const rawID = chatgpt
+      ? item.slug
+      : kind === 'ollama'
+        ? item.name
+        : kind === 'gemini'
+          ? String(item.name).replace(/^models\//, '')
+          : (item.id ?? item.name);
+    const model = normalizeModel(
+      rawID,
+      chatgpt
+        ? (item.display_name ?? item.displayName ?? rawID)
+        : (item.display_name ?? item.displayName ?? item.name ?? rawID),
+    );
+    applyCatalogMetadata(model, item, baseURL, kind);
+    models.push(modelSchema.parse(model));
+  }
+  return {models, data};
+}
+
+/** Shared pagination for login and catalog refresh. */
+export async function readCatalogPages(
+  first: unknown,
+  kind: Provider['catalog'],
+  baseURL: string,
+  nextPage: (cursor: string) => Promise<unknown>,
+  chatgpt = false,
+): Promise<ModelInfo[]> {
+  const models = new Map<string, ModelInfo>();
+  const cursors = new Set<string>();
+  let payload = first;
+  let count = 0;
+  for (let page = 0; page < 20; page++) {
+    const {models: entries, data} = parseCatalogPage(payload, kind, baseURL, chatgpt);
+    count += entries.length;
+    if (count > 10000) throw new FutrynError('PROTOCOL');
+    for (const model of entries) models.set(model.id, model);
+    const next = kind === 'gemini' ? data.nextPageToken : data.has_more === true ? data.last_id : undefined;
+    if (data.has_more === true && typeof next !== 'string') throw new FutrynError('PROTOCOL');
+    if (!next) return [...models.values()];
+    if (typeof next !== 'string' || cursors.has(next) || page === 19) throw new FutrynError('PROTOCOL');
+    cursors.add(next);
+    payload = await nextPage(next);
+  }
+  throw new FutrynError('PROTOCOL');
+}
 export function normalizeModel(id: unknown, name: unknown, source: 'provider' | 'manual' = 'provider'): ModelInfo {
   try {
     return modelSchema.parse({
@@ -129,6 +283,11 @@ export class ModelCatalog {
       });
     });
   }
+  /** Seed a newly connected account with the catalog used to choose and verify its model. */
+  async seedVerifiedCatalog(models: readonly ModelInfo[], selected: ModelInfo, signal?: AbortSignal) {
+    this.save(models.some(model => model.id === selected.id) ? [...models] : [...models, selected]);
+    return this.refreshMetadata(signal);
+  }
   /** Remember that the provider rejected tool use for this model (ADR 0017); rediscovery resets it. */
   markToolsUnsupported(id: string): void {
     this.save(
@@ -140,8 +299,17 @@ export class ModelCatalog {
     );
   }
   manual(id: string): ModelInfo {
-    const model = normalizeModel(id, id, 'manual');
-    model.manualOrigin = 'user';
+    const existing = this.rawCache().find(m => m.id === id);
+    const model = existing
+      ? modelSchema.parse({
+          ...existing,
+          source: 'manual',
+          manualOrigin: 'user',
+        })
+      : {
+          ...normalizeModel(id, id, 'manual'),
+          manualOrigin: 'user' as const,
+        };
     const cache = this.rawCache().filter(m => m.id !== id);
     this.save([...cache, model]);
     return this.selectable(model);
@@ -184,11 +352,8 @@ export class ModelCatalog {
         warning: 'Manual catalog; model availability is unverified until generation succeeds.',
       };
     try {
-      const models: ModelInfo[] = [];
-      let cursor: string | undefined;
-      const cursors = new Set<string>();
-      for (let page = 0; page < 20; page++) {
-        const kind = this.transport.provider.catalog;
+      const kind = this.transport.provider.catalog;
+      const readPage = (cursor?: string) => {
         const path = this.transport.provider.modelCatalogURL
           ? (() => {
               const url = new URL(this.transport.provider.modelCatalogURL!);
@@ -203,76 +368,9 @@ export class ModelCatalog {
                   ? '?pageToken=' + encodeURIComponent(cursor)
                   : '?after_id=' + encodeURIComponent(cursor)
                 : '');
-        const data = object(await this.transport.json(path, signal));
-        const items = chatgpt || kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
-        if (!Array.isArray(items) || items.length > 10000) throw new FutrynError('PROTOCOL');
-        for (const value of items) {
-          const item = object(value);
-          // Compatible ChatGPT endpoints may omit visibility; hide only an explicit non-list entry.
-          if (chatgpt && item.visibility !== undefined && item.visibility !== 'list') continue;
-          const rawID = chatgpt
-            ? item.slug
-            : kind === 'ollama'
-              ? item.name
-              : kind === 'gemini'
-                ? String(item.name).replace(/^models\//, '')
-                : (item.id ?? item.name);
-          const model = normalizeModel(
-            rawID,
-            chatgpt
-              ? (item.display_name ?? item.displayName ?? rawID)
-              : (item.display_name ?? item.displayName ?? item.name ?? rawID),
-          );
-          applyAdvertisedCapabilities(model, item);
-          // Only documented provider fields; do not guess limits from model IDs.
-          if (kind === 'gemini') {
-            model.contextLimit = positiveInteger(item.inputTokenLimit);
-            model.outputLimit = positiveInteger(item.outputTokenLimit);
-            if (
-              Array.isArray(item.supportedGenerationMethods) &&
-              item.supportedGenerationMethods.includes('generateContent') &&
-              model.capabilities.text !== 'unsupported'
-            )
-              model.capabilities.text = 'supported';
-            else if (Array.isArray(item.supportedGenerationMethods)) model.capabilities.text = 'unsupported';
-            if (model.contextLimit || model.outputLimit) {
-              model.metadataSource = this.transport.provider.baseURL + '/models';
-              model.metadataFetchedAt = model.fetchedAt;
-            }
-          }
-          if (
-            this.transport.provider.id === 'openrouter' &&
-            this.transport.provider.baseURL === 'https://openrouter.ai/api/v1'
-          ) {
-            model.contextLimit = positiveInteger(item.context_length);
-            const top =
-              item.top_provider && typeof item.top_provider === 'object'
-                ? (item.top_provider as Record<string, unknown>)
-                : {};
-            model.outputLimit = positiveInteger(top.max_completion_tokens);
-            const pricing =
-              item.pricing && typeof item.pricing === 'object' ? (item.pricing as Record<string, unknown>) : {};
-            const price = (value: unknown) =>
-              typeof value === 'string' && value.trim() && Number.isFinite(Number(value)) && Number(value) >= 0
-                ? Number(value) * 1000000
-                : null;
-            const input = price(pricing.prompt);
-            const output = price(pricing.completion);
-            if (input !== null && output !== null && Number.isFinite(input) && Number.isFinite(output))
-              model.pricing = {inputPerMillion: input, outputPerMillion: output, currency: 'USD'};
-            model.metadataSource = this.transport.provider.baseURL + '/models';
-            model.metadataFetchedAt = model.fetchedAt;
-          }
-          models.push(model);
-        }
-        if (models.length > 10000) throw new FutrynError('PROTOCOL');
-        const next = kind === 'gemini' ? data.nextPageToken : data.has_more === true ? data.last_id : undefined;
-        if (data.has_more === true && typeof next !== 'string') throw new FutrynError('PROTOCOL');
-        if (!next) break;
-        if (typeof next !== 'string' || cursors.has(next) || page === 19) throw new FutrynError('PROTOCOL');
-        cursors.add(next);
-        cursor = next;
-      }
+        return this.transport.json(path, signal);
+      };
+      const models = await readCatalogPages(await readPage(), kind, this.transport.provider.baseURL, readPage, chatgpt);
       const merged = new Map(
         // ChatGPT's account catalog supersedes configured preset fallbacks. Keep explicit
         // user IDs, including legacy manual IDs that are not configured fallbacks.
@@ -391,8 +489,8 @@ export class ModelCatalog {
           }
         }
         if (efforts.length) controls.efforts = efforts;
-        if (Object.keys(controls).length) enriched.reasoningOptions = controls;
-        else delete enriched.reasoningOptions;
+        if (Object.keys(controls).length) enriched.reasoningOptions = {...enriched.reasoningOptions, ...controls};
+        else if (!model.reasoningOptions) delete enriched.reasoningOptions;
         if (reasoning && enriched.capabilities.reasoning !== 'unsupported')
           enriched.capabilities.reasoning = 'supported';
         const limit = item.limit ? object(item.limit) : {};
@@ -404,14 +502,15 @@ export class ModelCatalog {
         return modelSchema.parse({
           ...enriched,
           // Advisory metadata fills gaps but never erases provider-reported values.
-          contextLimit: positive(limit.context) ?? model.contextLimit,
-          outputLimit: positive(limit.output) ?? model.outputLimit,
+          contextLimit: model.contextLimit ?? positive(limit.context),
+          outputLimit: model.outputLimit ?? positive(limit.output),
           pricing:
-            input !== null && output !== null
+            model.pricing ??
+            (input !== null && output !== null
               ? {inputPerMillion: input, outputPerMillion: output, currency: 'USD'}
-              : model.pricing,
-          metadataSource: 'https://models.dev/api.json',
-          metadataFetchedAt: new Date().toISOString(),
+              : null),
+          metadataSource: model.metadataSource ?? 'https://models.dev/api.json',
+          metadataFetchedAt: model.metadataFetchedAt ?? new Date().toISOString(),
         });
       }),
     );

@@ -47,6 +47,15 @@ export class ToolDispatcher implements ToolPort {
   ) {
     return this.orchestrator.invoke(call, signal, onOutput, onEvent);
   }
+  invokeUserSkill(name: string, signal?: AbortSignal) {
+    return this.orchestrator.invoke(
+      {id: crypto.randomUUID(), name: 'skill', input: {name}},
+      signal,
+      undefined,
+      undefined,
+      true,
+    );
+  }
   readInstruction(path: string, maxBytes: number, signal?: AbortSignal) {
     return this.instructions.readInstruction(path, maxBytes, signal);
   }

@@ -16,11 +16,12 @@ import {loadHostConfig, providerPresets, reservedProviderIds} from '@cosmew/mode
 import {fetchModelsDev, terminalText} from '@cosmew/security';
 import {reportRows, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@cosmew/tui';
 import {loginOAuth} from './subscriptions/login';
-import {loginWizard} from './auth-wizard';
+import {chooseGatewayModel, loginWizard} from './auth-wizard';
 import {writeMcpNotices} from './bootstrap/mcp';
 import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
 import {execCli} from './exec';
+import {mcpCli, MCP_HELP} from './mcp-cli';
 
 // Suppress third-party raw warning output; diagnostics are normalized by Cosmew.
 (globalThis as typeof globalThis & {AI_SDK_LOG_WARNINGS: boolean}).AI_SDK_LOG_WARNINGS = false;
@@ -35,9 +36,9 @@ const HELP = `Cosmew (cosmew) provider, authentication & TUI CLI
         [--stream-retries n] [--replay-reasoning]
         Writes [model_providers.<id>] in ~/.cosmew/config.toml (user-level only; no tokens in the file).
   login --provider <id> (alias of auth login)
+  login "<base-url> | <api-key> | [model]" | login <base-url> [--key-stdin|--no-auth] [--model <id>]
   logout [--account <id-or-alias>] | status | doctor
-  mcp [list]
-    Connects the user mcp.json (stdio and HTTP) and prints status. Project MCP files are not started.
+${MCP_HELP.trimEnd()}
   auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
     [--method api-key|env|none|oauth-browser] [--model <manual-model-id>]
   auth list | methods | status [--account <id-or-alias>] | logout --account <id-or-alias>
@@ -63,8 +64,8 @@ const HELP = `Cosmew (cosmew) provider, authentication & TUI CLI
 
 Options: --json, --help, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
-variable NAME. Never pass a key as an argument. Default storage: ~/.cosmew (0700); existing ~/.futryn and ~/.hannes are reused.
-COSMEW_HOME overrides storage; FUTRYN_HOME and HANNES_HOME remain compatible.
+variable NAME. Never pass a key as an argument. Default storage: ~/.cosmew (0700). An existing ~/.futryn or ~/.hannes is renamed there once; it is not merged.
+COSMEW_HOME overrides storage.
 Canonical TUI commands follow Claude Code: /login, /logout, /model, /status,
   /config [key=value ...], /permissions, /mcp, /theme, /resume,
   /usage (/cost /stats), /context [all], /effort <level|auto|status>,
@@ -156,7 +157,7 @@ function output(app: Application, value: unknown, json = false) {
   process.stdout.write(terminalText(app.redactor.text(render)) + '\n');
 }
 
-const MCP_NOTE = 'Project MCP files are not started. OAuth, resources and install are not in this slice.';
+const MCP_NOTE = 'Project MCP files are not started.';
 
 /** Paths that exist and are ignored. Their contents are not read and nothing in them is started. */
 function ignoredProjectMcpFiles(): string[] {
@@ -181,6 +182,25 @@ async function connectUserMcp(app: Application, signal?: AbortSignal, required =
     if (required || signal?.aborted) throw error instanceof FutrynError ? error : new FutrynError('CANCELLED');
     process.stderr.write('Notice: MCP servers were not started.\n');
     return undefined;
+  }
+}
+
+/**
+ * Interactive TUI opens immediately while user MCP servers connect in the background.
+ * Avoids blocking the alternate screen on slow remote servers and avoids writing raw stderr over Ink.
+ */
+async function runTuiWithBackgroundMcp(app: Application, signal: AbortSignal, initialCommand?: string): Promise<void> {
+  const client = app.createFutrynClient(resolve('.'));
+  const mcpAbort = new AbortController();
+  const abortMcp = () => mcpAbort.abort();
+  signal.addEventListener('abort', abortMcp, {once: true});
+  const mcpConnect = app.connectMcp(mcpAbort.signal).catch(() => undefined);
+  try {
+    await runInteractiveTui({client, initialCommand});
+  } finally {
+    mcpAbort.abort();
+    signal.removeEventListener('abort', abortMcp);
+    await mcpConnect;
   }
 }
 
@@ -596,7 +616,7 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
             const session = client.activeSession();
             conversation = session ? app.resumeConversation(session.id) : app.conversation(project);
             conversationAccountId = account.id;
-            output(app, `Using ${account.alias}; original session preserved.`);
+            output(app, `Using ${account.alias}; continuing current session.`);
           }
         } else if (text.startsWith('/resume ')) {
           conversation = app.resumeConversation(parsedCommand!.args);
@@ -753,6 +773,10 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
 }
 
 async function main() {
+  if (process.argv[2] === 'mcp') {
+    await mcpCli(process.argv.slice(3));
+    return;
+  }
   if (process.argv[2] === 'exec') {
     process.exitCode = await execCli(process.argv.slice(3));
     return;
@@ -836,6 +860,71 @@ async function main() {
     } else if (group === 'logout') {
       await app.accounts.logout(account().id, true);
       output(app, 'Logged out locally; remote keys require provider-console revocation.');
+    } else if (group === 'login' && action && /^https?:\/\//i.test(action.trim())) {
+      const trimmed = action.trim();
+      if (trimmed.includes('|')) {
+        const rawKey = trimmed.split('|')[1]?.trim();
+        if (rawKey) app.redactor.register(rawKey);
+      }
+      const apiKey = trimmed.includes('|')
+        ? undefined
+        : options['no-auth']
+          ? undefined
+          : options['key-stdin']
+            ? await readSecretStdin()
+            : process.stdin.isTTY
+              ? await secretInput('API key (Enter to skip if no auth)')
+              : undefined;
+      if (apiKey) app.redactor.register(apiKey);
+      const client = app.createFutrynClient(resolve('.'));
+      const chooseModel =
+        process.stdin.isTTY && !options.json && !options['key-stdin']
+          ? async (models: readonly ModelInfo[]) => {
+              const input = new ChatInput(controller.signal);
+              try {
+                return await chooseGatewayModel(
+                  input,
+                  line => {
+                    process.stderr.write(terminalText(app.redactor.text(line)) + '\n');
+                  },
+                  models,
+                );
+              } finally {
+                input.close();
+              }
+            }
+          : undefined;
+      const result = await progress('Checking gateway', () =>
+        client.quickConnectProvider(
+          {
+            ...(trimmed.includes('|') ? {raw: trimmed} : {baseURL: trimmed, apiKey, modelId: str(options, 'model')}),
+            ...(str(options, 'alias') ? {alias: str(options, 'alias')} : {}),
+            ...(options.project ? {project: resolve('.')} : {}),
+            chooseModel,
+          },
+          controller.signal,
+        ),
+      );
+      output(
+        app,
+        options.json
+          ? {
+              accountId: result.account.id,
+              alias: result.account.alias,
+              providerId: result.provider.id,
+              protocol: result.protocol,
+              catalog: result.catalog,
+              modelsCount: result.modelsCount,
+              model: result.model.id,
+              contextLimit: result.model.contextLimit,
+              outputLimit: result.model.outputLimit,
+              capabilities: result.model.capabilities,
+              reusedProvider: result.reusedProvider,
+              summary: result.summary,
+            }
+          : result.summary,
+        !!options.json,
+      );
     } else if (group === 'login' && str(options, 'provider')) {
       await login(app, options, controller.signal);
     } else if (
@@ -843,11 +932,11 @@ async function main() {
         !(group === 'model' && action === 'doctor')) ||
       (!group && process.stdin.isTTY && process.stdout.isTTY)
     ) {
-      await connectUserMcp(app, controller.signal);
-      await runInteractiveTui({
-        client: app.createFutrynClient(resolve('.')),
-        initialCommand: group ? `/${group}${action ? ' ' + action : ''}` : undefined,
-      });
+      await runTuiWithBackgroundMcp(
+        app,
+        controller.signal,
+        group ? `/${group}${action ? ' ' + action : ''}` : undefined,
+      );
     } else if (group === 'exit') {
       return;
     } else if (group === 'providers') {
@@ -1035,12 +1124,7 @@ async function main() {
     } else if (group === 'themes' || group === 'theme') {
       await handleThemesCli(app, action, argument, options);
     } else if (group === 'tui' || options.tui) {
-      await connectUserMcp(app, controller.signal);
-      const client = app.createFutrynClient(resolve('.'));
-      await runInteractiveTui({
-        client,
-        initialCommand: action ? `/${action}` : undefined,
-      });
+      await runTuiWithBackgroundMcp(app, controller.signal, action ? `/${action}` : undefined);
     } else if (!group || group === 'chat' || group === 'run') {
       await chat(app, options, controller.signal, group === 'run');
     } else {

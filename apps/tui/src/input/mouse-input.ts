@@ -134,6 +134,8 @@ export interface TerminalMouseInput {
   stdin: MouseStdin;
   subscribe(listener: (event: TerminalWheel) => void): () => void;
   subscribeMouse?(listener: (event: TerminalMouseEvent) => void): () => void;
+  /** Release mouse reporting for native terminal text selection, without leaving raw input. */
+  setCaptureEnabled?(enabled: boolean): void;
   dispose(): void;
 }
 
@@ -147,6 +149,14 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
   const mouseListeners = new Set<(event: TerminalMouseEvent) => void>();
   let active = false;
   let disposed = false;
+  let captureEnabled = true;
+  let reporting = false;
+  const syncReporting = () => {
+    const enabled = active && captureEnabled && !disposed;
+    if (enabled === reporting) return;
+    stdout.write(enabled ? ENABLE_TERMINAL_MOUSE : DISABLE_TERMINAL_MOUSE);
+    reporting = enabled;
+  };
   let ready = '';
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clear = () => {
@@ -156,6 +166,7 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
     filter.reset();
   };
   const emit = (event: TerminalWheel) => {
+    if (!captureEnabled) return;
     for (const listener of listeners) listener(event);
     for (const listener of mouseListeners) listener(event);
   };
@@ -170,6 +181,7 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
       if (!active) return chunk;
       clearTimeout(timer);
       const text = filter.feed(String(chunk), emit, event => {
+        if (!captureEnabled) return;
         for (const listener of mouseListeners) listener(event);
       });
       if (filter.hasPending && !filter.awaitingReport) {
@@ -190,9 +202,9 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
       if (property === 'setRawMode' && source.setRawMode)
         return (mode: boolean) => {
           source.setRawMode!(mode);
-          if (!disposed && active !== mode) {
+          if (!disposed) {
             active = mode;
-            stdout.write(mode ? ENABLE_TERMINAL_MOUSE : DISABLE_TERMINAL_MOUSE);
+            syncReporting();
           }
           if (!mode) clear();
           return stdin;
@@ -215,9 +227,14 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
         mouseListeners.delete(listener);
       };
     },
+    setCaptureEnabled(enabled) {
+      if (disposed) return;
+      captureEnabled = enabled;
+      syncReporting();
+    },
     dispose() {
       disposed = true;
-      if (active) stdout.write(DISABLE_TERMINAL_MOUSE);
+      syncReporting();
       active = false;
       clear();
       listeners.clear();

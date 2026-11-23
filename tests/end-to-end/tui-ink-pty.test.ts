@@ -6,6 +6,7 @@ import type {FutrynClient} from '@cosmew/sdk';
 import {join, resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
+import {TerminalScreen} from '../fixtures/terminal-screen';
 
 const completedOnboarding = ['theme', 'auth', 'security'];
 
@@ -74,10 +75,12 @@ test.skipIf(process.platform === 'win32')(
       client.trustWorkspace();
       client.updateAppearance({animations: {...client.getAppearance().animations, enabled: false}});
       let output = '';
+      const screen = new TerminalScreen(140, 40);
       terminal = new Bun.Terminal({
         cols: 140,
         rows: 40,
         data(_t, bytes) {
+          screen.write(bytes);
           output += Buffer.from(bytes).toString('utf8');
         },
       });
@@ -91,7 +94,7 @@ test.skipIf(process.platform === 'win32')(
           BUN_INSTALL_CACHE_DIR: join(runtimeDir, 'bun-cache'),
           XDG_CACHE_HOME: join(runtimeDir, 'cache'),
           COSMEW_HOME: join(dir, 'state'),
-          FUTRYN_COMMAND_BACKEND: 'none',
+          COSMEW_COMMAND_BACKEND: 'none',
           TERM: 'xterm-256color',
           LANG: 'en_US.UTF-8',
           NO_COLOR: '1',
@@ -99,10 +102,14 @@ test.skipIf(process.platform === 'win32')(
       });
       const wait = async (text: string, from = 0) => {
         const deadline = Date.now() + 8000;
-        while (!output.slice(from).includes(text) && Date.now() < deadline && child!.exitCode === null)
+        while (
+          !(output.slice(from).includes(text) || screen.text().includes(text)) &&
+          Date.now() < deadline &&
+          child!.exitCode === null
+        )
           await Bun.sleep(5);
         expect(
-          output.slice(from).includes(text),
+          output.slice(from).includes(text) || screen.text().includes(text),
           `waiting for ${text}; tail: ${JSON.stringify(output.slice(-5000))}`,
         ).toBe(true);
         expect(child!.exitCode).toBeNull();
@@ -135,8 +142,7 @@ test.skipIf(process.platform === 'win32')(
       await wait('A_CHANGE_00', from);
 
       from = await send('\x1b[6~');
-      // The pointer is repainted as a partial cell update, so only the freshly written body line is a stable raw-stream marker;
-      // the highlighted row itself is asserted by the Ink frame tests.
+      // Ink can repaint only changed cells; the screen applies those cursor/erase deltas.
       await wait('BODY_file-06', from);
       from = await send('\x1b[<65;100;7M');
       await wait('BODY_file-09', from);
@@ -222,7 +228,7 @@ test.skipIf(process.platform === 'win32')(
           return {text: 'INK_TURN_DONE'};
         },
       });
-      const historyId = app.conversations.create(client.status().selection!);
+      const historyId = client.createSession().id;
       app.db.transaction(() => {
         for (let n = 0; n < 1200; n++)
           app.conversations.append(
@@ -244,7 +250,7 @@ test.skipIf(process.platform === 'win32')(
         terminal,
         env: {
           ...process.env,
-          HANNES_HOME: join(dir, 'state'),
+          COSMEW_HOME: join(dir, 'state'),
           NO_COLOR: '1',
         },
       });
@@ -332,22 +338,28 @@ test.skipIf(process.platform === 'win32')(
       await client.discoverModels();
       client.selectModel('fixture-model');
       let output = '';
+      const screen = new TerminalScreen(80, 24);
       terminal = new Bun.Terminal({
         cols: 80,
         rows: 24,
         data(_t, bytes) {
+          screen.write(bytes);
           output += Buffer.from(bytes).toString('utf8');
         },
       });
       child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
         cwd: dir,
         terminal,
-        env: {...process.env, HANNES_HOME: join(dir, 'state'), NO_COLOR: '1'},
+        env: {...process.env, COSMEW_HOME: join(dir, 'state'), NO_COLOR: '1'},
       });
       const wait = async (text: string) => {
         const deadline = Date.now() + 8000;
-        while (!output.includes(text) && Date.now() < deadline) await Bun.sleep(5);
-        expect(output.includes(text), `waiting for ${text}; tail: ${output.slice(-800)}`).toBe(true);
+        while (!(output.includes(text) || screen.text().replace(/\s+/g, ' ').includes(text)) && Date.now() < deadline)
+          await Bun.sleep(5);
+        expect(
+          output.includes(text) || screen.text().replace(/\s+/g, ' ').includes(text),
+          `waiting for ${text}; tail: ${output.slice(-800)}`,
+        ).toBe(true);
       };
       await wait('Accessing workspace:');
       await Bun.sleep(200);
@@ -355,11 +367,15 @@ test.skipIf(process.platform === 'win32')(
       await Bun.sleep(60);
       terminal.write('\r');
       await wait('manual mode on');
+      screen.resize(120, 40);
       terminal.resize(120, 40);
+      child.kill('SIGWINCH');
       await Bun.sleep(120);
       terminal.write('wide');
       await wait('wide');
+      screen.resize(20, 8);
       terminal.resize(20, 8);
+      child.kill('SIGWINCH');
       await Bun.sleep(120);
       terminal.write('n');
       await wait('widen');
@@ -367,7 +383,8 @@ test.skipIf(process.platform === 'win32')(
       terminal.write('\x03'); // text in the prompt: Ctrl+C clears it first
       await wait('ctrl+y to paste deleted text');
       terminal.write('\x03');
-      await wait('Press Ctrl-C again to exit');
+      // The 20-column footer clips the confirmation suffix; verify the visible prompt, then actual exit.
+      await wait('Press Ctrl-C again');
       terminal.write('\x03');
       const timer = setTimeout(() => child?.kill('SIGKILL'), 5000);
       expect(await child.exited).toBe(0);
@@ -417,7 +434,7 @@ test.skipIf(process.platform === 'win32')(
         const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui', ...args], {
           cwd: dir,
           terminal,
-          env: {...process.env, HANNES_HOME: join(dir, 'state'), NO_COLOR: '1'},
+          env: {...process.env, COSMEW_HOME: join(dir, 'state'), NO_COLOR: '1'},
         });
         try {
           const wait = async (text: string) => {
@@ -549,22 +566,24 @@ test.skipIf(process.platform === 'win32')(
       await client.discoverModels();
       client.selectModel('stream-model');
       let output = '';
+      const screen = new TerminalScreen(100, 35);
       terminal = new Bun.Terminal({
         cols: 100,
         rows: 35,
         data(_t, bytes) {
+          screen.write(bytes);
           output = (output + Buffer.from(bytes).toString('utf8')).slice(-250000);
         },
       });
       child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
         cwd: dir,
         terminal,
-        env: {...process.env, HANNES_HOME: join(dir, 'state'), NO_COLOR: '1'},
+        env: {...process.env, COSMEW_HOME: join(dir, 'state'), NO_COLOR: '1'},
       });
       const wait = async (text: string, timeout = 10000) => {
         const deadline = Date.now() + timeout;
-        while (!output.includes(text) && Date.now() < deadline) await Bun.sleep(3);
-        expect(output.includes(text), `waiting for ${text}`).toBe(true);
+        while (!(output.includes(text) || screen.text().includes(text)) && Date.now() < deadline) await Bun.sleep(3);
+        expect(output.includes(text) || screen.text().includes(text), `waiting for ${text}`).toBe(true);
       };
       await wait('Accessing workspace:');
       await Bun.sleep(200);
@@ -591,7 +610,7 @@ test.skipIf(process.platform === 'win32')(
       expect(Math.max(...latency)).toBeLessThan(250);
       await wait('LIVE_STREAM_DONE', 20000);
       expect(emitted).toBe(250);
-      expect(output).toContain(draft);
+      expect(screen.text()).toContain(draft);
       terminal.write('\x03'); // text in the prompt: Ctrl+C clears it first
       await wait('ctrl+y to paste deleted text');
       terminal.write('\x03');
@@ -697,7 +716,7 @@ test.skipIf(process.platform === 'win32')(
       await client.discoverModels();
       client.selectModel('fixture-model');
       client.trustWorkspace(); // Skip the trust dialog: a key sent before input is ready is lost and Enter would exit.
-      const historyId = app.conversations.create(client.status().selection!);
+      const historyId = client.createSession().id;
       app.conversations.append(historyId, {role: 'user', content: 'needle first'}, 'committed');
       app.conversations.append(historyId, {role: 'assistant', content: 'needle second'}, 'committed');
       app.conversations.append(historyId, {role: 'user', content: 'Check a stored tool result'}, 'committed');
@@ -721,10 +740,12 @@ test.skipIf(process.platform === 'win32')(
         'committed',
       );
       let output = '';
+      const screen = new TerminalScreen(100, 36);
       terminal = new Bun.Terminal({
         cols: 100,
         rows: 36,
         data(_t, bytes) {
+          screen.write(bytes);
           output += Buffer.from(bytes).toString('utf8');
         },
       });
@@ -738,7 +759,7 @@ test.skipIf(process.platform === 'win32')(
           HOME: dir,
           TMPDIR: dir,
           COSMEW_HOME: join(dir, 'state'),
-          FUTRYN_COMMAND_BACKEND: 'none',
+          COSMEW_COMMAND_BACKEND: 'none',
           TERM: 'xterm-256color',
           LANG: 'en_US.UTF-8',
           NO_COLOR: '1',
@@ -746,9 +767,10 @@ test.skipIf(process.platform === 'win32')(
       });
       const wait = async (text: string, from = 0) => {
         const deadline = Date.now() + 8000;
-        while (!output.slice(from).includes(text) && Date.now() < deadline) await Bun.sleep(5);
+        while (!(output.slice(from).includes(text) || screen.text().includes(text)) && Date.now() < deadline)
+          await Bun.sleep(5);
         expect(
-          output.slice(from).includes(text),
+          output.slice(from).includes(text) || screen.text().includes(text),
           `waiting for ${JSON.stringify(text)}; last screen/output: ${JSON.stringify(output.slice(-8000))}`,
         ).toBe(true);
         expect(child!.exitCode).toBeNull();
@@ -762,13 +784,12 @@ test.skipIf(process.platform === 'win32')(
       await wait('manual mode on');
       await wait('needle second');
       const summary = 'Ran 1 shell command (click or ctrl+o to expand)';
-      const footer = '⏸ manual mode on';
       const summaryRow = () => {
-        const lines = stripVTControlCharacters(output).split(/\r?\n/);
-        const last = lines.findLastIndex(line => line.trimStart().startsWith(footer));
-        if (last < 0) return 0;
-        const first = lines.findLastIndex((line, index) => index < last && line.trim() === summary);
-        return first >= 0 && last - first < 36 ? 36 - (last - first) : 0;
+        const row = screen
+          .text()
+          .split('\n')
+          .findIndex(line => line.trim() === summary);
+        return row + 1;
       };
       const readyBy = Date.now() + 8000;
       while (!summaryRow() && Date.now() < readyBy) await Bun.sleep(10);
@@ -776,8 +797,9 @@ test.skipIf(process.platform === 'win32')(
       expect(output).not.toContain('PTY_BASH_RECEIPT_LINE');
       let from = await send(`\x1b[<0;3;${summaryRow()}M`);
       const receipt = () =>
-        stripVTControlCharacters(output.slice(from))
-          .split(/\r?\n/)
+        screen
+          .text()
+          .split('\n')
           .some(line => line.trim() === '⎿  PTY_BASH_RECEIPT_LINE');
       const clickedBy = Date.now() + 8000;
       while (!receipt() && Date.now() < clickedBy && child.exitCode === null) await Bun.sleep(10);
@@ -844,15 +866,18 @@ globalThis.fetch = async (input, init) => {
     );
 
     let output = '';
+    let screen = new TerminalScreen(100, 36);
     let terminal: Bun.Terminal | undefined;
     let child: ReturnType<typeof Bun.spawn> | undefined;
     const launch = () => {
       output = '';
+      screen = new TerminalScreen(100, 36);
       const decoder = new TextDecoder();
       terminal = new Bun.Terminal({
         cols: 100,
         rows: 36,
         data(_terminal, bytes) {
+          screen.write(bytes);
           output += decoder.decode(bytes, {stream: true});
         },
       });
@@ -891,7 +916,11 @@ globalThis.fetch = async (input, init) => {
           stableSince = Date.now();
         }
         const fresh = stripVTControlCharacters(output.slice(from));
-        if (markers.every(marker => fresh.includes(marker)) && Date.now() - stableSince >= 65) return;
+        if (
+          markers.every(marker => fresh.includes(marker) || screen.text().includes(marker)) &&
+          Date.now() - stableSince >= 65
+        )
+          return;
         await Bun.sleep(10);
       }
       throw new Error(`Waiting for ${markers.join(', ')}. Last PTY bytes: ${JSON.stringify(output.slice(-3500))}`);

@@ -204,8 +204,8 @@ test('MCP discovery refuses an oversized schema explicitly instead of replacing 
   );
   try {
     const status = await hub.connect();
-    expect(status.servers[0]?.state).toBe('failed');
-    expect(status.servers[0]?.error).toContain('schema');
+    expect(status.servers[0]?.state).toBe('connected');
+    expect(status.problems.join(' ')).toContain('schema');
     expect(hub.tools()).toHaveLength(0);
   } finally {
     await hub.close();
@@ -343,5 +343,87 @@ test('MCP schema keyword restrictions do not reject ordinary argument names or a
     expect(f.calls).toBe(1);
   } finally {
     f.close();
+  }
+});
+
+test('OpenAI Docs 2020-12 search schema exposes the tool and validates arguments before approval', async () => {
+  const f = fixture({
+    type: 'object',
+    properties: {
+      query: {type: 'string', minLength: 1},
+      limit: {type: 'integer', minimum: 1, maximum: 50},
+      cursor: {type: 'string'},
+    },
+    required: ['query'],
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+  });
+  try {
+    expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(true);
+    for (const input of [{}, {query: ''}, {query: 'Responses API', limit: 51}, {query: 'API', limit: '2'}]) {
+      const result = await f.dispatcher.invoke({id: crypto.randomUUID(), name: 'mcp__fixture__run', input});
+      expect(result.code).toBe('INVALID_INPUT');
+    }
+    expect(f.asked).toBe(0);
+    expect(f.calls).toBe(0);
+    const result = await f.dispatcher.invoke({
+      id: 'openai-docs-search',
+      name: 'mcp__fixture__run',
+      input: {query: 'Responses API', limit: 2},
+    });
+    expect(result.status).toBe('ok');
+    expect(f.asked).toBe(1);
+    expect(f.calls).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test('2020-12 validates dependentRequired instead of treating the schema as draft-07', async () => {
+  const f = fixture({
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: {query: {type: 'string'}, cursor: {type: 'string'}},
+    dependentRequired: {cursor: ['query']},
+  });
+  try {
+    expect(
+      (await f.dispatcher.invoke({id: 'missing-query', name: 'mcp__fixture__run', input: {cursor: 'next'}})).code,
+    ).toBe('INVALID_INPUT');
+    expect(f.calls).toBe(0);
+    expect(
+      (await f.dispatcher.invoke({id: 'valid-query', name: 'mcp__fixture__run', input: {cursor: 'next', query: 'API'}}))
+        .status,
+    ).toBe('ok');
+    expect(f.calls).toBe(1);
+  } finally {
+    f.close();
+  }
+});
+
+test('2020-12 schema positions retain costly keyword restrictions and unknown dialects are refused', async () => {
+  for (const schema of [
+    {$schema: 'https://example.com/unknown-schema', type: 'object'},
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      unevaluatedProperties: {type: 'string', pattern: '(a+)+$'},
+    },
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      properties: {args: {type: 'array', prefixItems: [{type: 'string', pattern: '(a+)+$'}], minItems: 1, maxItems: 1}},
+    },
+  ]) {
+    const f = fixture(schema);
+    try {
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(false);
+      expect((await f.dispatcher.invoke({id: crypto.randomUUID(), name: 'mcp__fixture__run', input: {}})).code).toBe(
+        'INVALID_INPUT',
+      );
+      expect(f.asked).toBe(0);
+      expect(f.calls).toBe(0);
+    } finally {
+      f.close();
+    }
   }
 });

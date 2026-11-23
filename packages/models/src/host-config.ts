@@ -69,6 +69,7 @@ const ALLOWED_FIELDS = new Set([
   'request_max_retries',
   'stream_max_retries',
   'stream_idle_timeout_ms',
+  'stream_usage',
   'model_catalog_url',
   'models',
   'catalog',
@@ -203,6 +204,8 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     fail('env_key_instructions must be a string');
   if (raw.requires_auth !== undefined && typeof raw.requires_auth !== 'boolean')
     fail('requires_auth must be true or false');
+  if (raw.stream_usage !== undefined && typeof raw.stream_usage !== 'boolean')
+    fail('stream_usage must be true or false');
   if (raw.replay_reasoning !== undefined && typeof raw.replay_reasoning !== 'boolean')
     fail('replay_reasoning must be true or false');
 
@@ -267,7 +270,7 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     ...(raw.replay_reasoning === true ? {replayReasoning: true} : {}),
     ...(reasoning?.success ? {reasoning: reasoning.data} : {}),
     // Streams are chatty; a chat gateway reports usage only when asked.
-    ...(protocol.data === 'chat' ? {streamUsage: true} : {}),
+    ...(protocol.data === 'chat' ? {streamUsage: raw.stream_usage !== false} : {}),
   });
   if (!provider.success) return fail('invalid provider definition');
   return {provider: provider.data, ...(command ? {tokenCommand: command} : {})};
@@ -507,6 +510,7 @@ export function renderProviderToml(entry: HostProviderEntry): string {
   const head = `model_providers.${tomlKey(provider.id)}`;
   const lines = [`[${head}]`, `name = ${tomlString(provider.name)}`, `base_url = ${tomlString(provider.baseURL)}`];
   lines.push(`wire_api = ${tomlString(provider.protocol)}`);
+  if (provider.protocol === 'chat' && provider.streamUsage === false) lines.push('stream_usage = false');
   const defaultCatalog =
     provider.protocol === 'anthropic' ? 'anthropic' : provider.protocol === 'gemini' ? 'gemini' : 'openai';
   if (provider.catalog !== defaultCatalog && !(provider.catalog === 'manual' && provider.models?.length))

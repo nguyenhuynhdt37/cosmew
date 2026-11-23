@@ -266,12 +266,7 @@ export class ThemeEngine {
         return bgCode < 7 || bgCode === 8;
       }
     }
-    const modeEnv = (
-      this.env.COSMEW_THEME_MODE ??
-      this.env.FUTRYN_THEME_MODE ??
-      this.env.HANNES_THEME_MODE ??
-      ''
-    ).toLowerCase();
+    const modeEnv = (this.env.COSMEW_THEME_MODE ?? '').toLowerCase();
     if (modeEnv === 'light') return false;
     if (modeEnv === 'dark') return true;
     return true;

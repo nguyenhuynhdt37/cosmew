@@ -55,3 +55,61 @@ provider compatibility; hai file end-to-end gốc vẫn cần coordinator chạy
 
 Reasoning-effort reset and user-only capability declarations are corrected by
 [ADR 0078](0078-user-declared-reasoning-efforts.md), folded into the uncommitted contract 1.40 rename.
+
+## Session workspace safety correction (2026-11-22)
+
+Audit item 1 in `docs/delivery/product-audit-2026-11-22.md` demonstrated that the
+production client could resume A's history while keeping B's tool root. Default
+SDK/TUI session lists now select the client's canonical workspace in SQLite
+**before** the 200-row limit; identical titles never determine identity. Aliases
+and symlink paths to the same project resolve to the same canonical identity.
+The raw persistence list without a workspace remains available for internal
+inspection; it is not an All projects UI or permission to execute a stored session.
+
+Production session reads used by resume/fork validate the stored workspace before
+loading recovery state, and opening an inactive stored conversation validates it
+again. Foreign sessions fail with POLICY and an actionable original-directory
+message, leaving the selected session, permission mode, stored owner and history
+intact. CLI chat records its canonical cwd on creation and applies the same guard
+on `/resume`; it does not silently change the tool root or relabel history.
+
+Legacy `conversations.workspace IS NULL` rows remain NULL, are absent from default
+project lists, and cannot resume/fork through the production client. The error
+explains that the workspace is unknown and asks the user to start a new session.
+No automatic ownership adoption or migration is inferred from the current cwd;
+raw persistence still permits inspection of legacy history. Existing migration
+backfill from recorded checkpoints remains unchanged. An explicit, labelled
+cross-project fork/root-switch UI and verified legacy provenance recovery remain
+future work. This replaces the earlier production cross-project-resume behavior;
+the low-level prompt-history attribution invariant remains unchanged.
+
+No shared contract fields, event versions, schema or dependencies changed. Local
+regressions in `tests/contracts/session-workspace.test.ts` cover A/B isolation,
+same titles, canonical aliases, more than 200 foreign sessions, NULL ownership,
+non-mutating rejection, ordinary creation, and the separate CLI chat path. These
+are deterministic fixture checks, without paid provider or live OS parity claims.
+
+Independent review follow-up (2026-11-22): the composition root also checks the
+workspace before session deletion, explicit shell-context receipts, plan/proposal
+access, queue/inbox/steering retraction, per-session prompt history and checkpoint
+access. Subagent inspection/stop validate the durable parent chain before loading
+child history or stopping a task; missing agent IDs retain undefined/false. The
+SDK shell/plan/queue convenience APIs normally supply the current session, but
+the injected host callbacks validate their explicit session IDs independently.
+The explicit `everywhere` prompt-history scope remains user-wide by design.
+Checkpoint creation, listing, rewind, restoration and diff baselines use the same
+canonical workspace identity, including clients opened through a symlink alias.
+Additional regressions reproduce each reviewed boundary before the guard fix,
+check non-mutation, preserve missing-session errors and normal local queue flows,
+and verify canonical checkpoint listing/rewind. No checks were added to the raw
+user-wide persistence APIs or to per-client in-memory task lookups that cannot
+address another client's tasks.
+
+TUI integration follow-up: child transcript reads authorize the durable parent
+chain even when the child's own workspace is NULL (including isolated worktree
+children). This permits inspection, while direct resume/fork of the child remains
+blocked. Cross-project child reads still reject before recovery. If changing the
+selected session removes a pending command row, a cancelled review publishes a
+fixed notice in the current notice area; it never recreates the old command or
+copies its output into the newly selected session. The TUI race test waits for
+collection readiness and the actual cancellation notice rather than elapsed time.

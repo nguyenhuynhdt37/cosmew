@@ -5,6 +5,7 @@ import {join, resolve} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {fixtureServer, memoryVault} from '../fixtures';
 import type {ProjectContextOptions} from '@cosmew/contracts';
+import {TerminalScreen} from '../fixtures/terminal-screen';
 const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const f of cleanup.splice(0).reverse()) await f();
@@ -96,13 +97,16 @@ test('applicable nested overrides are injected in order; budget and diagnostics 
   const c = await setup({workingDirectory: 'src/deep', maxBytes: 4096});
   mkdirSync(join(c.ws, 'src/deep'), {recursive: true});
   writeFileSync(join(c.ws, 'AGENTS.md'), 'ROOT_CONTEXT');
+  writeFileSync(join(c.ws, 'src/CLAUDE.md'), 'CLAUDE_CONTEXT');
   writeFileSync(join(c.ws, 'src/AGENTS.md'), 'SHADOWED_CONTEXT');
   writeFileSync(join(c.ws, 'src/AGENTS.override.md'), 'LOCAL_CONTEXT');
   writeFileSync(join(c.ws, 'src/deep/AGENTS.md'), 'DEEP_CONTEXT');
   c.client.setToolsEnabled(true);
   await send(c.client, 'Overview');
   const context = contextual(c.server.requests.filter(r => r.body).at(-1)!.body)[0].content;
-  expect(context.indexOf('ROOT_CONTEXT')).toBeLessThan(context.indexOf('LOCAL_CONTEXT'));
+  expect(context).toContain('CLAUDE_CONTEXT');
+  expect(context.indexOf('ROOT_CONTEXT')).toBeLessThan(context.indexOf('CLAUDE_CONTEXT'));
+  expect(context.indexOf('CLAUDE_CONTEXT')).toBeLessThan(context.indexOf('LOCAL_CONTEXT'));
   expect(context.indexOf('LOCAL_CONTEXT')).toBeLessThan(context.indexOf('DEEP_CONTEXT'));
   expect(context).not.toContain('SHADOWED_CONTEXT');
   expect(Buffer.byteLength(context)).toBeLessThanOrEqual(4096);
@@ -157,19 +161,19 @@ test('context budget configuration rejects invalid values without a model reques
   const c = await setup();
   expect(() => c.app.createFutrynClient(c.ws, {maxBytes: 65537})).toThrow();
   expect(() => c.app.createFutrynClient(c.ws, {maxBytes: -1})).toThrow();
-  const previous = process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
+  const previous = process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES;
   try {
-    process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES = 'invalid';
+    process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES = 'invalid';
     expect(() => c.app.createFutrynClient(c.ws)).toThrow();
-    process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES = '2048';
+    process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES = '2048';
     const client = c.app.createFutrynClient(c.ws);
     client.setToolsEnabled(true);
     writeFileSync(join(c.ws, 'AGENTS.md'), 'RULE_ENV_BUDGET');
     await send(client, 'Check rules');
     expect(client.projectContext()!.budgetBytes).toBe(2048);
   } finally {
-    if (previous === undefined) delete process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES;
-    else process.env.HANNES_PROJECT_CONTEXT_MAX_BYTES = previous;
+    if (previous === undefined) delete process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES;
+    else process.env.COSMEW_PROJECT_CONTEXT_MAX_BYTES = previous;
   }
 });
 
@@ -181,35 +185,37 @@ test.skipIf(process.platform === 'win32')(
     for (const step of ['theme', 'auth', 'security']) c.client.completeOnboardingStep(step);
     writeFileSync(join(c.ws, 'AGENTS.md'), 'Architecture: TASK01_PTY_V1 Use injected ports.');
     let output = '';
+    const screen = new TerminalScreen(100, 30);
     const terminal = new Bun.Terminal({
       cols: 100,
       rows: 30,
       data(_t, bytes) {
+        screen.write(bytes);
         output += Buffer.from(bytes).toString('utf8');
       },
     });
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'tui'], {
       cwd: c.ws,
       terminal,
-      env: {...process.env, HANNES_HOME: c.home, HANNES_PROJECT_CONTEXT_MAX_BYTES: '32768', NO_COLOR: '1'},
+      env: {...process.env, COSMEW_HOME: c.home, COSMEW_PROJECT_CONTEXT_MAX_BYTES: '32768', NO_COLOR: '1'},
     });
     const wait = async (fn: () => boolean) => {
       const end = Date.now() + 5000;
-      while (!fn() && Date.now() < end) await Bun.sleep(10);
-      expect(fn()).toBe(true);
+      while (!fn() && Date.now() < end && child.exitCode === null) await Bun.sleep(10);
+      expect(fn(), `Current screen:\n${screen.text()}\nOutput tail:\n${output.slice(-1000)}`).toBe(true);
+      expect(child.exitCode).toBeNull();
     };
     try {
-      await wait(() => output.includes('Accessing workspace:'));
-      await Bun.sleep(200);
+      await wait(() => screen.text().includes('Accessing workspace:'));
+      await wait(() => screen.text().includes('Enter to confirm'));
       terminal.write('\x1b[A');
-      await Bun.sleep(80);
+      await wait(() => screen.text().includes('❯ Yes, I trust this folder'));
       terminal.write('\r');
-      await Bun.sleep(300);
-      await wait(() => output.includes('manual mode on'));
+      await wait(() => screen.text().includes('manual mode on'));
       terminal.write('Explain this project architecture');
-      await Bun.sleep(80);
+      await wait(() => screen.text().includes('Explain this project architecture'));
       terminal.write('\r');
-      await wait(() => output.includes('Hello fixture'));
+      await wait(() => screen.text().includes('Hello fixture'));
       const request = c.server.requests
         .filter(r => r.body?.messages?.some((m: any) => m.content === 'Explain this project architecture'))
         .at(-1)!.body;
@@ -217,7 +223,7 @@ test.skipIf(process.platform === 'win32')(
       expect(JSON.stringify(request).split('TASK01_PTY_V1')).toHaveLength(2);
       writeFileSync(join(c.ws, 'AGENTS.md'), 'Architecture: TASK01_PTY_V2 Use injected ports.');
       terminal.write('Explain the updated architecture');
-      await Bun.sleep(80);
+      await wait(() => screen.text().includes('Explain the updated architecture'));
       terminal.write('\r');
       await wait(() =>
         c.server.requests.some(r =>
@@ -226,17 +232,15 @@ test.skipIf(process.platform === 'win32')(
       );
       // The request arriving at the fixture server can precede the completed answer frame.
       // Wait for the turn to settle before exercising the Ctrl-C double-press flow.
-      await wait(() => output.split('Hello fixture').length >= 3);
+      await wait(() => screen.text().split('Hello fixture').length >= 3);
       const updated = c.server.requests
         .filter(r => r.body?.messages?.some((m: any) => m.content === 'Explain the updated architecture'))
         .at(-1)!.body;
       expect(contextual(updated)).toHaveLength(1);
       expect(JSON.stringify(updated)).toContain('TASK01_PTY_V2');
       expect(JSON.stringify(updated)).not.toContain('TASK01_PTY_V1');
-      // Give Ink one render turn after the second response before sending the exit chord.
-      await Bun.sleep(250);
       terminal.write('\x03');
-      await wait(() => output.includes('Press Ctrl-C again to exit'));
+      await wait(() => screen.text().includes('Press Ctrl-C again to exit'));
       expect(child.exitCode).toBeNull();
       terminal.write('\x03');
       expect(await Promise.race([child.exited, Bun.sleep(4000).then(() => -1)])).toBe(0);
@@ -254,14 +258,17 @@ test('account forks and model changes keep project context transient and preserv
   writeFileSync(join(c.ws, 'AGENTS.md'), 'TASK01_ROUTING_RULE');
   c.client.setToolsEnabled(true);
   await send(c.client, 'First account');
+  const sessionId = c.client.activeSession()!.id;
   const other = await c.app.accounts.add('context-fixture', 'second-context-user', {kind: 'none'});
   await c.client.switchAccount(other.id, true, 'fixture-model');
+  expect(c.client.activeSession()?.id).toBe(sessionId);
   await send(c.client, 'Second account');
   expect(c.client.status().activeAccount?.id).toBe(other.id);
   expect(contextual(c.server.requests.filter(r => r.body).at(-1)!.body)).toHaveLength(1);
   c.client.addManualModel('alternate-context-model');
   c.client.selectModel('alternate-context-model');
-  expect(c.client.activeSession()).toBeNull();
+  expect(c.client.activeSession()?.id).toBe(sessionId);
+  expect(c.client.activeSession()?.selection.modelId).toBe('alternate-context-model');
   expect(c.client.context().projectInstructionBytes).toBeGreaterThan(0);
   await send(c.client, 'Alternate model');
   const request = c.server.requests.filter(r => r.body).at(-1)!.body;

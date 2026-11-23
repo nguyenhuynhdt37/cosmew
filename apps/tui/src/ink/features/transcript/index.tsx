@@ -32,7 +32,7 @@ import {
   type WrapRun,
 } from '../../ui';
 import {WindowedRows} from '../../screen';
-import {renderCache} from '../../ui/render-cache';
+import {createPresentationCache} from './presentation-cache';
 import {useUiTheme} from '../../ui/ui-theme';
 import {TodoItems, todosFromInput} from '../plan';
 import {ToolDiff} from '../diff';
@@ -61,11 +61,32 @@ export function activityIds(item: Item): string[] {
         : [],
   );
 }
-/** Last `rows` lines of a streaming answer, with a marker for the hidden head. */
-export function liveTail(text: string, rows: number): string {
-  const lines = text.split('\n');
-  if (lines.length <= rows) return text;
-  return `… ${lines.length - rows} earlier lines (shown in full when the answer completes)\n${lines.slice(-rows).join('\n')}`;
+/** Bound live Markdown work by both lines and viewport width, including unbroken paragraphs. */
+export function liveTail(text: string, rows: number, width = 80): string {
+  const lineLimit = Math.max(1, Math.floor(rows));
+  // Two UTF-16 units per cell accommodate astral characters without passing a huge
+  // single paragraph to Markdown/Ink on every delta. The source item stays intact.
+  const characterLimit = lineLimit * Math.max(1, Math.floor(width)) * 2;
+  let lineStart = 0;
+  let scan = text.length;
+  for (let line = 0; line < lineLimit; line++) {
+    const newline = scan > 0 ? text.lastIndexOf('\n', scan - 1) : -1;
+    if (newline < 0) {
+      lineStart = 0;
+      break;
+    }
+    lineStart = newline + 1;
+    scan = newline;
+  }
+  let start = Math.max(lineStart, text.length - characterLimit, 0);
+  if (!start) return text;
+  if (/[\uDC00-\uDFFF]/.test(text[start]!)) start++;
+  let hiddenLines = 0;
+  if (start === lineStart) {
+    for (let at = text.indexOf('\n'); at >= 0 && at < start; at = text.indexOf('\n', at + 1)) hiddenLines++;
+  }
+  const label = start === lineStart ? `${hiddenLines} earlier lines` : 'earlier text';
+  return `… ${label} (shown in full when the answer completes)\n${text.slice(start)}`;
 }
 /** `11:00 PM` from local time (12-hour, no locale data: ICU spacing differs between runtimes). */
 export function formatClock(ms: number): string {
@@ -383,7 +404,7 @@ interface ItemPresentation {
   files: string[];
   postHooks: number;
 }
-const recentPresentations = renderCache<Item, ItemPresentation>(48);
+const recentPresentations = createPresentationCache<ItemPresentation>();
 function itemPresentation(item: Item): ItemPresentation {
   return recentPresentations(item, () => {
     const parts = item.role === 'assistant' ? transcriptParts(item) : [];
@@ -469,7 +490,7 @@ export const TranscriptItem = memo(function TranscriptItem({
   const liveRows = liveRowBudget ?? Math.max(8, (rows || 24) - 12);
   const bodyWidth = Math.max(1, width - 2);
   const {detailedBlocks, normalBlocks, files, calls, results, postHooks} = itemPresentation(item);
-  const label = model ?? item.model;
+  const label = item.model ?? model;
   const entries: {key: string; node: ReactNode; attached?: boolean}[] = [];
   if (item.role === 'user') {
     entries.push({key: 'user', node: <UserMessage text={item.content} width={width} />});
@@ -503,7 +524,10 @@ export const TranscriptItem = memo(function TranscriptItem({
           node: (
             <Box minWidth={0}>
               <Text color={color('markdownHeading')}>⏺ </Text>
-              <Markdown text={item.streaming ? liveTail(block.text, liveRows) : block.text} width={bodyWidth} />
+              <Markdown
+                text={item.streaming ? liveTail(block.text, liveRows, bodyWidth) : block.text}
+                width={bodyWidth}
+              />
             </Box>
           ),
         });
@@ -546,7 +570,7 @@ export const TranscriptItem = memo(function TranscriptItem({
               {open ? (
                 <Box paddingLeft={Math.max(0, Math.min(2, width - 1))} minWidth={0}>
                   <Markdown
-                    text={item.streaming ? liveTail(block.text, liveRows) : block.text}
+                    text={item.streaming ? liveTail(block.text, liveRows, bodyWidth) : block.text}
                     width={bodyWidth}
                     tone="thinking"
                   />

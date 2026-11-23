@@ -51,13 +51,14 @@ async function chain(
     launch?: {allow?: string[]; deny?: string[]};
     /** When set, an unsandboxed command is actually run with bash. Sandboxed commands stay fixtures. */
     execute?: boolean;
+    externalSession?: boolean;
     codeIntel?: LspManager;
     stateDirectory?: string;
     /** Replaces the fixture runtime. Used to drive NativeCommandRuntime on the real dispatcher path. */
     commands?: (root: string) => CommandRuntime;
   } = {},
 ) {
-  const home = mkdtempSync(join(tmpdir(), 'futryn-modes-home-'));
+  const home = realpathSync.native(mkdtempSync(join(tmpdir(), 'futryn-modes-home-')));
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'futryn-modes-ws-')));
   cleanup.push(
     () => rmSync(home, {recursive: true, force: true}),
@@ -84,6 +85,7 @@ async function chain(
   const ran: string[] = [];
   const launches: CommandRequest[] = [];
   const audits: ToolAuditRecord[] = [];
+  const sessionCwd = options.externalSession ? realpathSync.native(home) : root;
   const runtime: CommandRuntime = options.commands?.(root) ?? {
     id: 'policy-fixture',
     label: 'fixture',
@@ -115,10 +117,10 @@ async function chain(
     // Two owned terminals: one launched in the sandbox, one launched without it.
     session: id =>
       id === SHELL_SESSION
-        ? {cwd: root, command: 'bash', tty: true, sandbox: {mode: 'workspace-write', network: false}}
+        ? {cwd: sessionCwd, command: 'bash', tty: true, sandbox: {mode: 'workspace-write', network: false}}
         : id === UNSANDBOXED_SESSION
           ? {
-              cwd: root,
+              cwd: sessionCwd,
               command: 'bash',
               tty: true,
               sandbox: {mode: 'danger-full-access', network: true, unsandboxed: true},
@@ -179,6 +181,112 @@ async function chain(
 const exec = (cmd: string, extra: Record<string, unknown> = {}) => ({cmd, ...extra});
 const noAutoAllow = {sandbox: {autoAllowBashIfSandboxed: false}};
 
+describe('external command cwd', () => {
+  for (const [mode, sandbox, allow] of [
+    ['default', 'off', true],
+    ['acceptEdits', 'off', true],
+    ['default', 'off', false],
+    ['acceptEdits', 'off', false],
+    ['bypassPermissions', 'off', false],
+    ['default', 'auto-allow', false],
+    ['acceptEdits', 'auto-allow', false],
+    ['plan', 'off', true],
+  ] as const) {
+    test(`external cwd in ${mode}, sandbox ${sandbox}, Bash allow ${allow}`, async () => {
+      const c = await chain({mode, defaults: sandbox === 'off'});
+      if (allow) c.client.addPermissionRule('allow', 'Bash(printf:*)');
+      const workdir = realpathSync.native(c.home);
+      const result = await c.attempt('exec_command', exec('printf fixture', {workdir}));
+      const bypass = mode === 'bypassPermissions' && sandbox === 'off';
+      expect(c.ran).toEqual(bypass ? ['printf fixture'] : []);
+      expect(result.outcome).toBe(mode === 'plan' ? 'refused' : bypass ? 'ran' : 'prompt');
+      if (mode !== 'plan' && !bypass) {
+        expect(result.prompt).toMatchObject({
+          action: `Run in ${workdir} (outside the working directories)`,
+          decisions: ['once', 'session'],
+        });
+        expect(result.prompt?.alwaysRule).toBeUndefined();
+        expect(c.audits.some(a => a.reason === 'outside-working-directories')).toBe(true);
+      }
+    });
+  }
+
+  test('bypass with sandbox off runs external cwd and stdin without prompting, but honors ask and deny rules', async () => {
+    const c = await chain({mode: 'bypassPermissions', defaults: true, externalSession: true, execute: true});
+    const workdir = realpathSync.native(c.home);
+    const ran = await c.attempt('exec_command', {cmd: 'printf approved > bypass-cwd.txt', workdir});
+    expect(ran).toMatchObject({outcome: 'ran', prompts: 0, status: 'ok'});
+    expect(readFileSync(join(workdir, 'bypass-cwd.txt'), 'utf8')).toBe('approved');
+    expect(c.launches.at(-1)!.sandbox?.unsandboxed).toBe(true);
+    expect((await c.attempt('write_stdin', {session_id: UNSANDBOXED_SESSION, chars: 'fixture\n'})).prompts).toBe(0);
+    c.client.addPermissionRule('ask', 'Bash(printf:*)');
+    expect((await c.attempt('exec_command', {cmd: 'printf blocked > ask-cwd.txt', workdir})).outcome).toBe('prompt');
+    expect(existsSync(join(workdir, 'ask-cwd.txt'))).toBe(false);
+    c.client.addPermissionRule('deny', 'Bash(printf:*)');
+    expect((await c.attempt('exec_command', {cmd: 'printf blocked > deny-cwd.txt', workdir})).outcome).toBe('refused');
+    expect(existsSync(join(workdir, 'deny-cwd.txt'))).toBe(false);
+  });
+
+  test('an approved external sandboxed cwd validates the launch without adding a writable root', async () => {
+    const c = await chain();
+    const workdir = realpathSync.native(c.home);
+    expect((await c.attempt('exec_command', exec('pwd', {workdir}), 'once')).outcome).toBe('prompt');
+    expect(c.launches).toHaveLength(1);
+    expect(c.launches[0]).toMatchObject({cwd: workdir, cwdRoots: [workdir], sandbox: {mode: 'workspace-write'}});
+    expect(c.launches[0]!.sandbox?.writableRoots).toBeUndefined();
+  });
+
+  test('a saved Bash Always rule applies in the project but cannot approve an external cwd', async () => {
+    const c = await chain({defaults: true});
+    const cmd = 'printf fixture';
+    expect((await c.attempt('exec_command', exec(cmd), 'always')).status).toBe('ok');
+    expect(c.client.permissionRules().allow).toContain('Bash(printf fixture:*)');
+    expect((await c.attempt('exec_command', exec(cmd))).outcome).toBe('ran');
+    expect((await c.attempt('exec_command', exec(cmd, {workdir: c.home}))).outcome).toBe('prompt');
+    expect(c.ran).toEqual([cmd, cmd]);
+  });
+
+  test('Bash deny, Git internals and state deny an external cwd before prompting, including in bypass', async () => {
+    const c = await chain({mode: 'bypassPermissions', defaults: true});
+    c.client.addPermissionRule('allow', 'Bash(printf:*)');
+    c.client.addPermissionRule('deny', 'Bash(printf denied)');
+    const git = join(c.home, '.git');
+    const state = join(c.home, 'state-not-in-ws');
+    mkdirSync(git);
+    mkdirSync(state);
+    for (const [cmd, workdir] of [
+      ['printf denied', c.home],
+      ['pwd', git],
+      ['pwd', state],
+    ] as const) {
+      expect({workdir, outcome: (await c.attempt('exec_command', exec(cmd, {workdir}))).outcome}).toEqual({
+        workdir,
+        outcome: 'refused',
+      });
+    }
+    expect(c.ran).toEqual([]);
+  });
+
+  for (const [mode, session_id] of [
+    ['default', SHELL_SESSION],
+    ['acceptEdits', SHELL_SESSION],
+    ['bypassPermissions', UNSANDBOXED_SESSION],
+    ['plan', SHELL_SESSION],
+  ] as const) {
+    test(`external terminal input in ${mode} preserves poll and interrupt transport`, async () => {
+      const c = await chain({mode, externalSession: true, defaults: session_id === UNSANDBOXED_SESSION});
+      const result = await c.attempt('write_stdin', {session_id, chars: 'fixture\n'});
+      const bypass = mode === 'bypassPermissions';
+      expect(c.ran).toEqual(bypass ? ['stdin:fixture\n'] : []);
+      expect(result.outcome).toBe(mode === 'plan' ? 'refused' : bypass ? 'ran' : 'prompt');
+      if (mode !== 'plan' && !bypass)
+        expect(result.prompt?.action).toBe(`Run in ${realpathSync.native(c.home)} (outside the working directories)`);
+      expect((await c.attempt('write_stdin', {session_id})).outcome).toBe('ran');
+      expect((await c.attempt('write_stdin', {session_id, signal: 'SIGINT'})).outcome).toBe('ran');
+    });
+  }
+});
+
 describe('mode matrix on real tools', () => {
   type Outcome = 'prompt' | 'ran' | 'refused';
   const expected: Record<PermissionMode, {command: Outcome; write: Outcome; secret: Outcome; read: Outcome}> = {
@@ -213,7 +321,6 @@ describe('mode matrix on real tools', () => {
       expect((await c.attempt('write', {path: external, content: 'x'})).outcome).toBe(
         mode === 'plan' ? 'refused' : mode === 'bypassPermissions' ? 'ran' : 'prompt',
       );
-      expect((await c.attempt('exec_command', {cmd: 'ls', workdir: '..'})).outcome).toBe(want.command);
       const externalRead = join(c.home, 'external.txt');
       writeFileSync(externalRead, 'EXTERNAL_MODE_CANARY');
       expect((await c.attempt('read', {path: externalRead})).outcome).toBe(
@@ -254,14 +361,14 @@ describe('rules: deny > ask > allow, then the mode', () => {
     }
   });
 
-  test('an ask rule prompts even for a sandboxed command; bypassPermissions answers it without a prompt', async () => {
+  test('an explicit ask rule prompts even for sandboxed commands and bypassPermissions', async () => {
     const c = await chain();
     c.client.addPermissionRule('ask', 'Bash(git push:*)');
     expect((await c.attempt('exec_command', exec('git push origin "$BRANCH"'))).outcome).toBe('prompt');
     expect((await c.attempt('exec_command', exec('git status'))).outcome).toBe('ran');
     const bypass = await chain({mode: 'bypassPermissions'});
     bypass.client.addPermissionRule('ask', 'Bash(git push:*)');
-    expect((await bypass.attempt('exec_command', exec('git push origin main'))).outcome).toBe('ran');
+    expect((await bypass.attempt('exec_command', exec('git push origin main'))).outcome).toBe('prompt');
   });
 
   test('Edit and Read rules judge paths; Write is an alias of Edit', async () => {
@@ -1028,4 +1135,127 @@ test('explicit external file rules permit only their targets without granting th
   expect((await c.attempt('write', {path: join(third, 'other.txt'), content: 'NO'})).outcome).toBe('prompt');
   expect(existsSync(join(third, 'other.txt'))).toBe(false);
   expect(c.client.permissionSettings().additionalDirectories).not.toContain(third);
+});
+
+describe('external cwd audit matrix', () => {
+  for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const)
+    for (const enabled of [false, true])
+      for (const autoAllow of [false, true])
+        for (const allow of [false, true])
+          test(`cwd audit ${mode}, sandbox=${enabled}, autoAllow=${autoAllow}, Bash allow=${allow}`, async () => {
+            const c = await chain({mode, user: {sandbox: {enabled, autoAllowBashIfSandboxed: autoAllow}}});
+            if (allow) c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+            const result = await c.attempt('exec_command', {cmd: 'npm test', workdir: c.home});
+            const bypass = mode === 'bypassPermissions' && !enabled;
+            expect(c.ran).toEqual(bypass ? ['npm test'] : []);
+            expect(result.outcome).toBe(mode === 'plan' ? 'refused' : bypass ? 'ran' : 'prompt');
+            if (mode !== 'plan' && !bypass) {
+              expect(result.prompt?.action).toContain(realpathSync.native(c.home));
+              expect(result.prompt?.decisions).toEqual(['once', 'session']);
+              expect(result.prompt?.alwaysRule).toBeUndefined();
+            }
+          });
+
+  for (const enabled of [false, true])
+    test(`cwd audit actual npm script outside project, sandbox=${enabled}`, async () => {
+      const c = await chain({
+        mode: 'default',
+        user: {sandbox: {enabled, autoAllowBashIfSandboxed: true}},
+        commands: root => {
+          const native = new NativeCommandRuntime({workspaceRoot: root, stateDirectory: join(root, 'runtime-state')});
+          cleanup.push(() => native.shutdown());
+          return native;
+        },
+      });
+      const workdir = realpathSync.native(c.home);
+      writeFileSync(
+        join(workdir, 'proof.ts'),
+        "import {writeFileSync} from 'node:fs'; writeFileSync('cwd-audit-canary.txt', 'RAN');",
+      );
+      writeFileSync(
+        join(workdir, 'package.json'),
+        JSON.stringify({scripts: {test: `${quote(process.execPath)} proof.ts`}}),
+      );
+      c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+      const input = {
+        cmd: 'npm test --offline --no-audit --no-fund --update-notifier=false',
+        workdir,
+        yield_time_ms: 1000,
+      };
+      const denied = await c.attempt('exec_command', input);
+      expect({
+        status: denied.status,
+        prompts: denied.prompts,
+        canary: existsSync(join(workdir, 'cwd-audit-canary.txt')),
+      }).toEqual({status: 'denied', prompts: 1, canary: false});
+      const approved = await c.attempt('exec_command', input, 'once');
+      expect(approved.outcome).toBe('prompt');
+      if (enabled) {
+        expect(approved).toMatchObject({status: 'error', code: 'SANDBOX_DENIED'});
+        expect(existsSync(join(workdir, 'cwd-audit-canary.txt'))).toBe(false);
+      } else {
+        expect(approved.status).toBe('ok');
+        expect(readFileSync(join(workdir, 'cwd-audit-canary.txt'), 'utf8')).toBe('RAN');
+      }
+    });
+});
+
+for (const mode of ['default', 'acceptEdits', 'plan', 'bypassPermissions'] as const)
+  test(`cwd audit noninteractive permission gate in ${mode}`, async () => {
+    const c = await chain({mode, defaults: true});
+    c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+    c.client.setPromptsAvailable(false);
+    const result = await c.attempt('exec_command', {cmd: 'npm test', workdir: c.home});
+    const bypass = mode === 'bypassPermissions';
+    expect(result.outcome).toBe(bypass ? 'ran' : 'refused');
+    expect(result.status).toBe(bypass ? 'ok' : 'denied');
+    expect(c.ran).toEqual(bypass ? ['npm test'] : []);
+  });
+
+for (const mode of ['default', 'acceptEdits', 'bypassPermissions'] as const)
+  for (const enabled of [false, true])
+    test(`cwd audit once/session scope in ${mode}, sandbox=${enabled}`, async () => {
+      const c = await chain({mode, user: {sandbox: {enabled, autoAllowBashIfSandboxed: true}}});
+      c.client.addPermissionRule('allow', 'Bash(npm test:*)');
+      const input = {cmd: 'npm test', workdir: c.home};
+      if (mode === 'bypassPermissions' && !enabled) {
+        expect((await c.attempt('exec_command', input)).outcome).toBe('ran');
+        expect(c.client.listPendingPermissions()).toEqual([]);
+        expect(c.client.permissionSettings().additionalDirectories).not.toContain(c.home);
+        return;
+      }
+      expect((await c.attempt('exec_command', input, 'once')).outcome).toBe('prompt');
+      expect((await c.attempt('exec_command', input)).outcome).toBe('prompt');
+      expect((await c.attempt('exec_command', input, 'session')).outcome).toBe('prompt');
+      expect((await c.attempt('exec_command', input)).outcome).toBe('ran');
+      const other = join(c.home, 'other');
+      mkdirSync(other);
+      expect((await c.attempt('exec_command', {...input, workdir: other})).outcome).toBe('prompt');
+      expect(c.ran).toEqual(['npm test', 'npm test', 'npm test']);
+    });
+
+test('sandboxed cwd audit always cannot be resolved or saved even in bypass', async () => {
+  const c = await chain({mode: 'bypassPermissions'});
+  const before = c.client.permissionRules().allow;
+  let settled = false;
+  const pending = c.dispatcher
+    .invoke({id: crypto.randomUUID(), name: 'exec_command', input: {cmd: 'npm test', workdir: c.home}})
+    .finally(() => {
+      settled = true;
+    });
+  const deadline = Date.now() + 2000;
+  while (!settled && !c.client.listPendingPermissions().length && Date.now() < deadline) await Bun.sleep(2);
+  const prompt = c.client.listPendingPermissions()[0];
+  if (!prompt) {
+    await pending;
+    throw new Error('Expected explicit external-cwd approval');
+  }
+  try {
+    expect(() => c.client.resolvePermission(prompt.approvalId, prompt.scopeHash, 'always')).toThrow();
+    expect(c.client.permissionRules().allow).toEqual(before);
+  } finally {
+    c.client.dismissPermissionDialog(prompt.approvalId);
+  }
+  expect((await pending).status).toBe('denied');
+  expect(c.ran).toEqual([]);
 });

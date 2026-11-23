@@ -9,7 +9,16 @@ import {
 
 export function normalizeError(error: unknown, signal?: AbortSignal): FutrynError {
   if (signal?.aborted) return new FutrynError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
-  if (error instanceof FutrynError) return error;
+  if (error instanceof FutrynError) {
+    if (isEncryptedHistoryError(error)) (error as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+    return error;
+  }
+  if (isEncryptedHistoryError(error)) {
+    const err = new FutrynError('INVALID_INPUT');
+    (err as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+    if (error instanceof Error && error.message) err.message = error.message;
+    return err;
+  }
   const status = (() => {
     if (!error || typeof error !== 'object') return undefined;
     const value = error as Record<string, unknown>;
@@ -44,6 +53,26 @@ export function statusError(status: number, retry: string | null): FutrynError {
 const billingMarker =
   /\b(?:insufficient[ -](?:quota|credits|balance)|credit[ -]balance|out of credits|spending[ -]limit|billing|payment[ -]required|subscription (?:is )?required|needs? a [\w -]*subscription)\b/i;
 const contextErrorCodes = new Set(['context_length_exceeded', 'context_window_exceeded']);
+
+export const encryptedHistoryMarker = /\b(?:encrypted history|reasoning\.encrypted_content|original account)\b/i;
+
+export function isEncryptedHistoryError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof error === 'object' && (error as {encryptedHistory?: boolean}).encryptedHistory) return true;
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof error === 'object' && 'message' in (error as Record<string, unknown>)
+          ? String((error as Record<string, unknown>).message)
+          : '';
+  const body =
+    typeof error === 'object' && error !== null && 'responseBody' in (error as Record<string, unknown>)
+      ? String((error as Record<string, unknown>).responseBody)
+      : '';
+  return encryptedHistoryMarker.test(message) || encryptedHistoryMarker.test(body);
+}
 
 function errorFields(value: unknown) {
   const text = (value: unknown) => (typeof value === 'string' ? value : '');
@@ -199,6 +228,12 @@ export class ProviderTransport {
         if (init.signal?.aborted) throw normalizeError(null, init.signal);
         if (contextStatus) {
           if (markers.some(marker => contextErrorCodes.has(marker))) throw new FutrynError('CONTEXT_LIMIT');
+          if (encryptedHistoryMarker.test(message) || markers.some(m => encryptedHistoryMarker.test(m))) {
+            const err = new FutrynError('INVALID_INPUT');
+            err.message = message || 'This conversation contains encrypted history for the original account.';
+            (err as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+            throw err;
+          }
         } else if (
           response.status === 402 ||
           [...markers, message].some(text => billingMarker.test(text.replaceAll('_', ' ')))

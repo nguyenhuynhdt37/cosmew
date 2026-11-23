@@ -122,10 +122,69 @@ test('cancelling a pending first-send check keeps the draft and sends no prompt'
   await key(view, 'kept input');
   await key(view, '\r');
   expect(request).toBeDefined();
+  expect(view.lastFrame()).toContain('Checking account…');
   await key(view, '\x1b');
   expect(request?.aborted).toBe(true);
   expect(view.lastFrame()).toContain('kept input');
+  expect(view.lastFrame()).not.toContain('Checking account…');
   expect(f.prompts).toEqual([]);
+});
+
+test('compact echoes in the transcript before its backend completes and updates the same row', async () => {
+  const pending = Promise.withResolvers<void>();
+  const {client} = dialogFixture({
+    startSession: () => ({id: 'compact-fixture', selection, messages: []}),
+    async compactSession() {
+      await pending.promise;
+      return {compacted: true, strategy: 'model', tokensBefore: 2000, tokensAfter: 500, usage: null};
+    },
+  });
+  client.createSession();
+  const ui = await openInk(client, {width: 90, rows: 28});
+  try {
+    await ui.type('/compact');
+    await ui.press('\r');
+    expect(ui.frame()).toMatch(/❯ \/compact\n  ⎿\s+Running…/);
+    pending.resolve();
+    await ui.waitFor('Context compacted');
+    const frame = ui.frame();
+    expect(frame.match(/❯ \/compact/g)).toHaveLength(1);
+    expect(frame).toMatch(/❯ \/compact\n  ⎿\s+Context compacted/);
+    expect(frame).not.toContain('Running…');
+  } finally {
+    pending.resolve();
+    await ui.close();
+  }
+});
+
+test('Escape cancels a running slash command and replaces its progress on the same row', async () => {
+  const pending = Promise.withResolvers<void>();
+  let signal: AbortSignal | undefined;
+  const {client} = dialogFixture({
+    async validateAccount(_account, requestSignal) {
+      signal = requestSignal;
+      const onAbort = () => pending.resolve();
+      requestSignal?.addEventListener('abort', onAbort, {once: true});
+      await pending.promise;
+      requestSignal?.removeEventListener('abort', onAbort);
+      requestSignal?.throwIfAborted();
+      return {models: 1, validation: 'fixture'};
+    },
+  });
+  const ui = await openInk(client, {width: 90, rows: 28});
+  try {
+    await ui.type('/doctor');
+    await ui.press('\r');
+    expect(ui.frame()).toMatch(/❯ \/doctor\n  ⎿\s+Running…/);
+    await ui.press('\x1b');
+    expect(signal?.aborted).toBe(true);
+    const frame = ui.frame();
+    expect(frame.match(/❯ \/doctor/g)).toHaveLength(1);
+    expect(frame).toMatch(/❯ \/doctor\n  ⎿\s+Command cancelled/);
+  } finally {
+    pending.resolve();
+    await ui.close();
+  }
 });
 test('controlled picker tracks highlight and fixed decision numbering', async () => {
   const highlights: string[] = [];
@@ -172,6 +231,33 @@ test('every SDK slash has an explicit implemented route or Not implemented diagn
       def.command,
     ).toBe(false);
   }
+});
+
+test('/copy selects an earlier reply and copies the chosen code block', async () => {
+  const {client} = fixture();
+  const output: string[] = [];
+  const host: CommandHost = {
+    client,
+    busy: () => false,
+    open: () => {},
+    notice: text => output.push(text),
+    reset: () => {},
+    submit: () => false,
+    exit: () => {},
+    responseText: index => (index === 2 ? 'Earlier reply\n\n```ts\nconst value = 1;\n```\n\n> Quoted text' : undefined),
+    choose: async (title, choices, writeKey) => {
+      expect(title).toBe('Copy response');
+      expect(writeKey).toBe(true);
+      expect(choices.map(choice => choice.label)).toEqual(['Full response', 'Code block 1', 'Blockquote 2']);
+      return {id: choices[1]!.id, write: false};
+    },
+    copyText: async text => {
+      output.push(text);
+      return true;
+    },
+  };
+  await routeCommand(host, '/copy 2');
+  expect(output).toEqual(['const value = 1;', 'Response copied to clipboard.']);
 });
 
 test('/config applies Claude-style multiple key=value arguments', async () => {
@@ -615,7 +701,7 @@ test('slash commands leave their result under ❯ /cmd; Esc on a panel prints a 
     await key(view, '/cost');
     await key(view, '\r');
     await settle();
-    expect(view.lastFrame()).toContain('Estimated cost');
+    expect(view.lastFrame()).toContain('API estimate');
     await key(view, '\x1b');
     await key(view, '/rewind');
     await key(view, '\r');
@@ -651,5 +737,144 @@ test('Ctrl+O shows the detailed transcript footer and Esc leaves it; the compose
     expect(view.lastFrame()).toContain('keep this');
   } finally {
     view.unmount();
+  }
+});
+
+test('a model without project tools keeps a persistent chat-only warning after a text reply', async () => {
+  const {model} = await import('../features/picker/test-fixture');
+  const f = dialogFixture({
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+    cachedModels: () => [{...model, capabilities: {...model.capabilities, tools: 'unsupported'}}],
+    startSession: () => ({id: 'chat-only', selection, messages: []}),
+    async *sendTurn() {
+      yield {type: 'textDelta', text: 'A plain chat reply.'};
+    },
+  });
+  const tui = await openInk(f.client, {width: 100, rows: 30});
+  try {
+    expect(tui.frame()).toContain('Chat only: project tools are unavailable');
+    await tui.submitPrompt('hello');
+    expect(tui.frame()).toContain('A plain chat reply.');
+    expect(tui.frame()).toContain('Chat only: project tools are unavailable');
+    expect(tui.frame()).not.toContain('Tools are now off');
+  } finally {
+    await tui.shutdown();
+  }
+});
+
+test('an MCP refresh before the next frame cannot silently consume a file approval dialog', async () => {
+  let client: ReturnType<typeof dialogFixture>['client'];
+  const f = dialogFixture({
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+    startSession: () => ({id: 'approval-ui', selection, messages: []}),
+    async *sendTurn(_id, _content, signal) {
+      const approval = client.requestPermission(
+        {
+          capability: 'fs.write',
+          action: 'Write draft.txt',
+          target: 'draft.txt',
+          reason: 'Approve a project file write',
+          kind: 'edit',
+          requiresApproval: true,
+        },
+        signal,
+      );
+      // This is the synchronous broadcast that previously denied the request before React painted it.
+      client.invalidateMcpPermissions();
+      const decision = await approval;
+      yield {type: 'textDelta', text: `Approval decision: ${decision}`};
+    },
+  });
+  client = f.client;
+  const tui = await openInk(client, {width: 100, rows: 30});
+  try {
+    const pending = tui.submitPrompt('prepare a file change');
+    await tui.nextPermission();
+    expect(tui.frame()).toContain('draft.txt');
+    expect(tui.frame()).toContain('Yes');
+    expect(tui.frame()).not.toContain('Approval decision:');
+    await tui.handleKey('Enter');
+    await pending;
+    expect(tui.frame()).toContain('Approval decision: once');
+  } finally {
+    await tui.shutdown();
+  }
+});
+
+test('native text-selection shortcut preserves draft and pending approval', async () => {
+  let clears = 0;
+  const f = dialogFixture({
+    toolGrants: {
+      list: () => [],
+      clear: () => {
+        clears++;
+      },
+    },
+  });
+  const tui = await openInk(f.client, {width: 100, rows: 30});
+  try {
+    await tui.type('keep this draft');
+    const before = clears;
+    const approval = f.client.requestPermission({
+      capability: 'fs.write',
+      action: 'Write copy-test.txt',
+      target: 'copy-test.txt',
+      reason: 'fixture',
+    });
+    await tui.nextPermission();
+    const request = f.client.listPendingPermissions()[0]!;
+    await tui.press('\x11');
+    expect(f.client.listPendingPermissions().map(p => p.approvalId)).toContain(request.approvalId);
+    expect(clears).toBe(before);
+    expect(tui.frame()).toContain('Text selection enabled');
+    f.client.resolvePermission(request.approvalId, request.scopeHash, 'deny');
+    await approval;
+    await tui.idle();
+    expect(tui.frame()).toContain('Text selection enabled');
+    expect(tui.frame()).toContain('keep this draft');
+    await tui.press('\x11');
+    expect(tui.frame()).not.toContain('Text selection enabled');
+    expect(tui.frame()).toContain('keep this draft');
+  } finally {
+    await tui.shutdown();
+  }
+});
+
+test('selection mode does not cancel a running model response', async () => {
+  let release!: () => void;
+  let aborted = false;
+  const done = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const f = dialogFixture({
+    validateAccount: async () => ({models: 1, validation: 'fixture'}),
+    startSession: () => ({id: 'copy-stream', selection, messages: []}),
+    async *sendTurn(_id, _content, signal) {
+      signal?.addEventListener(
+        'abort',
+        () => {
+          aborted = true;
+        },
+        {once: true},
+      );
+      yield {type: 'textDelta', text: 'COPY_STREAM_START'};
+      await done;
+      yield {type: 'textDelta', text: ' COPY_STREAM_END'};
+    },
+  });
+  const tui = await openInk(f.client, {width: 100, rows: 30});
+  try {
+    const pending = tui.submitPrompt('stream a response');
+    await tui.waitFor('COPY_STREAM_START');
+    await tui.press('\x11');
+    expect(tui.frame()).toContain('Text selection enabled');
+    expect(aborted).toBe(false);
+    release();
+    await pending;
+    expect(tui.frame()).toContain('COPY_STREAM_END');
+    expect(aborted).toBe(false);
+  } finally {
+    release();
+    await tui.shutdown();
   }
 });

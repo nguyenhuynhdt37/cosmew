@@ -1,8 +1,9 @@
 import {turnBudgetSchema} from './telemetry';
 import {z} from 'zod';
+import {SKILL_VISIBILITIES} from './skills';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.48' as const;
+export const CONTRACT_VERSION = '1.63' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
@@ -341,6 +342,7 @@ export const requestSchema = z.strictObject({
   maxOutputTokens: z.number().int().min(1).optional(),
   reasoningEffort: z.string().min(1).max(40).optional(),
   maxEstimatedCostUSD: z.number().positive().max(1000).optional(),
+  // MCP catalogs can offer many more tools than a model calls in a response.
   tools: z
     .array(
       z.strictObject({
@@ -349,7 +351,6 @@ export const requestSchema = z.strictObject({
         inputSchema: z.record(z.string(), z.unknown()),
       }),
     )
-    .max(32)
     .default([]),
   /**
    * Host guidance (ADR 0020) plus explicitly labeled untrusted skill metadata (ADR 0056). Adapters place it in the
@@ -614,6 +615,9 @@ export const settingsSchema = z
     sessionModes: z.record(z.string().uuid(), z.enum(['chat', 'plan', 'review'])).optional(),
     agentPreferences: z.strictObject({turnBudget: turnBudgetSchema.optional()}).optional(),
     appearance: appearanceSchema.optional(),
+    projectSkillOverrides: z
+      .record(z.string(), z.record(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/), z.enum(SKILL_VISIBILITIES)))
+      .optional(),
     projectAppearances: z.record(z.string(), partialAppearanceSchema).optional(),
     /** Project permission rules by workspace path (ADR 0028); optional, so older files still load. */
     projectPermissionRules: z.record(z.string(), legacyPermissionRuleSetSchema).optional(),

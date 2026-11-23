@@ -97,3 +97,7 @@ Permission UI follow-up (2026-11-15): `/permissions` is a compact modal manager 
 ## Amendment 2026-11-15 (ADR 0020)
 
 The budget "8 tool rounds per user turn and 32 calls per round" is replaced by 16 tool rounds and 32 executed calls per user turn on both the round-based and the Codex inline path; over-budget calls receive a paired `TOOL_BUDGET` result. See [ADR 0020](0020-progressive-code-exploration.md).
+
+## Correction — 2026-11-22
+
+[ADR 0105](0105-preserve-tools-on-request-validation-errors.md) supersedes the first-round HTTP-400 inference above. Generic request errors no longer mark the model unsupported or force later turns into text-only mode. Explicit catalog capability metadata is still honored.

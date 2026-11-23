@@ -33,7 +33,7 @@ export class McpToolSource {
       live.add(spec.name);
       let signature: string;
       try {
-        signature = JSON.stringify([spec.description, spec.inputSchema, spec.readOnlyHint === true]);
+        signature = JSON.stringify([spec.description, spec.inputSchema, spec.readOnlyHint === true, spec.identity]);
       } catch {
         signature = 'invalid-schema';
       }
@@ -51,7 +51,13 @@ export class McpToolSource {
 
 function mcpHandler(
   options: ToolDispatcherOptions,
-  spec: {name: string; description: string; inputSchema: Record<string, unknown>; readOnlyHint?: boolean},
+  spec: {
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    readOnlyHint?: boolean;
+    identity?: string;
+  },
 ): ToolHandler {
   const validate = mcpValidator(spec.inputSchema);
   const descriptor: ToolDescriptor = {
@@ -100,6 +106,7 @@ function mcpHandler(
       return {
         kind: 'mcp' as const,
         target: spec.name,
+        identity: spec.identity,
         async execute(signal) {
           try {
             signal?.throwIfAborted();

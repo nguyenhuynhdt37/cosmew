@@ -29,8 +29,8 @@ Ký hiệu: `⏺` là glyph thật (terminal vẽ thành `●`). "Ref" = file tr
 
 ## 2. Ô nhập và footer
 
-- Rule trên/dưới full width màu rule; prompt `❯ `; placeholder mờ `Try "<ví dụ>"` (xoay: `fix lint errors`, `write a test for
-  <filepath>`, `edit <filepath> to…`, `fix typecheck errors`). Đang chạy: placeholder rỗng; có tin xếp hàng: `Press up to edit queued messages`.
+- Rule trên/dưới full width màu rule; prompt `❯ `. Phiên mới hiển thị gợi ý mờ có thể điền bằng Tab hoặc → rồi sửa trước khi gửi. Gõ văn bản sẽ ẩn gợi ý. Khi đang chạy, ô nhập rỗng hiện `Press up to edit queued messages` nếu có tin chờ.
+- Hint dưới ô nhập thay đổi theo menu, trạng thái gửi và phím đã remap. Ở terminal hẹp, chỉ hiện những hint còn đủ chỗ.
 - Dòng effort phải phía trên rule trên: `◐ medium · /effort`; lúc đang chạy dòng effort và spinner cùng hàng trên.
 - Footer (2 khoảng trắng đầu): `⏸ manual mode on` (default), `⏵⏵ accept edits on (shift+tab to cycle)`, `⏸ plan mode on (shift+tab to cycle)`,
   `⏵⏵ auto mode on (shift+tab to cycle)` (Cosmew: `⏵⏵ bypass permissions on (shift+tab to cycle)`), nối tiếp bằng ` · `:
@@ -39,7 +39,9 @@ Ký hiệu: `⏺` là glyph thật (terminal vẽ thành `●`). "Ref" = file tr
 - `!` ở đầu: prompt thành `!` (màu bash), footer `! for shell mode` (Ref `idle/06-bash-mode`). `#` không còn là chế độ riêng
   (Ref `06b-hash`) — Cosmew giữ `#` memory nếu đã có nhưng dùng prompt `❯`.
 - `?` khi rỗng: bảng 3 cột (Ref `idle/02-shortcuts`) thay footer.
-- `/`: menu trên rule, 2 cột (Ref `idle/03-slash`, `03b-slash-filter`); `@`: menu file (Ref `04-at`).
+- `/` ở đầu prompt lọc lệnh và skill. Tiền tố khớp tên hoặc alias được chọn sẵn. Mục gần đúng vẫn hiện khi gõ sai và cần Tab hoặc phím mũi tên để chọn. Enter chạy mục đã chọn hoặc gửi nguyên văn khi chưa chọn. Tab điền vào draft, Esc đóng menu. Alias đầy đủ giữ nguyên.
+- `/` giữa prompt gợi ý lệnh khớp tiền tố. Enter gửi nguyên văn khi chưa chọn. Tab hoặc Enter trên mục đã chọn điền tên vào draft. Với dấu `/` đứng một mình giữa prompt, Tab mở danh sách trước khi điền.
+- `@` gợi ý file đã được phép liệt kê. `$` gợi ý skill. Gõ ít nhất hai ký tự sau `:` để tìm emoji. Tab hoặc Enter trên mục đã chọn điền vào draft.
 - `\`+Enter xuống dòng (Ref `07-multiline`). Ctrl+R: panel `Search prompts · everywhere`, danh sách trái `<thời gian>  <prompt…>`
   + hộp xem trước bo tròn bên phải, ô `⌕ Filter history…` bo tròn, footer `↑/↓ to navigate · ctrl+s to change scope · Enter to use · Esc to cancel`
   (khung không lưu vì có dữ liệu riêng; bố cục ghi ở đây).

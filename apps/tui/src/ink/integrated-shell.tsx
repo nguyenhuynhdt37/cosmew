@@ -1,14 +1,21 @@
 import {SandboxDialog} from './features/sandbox';
 /** @jsxImportSource react */
 import {useTerminalSize} from './hooks/use-terminal-size';
-import {useTerminalWheel} from './hooks/use-terminal-wheel';
+import {useTerminalMouseCapture, useTerminalWheel} from './hooks/use-terminal-wheel';
 import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {Box, Text, renderToString, useApp, useStdout, type DOMElement} from 'ink';
-import {BYPASS_PERMISSIONS_WARNING, FutrynError, type ToolCall, type ToolResult} from '@cosmew/contracts';
+import {
+  BYPASS_PERMISSIONS_WARNING,
+  FutrynError,
+  type SkillVisibility,
+  type ToolCall,
+  type ToolResult,
+} from '@cosmew/contracts';
+import {parseMemoryCitations} from '@cosmew/sdk';
 import {useOverlay} from './core';
 import {
   InputScope,
@@ -25,7 +32,7 @@ import {
 } from './hooks';
 import {useTheme} from './theme';
 import {Panel, TextLine, safeText, spinnerTip} from './ui';
-import {readMacClipboardImage} from '../clipboard';
+import {deliverClipboard, readMacClipboardImage, writeMacClipboard} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
 import {verificationMessage} from './features/startup-gate/logic';
@@ -85,7 +92,8 @@ import {DiffSidePanel, useDiff, diffPanelLayout, DIFF_PANEL_RESIZE_MESSAGE, chan
 import {BackgroundTasksDialog} from './features/background-tasks';
 import {TaskNotifications} from './features/background-tasks/notifications';
 import {PlanApprovalDialog} from './features/plan-approval';
-import {routeCommand, type CommandHost} from './features/commands';
+import {PickerDialog} from './features/picker';
+import {routeCommand, type CommandChoice, type CommandHost} from './features/commands';
 import {ScrollViewport, useLiveRows, useScrollback} from './screen';
 import {LiveDialog, Spinner} from './ui';
 
@@ -135,6 +143,44 @@ function dismissalResult(route: string, raw: string): CommandResultLines {
       return closedResult(raw, route === 'settings' ? 'config' : route);
   }
 }
+function CommandChoiceDialog({
+  title,
+  choices,
+  writeKey,
+  width,
+  finish,
+}: {
+  title: string;
+  choices: readonly CommandChoice[];
+  writeKey?: boolean;
+  width: number;
+  finish(selection?: {id: string; write: boolean}): void;
+}) {
+  const highlighted = useRef(choices[0]?.id);
+  useEffect(() => () => finish(), [finish]);
+  return (
+    <PickerDialog
+      title={title}
+      items={choices}
+      width={width}
+      message={writeKey ? 'Enter to copy · w to save to a file' : undefined}
+      onHighlight={item => {
+        highlighted.current = item.id;
+      }}
+      onSelect={item => finish({id: item.id, write: false})}
+      onTextKey={
+        writeKey
+          ? key => {
+              if (key !== 'w' || !highlighted.current) return false;
+              finish({id: highlighted.current, write: true});
+              return true;
+            }
+          : undefined
+      }
+    />
+  );
+}
+
 function HistoryDialog({
   items,
   initialOffset = 0,
@@ -171,12 +217,14 @@ function requestFailure(error: unknown): string {
     error.code === 'AUTH'
       ? 'No active provider account or model selected. Run /login or /model.'
       : error.code === 'UNSUPPORTED'
-        ? 'This model does not accept workspace tools. Tools are now off for it; send your message again.'
-        : error.code === 'CONTEXT_LIMIT'
-          ? 'The request exceeded the model context window. Use /compact before continuing.'
-          : error.code === 'TIMEOUT'
-            ? 'The provider request timed out.'
-            : '';
+        ? 'The selected model or request setting is unsupported. Check /model and /effort; tool access was not changed.'
+        : error.code === 'INVALID_INPUT'
+          ? 'The request was rejected as invalid. Check /effort, /model or /doctor. Tool access was not changed.'
+          : error.code === 'CONTEXT_LIMIT'
+            ? 'The request exceeded the model context window. Use /compact before continuing.'
+            : error.code === 'TIMEOUT'
+              ? 'The provider request timed out.'
+              : '';
   return `Request failed [${error.code}].${hint ? ' ' + hint : ''}`;
 }
 /** Owns SDK tasks; feature views never start a second agent loop or grant permissions. */
@@ -188,7 +236,7 @@ export function IntegratedShell({
 }: IntegratedShellProps) {
   const client = useFutrynClient();
   const overlay = useOverlay();
-  const {exit, suspendTerminal} = useApp();
+  const {exit, suspendTerminal, waitUntilRenderFlush} = useApp();
   const {stdout} = useStdout();
   const router = useKeyRouter();
   const anchors = useRef(new Map<string, DOMElement>());
@@ -222,6 +270,9 @@ export function IntegratedShell({
     });
   }, []);
   const verboseKey = useBindingLabel('Global', 'app:toggleTranscript');
+  const selectionKey = useBindingLabel('Global', 'app:toggleTextSelection');
+  const [textSelection, setTextSelection] = useState(false);
+  useTerminalMouseCapture(!textSelection);
   const previousActivityKey = useBindingLabel('Transcript', 'transcript:focusPrevious');
   const nextActivityKey = useBindingLabel('Transcript', 'transcript:focusNext');
   const toggleActivityKey = useBindingLabel('Transcript', 'transcript:toggleItem');
@@ -262,6 +313,7 @@ export function IntegratedShell({
   const permissions = usePermissions();
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [checkingAccount, setCheckingAccount] = useState(false);
   const scroll = useScrollback();
   useTerminalWheel(
     event => {
@@ -306,10 +358,13 @@ export function IntegratedShell({
     closing.current = true;
     void current.current?.shutdown().finally(() => exit());
   };
+  const pendingSkillOverrides = useRef<Record<string, SkillVisibility>>({});
   const open = (route: string, args?: string) => {
     if (closing.current) return;
     if (!ready && route !== 'connect' && route !== 'models') return;
-    const changed = () => reset();
+    const changed = () => {
+      if ((client.status().activeSessionId ?? undefined) !== session.current) reset();
+    };
     const show = (id: string, content: ReactNode) => {
       opened.current = routing.current ? {id, route, raw: routing.current} : null;
       overlay.open(id, content);
@@ -392,16 +447,8 @@ export function IntegratedShell({
         show(route, <MemoryDialog width={width} />);
         break;
       case 'skills':
-        show(
-          route,
-          <SkillsDialog
-            width={width}
-            onInvoke={raw => {
-              overlay.close();
-              submit(raw);
-            }}
-          />,
-        );
+        pendingSkillOverrides.current = {};
+        show(route, <SkillsDialog width={width} onChange={changes => (pendingSkillOverrides.current = changes)} />);
         break;
       case 'context':
         // Claude Code prints the grid into the transcript; mid-turn it would land inside the running answer.
@@ -467,11 +514,12 @@ export function IntegratedShell({
     client.setToolsEnabled(false);
     if (engine.isPreviewing()) engine.cancelPreview();
   };
-  const submit = async (text: string): Promise<boolean> => {
+  const submit = async (text: string, label?: string): Promise<boolean> => {
     if (!ready || closing.current || turn.current || !client.toolsEnabled()) return false;
     const abort = new AbortController();
     turn.current = abort;
     scroll.toBottom();
+    setCheckingAccount(true);
     const verification = client.verifyAccount(abort.signal);
     pending.current = verification.then(
       () => {},
@@ -491,6 +539,7 @@ export function IntegratedShell({
       }
     } finally {
       turn.current = null;
+      if (mounted.current) setCheckingAccount(false);
     }
     turn.current = abort;
     setBusy(true);
@@ -502,9 +551,10 @@ export function IntegratedShell({
         !closing.current &&
         !abort.signal.aborted
       ) {
-        const displayPrompt = [prompt, ...client.imageAttachments().map(image => image.label)]
+        const displayPrompt = [label ?? prompt, ...client.imageAttachments().map(image => image.label)]
           .filter(Boolean)
           .join('\n');
+        label = undefined;
         transcript.begin(displayPrompt, undefined, status.selection?.modelId);
         try {
           for await (const event of client.sendMessage(prompt, {signal: abort.signal})) {
@@ -717,13 +767,73 @@ export function IntegratedShell({
     reset,
     submit,
     setTheme: id => engine.setTheme(id),
+    exportTranscript: () => safeText(parseMemoryCitations(transcriptPlainText(transcript.items)).content),
+    responseText: index => {
+      for (let i = transcript.items.length - 1; i >= 0; i--) {
+        const item = transcript.items[i]!;
+        if (item.role !== 'assistant' || item.streaming || item.interrupted || item.errorText || !item.parts?.length)
+          continue;
+        const text = safeText(parseMemoryCitations(item.content).content).trim();
+        if (text && --index === 0) return text;
+      }
+    },
+    copyText: async text => {
+      if (!text || Buffer.byteLength(text) > 65536 || !('isTTY' in stdout && stdout.isTTY)) return false;
+      await deliverClipboard(
+        `\x1b]52;c;${Buffer.from(text).toString('base64')}\x07`,
+        sequence => stdout.write(sequence),
+        process.platform === 'darwin' ? writeMacClipboard : undefined,
+      );
+      return true;
+    },
     exit: () => gate.exit(),
   };
   const command = async (raw: string) => {
     if (!ready || closing.current) return;
     const abort = new AbortController();
     routing.current = raw.trim();
-    const task = routeCommand({...host, signal: abort.signal}, raw);
+    let commandId: string | undefined;
+    let commandSessionId: string | undefined;
+    const lines: string[] = [];
+    const task = routeCommand(
+      {
+        ...host,
+        signal: abort.signal,
+        choose: (title, choices, writeKey) =>
+          new Promise(resolve => {
+            const cancel = () => resolve(undefined);
+            abort.signal.addEventListener('abort', cancel, {once: true});
+            overlay.open(
+              'command-choice',
+              <CommandChoiceDialog
+                title={title}
+                choices={choices}
+                writeKey={writeKey}
+                width={width}
+                finish={selection => {
+                  abort.signal.removeEventListener('abort', cancel);
+                  resolve(selection);
+                  if (selection) overlay.close();
+                }}
+              />,
+            );
+          }),
+        beforeWork: async () => {
+          if (turn.current || shellCall.current) return;
+          commandSessionId = client.activeSession()?.id;
+          commandId = transcript.beginCommand(safeText(raw.trim()));
+          scroll.toBottom();
+          if ('isTTY' in stdout && stdout.isTTY) await waitUntilRenderFlush();
+          else await new Promise<void>(resolve => setImmediate(resolve));
+          abort.signal.throwIfAborted();
+        },
+        notice: text => {
+          if (commandId) lines.push(safeText(text));
+          else commandNotice(text);
+        },
+      },
+      raw,
+    );
     // /exit starts shutdown synchronously: do not make shutdown await itself.
     if (closing.current) return;
     commands.current.set(abort, task);
@@ -731,6 +841,14 @@ export function IntegratedShell({
       return await task;
     } finally {
       commands.current.delete(abort);
+      if (commandId && mounted.current) {
+        if (client.activeSession()?.id !== commandSessionId) {
+          // The old pending row was cleared with its session. Publish only a fixed cancellation
+          // notice here; never replay that session's command output into the newly selected one.
+          if (abort.signal.aborted || lines.includes('Review cancelled: conversation changed.'))
+            notices.addNotice('Command cancelled: conversation changed.');
+        } else transcript.finishCommand(commandId, abort.signal.aborted ? ['Command cancelled.'] : lines);
+      }
       if (routing.current === raw.trim()) routing.current = undefined;
     }
   };
@@ -919,6 +1037,15 @@ export function IntegratedShell({
   const closeOverlay = () => {
     if (!overlay.active) return;
     const info = opened.current;
+    if (overlay.active.id === 'skills' && Object.keys(pendingSkillOverrides.current).length) {
+      try {
+        client.saveSkillOverrides(pendingSkillOverrides.current);
+        pendingSkillOverrides.current = {};
+      } catch {
+        notices.addNotice('Could not save skill visibility.');
+        return;
+      }
+    }
     opened.current = null;
     if (overlay.active.id.startsWith('plan:')) turn.current?.abort();
     if (info && info.id === overlay.active.id) printResult(dismissalResult(info.route, info.raw));
@@ -940,6 +1067,10 @@ export function IntegratedShell({
   const stopWork = () => {
     if (turn.current && !busy) {
       turn.current.abort();
+      return;
+    }
+    if (!turn.current && !shellCall.current && commands.current.size) {
+      for (const abort of commands.current.keys()) abort.abort();
       return;
     }
     if (!composer.interrupt()) {
@@ -1123,6 +1254,10 @@ export function IntegratedShell({
       },
     },
     Global: {
+      'app:toggleTextSelection': () => {
+        setTextSelection(value => !value);
+        if (textSelection) notices.addNotice('Mouse scrolling resumed.');
+      },
       'app:interrupt': () => {
         if (!ready) {
           if (overlay.active) overlay.close();
@@ -1249,20 +1384,32 @@ export function IntegratedShell({
     show();
     return keymapStore.subscribe(show);
   }, []);
-  const activity = transcript.items.findLast(item => item.streaming);
+  const activity =
+    busy || composer.busy || shellCall.current ? transcript.items.findLast(item => item.streaming) : undefined;
   const showBanner = ready && (!fullscreen || transcript.items.length <= 60);
   const tip = useMemo(
     () => spinnerTip(transcript.items.filter(item => item.role === 'user').length),
     [transcript.items],
   );
-  const warning = composer.status.permissionMode === 'bypassPermissions' ? BYPASS_PERMISSIONS_WARNING : undefined;
+  const warning =
+    [
+      textSelection
+        ? `Text selection enabled: drag to select, ${process.platform === 'darwin' ? 'Cmd+C' : 'Ctrl+Shift+C'} to copy. ${selectionKey} resumes mouse scrolling.`
+        : undefined,
+      composer.status.permissionMode === 'bypassPermissions' ? BYPASS_PERMISSIONS_WARNING : undefined,
+      ready && composer.status.activeModel && !composer.status.toolsEnabled
+        ? 'Chat only: project tools are unavailable for this model. Choose /model or refresh model metadata.'
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join('\n') || undefined;
   const dialogWaiting = !!client.listPendingPermissions().length || !!client.listPendingQuestions().length;
   // A dialog replaces the composer; the transcript clips first so choices never leave the screen.
   const fullOverlay = !!overlay.active?.fullScreen;
   const dialogRows = screenRows
     ? fullOverlay
-      ? screenRows
-      : Math.max(1, screenRows - 1 - (ready && detail.detailed ? 2 : 0))
+      ? Math.max(1, screenRows - (textSelection ? 1 : 0))
+      : Math.max(1, screenRows - 1 - (ready && detail.detailed ? 2 : 0) - (textSelection ? 1 : 0))
     : undefined;
   const body = (
     <>
@@ -1354,6 +1501,11 @@ export function IntegratedShell({
         </Box>
         {ready ? (
           <Box flexDirection="column" flexShrink={0} display={overlay.active || detail.detailed ? 'none' : 'flex'}>
+            {status.sessionTitle ? (
+              <TextLine width={width} color={color('foregroundMuted')}>
+                {status.sessionTitle}
+              </TextLine>
+            ) : null}
             <ComposerView
               controller={composer}
               width={width}
@@ -1367,7 +1519,11 @@ export function IntegratedShell({
                   : undefined
               }
               activity={
-                activity ? (
+                checkingAccount ? (
+                  <TextLine width={width} color={color('foregroundMuted')}>
+                    Checking account… · Esc to cancel
+                  </TextLine>
+                ) : activity ? (
                   <Box flexDirection="column">
                     <Spinner
                       key={activity.id}
@@ -1432,6 +1588,12 @@ export function IntegratedShell({
       ) : null}
       {overlay.active ? (
         <Box flexDirection="column" flexShrink={0}>
+          {textSelection ? (
+            <Text
+              color={color('info')}
+              wrap="truncate-end"
+            >{`Text selection enabled · ${process.platform === 'darwin' ? 'Cmd+C' : 'Ctrl+Shift+C'} copy · ${selectionKey} return`}</Text>
+          ) : null}
           <LiveDialog rows={dialogRows}>{overlay.active.content}</LiveDialog>
         </Box>
       ) : null}

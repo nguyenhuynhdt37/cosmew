@@ -23,7 +23,7 @@ export function openPrivateDatabase(directory: string): Database {
     const db = new Database(path, {strict: true});
     db.exec('PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000; PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;');
     const version = (db.query('PRAGMA user_version').get() as {user_version: number}).user_version;
-    if (version > 11) {
+    if (version > 13) {
       db.close();
       throw new FutrynError('STORAGE');
     }
@@ -135,7 +135,12 @@ export function openPrivateDatabase(directory: string): Database {
         conversation TEXT NOT NULL REFERENCES conversations(id), id TEXT NOT NULL,
         updated_at TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(conversation,id));
         CREATE INDEX IF NOT EXISTS background_task_history_recent ON background_task_history(updated_at DESC);`);
-      db.exec('PRAGMA user_version=11;');
+      // v12: billing without an agent receipt must not invent a conversation turn.
+      db.exec(`CREATE TABLE IF NOT EXISTS session_usage (
+        conversation TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE, data TEXT NOT NULL);`);
+      if (!conversationColumns.some(column => column.name === 'title'))
+        db.exec('ALTER TABLE conversations ADD COLUMN title TEXT');
+      db.exec('PRAGMA user_version=13;');
     })();
     return db;
   } catch {

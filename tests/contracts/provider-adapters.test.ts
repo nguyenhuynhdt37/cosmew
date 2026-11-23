@@ -59,6 +59,26 @@ const setup = (protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat')
   };
   return {f, provider, vault, account, db, store, transport, request};
 };
+
+test('Chat adapter sends a large MCP catalog to the provider', async () => {
+  const x = setup();
+  try {
+    const tools = Array.from({length: 209}, (_, index) => ({
+      name: `mcp__fixture__tool_${index}`,
+      description: 'Fixture tool',
+      inputSchema: {type: 'object', properties: {}, additionalProperties: false},
+    }));
+    const adapter = new ProviderAdapter(x.transport, x.request.modelId);
+    const events = await Array.fromAsync(adapter.stream({...x.request, tools}));
+    expect(events.at(-1)?.type).toBe('completed');
+    expect(x.f.requests.at(-1)?.body.tools.map((tool: {function: {name: string}}) => tool.function.name)).toEqual(
+      tools.map(tool => tool.name),
+    );
+  } finally {
+    x.db.close();
+  }
+});
+
 for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
   test(`${protocol}: real HTTP discovery, nonstream and normalized stream with auth`, async () => {
     const x = setup(protocol);
@@ -123,6 +143,57 @@ for (const protocol of ['chat', 'responses', 'anthropic', 'gemini'] as const) {
     const call = events.find(e => e.type === 'toolCallComplete');
     expect(call?.type === 'toolCallComplete' && call.call.input).toEqual({query: 'hello'});
     x.db.close();
+  });
+}
+
+for (const protocol of ['chat', 'responses'] as const) {
+  for (const suffix of ['', '#']) {
+    test(`${protocol}: OpenAI Docs JSON Schema 2020-12${suffix} reaches HTTP unchanged`, async () => {
+      const x = setup(protocol);
+      try {
+        const inputSchema = {
+          $schema: `https://json-schema.org/draft/2020-12/schema${suffix}`,
+          type: 'object',
+          properties: {
+            query: {type: 'string', minLength: 1},
+            limit: {type: 'integer', minimum: 1, maximum: 50},
+            cursor: {type: 'string'},
+          },
+          required: ['query'],
+        };
+        const result = await new ProviderAdapter(x.transport, x.request.modelId).generate({
+          ...x.request,
+          tools: [{name: 'mcp__docs__search', description: 'Search documentation', inputSchema}],
+        });
+        expect(result.text).toBe('Hello fixture');
+        expect(x.f.requests).toHaveLength(1);
+        const tool = x.f.requests[0]!.body.tools[0];
+        expect(protocol === 'chat' ? tool.function.parameters : tool.parameters).toEqual(inputSchema);
+      } finally {
+        x.db.close();
+      }
+    });
+  }
+  test(`${protocol}: tool schema dialect validation rejects unknown, async, invalid and duplicate definitions before HTTP`, async () => {
+    const x = setup(protocol);
+    try {
+      const tool = (inputSchema: Record<string, unknown>) => ({name: 'lookup', description: '', inputSchema});
+      const schema2020 = {$schema: 'https://json-schema.org/draft/2020-12/schema', type: 'object'};
+      const invalidTools = [
+        [tool({$schema: 'https://example.invalid/unknown-schema', type: 'object'})],
+        [tool({...schema2020, $async: true})],
+        [tool({...schema2020, properties: {query: {type: 'invalid'}}})],
+        [tool(schema2020), tool({type: 'object'})],
+      ];
+      for (const tools of invalidTools) {
+        await expect(
+          new ProviderAdapter(x.transport, x.request.modelId).generate({...x.request, tools}),
+        ).rejects.toMatchObject({code: 'INVALID_INPUT'});
+      }
+      expect(x.f.requests).toHaveLength(0);
+    } finally {
+      x.db.close();
+    }
   });
 }
 

@@ -22,6 +22,10 @@ const {client} = dialogFixture({
     ],
   }),
   getPlan: () => plan,
+  compactSession: async () => {
+    await Bun.sleep(120);
+    return {compacted: true, strategy: 'model', tokensBefore: 2000, tokensAfter: 500, usage: null};
+  },
   async *sendTurn(_id, _content, signal) {
     yield {type: 'toolCallComplete', call: {id: 'read-live', name: 'read', input: {path: '.env'}}};
     const decision = await client.requestPermission(

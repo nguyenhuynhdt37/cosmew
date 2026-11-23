@@ -19,6 +19,9 @@ import {MemoryDirectory} from './memory-directory';
 const FILE_LIMIT = 16384,
   TOTAL_LIMIT = 1048576,
   COUNT_LIMIT = 256;
+const PENDING_FILE = '.pending.json';
+const hash = (text: string | undefined) =>
+  text === undefined ? null : createHash('sha256').update(text).digest('hex');
 const USAGE_FILE = '.usage.json',
   USAGE_LIMIT = 65536;
 const fail = (): never => {
@@ -57,6 +60,8 @@ export class FileMemories implements MemoriesPort {
     const directory = MemoryDirectory.open(this.root, this.id, create);
     if (!directory) return undefined;
     try {
+      directory.lock();
+      this.recover(directory);
       return run(directory);
     } finally {
       directory.close();
@@ -75,14 +80,16 @@ export class FileMemories implements MemoriesPort {
     return memoryMetadataSchema.parse(fields);
   }
 
-  private entries(directory: MemoryDirectory): MemoryMetadata[] {
+  private entries(directory: MemoryDirectory, recovering = false): MemoryMetadata[] {
     let total = 0;
     const result: MemoryMetadata[] = [];
     for (const file of directory.names()) {
-      if (file === '.lock') continue;
+      if (file === '.lock' || file === PENDING_FILE) continue;
       const size = directory.size(file);
       if (size === undefined) return fail();
-      total += size;
+      // Interrupted projections may temporarily exceed the aggregate quota; recovery
+      // validates the repaired projection before committing it.
+      if (!recovering || (file !== 'MEMORY.md' && file !== USAGE_FILE)) total += size;
       if (total > TOTAL_LIMIT) return fail();
       if (file === 'MEMORY.md' || file === USAGE_FILE) continue;
       const name = memoryNameSchema.parse(file.replace(/\.md$/, ''));
@@ -93,6 +100,60 @@ export class FileMemories implements MemoriesPort {
     }
     if (result.length > COUNT_LIMIT) return fail();
     return result;
+  }
+  /** A journal records metadata only; recovery never replays a memory body. */
+  private recover(d: MemoryDirectory): void {
+    // Cleanup streams through abandoned files before applying the entry-count cap.
+    d.names(true);
+    const text = d.read(PENDING_FILE, USAGE_LIMIT + 1024);
+    if (text === undefined) return;
+    const {name, after, planned} = (() => {
+      try {
+        const pending = JSON.parse(text);
+        if (
+          !pending ||
+          pending.version !== 1 ||
+          Object.keys(pending).sort().join(',') !== 'after,before,name,usage,version'
+        )
+          return fail();
+        const name = memoryNameSchema.parse(pending.name);
+        for (const value of [pending.before, pending.after])
+          if (value !== null && (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value))) return fail();
+        return {name, after: pending.after as string | null, planned: memoryUsageStateSchema.parse(pending.usage)};
+      } catch {
+        // Journal bytes and schema diagnostics are private storage data.
+        return fail();
+      }
+    })();
+    const actual = d.read(`${name}.md`, FILE_LIMIT);
+    const entries = this.entries(d, true);
+    // Retain successful counters when the content commit happened. If a user edited
+    // the file meanwhile, retain current counters and derive freshness from its mtime.
+    const state = hash(actual) === after ? planned : this.usage(d);
+    state.entries = Object.fromEntries(
+      entries.filter(e => Object.hasOwn(state.entries, e.name)).map(e => [e.name, state.entries[e.name]!]),
+    );
+    const metadata = entries.find(e => e.name === name);
+    const line = metadata ? `- [${name}](${name}.md) — ${metadata.description.replace(/[\[\]\\]/g, '')}` : undefined;
+    const index = d.read('MEMORY.md', TOTAL_LIMIT) ?? '';
+    let found = false;
+    const lines = (index ? index.replace(/\n$/, '').split('\n') : []).flatMap(existing => {
+      if (!existing.startsWith(`- [${name}](${name}.md) — `)) return [existing];
+      const replace = !found && line !== undefined;
+      found = true;
+      return replace ? [line!] : [];
+    });
+    if (line && !found) lines.push(line);
+    const nextIndex = lines.length ? lines.join('\n') + '\n' : '';
+    const usage = this.usageText(state);
+    const total = entries.reduce(
+      (sum, e) => sum + (d.size(`${e.name}.md`) ?? fail()),
+      Buffer.byteLength(nextIndex) + Buffer.byteLength(usage),
+    );
+    if (total > TOTAL_LIMIT) throw new FutrynError('BUDGET');
+    d.atomic('MEMORY.md', nextIndex);
+    d.atomic(USAGE_FILE, usage);
+    d.delete(PENDING_FILE);
   }
   /** Explicit host /memory open action may create the private empty directory. */
   prepareDirectory(): string {
@@ -148,30 +209,25 @@ export class FileMemories implements MemoriesPort {
   read(name: string): string {
     memoryNameSchema.parse(name);
     const result = this.withDirectory(false, d => {
-      d.lock();
-      try {
-        const text = d.read(`${name}.md`, FILE_LIMIT);
-        if (text === undefined) throw new FutrynError('NOT_FOUND');
-        const metadata = this.metadata(text);
-        if (metadata.name !== name) return fail();
-        const state = this.usage(d),
-          info = this.info(d, metadata, state);
-        state.entries[name] = {
-          usage_count: Math.min(Number.MAX_SAFE_INTEGER, info.usage_count + 1),
-          last_usage: new Date(this.now()).toISOString(),
-          updated_at: info.updated_at,
-        };
-        const usageText = this.usageText(state);
-        const total = d
-          .names()
-          .filter(f => f !== '.lock' && f !== USAGE_FILE)
-          .reduce((sum, f) => sum + (d.size(f) ?? fail()), Buffer.byteLength(usageText));
-        if (total > TOTAL_LIMIT) throw new FutrynError('BUDGET');
-        d.atomic(USAGE_FILE, usageText);
-        return this.redact(text);
-      } finally {
-        d.unlock();
-      }
+      const text = d.read(`${name}.md`, FILE_LIMIT);
+      if (text === undefined) throw new FutrynError('NOT_FOUND');
+      const metadata = this.metadata(text);
+      if (metadata.name !== name) return fail();
+      const state = this.usage(d),
+        info = this.info(d, metadata, state);
+      state.entries[name] = {
+        usage_count: Math.min(Number.MAX_SAFE_INTEGER, info.usage_count + 1),
+        last_usage: new Date(this.now()).toISOString(),
+        updated_at: info.updated_at,
+      };
+      const usageText = this.usageText(state);
+      const total = d
+        .names()
+        .filter(f => f !== '.lock' && f !== USAGE_FILE && f !== PENDING_FILE)
+        .reduce((sum, f) => sum + (d.size(f) ?? fail()), Buffer.byteLength(usageText));
+      if (total > TOTAL_LIMIT) throw new FutrynError('BUDGET');
+      d.atomic(USAGE_FILE, usageText);
+      return this.redact(text);
     });
     if (result === undefined) throw new FutrynError('NOT_FOUND');
     return result;
@@ -179,46 +235,52 @@ export class FileMemories implements MemoriesPort {
   private mutate(name: string, entry?: MemoryWrite): void {
     memoryNameSchema.parse(name);
     this.withDirectory(true, d => {
-      d.lock();
-      try {
-        const before = this.entries(d);
-        const entries = before.filter(e => e.name !== name);
-        const state = this.usage(d);
-        state.entries = Object.fromEntries(
-          before.filter(e => Object.hasOwn(state.entries, e.name)).map(e => [e.name, state.entries[e.name]!]),
-        );
-        let text = '';
-        if (entry) {
-          text = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(entry.description)}\ntype: ${entry.type}\n---\n${entry.content}\n`;
-          if (Buffer.byteLength(text) > FILE_LIMIT) throw new FutrynError('BUDGET');
-          entries.push({name, description: entry.description, type: entry.type});
-        }
-        if (entry)
-          state.entries[name] = {
-            usage_count: state.entries[name]?.usage_count ?? 0,
-            last_usage: state.entries[name]?.last_usage ?? null,
-            updated_at: new Date(this.now()).toISOString(),
-          };
-        else delete state.entries[name];
-        const usageText = this.usageText(state);
-        entries.sort((a, b) => a.name.localeCompare(b.name));
-        const index = entries
-          .map(e => `- [${e.name}](${e.name}.md) — ${e.description.replace(/[\[\]\\]/g, '')}\n`)
-          .join('');
-        const total = entries.reduce(
-          (sum, e) => sum + (e.name === name ? Buffer.byteLength(text) : (d.size(`${e.name}.md`) ?? fail())),
-          Buffer.byteLength(index) + Buffer.byteLength(usageText),
-        );
-        if (entries.length > COUNT_LIMIT || total > TOTAL_LIMIT) throw new FutrynError('BUDGET');
-        d.size(USAGE_FILE);
-        d.size('MEMORY.md'); // Validate index before changing a memory.
-        if (entry) d.atomic(`${name}.md`, text);
-        else if (before.some(e => e.name === name)) d.delete(`${name}.md`);
-        d.atomic('MEMORY.md', index);
-        d.atomic(USAGE_FILE, usageText);
-      } finally {
-        d.unlock();
+      const before = this.entries(d);
+      const entries = before.filter(e => e.name !== name);
+      const state = this.usage(d);
+      state.entries = Object.fromEntries(
+        before.filter(e => Object.hasOwn(state.entries, e.name)).map(e => [e.name, state.entries[e.name]!]),
+      );
+      let text = '';
+      if (entry) {
+        text = `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(entry.description)}\ntype: ${entry.type}\n---\n${entry.content}\n`;
+        if (Buffer.byteLength(text) > FILE_LIMIT) throw new FutrynError('BUDGET');
+        entries.push({name, description: entry.description, type: entry.type});
       }
+      if (entry)
+        state.entries[name] = {
+          usage_count: state.entries[name]?.usage_count ?? 0,
+          last_usage: state.entries[name]?.last_usage ?? null,
+          updated_at: new Date(this.now()).toISOString(),
+        };
+      else delete state.entries[name];
+      const usageText = this.usageText(state);
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      const index = entries
+        .map(e => `- [${e.name}](${e.name}.md) — ${e.description.replace(/[\[\]\\]/g, '')}\n`)
+        .join('');
+      const total = entries.reduce(
+        (sum, e) => sum + (e.name === name ? Buffer.byteLength(text) : (d.size(`${e.name}.md`) ?? fail())),
+        Buffer.byteLength(index) + Buffer.byteLength(usageText),
+      );
+      if (entries.length > COUNT_LIMIT || total > TOTAL_LIMIT) throw new FutrynError('BUDGET');
+      d.size(USAGE_FILE);
+      d.size('MEMORY.md'); // Validate index before changing a memory.
+      d.atomic(
+        PENDING_FILE,
+        JSON.stringify({
+          version: 1,
+          name,
+          before: hash(d.read(`${name}.md`, FILE_LIMIT)),
+          after: hash(entry ? text : undefined),
+          usage: state,
+        }),
+      );
+      if (entry) d.atomic(`${name}.md`, text);
+      else if (before.some(e => e.name === name)) d.delete(`${name}.md`);
+      d.atomic('MEMORY.md', index);
+      d.atomic(USAGE_FILE, usageText);
+      d.delete(PENDING_FILE);
     });
   }
   write(entry: MemoryWrite): void {

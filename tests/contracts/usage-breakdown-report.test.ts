@@ -136,9 +136,30 @@ test('quota rows distinguish rate windows, subscription allowances, credits and 
 test('usage meters retain provider/account identity and snapshot metadata', () => {
   const account = limits({stale: true, items: [{label: 'requests', kind: 'rate-limit', unit: '%', usedPercent: 25}]});
   const meters = usageMeters({limits: () => [account]} as FutrynClient);
-  expect(meters[0]?.label).toContain('Provider A / work · Rate limit');
+  expect(meters[0]?.label).toBe('Provider A / work');
+  expect(meters[0]?.text).toContain('Rate limit');
   expect(meters[0]?.reset).toContain('source last-turn');
   expect(meters[0]?.reset).toContain('STALE');
+});
+
+test('a rate limit without a reset is shown as a historical observation, never a current meter', () => {
+  const account = limits({
+    items: [
+      {
+        label: 'tokens (grok-4.7)',
+        source: 'last-turn',
+        kind: 'rate-limit',
+        unit: '%',
+        usedPercent: 1.3,
+        observedAt: '2026-11-22T00:00:00Z',
+        resetAt: null,
+      },
+    ],
+  });
+  const meter = usageMeters({limits: () => [account]} as FutrynClient)[0]!;
+  expect(meter.percent).toBeNull();
+  expect(meter.text).toContain('1.3% used');
+  expect(meter.reset).toContain('Current quota unknown');
 });
 
 test('missing usage and partial source counters keep coverage explicitly incomplete', () => {
@@ -158,9 +179,15 @@ test('summary does not infer subscription billing or plan quota from OAuth', () 
   const client = {
     status: () => ({activeProvider: {auth: 'oauth'}}),
     usage: () => usage,
-    context: () => ({}),
-    projectContext: () => null,
-    toolsEnabled: () => false,
+    context: () => {
+      throw new Error('Usage must not rebuild context');
+    },
+    projectContext: () => {
+      throw new Error('Usage must not scan project files');
+    },
+    toolsEnabled: () => {
+      throw new Error('Usage must not inspect workspace tools');
+    },
     limits: () => [limits({status: 'unsupported', source: 'unavailable'})],
   } as unknown as FutrynClient;
   const rows = reportRows(client, 'usage').join('\n');
@@ -186,8 +213,9 @@ test('mixed snapshots display each item observation and source without making ol
   const rows = limitRows([account]);
   expect(rows.find(row => row.startsWith('API credits'))).toContain(`source live · observed ${old}`);
   expect(rows.find(row => row.startsWith('Rate limit'))).toContain(`source last-turn · observed ${fresh}`);
-  const meter = usageMeters({limits: () => [account]} as FutrynClient)[0]!;
-  expect(meter.reset).toContain(`source last-turn · observed ${fresh}`);
+  const meters = usageMeters({limits: () => [account]});
+  expect(meters[0]?.reset).toContain(`source live · observed ${old}`);
+  expect(meters[1]?.reset).toContain(`source last-turn · observed ${fresh}`);
 });
 
 test('subscription windows show their provider-reported duration', () => {

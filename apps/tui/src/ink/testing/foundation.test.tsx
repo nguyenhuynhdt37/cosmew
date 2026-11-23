@@ -329,7 +329,7 @@ test('hooks deliver interaction and subagent events, then remove both observers'
 test('public runtime entry is Ink without any opt-in and writes one frame without a TTY', async () => {
   const runtime = new URL('../../runtime.tsx', import.meta.url).pathname;
   const fixture = new URL('./client-fixture.ts', import.meta.url).pathname;
-  const code = `import {runInteractiveTui} from ${JSON.stringify(runtime)}; import {createClientFixture} from ${JSON.stringify(fixture)}; await runInteractiveTui({client: createClientFixture().client, env: {NO_COLOR: '1', FUTRYN_THEME_MODE: 'dark'}, cols: 80, rows: 24});`;
+  const code = `import {runInteractiveTui} from ${JSON.stringify(runtime)}; import {createClientFixture} from ${JSON.stringify(fixture)}; await runInteractiveTui({client: createClientFixture().client, env: {NO_COLOR: '1', COSMEW_THEME_MODE: 'dark'}, cols: 80, rows: 24});`;
   const child = Bun.spawn([process.execPath, '--eval', code], {stdin: 'ignore', stdout: 'pipe', stderr: 'pipe'});
   const [stdout, stderr, exit] = await Promise.all([
     new Response(child.stdout).text(),

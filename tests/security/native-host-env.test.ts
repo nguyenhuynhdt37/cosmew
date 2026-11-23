@@ -50,13 +50,13 @@ nativeTest('an unsandboxed command sees the real HOME and environment, a sandbox
   expect(escalated.output).toContain('X=\n');
   expect(escalated.output).toContain('V=visible');
   expect(escalated.output).not.toContain('must-not-pass');
-  expect(escalated.output).not.toContain('FUTRYN_SANDBOX');
+  expect(escalated.output).not.toContain('COSMEW_SANDBOX');
   expect(escalated.output).not.toContain('fyn-exec-');
 
   const fullAccess = await run(rt, 'echo "H=$HOME"', true, 'danger-full-access' as never);
   expect(fullAccess.output).toContain(`H=${real}\n`);
 
-  const sandboxed = await run(rt, 'echo "H=$HOME"; echo "S=$FUTRYN_SANDBOX"', false);
+  const sandboxed = await run(rt, 'echo "H=$HOME"; echo "S=$COSMEW_SANDBOX"', false);
   expect(sandboxed.output).not.toContain(`H=${real}\n`);
   expect(sandboxed.output).toContain('fyn-exec-');
   expect(sandboxed.output).toContain('S=1');

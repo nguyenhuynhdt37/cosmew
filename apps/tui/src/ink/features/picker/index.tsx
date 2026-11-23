@@ -69,6 +69,7 @@ export function PickerDialog<T extends PickerItem>({
   onHighlight,
   hint,
   filterable,
+  showSearch,
   onTextKey,
   placeholder,
   numbered,
@@ -79,7 +80,8 @@ export function PickerDialog<T extends PickerItem>({
   title: string;
   hint?: string | false;
   filterable?: boolean;
-  onTextKey?: (input: string) => boolean;
+  showSearch?: boolean;
+  onTextKey?: (input: string, query: string, item: T | undefined) => boolean;
   placeholder?: string;
   numbered?: boolean;
   /** Controlled highlight (the effort slider moves it with ←/→). */
@@ -102,6 +104,7 @@ export function PickerDialog<T extends PickerItem>({
         onSelect={onSelect}
         hint={hint}
         filterable={filterable}
+        showSearch={showSearch}
         onTextKey={onTextKey}
         placeholder={placeholder}
         numbered={numbered}
@@ -124,6 +127,7 @@ export function TextEntry({
   label,
   onSubmit,
   hidden = false,
+  mask,
   initialValue = '',
   maxLength = 2048,
   allowEmpty = false,
@@ -131,6 +135,7 @@ export function TextEntry({
   label: string;
   onSubmit(value: string): void;
   hidden?: boolean;
+  mask?: (value: string) => string;
   initialValue?: string;
   maxLength?: number;
   allowEmpty?: boolean;
@@ -162,9 +167,10 @@ export function TextEntry({
     if (key.backspace || key.delete) setValue(s => Array.from(s).slice(0, -1).join(''));
     else if (input) setValue(s => (s + safeText(input).replace(/\n/g, '')).slice(0, maxLength));
   });
+  const display = hidden ? '•'.repeat(Math.min(24, Array.from(value).length)) : mask ? mask(value) : value;
   return (
     <>
-      <TextLine>{`${label}: ${hidden ? '•'.repeat(Math.min(24, Array.from(value).length)) : value}▏`}</TextLine>
+      <TextLine>{`${label}: ${display}▏`}</TextLine>
       <KeyHint keys="Enter Esc" label="save · close" />
     </>
   );

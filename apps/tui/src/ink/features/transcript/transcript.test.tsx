@@ -328,6 +328,23 @@ test('a streaming answer shows a bounded tail; the finished item keeps every lin
   expect(liveTail('short\nanswer', 20)).toBe('short\nanswer');
 });
 
+test('live tail bounds long wrapped paragraphs without losing the newest delta or splitting surrogate pairs', async () => {
+  const {liveTail} = await import('./index');
+  const source = 'head ' + '🚀'.repeat(100000) + ' NEWEST';
+  for (const width of [1, 40, 100]) {
+    const tail = liveTail(source, 12, width);
+    const visible = tail.slice(tail.indexOf('\n') + 1);
+    expect(visible.length).toBeLessThanOrEqual(12 * width * 2);
+    expect(visible).toEndWith(' NEWEST');
+    expect(visible.isWellFormed()).toBe(true);
+    expect(tail).toContain('earlier text');
+  }
+  expect(source).toStartWith('head ');
+  expect(liveTail('first\nsecond', 1)).toEndWith('\nsecond');
+  expect(liveTail('\nsecond', 1)).toEndWith('\nsecond');
+  expect(liveTail('\nsecond', 1)).toContain('1 earlier lines');
+});
+
 const windowHistory: Item[] = Array.from({length: 35}, (_, n) => ({
   id: `window-${n}`,
   role: 'user',

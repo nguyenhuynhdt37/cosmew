@@ -381,12 +381,13 @@ test('an existing Claude CLI keybindings file is accepted as a compatibility sou
   expect(keybindingsPath(home)).toBe(claudePath);
   expect(loadKeybindings(keybindingsPath(home)).warnings).toEqual([]);
 });
-test('an existing legacy keybindings file is reused before creating a Cosmew file', () => {
+test('an existing legacy keybindings file is not selected', () => {
   const home = tempHome();
   const legacyPath = join(home, '.futryn', 'keybindings.json');
   mkdirSync(join(home, '.futryn'), {recursive: true});
   writeFileSync(legacyPath, JSON.stringify({bindings: []}));
-  expect(keybindingsPath(home)).toBe(legacyPath);
+  expect(keybindingsPath(home)).toBe(join(home, '.cosmew', 'keybindings.json'));
+  expect(keybindingsPath(home)).not.toBe(legacyPath);
 });
 test('hot reload: editing the file swaps the bindings, warnings are reported once and logged, deleting restores defaults', async () => {
   const home = tempHome();

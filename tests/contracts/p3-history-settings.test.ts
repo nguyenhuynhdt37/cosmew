@@ -144,12 +144,12 @@ test('schema 9 migration preserves known times and leaves unknown workspace prom
     );
     db.close();
     db = openPrivateDatabase(root);
-    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(11);
+    expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(13);
     expect(new SqliteConversations(db).promptHistory({scope: 'project', workspace: '/arbitrary'})).toEqual([]);
     expect(new SqliteConversations(db).promptHistory({scope: 'everywhere', workspace: '/arbitrary'})).toEqual([]);
     db.close();
     const raw = new Database(join(root, 'provider-auth.sqlite'));
-    raw.exec('PRAGMA user_version=12');
+    raw.exec('PRAGMA user_version=14');
     raw.close();
     expect(() => openPrivateDatabase(root)).toThrow();
     db = new Database(':memory:');

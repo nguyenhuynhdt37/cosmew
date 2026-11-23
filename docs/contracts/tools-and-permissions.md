@@ -1,5 +1,7 @@
 # Tools và permission contracts
 
+Contract **1.55** adds capability-scoped `toolGrants.clear(capability?)` and `SessionGrants.generationFor(capability)`. MCP changes invalidate only MCP approvals/grants; global mode/rule/session changes retain full revocation. Stale authorization returns `APPROVAL_REVOKED`, never a grant or mutation. It does not imply user denial or permanently latch other writes; a new tool call repeats current policy and approval. See [ADR 0108](../adr/0108-capability-scoped-approval-revocation.md).
+
 Contract **1.43** adds `agent.spawn` to permission-prompt capabilities for
 explicit `agent_message` control. The public SDK action routes through the
 existing ToolDispatcher, with `Tool(agent_message)` rules and approval scope
@@ -124,7 +126,9 @@ per-file OS sandbox for arbitrary third-party language servers.
 
 ## Working directories (ADR 0067, no contract bump)
 
-Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither is normalized and asks for per-operation permission in default/acceptEdits; an explicit allow rule or bypass can permit it (ADR 0092). File-tool approval is independent of the OS sandbox. An external Bash cwd follows normal Bash approval and never enlarges sandbox write roots. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` defaults to off (ADR 0081); autoAllowBashIfSandboxed defaults to false and allowUnsandboxedCommands to true. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
+Trusted `permissions.additionalDirectories` (the user settings file, or a repository settings file after its SHA-256 content is trusted) are working directories together with the session project. Read, Edit, Write, `apply_patch`, Grep, Glob and LSP resolve a path that exists only in such a directory. A path in neither is normalized and asks for per-operation permission in default/acceptEdits; an explicit allow rule or bypass can permit it (ADR 0092). File-tool approval is independent of the OS sandbox. `.git`, Cosmew and legacy state, deny rules and secret-file asks still apply inside a granted directory. An untrusted repository file that sets `sandbox.enabled: false` or lists `additionalDirectories` grants neither. `sandbox.enabled` defaults to off (ADR 0081); autoAllowBashIfSandboxed defaults to false and allowUnsandboxedCommands to true. With it trusted off, commands run unsandboxed, including a workdir inside a granted directory, and `default` / `acceptEdits` still ask. `plan` still refuses edits and execution. Nested instructions and project context stay on the session project. See [ADR 0067](../adr/0067-working-directories.md).
+
+An `exec_command` launch in an external directory and non-transport `write_stdin` input to a terminal there require explicit approval. The prompt identifies the canonical cwd as `Run in <dir> (outside the working directories)`. Bash allow rules and sandbox auto-allow cannot answer this prompt. From contract 1.62 ([ADR 0117](../adr/0117-bypass-external-cwd.md)), `bypassPermissions` answers it without user interaction when the trusted sandbox setting is off; with sandboxing enabled the explicit external-cwd approval remains. Explicit ask rules still prompt in bypass, and deny rules still refuse. A session answer covers the exact launch scope or owned terminal, including its canonical cwd and sandbox. To put a directory in the regular Bash permission flow, use trusted `permissions.additionalDirectories`. Plan and deny rules still refuse execution, and `cosmew exec` without a TTY refuses any request that needs a prompt. External cwd approval allows the runtime to start there while the configured OS sandbox write roots still apply.
 
 ## User MCP (ADR 0068, no contract bump)
 
@@ -137,3 +141,31 @@ Trusted `permissions.additionalDirectories` (the user settings file, or a reposi
 When configured, `tool_output({output_id, offset?, limit?, query?})` pages or searches historical captured output. `query` is literal; offset counts Unicode code points in the currently redacted view; `limit` bounds page text in UTF-8 bytes (1–10000). The metadata reports coverage, `next_offset`, source truncation and search outcome. Too small a byte limit to fit the next code point returns `OUTPUT_PAGE_TOO_SMALL`. Missing/expired/evicted/cross-session handles return `OUTPUT_UNAVAILABLE`. Cache bounds: 1 MiB per artifact, 8 MiB per session, 1024 global entries and seven-day retention.
 
 Retrieval is a dispatcher operation with audit, explicit `Tool(tool_output)` policy and current source Read checks. Effective policy/session/workspace changes or grant revocation invalidate access. No source command or web request runs again. Handles do not restore grants after host restart; reread the source under current permissions when needed. Archive contents are untrusted evidence, never new instructions. Persistence stores redacted producer output before the generic result clip; it cannot recover bytes already omitted by a producer/process runtime. Optional cache write failure leaves the original result usable and reports archive unavailability rather than replaying the operation.
+
+### Guarded worktree integration (contract 1.49, ADR 0097)
+
+`apply_patch` accepts optional `expected_files`, an object mapping every canonical
+target path to its lowercase SHA-256 UTF-8 preimage hash, or `null` when absent.
+Optional `expected_modes` uses the same complete target key set with integer
+permission bits (0..511), or null when absent; it requires `expected_files`.
+The key set must exactly cover all source/destination paths. Verification refuses
+mismatched hashes with `PATCH_CONFLICT` before approval or writes; ordinary patch
+verification can also reject first. Snapshot revalidation after approval remains
+mandatory. Omitting the field preserves existing behavior. This is a conflict
+guard, never authorization. Worktree completion notes include bounded guarded
+patch JSON for review; parent integration goes through ordinary ToolDispatcher
+approval. Uncommitted edits cannot be integrated by merging the branch alone.
+Changed worktrees remain until the user/parent verifies and explicitly removes
+them. Contextual hunks retain whole-file hash guards. Same-mode tracked executable
+updates preserve their exact parent mode, including restrictive 0700 scripts.
+Non-executable 0600/0640/0644/0660/0664 text is supported; new-file creation
+uses `0644 & ~process.umask()`. Handoffs describe mode normalization and refuse
+a source more restrictive than the parent creation mode. Binary/actual-mode/symlink/encoding/oversized changes require manual review.
+If redaction changes a handoff or decoded patch, the entire machine patch is
+suppressed for manual review; a redacted replacement is never offered.
+See [ADR 0097](../adr/0097-worktree-review-handoff.md).
+
+
+## MCP manager (contract 1.54, ADR0102)
+
+Human CLI/TUI management uses SDK host ports; no model install/login tool is registered. File settings mutation is user-scoped, locked and compare-and-swap. Model tools continue through ToolDispatcher. Exposed MCP registrations include an opaque connection identity generation in handler/approval keys, invalidating stale routes when the same display name/schema points to a new endpoint. Login/logout/credentials and configuration changes revoke session grants and pending approvals. Tool annotations never grant permission; plan/read-only still deny MCP calls.

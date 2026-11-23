@@ -17,6 +17,7 @@ export interface PickerItem {
   description?: string;
   descriptionTone?: UiThemeToken;
   keywords?: string;
+  group?: string;
   disabled?: boolean;
   current?: boolean;
 }
@@ -28,7 +29,7 @@ export interface ListPickerProps<T extends PickerItem = PickerItem> {
   isActive?: boolean;
   placeholder?: string;
   filterable?: boolean;
-  onTextKey?: (input: string) => boolean;
+  onTextKey?: (input: string, query: string, item: T | undefined) => boolean;
   /** Draw the bordered search box even before typing (default: lists longer than eight rows). */
   showSearch?: boolean;
   initialQuery?: string;
@@ -79,7 +80,7 @@ export function ListPicker<T extends PickerItem>({
     onCursorChange?.(value);
   };
   const filtered = items.filter(item =>
-    `${item.label} ${item.description ?? ''} ${item.keywords ?? ''}`
+    `${item.label} ${item.description ?? ''} ${item.keywords ?? ''} ${item.group ?? ''}`
       .toLocaleLowerCase()
       .includes(query.toLocaleLowerCase()),
   );
@@ -146,7 +147,6 @@ export function ListPicker<T extends PickerItem>({
     {
       onKey: (input, key) => {
         if (
-          !filterable ||
           key.eventType === 'release' ||
           key.ctrl ||
           key.meta ||
@@ -159,7 +159,8 @@ export function ListPicker<T extends PickerItem>({
           key.tab
         )
           return;
-        if (onTextKey?.(input)) return true;
+        if (onTextKey?.(input, query, highlighted)) return true;
+        if (!filterable) return;
         if (key.backspace || key.delete) {
           setQuery(value => Array.from(value).slice(0, -1).join(''));
           setCursor(0);
@@ -196,26 +197,31 @@ export function ListPicker<T extends PickerItem>({
         const active = top + offset === index;
         const label = safeText(item.label);
         return (
-          <MouseRow key={item.id} minWidth={0} onHighlight={() => move(top + offset)} isActive={isActive}>
-            <Text wrap="truncate-end">
-              <Pointer selected={active} />
-              {markerSlot ? item.current ? <Text color={color('success')}>{'✔ '}</Text> : '  ' : null}
-              {numbered ? <Text color={muted}>{`${top + offset + 1}. `}</Text> : null}
-              <Text
-                color={active ? ui.color('selected') : item.labelTone ? ui.color(item.labelTone) : undefined}
-                dimColor={item.disabled}
-              >
-                {label}
-                {item.disabled ? ' (unavailable)' : ''}
+          <Box key={item.id} flexDirection="column" minWidth={0}>
+            {item.group && visible[offset - 1]?.group !== item.group ? (
+              <Text bold color={muted}>{`  ${safeText(item.group)}`}</Text>
+            ) : null}
+            <MouseRow minWidth={0} onHighlight={() => move(top + offset)} isActive={isActive}>
+              <Text wrap="truncate-end">
+                <Pointer selected={active} />
+                {markerSlot ? item.current ? <Text color={color('success')}>{'✔ '}</Text> : '  ' : null}
+                {numbered ? <Text color={muted}>{`${top + offset + 1}. `}</Text> : null}
+                <Text
+                  color={active ? ui.color('selected') : item.labelTone ? ui.color(item.labelTone) : undefined}
+                  dimColor={item.disabled}
+                >
+                  {label}
+                  {item.disabled ? ' (unavailable)' : ''}
+                </Text>
+                {item.description && !compact ? (
+                  <>
+                    {' '.repeat(Math.max(2, labelWidth - Array.from(label).length + 2))}
+                    <Text color={ui.color(item.descriptionTone ?? 'dim')}>{safeText(item.description)}</Text>
+                  </>
+                ) : null}
               </Text>
-              {item.description && !compact ? (
-                <>
-                  {' '.repeat(Math.max(2, labelWidth - Array.from(label).length + 2))}
-                  <Text color={ui.color(item.descriptionTone ?? 'dim')}>{safeText(item.description)}</Text>
-                </>
-              ) : null}
-            </Text>
-          </MouseRow>
+            </MouseRow>
+          </Box>
         );
       })}
       {below > 0 ? <Text color={muted}>{`    ↓ ${below} more`}</Text> : null}

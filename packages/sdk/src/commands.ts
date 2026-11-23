@@ -13,7 +13,9 @@ export type CommandOverlay =
   | 'help'
   | 'agents'
   | 'background-tasks'
-  | 'connect';
+  | 'connect'
+  | 'mcp'
+  | 'rewind';
 export type CommandHandler =
   | 'overlay'
   | 'effort'
@@ -34,6 +36,10 @@ export type CommandHandler =
   | 'memory'
   | 'exit'
   | 'keybindings'
+  | 'init'
+  | 'export'
+  | 'copy'
+  | 'rename'
   | 'mode'
   | 'unavailable';
 
@@ -101,7 +107,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/claude-api', [], 'optional'),
   unavailableClaudeCommand('/claude-in-chrome', [], 'optional'),
   unavailableClaudeCommand('/color', [], 'optional'),
-  unavailableClaudeCommand('/copy', [], 'optional'),
   unavailableClaudeCommand('/debug', [], 'optional'),
   unavailableClaudeCommand('/deep-research', [], 'required'),
   unavailableClaudeCommand('/design', [], 'optional'),
@@ -109,7 +114,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/design-sync', [], 'optional'),
   unavailableClaudeCommand('/desktop', ['/app']),
   unavailableClaudeCommand('/dataviz', [], 'optional'),
-  unavailableClaudeCommand('/export', [], 'optional'),
   unavailableClaudeCommand('/fast', [], 'optional'),
   unavailableClaudeCommand('/feedback', [], 'optional'),
   unavailableClaudeCommand('/fewer-permission-prompts'),
@@ -117,7 +121,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/goal', [], 'optional'),
   unavailableClaudeCommand('/heapdump'),
   unavailableClaudeCommand('/import', [], 'optional'),
-  unavailableClaudeCommand('/init', [], 'optional'),
   unavailableClaudeCommand('/ide'),
   unavailableClaudeCommand('/insights'),
   unavailableClaudeCommand('/install-github-app'),
@@ -137,7 +140,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/reload-skills'),
   unavailableClaudeCommand('/remote-control', ['/rc']),
   unavailableClaudeCommand('/remote-env'),
-  unavailableClaudeCommand('/rename', [], 'optional'),
   unavailableClaudeCommand('/release-notes'),
   unavailableClaudeCommand('/restart', ['/update']),
   unavailableClaudeCommand('/run', [], 'optional'),
@@ -255,7 +257,7 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     handler: 'switch',
     aliases: ['/account'],
     title: 'Switch Account',
-    description: 'Use another connected account; the chat continues in a new session',
+    description: 'Use another connected account while continuing the current conversation',
     category: 'Providers & Models',
     arguments: 'optional',
   },
@@ -269,13 +271,13 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/mcp',
-    handler: 'unavailable',
+    handler: 'overlay',
+    overlay: 'mcp',
     aliases: [],
     arguments: 'optional',
     title: 'MCP Servers',
-    description: 'List user MCP servers from mcp.json (stdio and HTTP). Project files are not started.',
+    description: 'Manage user MCP servers, tools, connections and authentication',
     category: 'Workspace & Security',
-    unavailable: 'MCP reconnect/enable/disable subcommands are not implemented in Cosmew yet.',
   },
   {
     command: '/hooks',
@@ -288,7 +290,8 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/rewind',
-    handler: 'unavailable',
+    handler: 'overlay',
+    overlay: 'rewind',
     aliases: ['/checkpoint', '/undo'],
     title: 'Rewind',
     description: 'Restore conversation and/or tracked text edits from a checkpoint',
@@ -338,9 +341,9 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/skills',
     handler: 'skills',
-    aliases: [],
+    aliases: ['/skill'],
     title: 'Skills',
-    description: 'List discovered skills, sources and discovery diagnostics',
+    description: 'Manage skill visibility and browse skills by source',
     category: 'Workspace & Security',
     duringRequest: true,
   },
@@ -474,6 +477,42 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
     category: 'Navigation',
   },
   {
+    command: '/init',
+    handler: 'init',
+    requires: 'model',
+    aliases: [],
+    title: 'Initialize Project Instructions',
+    description: 'Analyze the project and generate AGENTS.md',
+    category: 'Workspace & Security',
+  },
+  {
+    command: '/export',
+    handler: 'export',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Export Conversation',
+    description: 'Export the conversation as plain text',
+    category: 'Sessions',
+  },
+  {
+    command: '/copy',
+    handler: 'copy',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Copy Response',
+    description: 'Copy a recent assistant response or select a code block or quote',
+    category: 'Sessions',
+  },
+  {
+    command: '/rename',
+    handler: 'rename',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Rename Session',
+    description: 'Name the current session for /resume',
+    category: 'Sessions',
+  },
+  {
     command: '/keybindings',
     handler: 'keybindings',
     aliases: [],
@@ -509,7 +548,7 @@ const LEGACY_COMMANDS: readonly SlashCommandDef[] = [
   {
     command: '/theme edit',
     handler: 'unavailable',
-    aliases: ['/editor', '/customize'],
+    aliases: ['/customize'],
     title: 'Theme Editor',
     description: 'Custom theme editing is unavailable',
     unavailable: 'Custom themes are unavailable. Use /theme to choose Auto, Dark, or Light.',

@@ -122,7 +122,7 @@ Sau lượt đầu, `fyn exec` chờ các con nền đang chạy; mỗi thông b
 ### Khác upstream / giới hạn
 
 - Claude Code `isolation: "worktree"` còn dọn khi không đổi gì; port đó. Codex không có worktree cho subagent.
-- Con cách ly không thể `git commit` (không ghi được thư mục Git chung): cha/user commit hoặc merge từ nhánh/worktree được giữ lại.
+- Con cách ly không thể `git commit` (không ghi được thư mục Git chung). Handoff hiện tại theo [ADR 0097](0097-worktree-review-handoff.md): xem cả committed/uncommitted, dùng guarded `apply_patch` qua quyền thường của cha; merge branch đơn thuần không mang về file chưa commit. Giữ worktree tới khi đã kiểm tra tích hợp đủ.
 - Worktree để trong thư mục tạm của OS; hệ điều hành có thể dọn nó (nhánh vẫn còn trong repo).
 - bubblewrap (Linux) chưa kiểm chứng thật cho worktree; Windows chưa hỗ trợ (như ADR 0035).
 - UI TUI cho nhiều con song song: `/agents` (S5b) là danh sách gọn có chọn xem; không thay đổi TUI trong S5c (TUI được viết lại riêng).

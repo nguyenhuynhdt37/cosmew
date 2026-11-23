@@ -201,10 +201,10 @@ test('schema 10 migrates additively, preserves conversations, and future schema 
   h.store.append(h.owner, {role: 'assistant', content: 'retained'}, 'committed');
   h.db.exec('DROP TABLE background_task_history; PRAGMA user_version=10;');
   h.reopen();
-  expect(h.db.query('PRAGMA user_version').get()).toEqual({user_version: 11});
+  expect(h.db.query('PRAGMA user_version').get()).toEqual({user_version: 13});
   expect(new SqliteConversations(h.db).get(h.owner)?.messages[0]?.content).toBe('retained');
   new SqliteBackgroundTaskHistory(h.db, redact).save(h.owner, task('migrated', 'done'));
-  h.db.exec('PRAGMA user_version=12;');
+  h.db.exec('PRAGMA user_version=14;');
   expect(() => openPrivateDatabase(h.root)).toThrow();
 });
 

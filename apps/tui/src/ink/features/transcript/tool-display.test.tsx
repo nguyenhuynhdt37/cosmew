@@ -75,7 +75,7 @@ test('denied, failed exit, continuing session and missing results stay distinct'
     r = result('exec_command', 'failed');
   expect(toolDisplay(c, {...r, status: 'denied'})).toMatchObject({
     status: 'denied',
-    lines: ['User rejected Bash', 'failed'],
+    lines: ['Bash denied', 'failed'],
   });
   expect(toolDisplay(c, {...r, exitCode: 2})).toMatchObject({status: 'error', lines: ['Error: Exit code 2', 'failed']});
   expect(toolDisplay(c, {...r, sessionId: 'session'}).status).toBe('running');
@@ -129,7 +129,7 @@ test('Update Todos renders acknowledged checklist and never renders denied propo
   expect(view.lastFrame()).toContain('☐ Test');
   view.rerender(<TranscriptItem item={{...item, toolResults: [{...result(c.name, 'refused'), status: 'denied'}]}} />);
   await settle();
-  expect(view.lastFrame()).toContain('User rejected Update Todos');
+  expect(view.lastFrame()).toContain('Update Todos denied');
   expect(view.lastFrame()).not.toContain('☒ Read');
 });
 
@@ -209,3 +209,17 @@ for (const name of ['exec_command', 'write_stdin'])
     await settle();
     expect(view.lastFrame()).toContain('Wall time: 0.00 s');
   });
+
+test('system-revoked approvals are distinguished from user denial in tool output', () => {
+  const c = call('write', {path: 'a.ts'});
+  const r = {
+    ...result('write', 'Permissions changed while approval was pending. No changes were made; request approval again.'),
+    status: 'denied' as const,
+    code: 'APPROVAL_REVOKED',
+  };
+  const display = toolDisplay(c, r);
+  expect(display.lines[0]).toBe('Write needs a new approval');
+  expect(display.lines.join('\n')).not.toContain('User rejected');
+  expect(display.lines.join('\n')).toContain('No changes were made');
+  expect(toolDisplay(c, {...r, code: 'DENIED'}).lines[0]).toBe('Write denied');
+});

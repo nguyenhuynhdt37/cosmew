@@ -1,14 +1,23 @@
+import type {OAuthClientProvider} from '@modelcontextprotocol/sdk/client/auth.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {getDefaultEnvironment, StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import {FutrynError} from '@cosmew/contracts';
-import {McpClient, MCP_TIMEOUT_MS, clip, MAX_MCP_OUTPUT_BYTES, type McpTextResult} from './client';
+import {
+  McpClient,
+  MCP_TIMEOUT_MS,
+  clip,
+  MAX_MCP_OUTPUT_BYTES,
+  type McpTextResult,
+  discoverTools,
+  normalizeResult,
+} from './client';
 import {qualifiedMcpName, type McpServerSpec} from './config';
 
 /** What `cosmew mcp` and `/mcp` may show. No command, arguments, environment, URL or headers. */
 export interface McpServerStatus {
   name: string;
   transport: 'stdio' | 'http';
-  state: 'connected' | 'failed';
+  state: 'stopped' | 'connecting' | 'reconnecting' | 'connected' | 'needs-auth' | 'failed' | 'disabled';
   tools: number;
   error?: string;
 }
@@ -21,6 +30,7 @@ export interface McpToolRecord {
   description: string;
   inputSchema: Record<string, unknown>;
   readOnlyHint?: boolean;
+  identity?: string;
 }
 
 export interface McpSnapshot {
@@ -34,6 +44,11 @@ export interface McpHubOptions {
   configPath: string;
   problems?: string[];
   timeoutMs?: number;
+  fetch?: typeof fetch;
+  authProvider?(spec: Extract<McpServerSpec, {transport: 'http'}>): OAuthClientProvider | undefined;
+  onDisconnect?(): void;
+  onStatusChange?(): void;
+  warnings?: string[];
 }
 
 interface LiveServer {
@@ -52,42 +67,114 @@ interface LiveServer {
  * composition root parsed out of the user file. Results are redacted text. The hub does not
  * decide permissions: ToolDispatcher does, before `call`.
  */
+interface ServerEntry {
+  identity: string;
+  spec: McpServerSpec;
+  enabled: boolean;
+  generation: number;
+  status: McpServerStatus;
+  lifetime?: AbortController;
+  live?: LiveServer;
+  pending?: Promise<void>;
+  stopping?: Promise<void>;
+  warnings: string[];
+}
+
 export class McpHub {
-  private readonly servers: LiveServer[] = [];
-  private snapshotValue: McpSnapshot;
-  private connecting?: Promise<McpSnapshot>;
+  private readonly entries = new Map<string, ServerEntry>();
   private closed = false;
+  private readonly identity = crypto.randomUUID();
   constructor(
-    private readonly specs: readonly McpServerSpec[],
+    specs: readonly McpServerSpec[],
     private readonly options: McpHubOptions,
   ) {
-    this.snapshotValue = {configPath: options.configPath, servers: [], problems: [...(options.problems ?? [])]};
+    for (const spec of specs) this.entries.set(spec.name, this.entry(spec));
   }
 
-  /** Current view. Empty server list until `connect` finishes. */
+  private entry(spec: McpServerSpec): ServerEntry {
+    const enabled = spec.enabled !== false;
+    return {
+      identity: crypto.randomUUID(),
+      spec: structuredClone(spec),
+      enabled,
+      generation: 0,
+      warnings: [],
+      status: {name: spec.name, transport: spec.transport, state: enabled ? 'stopped' : 'disabled', tools: 0},
+    };
+  }
+
   snapshot(): McpSnapshot {
     return {
-      configPath: this.snapshotValue.configPath,
-      servers: this.snapshotValue.servers.map(server => ({...server})),
-      problems: [...this.snapshotValue.problems],
+      configPath: this.options.configPath,
+      servers: [...this.entries.values()].map(entry => ({...entry.status})),
+      problems: [
+        ...(this.options.problems ?? []),
+        ...[...this.entries.values()].flatMap(entry => entry.warnings.map(warning => `${entry.spec.name}: ${warning}`)),
+      ],
     };
   }
 
   tools(): McpToolRecord[] {
-    return this.servers.flatMap(server => server.tools.map(tool => ({...tool, inputSchema: {...tool.inputSchema}})));
+    return [...this.entries.values()].flatMap(entry =>
+      entry.status.state === 'connected'
+        ? (entry.live?.tools ?? []).map(tool => ({
+            ...tool,
+            inputSchema: structuredClone(tool.inputSchema),
+            identity: `${this.identity}:${entry.identity}:${entry.generation}`,
+          }))
+        : [],
+    );
   }
 
-  connect(signal?: AbortSignal): Promise<McpSnapshot> {
-    if (this.closed) return Promise.reject(new FutrynError('CANCELLED'));
-    if (this.servers.length || this.snapshotValue.servers.length) return Promise.resolve(this.snapshot());
-    if (this.specs.length === 0) {
-      this.snapshotValue = {...this.snapshotValue, servers: []};
-      return Promise.resolve(this.snapshot());
+  async connect(signal?: AbortSignal): Promise<McpSnapshot> {
+    this.check(signal);
+    const entries = [...this.entries.values()];
+    // Worker pool (concurrency 4) so one slow or unresponsive server never stalls the rest of the queue.
+    let next = 0;
+    const worker = async () => {
+      while (next < entries.length && !this.closed && !signal?.aborted) {
+        const entry = entries[next++]!;
+        await this.start(entry, signal);
+      }
+    };
+    await Promise.all(Array.from({length: Math.min(4, entries.length)}, worker));
+    return this.snapshot();
+  }
+
+  async reconnect(name?: string, signal?: AbortSignal): Promise<McpSnapshot> {
+    this.check(signal);
+    const entries = name ? [this.require(name)] : [...this.entries.values()];
+    await Promise.all(
+      entries.map(async entry => {
+        await this.stop(entry);
+        if (entry.enabled) await this.start(entry, signal, true);
+      }),
+    );
+    return this.snapshot();
+  }
+
+  async setEnabled(name: string, enabled: boolean, signal?: AbortSignal): Promise<McpSnapshot> {
+    this.check(signal);
+    const entry = this.require(name);
+    entry.enabled = enabled;
+    if (!enabled) await this.stop(entry);
+    else await this.start(entry, signal);
+    return this.snapshot();
+  }
+
+  async replaceSpecs(specs: readonly McpServerSpec[], signal?: AbortSignal): Promise<McpSnapshot> {
+    this.check(signal);
+    const next = new Map(specs.map(spec => [spec.name, spec]));
+    const stopping: Promise<void>[] = [];
+    for (const [name, entry] of this.entries) {
+      if (!next.has(name) || JSON.stringify(entry.spec) !== JSON.stringify(next.get(name))) {
+        this.entries.delete(name);
+        stopping.push(this.stop(entry));
+      }
     }
-    this.connecting ??= this.open(signal).finally(() => {
-      this.connecting = undefined;
-    });
-    return this.connecting;
+    for (const spec of specs) if (!this.entries.has(spec.name)) this.entries.set(spec.name, this.entry(spec));
+    await Promise.all(stopping);
+    return this.connect(signal);
   }
 
   async call(
@@ -95,72 +182,108 @@ export class McpHub {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<string | {text: string; isError: true}> {
-    if (this.closed || signal?.aborted) throw new FutrynError('CANCELLED');
-    const match = this.servers.flatMap(server => server.tools).find(tool => tool.name === qualifiedName);
-    const live = match
-      ? this.servers.find(server => server.tools.some(tool => tool.name === qualifiedName))
-      : undefined;
-    if (!match || !live) throw new FutrynError('NOT_FOUND');
-    return live.call(match.tool, args, signal);
+    this.check(signal);
+    for (const entry of this.entries.values()) {
+      const match = entry.status.state === 'connected' && entry.live?.tools.find(tool => tool.name === qualifiedName);
+      if (match && entry.live) return entry.live.call(match.tool, args, signal);
+    }
+    throw new FutrynError('NOT_FOUND');
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    const pending = this.connecting;
-    if (pending) await pending.catch(() => undefined);
-    const live = this.servers.splice(0);
-    await Promise.allSettled(live.map(server => server.close()));
+    await Promise.all([...this.entries.values()].map(entry => this.stop(entry)));
   }
 
-  private async open(signal?: AbortSignal): Promise<McpSnapshot> {
-    const statuses: McpServerStatus[] = [];
-    for (let index = 0; index < this.specs.length; index += 4) {
-      if (signal?.aborted || this.closed) break;
-      const batch = this.specs.slice(index, index + 4);
-      const started = await Promise.all(batch.map(spec => this.startOne(spec, signal)));
-      for (const live of started) {
-        this.servers.push(live);
-        statuses.push(live.status);
-      }
-    }
-    this.snapshotValue = {...this.snapshotValue, servers: statuses};
-    return this.snapshot();
+  private check(signal?: AbortSignal): void {
+    if (this.closed || signal?.aborted) throw new FutrynError('CANCELLED');
   }
 
-  private async startOne(spec: McpServerSpec, signal?: AbortSignal): Promise<LiveServer> {
-    try {
-      if (signal?.aborted || this.closed) throw new FutrynError('CANCELLED');
-      const live =
-        spec.transport === 'stdio'
-          ? await connectStdio(spec, this.options, signal)
-          : await connectHttp(spec, this.options, signal);
-      if (this.closed || signal?.aborted) {
-        await live.close().catch(() => undefined);
-        throw new FutrynError('CANCELLED');
+  private require(name: string): ServerEntry {
+    const entry = this.entries.get(name);
+    if (!entry) throw new FutrynError('NOT_FOUND');
+    return entry;
+  }
+
+  private async stop(entry: ServerEntry): Promise<void> {
+    entry.generation++;
+    entry.lifetime?.abort();
+    const live = entry.live;
+    const pending = entry.pending;
+    entry.live = undefined;
+    entry.pending = undefined;
+    entry.status = {...entry.status, state: entry.enabled ? 'stopped' : 'disabled', tools: 0, error: undefined};
+    this.options.onStatusChange?.();
+    const stopping = Promise.allSettled([entry.stopping, live?.close(), pending]).then(() => undefined);
+    entry.stopping = stopping;
+    await stopping;
+    if (entry.stopping === stopping) entry.stopping = undefined;
+  }
+
+  private start(entry: ServerEntry, signal?: AbortSignal, reconnecting = false): Promise<void> {
+    if (this.closed || signal?.aborted || !entry.enabled || entry.live) return Promise.resolve();
+    if (entry.pending) return entry.pending;
+    const generation = ++entry.generation;
+    const lifetime = new AbortController();
+    entry.lifetime = lifetime;
+    entry.warnings = [];
+    entry.status = {...entry.status, state: reconnecting ? 'reconnecting' : 'connecting', tools: 0, error: undefined};
+    this.options.onStatusChange?.();
+    const startup = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
+    const current = () =>
+      !this.closed && entry.enabled && entry.generation === generation && this.entries.get(entry.spec.name) === entry;
+    const options: McpHubOptions = {
+      ...this.options,
+      warnings: entry.warnings,
+      onDisconnect: () => {
+        if (current()) {
+          entry.live = undefined;
+          entry.status = {...entry.status, state: 'failed', tools: 0, error: 'connection closed'};
+          lifetime.abort();
+          this.options.onStatusChange?.();
+        }
+      },
+    };
+    const pending = (async () => {
+      let live: LiveServer | undefined;
+      try {
+        if (startup.aborted) throw new FutrynError('CANCELLED');
+        live =
+          entry.spec.transport === 'stdio'
+            ? await connectStdio(entry.spec, options, startup, lifetime.signal)
+            : await connectHttp(entry.spec, options, startup, lifetime.signal);
+        if (!current() || startup.aborted) {
+          await live.close();
+          throw new FutrynError('CANCELLED');
+        }
+        entry.live = live;
+        entry.status = live.status;
+        this.options.onStatusChange?.();
+      } catch (error) {
+        if (current()) {
+          entry.status = {
+            ...entry.status,
+            state: error instanceof FutrynError && error.code === 'AUTH' ? 'needs-auth' : 'failed',
+            tools: 0,
+            error:
+              error instanceof FutrynError && error.code === 'AUTH'
+                ? 'authentication required'
+                : error instanceof FutrynError && error.code === 'TIMEOUT'
+                  ? 'timed out'
+                  : error instanceof FutrynError && error.code === 'PROTOCOL'
+                    ? 'protocol error'
+                    : signal?.aborted || this.closed
+                      ? 'cancelled'
+                      : 'failed to start',
+          };
+          this.options.onStatusChange?.();
+        }
+      } finally {
+        if (entry.generation === generation) entry.pending = undefined;
       }
-      return live;
-    } catch (error) {
-      const failed = error instanceof FutrynError ? error.code : 'TRANSPORT';
-      return {
-        status: {
-          name: spec.name,
-          transport: spec.transport,
-          state: 'failed',
-          tools: 0,
-          error:
-            failed === 'PROTOCOL'
-              ? 'MCP discovery refused: invalid or oversized input schema.'
-              : failed === 'TIMEOUT'
-                ? 'timed out'
-                : failed === 'CANCELLED'
-                  ? 'cancelled'
-                  : 'failed to start',
-        },
-        tools: [],
-        call: () => Promise.reject(new FutrynError('TRANSPORT')),
-        close: () => Promise.resolve(),
-      };
-    }
+    })();
+    entry.pending = pending;
+    return pending;
   }
 }
 
@@ -168,16 +291,23 @@ async function connectHttp(
   spec: Extract<McpServerSpec, {transport: 'http'}>,
   options: McpHubOptions,
   signal?: AbortSignal,
+  ownedSignal?: AbortSignal,
 ): Promise<LiveServer> {
   const client = new McpClient({
     endpoint: new URL(spec.url),
     headers: spec.headers,
     redact: options.redact,
     timeoutMs: options.timeoutMs,
+    fetch: options.fetch,
+    authProvider: options.authProvider?.(spec),
+    onDisconnect: options.onDisconnect,
   });
   try {
+    const onAbort = () => void client.close();
+    ownedSignal?.addEventListener('abort', onAbort, {once: true});
     const listed = await client.listTools(signal);
-    const tools = expose(spec.name, listed, options.redact);
+    options.warnings?.push(...client.warnings);
+    const tools = expose(spec.name, listed, options.redact, options.warnings);
     return {
       status: {name: spec.name, transport: 'http', state: 'connected', tools: tools.length},
       tools,
@@ -194,10 +324,18 @@ async function connectStdio(
   spec: Extract<McpServerSpec, {transport: 'stdio'}>,
   options: McpHubOptions,
   signal?: AbortSignal,
+  ownedSignal?: AbortSignal,
 ): Promise<LiveServer> {
   const lifetime = new AbortController();
-  const onAbort = () => lifetime.abort();
-  signal?.addEventListener('abort', onAbort, {once: true});
+  let closing: Promise<void> | undefined;
+  const close = () => {
+    lifetime.abort();
+    return (closing ??= client.close().catch(() => undefined));
+  };
+  const onAbort = () => {
+    void close();
+  };
+  ownedSignal?.addEventListener('abort', onAbort, {once: true});
   const timeout = options.timeoutMs ?? MCP_TIMEOUT_MS;
   const transport = new StdioClientTransport({
     command: spec.command,
@@ -212,11 +350,17 @@ async function connectStdio(
   try {
     await client.connect(transport, {
       timeout,
-      signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeout)]),
+      signal: AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), AbortSignal.timeout(timeout)]),
     });
     if (lifetime.signal.aborted) throw new FutrynError('CANCELLED');
-    const listed = await listRemoteTools(client, timeout, lifetime.signal);
-    const tools = expose(spec.name, listed, options.redact);
+    const listed = await discoverTools(
+      client,
+      timeout,
+      AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]),
+      options.warnings ?? [],
+    );
+    client.onclose = () => options.onDisconnect?.();
+    const tools = expose(spec.name, listed, options.redact, options.warnings);
     return {
       status: {name: spec.name, transport: 'stdio', state: 'connected', tools: tools.length},
       tools,
@@ -231,43 +375,15 @@ async function connectStdio(
         ),
       close: async () => {
         lifetime.abort();
-        signal?.removeEventListener('abort', onAbort);
-        await client.close().catch(() => undefined);
+        ownedSignal?.removeEventListener('abort', onAbort);
+        await close();
       },
     };
   } catch (error) {
-    signal?.removeEventListener('abort', onAbort);
-    lifetime.abort();
-    await client.close().catch(() => undefined);
+    ownedSignal?.removeEventListener('abort', onAbort);
+    await close();
     throw error instanceof FutrynError ? error : new FutrynError('TRANSPORT');
   }
-}
-
-async function listRemoteTools(
-  client: Client,
-  timeout: number,
-  signal: AbortSignal,
-): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[]> {
-  const tools: {name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[] =
-    [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 4 && tools.length < 64; page++) {
-    const listed = await client.listTools(cursor ? {cursor} : undefined, {timeout, signal});
-    for (const tool of listed.tools) {
-      if (tool.execution?.taskSupport === 'required') continue;
-      tools.push({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema,
-        readOnlyHint: tool.annotations?.readOnlyHint === true,
-      });
-      if (tools.length >= 64) break;
-    }
-    const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
-    if (!next || next === cursor) break;
-    cursor = next;
-  }
-  return tools;
 }
 
 async function callRemote(
@@ -280,13 +396,7 @@ async function callRemote(
 ): Promise<string | {text: string; isError: true}> {
   try {
     const result = await client.callTool({name, arguments: args}, undefined, {timeout, signal});
-    const blocks = Array.isArray(result.content) ? result.content : [];
-    const text = blocks
-      .flatMap(block => (block.type === 'text' && typeof block.text === 'string' ? [block.text] : []))
-      .join('\n');
-    const structured = result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '';
-    const safe = clip(redact(text + structured), MAX_MCP_OUTPUT_BYTES);
-    return result.isError ? {text: safe, isError: true} : safe;
+    return textOf(normalizeResult(result, redact));
   } catch (error) {
     if (signal.aborted) throw new FutrynError('CANCELLED');
     if (error instanceof FutrynError) throw error;
@@ -299,6 +409,7 @@ function expose(
   server: string,
   tools: {name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[],
   redact: (text: string) => string,
+  warnings: string[] = [],
 ): McpToolRecord[] {
   const records: McpToolRecord[] = [];
   const seen = new Set<string>();
@@ -306,12 +417,20 @@ function expose(
     const name = qualifiedMcpName(server, tool.name);
     if (!name || seen.has(name)) continue;
     seen.add(name);
+    let inputSchema: Record<string, unknown>;
+    try {
+      inputSchema = schemaOf(tool.inputSchema);
+    } catch {
+      if (!warnings.includes('A tool was skipped: invalid or oversized input schema.'))
+        warnings.push('A tool was skipped: invalid or oversized input schema.');
+      continue;
+    }
     records.push({
       name,
       server,
       tool: tool.name,
       description: clip(redact(tool.description ?? `MCP tool ${tool.name} on ${server}.`), 500),
-      inputSchema: schemaOf(tool.inputSchema),
+      inputSchema,
       readOnlyHint: tool.readOnlyHint === true,
     });
   }

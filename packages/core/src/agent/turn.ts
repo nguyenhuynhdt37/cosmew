@@ -18,6 +18,7 @@ import {
   type Usage,
   codexBackoffMs,
   combineUsage,
+  knownCostUSD,
   attributeUsage,
 } from '@cosmew/contracts';
 import {normalizeHistory, truncateToolResults} from '../context/builder';
@@ -145,8 +146,6 @@ export class TurnRun {
   /** The journal already records this turn as interrupted. */
   private settled = false;
   private recoveryNeeded = false;
-  /** True while round 0 offered tools and nothing has come back yet. */
-  private rejectionCandidate = false;
   /** Consecutive tool rounds without new evidence. */
   private stagnant = 0;
   /** Artifact-verification continuations used (at most one). */
@@ -439,7 +438,7 @@ export class TurnRun {
             strategy = 'model';
           }
         } catch (error) {
-          if (this.signal.aborted) throw error; // cancelled: nothing was changed
+          if (this.signal.aborted || (error instanceof FutrynError && error.code === 'STORAGE')) throw error;
           this.modelCompactionOff = true;
           failed = true;
         }
@@ -489,6 +488,8 @@ export class TurnRun {
       messageTokens = estimateTokens(history);
     }
     const used = measure();
+    // Preparation may itself spend the work budget on a successful or failed summary.
+    this.stop ??= this.workExhausted();
     if (used >= this.window) {
       this.stop = 'context_window';
       throw new FutrynError('CONTEXT_LIMIT');
@@ -498,7 +499,6 @@ export class TurnRun {
     const available = this.stop ? [] : offered;
     const tools = this.stop ? [] : offeredSchemas;
     const offerTools = tools.length > 0;
-    this.rejectionCandidate = round === 0 && offerTools;
     const instructions = this.instructions(
       tools.map(t => t.name),
       offerTools,
@@ -550,13 +550,13 @@ export class TurnRun {
       maxOutputTokens: this.maxOutputTokens,
       maxEstimatedCostUSD: this.request.maxEstimatedCostUSD,
       signal: this.signal,
+      onUsage: usage => {
+        // Billing survives invalid summaries, stream failures and cancellation.
+        this.modelUsage = combineUsage(this.modelUsage, attributeUsage(usage, {sessionId: host.id}));
+        this.receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
+        store.observeTurn?.(host.id, this.revision!, this.receipt);
+      },
     });
-    // Billed whether or not it helps: count it in this turn's (and so the session's) usage.
-    if (summary.usage) {
-      this.modelUsage = combineUsage(this.modelUsage, attributeUsage(summary.usage, {sessionId: this.host.id}));
-      this.receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
-      store.observeTurn?.(host.id, this.revision!, this.receipt);
-    }
     const handoff = assembleHandoff(summary.text, input, store.loadPlan?.(host.id));
     const before = estimateTokens(input);
 
@@ -612,6 +612,9 @@ export class TurnRun {
     let base: string | undefined;
     if (offerTools) base = guidance;
     else if (stop || toolsUsed) base = [guidance, budgetExhaustedNotice(stop)].filter(Boolean).join('\n');
+    else
+      base =
+        'No project tools are available in this request. You can answer questions, but cannot inspect files, run commands, install MCP servers, or start background work. State this limitation for action requests; do not claim work is running or promise to continue after this response ends.';
 
     return [base, this.progressNotice, ...(recovering ? [RECOVERY_INSTRUCTION] : [])].filter(Boolean).join('\n');
   }
@@ -823,11 +826,19 @@ export class TurnRun {
     stepId: string,
   ): ModelEvent | undefined {
     const {host, tools, receipt} = this;
+    if (result.terminal) throw new FutrynError('PROTOCOL');
+    if (event.type === 'usage' || event.type === 'completed') {
+      result.usage = attributeUsage(event.usage, {sessionId: host.id});
+      this.modelUsage = combineUsage(usageBefore, result.usage);
+      receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
+      this.lastInput = event.usage.inputTokens;
+      this.lastOutput = event.usage.outputTokens;
+    }
+    if (event.type === 'usage' || event.type === 'completed')
+      host.store.observeTurn?.(host.id, this.revision!, receipt);
     if (this.signal.aborted) throw new FutrynError('CANCELLED');
     // toolOutputDelta and subagent.* are Cosmew's own events: a provider stream cannot fabricate them.
     if (event.type === 'toolOutputDelta' || event.type.startsWith('subagent.')) throw new FutrynError('PROTOCOL');
-    if (result.terminal) throw new FutrynError('PROTOCOL');
-    if (event.type === 'textDelta' || event.type === 'toolCallComplete') this.rejectionCandidate = false;
 
     if (event.type === 'providerReplay') {
       if (result.providerReplay) throw new FutrynError('PROTOCOL');
@@ -844,15 +855,8 @@ export class TurnRun {
       result.reasoningBytes += Buffer.byteLength(event.text);
       result.reasoningText += event.text;
     }
-    if (event.type === 'usage' || event.type === 'completed') {
-      result.usage = attributeUsage(event.usage, {sessionId: host.id});
-      this.modelUsage = combineUsage(usageBefore, result.usage);
-      receipt.usage = this.childUsage ? combineUsage(this.modelUsage, this.childUsage) : this.modelUsage;
-      this.lastInput = event.usage.inputTokens;
-      this.lastOutput = event.usage.outputTokens;
-    }
     if (event.type === 'context') receipt.context = event.context;
-    if (event.type === 'usage' || event.type === 'context') host.store.observeTurn?.(host.id, this.revision!, receipt);
+    if (event.type === 'context') host.store.observeTurn?.(host.id, this.revision!, receipt);
 
     if (event.type === 'toolCallComplete') {
       // A complete call (adapters emit it only once its arguments parsed) is dispatched now, while
@@ -1009,14 +1013,12 @@ export class TurnRun {
 
   /** Journal a failed or cancelled turn and return the error the caller should see. */
   private failure(error: unknown): unknown {
-    const {host, receipt, signal} = this;
+    const {host, receipt} = this;
     const {state, store} = host;
     this.turn.accepting = false;
     this.deferPending();
     const reported = this.publicError(error);
     const cancelled = reported.code === 'CANCELLED';
-    const toolsRejected =
-      this.rejectionCandidate && !signal.aborted && error instanceof FutrynError && error.code === 'INVALID_INPUT';
 
     if (this.revision !== undefined && !this.completed) {
       receipt.outcome = cancelled ? 'cancelled' : 'failed';
@@ -1037,21 +1039,14 @@ export class TurnRun {
       if (!store.recover) state.messages.push(this.user, ...this.steps);
     }
 
-    // A 400 before any output, right after offering tools, means the provider refused the tool definitions.
-    if (toolsRejected) host.onToolsRejected?.();
+    // Generic request errors do not identify which field was rejected. Keep the legacy
+    // onToolsRejected host callback dormant rather than infer a durable capability change.
     return reported;
   }
 
   private publicError(error: unknown): FutrynError {
     // A cancelled turn reports cancellation, not whichever provider error raced with it.
     if (this.signal.aborted) return new FutrynError('CANCELLED');
-    if (
-      this.rejectionCandidate &&
-      this.host.onToolsRejected &&
-      error instanceof FutrynError &&
-      error.code === 'INVALID_INPUT'
-    )
-      return new FutrynError('UNSUPPORTED');
     if (error instanceof FutrynError) return error;
     return new FutrynError('PROTOCOL');
   }
@@ -1129,7 +1124,10 @@ export class TurnRun {
     const tokens = receipt.usage ? (receipt.usage.inputTokens ?? 0) + (receipt.usage.outputTokens ?? 0) : 0;
     if (budget.maxTokens !== undefined && tokens >= budget.maxTokens) return 'budget_tokens';
     if (budget.maxDurationMs !== undefined && Date.now() - this.startedAt >= budget.maxDurationMs) return 'budget_time';
-    if (budget.maxCostUSD !== undefined && (receipt.usage?.costUSD ?? 0) >= budget.maxCostUSD) return 'budget_cost';
+    // An unknown request price keeps the aggregate unknown, but already known charges still
+    // provide a lower bound that can exhaust the cost cap (source buckets partition usage).
+    const knownCost = knownCostUSD(receipt.usage);
+    if (budget.maxCostUSD !== undefined && knownCost >= budget.maxCostUSD) return 'budget_cost';
     return undefined;
   }
 }

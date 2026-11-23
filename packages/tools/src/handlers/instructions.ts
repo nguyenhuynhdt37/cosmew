@@ -15,7 +15,7 @@ export class InstructionReader {
   async readInstruction(path: string, maxBytes: number, signal?: AbortSignal): Promise<ProjectInstructionReadResult> {
     signal?.throwIfAborted();
     if (
-      !/(^|\/)AGENTS(?:\.override)?\.md$/.test(path) ||
+      !/(^|\/)(?:AGENTS(?:\.override)?|CLAUDE)\.md$/.test(path) ||
       !Number.isSafeInteger(maxBytes) ||
       maxBytes < 1 ||
       maxBytes > 65536

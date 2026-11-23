@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {mkdirSync, mkdtempSync, rmSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, rmSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {join} from 'node:path';
 import {CONTRACT_VERSION, CosmewError, FutrynError, HannesError} from '@cosmew/contracts';
@@ -7,7 +7,7 @@ import {defaultStateDirectory} from '../../apps/cli/src/bootstrap/paths';
 import {FilePermissionSettings} from '../../apps/cli/src/bootstrap/permission-settings';
 import {SENSITIVE_HOME_PATHS} from '@cosmew/security';
 
-test('Cosmew state override wins over legacy environment overrides', () => {
+test('only COSMEW_HOME overrides the state directory', () => {
   expect(
     defaultStateDirectory(
       {COSMEW_HOME: '/tmp/cosmew', FUTRYN_HOME: '/tmp/futryn', HANNES_HOME: '/tmp/hannes'},
@@ -15,12 +15,12 @@ test('Cosmew state override wins over legacy environment overrides', () => {
     ),
   ).toBe('/tmp/cosmew');
   expect(defaultStateDirectory({FUTRYN_HOME: '/tmp/futryn', HANNES_HOME: '/tmp/hannes'}, '/tmp/home')).toBe(
-    '/tmp/futryn',
+    '/tmp/home/.cosmew',
   );
-  expect(defaultStateDirectory({HANNES_HOME: '/tmp/hannes'}, '/tmp/home')).toBe('/tmp/hannes');
+  expect(defaultStateDirectory({HANNES_HOME: '/tmp/hannes'}, '/tmp/home')).toBe('/tmp/home/.cosmew');
 });
 
-test('default state discovery reuses one existing legacy root without copying it', () => {
+test('default state discovery moves one legacy root to .cosmew and does not merge the other', () => {
   const home = mkdtempSync(join(homedir(), 'cosmew-state-test-'));
   const cosmew = join(home, '.cosmew');
   const futryn = join(home, '.futryn');
@@ -28,8 +28,9 @@ test('default state discovery reuses one existing legacy root without copying it
   mkdirSync(futryn);
   mkdirSync(hannes);
   try {
-    expect(defaultStateDirectory({}, home)).toBe(futryn);
-    expect(defaultStateDirectory({}, home)).not.toBe(cosmew);
+    expect(defaultStateDirectory({}, home)).toBe(cosmew);
+    expect(existsSync(futryn)).toBe(false);
+    expect(existsSync(hannes)).toBe(true);
   } finally {
     rmSync(home, {recursive: true, force: true});
   }
@@ -43,8 +44,8 @@ test('CosmewError and legacy error names are the same constructor', () => {
   expect(error.name).toBe('CosmewError');
 });
 
-test('headless contract version is 1.48', () => {
-  expect(CONTRACT_VERSION).toBe('1.48');
+test('headless contract version is 1.63', () => {
+  expect(CONTRACT_VERSION).toBe('1.63');
 });
 
 test('project permission settings prefer Cosmew root and fall back to legacy roots', () => {
@@ -55,8 +56,8 @@ test('project permission settings prefer Cosmew root and fall back to legacy roo
     expect(current.pathOf('project')).toBe(join(workspace, '.cosmew', 'settings.json'));
     mkdirSync(join(workspace, '.futryn'));
     const legacy = new FilePermissionSettings({workspace, stateDirectory: workspace, store});
-    expect(legacy.pathOf('project')).toBe(join(workspace, '.futryn', 'settings.json'));
-    mkdirSync(join(workspace, '.cosmew'));
+    expect(legacy.pathOf('project')).toBe(join(workspace, '.cosmew', 'settings.json'));
+    expect(existsSync(join(workspace, '.futryn'))).toBe(false);
     const preferred = new FilePermissionSettings({workspace, stateDirectory: workspace, store});
     expect(preferred.pathOf('project')).toBe(join(workspace, '.cosmew', 'settings.json'));
   } finally {

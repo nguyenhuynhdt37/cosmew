@@ -20,6 +20,19 @@ flowchart LR
 
 Runtime arrows to injected implementations do not add compile-time package dependencies. Adapters never receive privileged tool callbacks. Model tool arguments are validated data only. Unknown tools/capabilities are denied; core does not dispatch any tools. Text chat is explicitly selected by the user even when metadata is unknown.
 
+## Quick gateway login
+
+In `/login`, choose **Custom provider**, enter the base URL and hidden API key,
+then choose a model. The picker shows the context window and output limit
+advertised by the gateway. A pasted URL, key and model ID can skip the picker.
+If the catalog is unavailable, enter the model ID from the gateway. For the
+shell, run `cosmew login <base-url>` and enter the key at the hidden prompt.
+Scripts can use `--key-stdin` and `--model <id>`.
+
+Cosmew checks streaming for the selected model before saving the account.
+`/context` uses the selected model's exact advertised limits when available.
+Unknown limits use the conservative runtime fallback. See [ADR 0115](../adr/0115-gateway-model-selection.md).
+
 ## Configure and connect
 
 Use `bun run cosmew` as the local command prefix below; `cosmew` is also the workspace CLI bin when Bun's bin directory is on PATH. `bun run cosmew --help` lists all options.

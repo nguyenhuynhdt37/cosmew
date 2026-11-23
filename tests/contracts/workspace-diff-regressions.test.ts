@@ -154,11 +154,17 @@ test('review keeps its original mode and refuses submission when the session cha
   client.createSession();
   const report = await client.refreshWorkspaceDiff({base: 'uncommitted'});
   let finish!: (value: typeof report) => void;
+  let collectionStarted!: () => void;
+  const collecting = new Promise<void>(resolve => {
+    collectionStarted = resolve;
+  });
   client.refreshWorkspaceDiff = () =>
     new Promise(resolve => {
       finish = resolve;
+      collectionStarted();
     });
   const running = review(client);
+  await collecting;
   expect(client.mode()).toBe('chat');
   client.clearSessionView();
   finish(report);

@@ -1,4 +1,4 @@
-import {limitKindLabel, limitItemText, limitItemSnapshotText} from '../usage/logic';
+import {isHistoricalLimit, limitItemText, limitItemSnapshotText} from '../usage/logic';
 import {PERMISSION_MODE_LABELS, type AppearanceConfig} from '@cosmew/contracts';
 
 export interface SettingRow {
@@ -347,17 +347,34 @@ export interface UsageMeter {
   percent: number | null;
   text: string;
   reset?: string;
+  historical?: boolean;
 }
-/** Provider-reported limits as bars; empty when no account reported one. */
-export function usageMeters(client: import('@cosmew/sdk').FutrynClient): UsageMeter[] {
-  return client.limits().flatMap(account =>
-    account.items
-      .filter(item => item.unit !== 'USD')
-      .map(item => ({
-        label: `${account.providerName} / ${account.alias} · ${limitKindLabel(item)} · ${item.label}`,
-        percent: item.unlimited ? null : (item.usedPercent ?? null),
+/** Show every connected account, including those with no quota evidence. */
+export function usageMeters(client: Pick<import('@cosmew/sdk').FutrynClient, 'limits'>): UsageMeter[] {
+  const now = Date.now();
+  return client.limits().flatMap<UsageMeter>(account => {
+    const provider = `${account.providerName} / ${account.alias}`;
+    if (!account.items.length)
+      return [
+        {
+          label: provider,
+          percent: null,
+          text: account.checking
+            ? 'Checking quota…'
+            : account.error
+              ? `Quota check failed (${account.error})`
+              : 'Quota not reported',
+        },
+      ];
+    return account.items.map(item => {
+      const historical = isHistoricalLimit(account, item, now);
+      return {
+        label: provider,
+        percent: item.unlimited || historical ? null : (item.usedPercent ?? null),
         text: limitItemText(item),
-        reset: limitItemSnapshotText(account, item),
-      })),
-  );
+        reset: limitItemSnapshotText(account, item, now),
+        historical,
+      };
+    });
+  });
 }

@@ -22,3 +22,5 @@ export * from './background-tasks';
 export * from './hooks';
 
 export * from './checkpoints';
+
+export * from './mcp-management';

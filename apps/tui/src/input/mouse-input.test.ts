@@ -126,3 +126,34 @@ test('left presses are separate control events; releases, motion, modifiers and 
     expect(wheels).toEqual([]);
   }
 });
+
+test('native text selection releases mouse capture without ending raw input or leaking mouse reports', () => {
+  const source = new Input();
+  const output = new PassThrough();
+  let modes = '';
+  output.on('data', chunk => {
+    modes += String(chunk);
+  });
+  const bridge = createTerminalMouseInput(source, output);
+  const events: unknown[] = [];
+  bridge.subscribeMouse!(event => events.push(event));
+  bridge.stdin.setEncoding('utf8');
+  bridge.stdin.setRawMode!(true);
+  bridge.setCaptureEnabled!(false);
+  expect(modes).toBe(ENABLE_TERMINAL_MOUSE + DISABLE_TERMINAL_MOUSE);
+  expect(source.modes).toEqual([true]);
+  source.write('Việt\x1b[<64;2;3M\x1b[<0;2;3M\x1b[A');
+  expect(bridge.stdin.read()).toBe('Việt\x1b[A');
+  expect(events).toEqual([]);
+  bridge.stdin.setRawMode!(false);
+  bridge.stdin.setRawMode!(true);
+  expect(modes).toBe(ENABLE_TERMINAL_MOUSE + DISABLE_TERMINAL_MOUSE);
+  bridge.setCaptureEnabled!(true);
+  expect(modes).toBe(ENABLE_TERMINAL_MOUSE + DISABLE_TERMINAL_MOUSE + ENABLE_TERMINAL_MOUSE);
+  source.write('\x1b[<65;2;3M');
+  bridge.stdin.read();
+  expect(events).toEqual([{direction: 1, column: 2, row: 3}]);
+  bridge.dispose();
+  source.destroy();
+  output.destroy();
+});

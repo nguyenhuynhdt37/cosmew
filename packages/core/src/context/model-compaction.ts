@@ -63,6 +63,8 @@ export async function summarizeWithModel(input: {
   maxOutputTokens?: number;
   maxEstimatedCostUSD?: number;
   signal?: AbortSignal;
+  /** Final request snapshot, exactly once even if validation, transport or cancellation fails. */
+  onUsage?: (usage: Usage) => void;
 }): Promise<SummaryResult> {
   const {model, selection, visible, window, signal} = input;
   signal?.throwIfAborted();
@@ -88,25 +90,29 @@ export async function summarizeWithModel(input: {
   let text = '';
   let usage: Usage | null = null;
   let finish: string | undefined;
-  for await (const event of model.stream(
-    {
-      requestId: crypto.randomUUID(),
-      modelId: selection.modelId,
-      messages,
-      tools: [],
-      ...(input.maxOutputTokens !== undefined ? {maxOutputTokens: input.maxOutputTokens} : {}),
-      ...(input.maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD: input.maxEstimatedCostUSD} : {}),
-    },
-    signal,
-  )) {
-    signal?.throwIfAborted();
-    if (event.type === 'textDelta' && text.length <= SUMMARY_MAX_CHARS)
-      text += event.text.slice(0, SUMMARY_MAX_CHARS + 1 - text.length);
-    else if (event.type === 'usage') usage = event.usage;
-    else if (event.type === 'completed') {
-      usage = event.usage;
-      finish = event.finishReason;
-    } else if (event.type === 'toolCallComplete') throw new FutrynError('PROTOCOL');
+  try {
+    for await (const event of model.stream(
+      {
+        requestId: crypto.randomUUID(),
+        modelId: selection.modelId,
+        messages,
+        tools: [],
+        ...(input.maxOutputTokens !== undefined ? {maxOutputTokens: input.maxOutputTokens} : {}),
+        ...(input.maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD: input.maxEstimatedCostUSD} : {}),
+      },
+      signal,
+    )) {
+      // Capture billing before cancellation checks: the provider may have already reported it.
+      if (event.type === 'usage' || event.type === 'completed') usage = event.usage ?? usage;
+      signal?.throwIfAborted();
+      if (event.type === 'textDelta' && text.length <= SUMMARY_MAX_CHARS)
+        text += event.text.slice(0, SUMMARY_MAX_CHARS + 1 - text.length);
+      else if (event.type === 'completed') {
+        finish = event.finishReason;
+      } else if (event.type === 'toolCallComplete') throw new FutrynError('PROTOCOL');
+    }
+  } finally {
+    if (usage) input.onUsage?.(usage);
   }
   signal?.throwIfAborted();
   if (finish === undefined || finish === 'length') throw new FutrynError('PROTOCOL');

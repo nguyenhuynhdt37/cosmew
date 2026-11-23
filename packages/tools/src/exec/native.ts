@@ -70,7 +70,7 @@ const EXEC_ENV = {
   GH_PAGER: 'cat',
   CODEX_CI: '1',
   GIT_OPTIONAL_LOCKS: '0',
-  FUTRYN_SANDBOX: '1',
+  COSMEW_SANDBOX: '1',
 };
 
 /** Codex `shell_environment_policy` default excludes: names that look like credentials. */
@@ -483,7 +483,7 @@ export class NativeCommandRuntime implements CommandRuntime {
       if (value === undefined || HOST_ENV_EXCLUDED.test(key) || /^(COSMEW|FUTRYN|HANNES)_/i.test(key)) continue;
       inherited[key] = value;
     }
-    const {FUTRYN_SANDBOX: _marker, ...overlay} = EXEC_ENV;
+    const {COSMEW_SANDBOX: _marker, ...overlay} = EXEC_ENV;
     return {
       ...inherited,
       ...overlay,

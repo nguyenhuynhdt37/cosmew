@@ -1,7 +1,17 @@
-import {FutrynError, modelIdSchema, providerSchema, type Account, type Provider} from '@cosmew/contracts';
+import {
+  FutrynError,
+  modelIdSchema,
+  providerSchema,
+  isCodingModel,
+  type Account,
+  type ModelInfo,
+  type Provider,
+} from '@cosmew/contracts';
+import {formatTokenCount} from '@cosmew/models';
 import {terminalText, validateEndpoint} from '@cosmew/security';
 import {loginOAuth} from './subscriptions/login';
 import type {Application} from './bootstrap/startup';
+import type {QuickConnectProviderInput} from '@cosmew/sdk';
 import type {ChatInput} from './input';
 
 type Print = (text: string) => void;
@@ -28,6 +38,35 @@ async function choose(
   }
 }
 
+export async function chooseGatewayModel(
+  input: ChatInput,
+  print: Print,
+  catalog: readonly ModelInfo[],
+): Promise<string> {
+  const models = catalog.filter(model => isCodingModel(model));
+  const manual = '!manual';
+  if (models.length) {
+    const selected = await choose(
+      input,
+      print,
+      'Chọn model',
+      [
+        ...models.map(model => {
+          const context = model.contextLimit ? `${formatTokenCount(model.contextLimit)} ctx` : 'chưa rõ context';
+          const output = model.outputLimit ? ` · ${formatTokenCount(model.outputLimit)} out` : '';
+          return {id: model.id, name: `${model.id} · ${context}${output}`};
+        }),
+        {id: manual, aliases: ['manual'], name: 'Nhập Model ID (manual)'},
+      ],
+      models[0]!.id,
+    );
+    if (selected !== manual) return selected;
+  }
+  const model = modelIdSchema.safeParse(await input.ask('Model ID từ gateway'));
+  if (!model.success) throw new FutrynError('INVALID_INPUT');
+  return model.data;
+}
+
 export async function loginWizard(
   app: Application,
   input: ChatInput,
@@ -51,8 +90,27 @@ export async function loginWizard(
       '1',
     );
     if (id === '@custom') {
-      const id = await input.ask('Tên cấu hình gateway', 'my-9router');
-      if (app.registry.list().some(p => p.id === id)) throw new FutrynError('INVALID_INPUT');
+      const first = await input.ask('Base URL (vd: https://gateway.example/v1; nhập ID để cấu hình nâng cao)');
+      if (/^https?:\/\//i.test(first)) {
+        const client = app.createFutrynClient(project);
+        const options: QuickConnectProviderInput = {
+          project,
+          chooseModel: models => chooseGatewayModel(input, print, models),
+        };
+        if (first.includes('|')) options.raw = first;
+        else {
+          options.baseURL = validateEndpoint(first);
+          options.apiKey = process.stdin.isTTY
+            ? await input.secret({allowEmpty: true, label: 'API key (ẩn; Enter nếu không cần)'})
+            : await input.ask('API key (Enter nếu không cần)', '');
+        }
+        const result = await client.quickConnectProvider(options, signal);
+        print(result.summary);
+        return result.account;
+      }
+      // Advanced custom provider setup when a configuration ID is provided instead of a URL.
+      const customId = first;
+      if (app.registry.list().some(p => p.id === customId)) throw new FutrynError('INVALID_INPUT');
       const baseURL = validateEndpoint(await input.ask('Base URL (thường kết thúc bằng /v1)'));
       const protocol = await choose(
         input,
@@ -80,8 +138,8 @@ export async function loginWizard(
       if (!['y', 'n'].includes(discover.toLowerCase())) throw new FutrynError('INVALID_INPUT');
       provider = app.registry.add(
         providerSchema.parse({
-          id,
-          name: id,
+          id: customId,
+          name: customId,
           baseURL,
           protocol,
           auth,

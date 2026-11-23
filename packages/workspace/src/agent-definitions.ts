@@ -109,7 +109,7 @@ interface Entry {
 
 /**
  * Snapshot discovery of custom agents (S5b, ADR 0058): workspace up to the repository root, nearer scopes first
- * (`.cosmew`, `.futryn`, `.hannes`, `.claude`, `.agents` in each), then the user's state roots. Files are
+ * (`.cosmew`, `.claude`, `.agents` in each), then the user's state roots. Files are
  * regular, non-symlinked, bounded UTF-8 `*.md`; the first definition of a name wins. Discovery decides nothing about
  * permissions: every definition is untrusted data.
  */
@@ -144,12 +144,11 @@ export class AgentDefinitionCatalog {
     const roots: {path: string; source: 'project' | 'user'}[] = [];
     for (let scope = options.workspace.root; ; scope = dirname(scope)) {
       if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
-        for (const dir of ['.cosmew', '.futryn', '.hannes', '.claude', '.agents'])
+        for (const dir of ['.cosmew', '.claude', '.agents'])
           roots.push({path: join(scope, dir, 'agents'), source: 'project'});
       if (scope === repo) break;
     }
-    for (const dir of ['.cosmew', '.futryn', '.claude', '.hannes'])
-      roots.push({path: join(home, dir, 'agents'), source: 'user'});
+    for (const dir of ['.cosmew', '.claude']) roots.push({path: join(home, dir, 'agents'), source: 'user'});
     let files = 0;
     for (const scan of roots) {
       try {

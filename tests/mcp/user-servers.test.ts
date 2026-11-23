@@ -173,7 +173,13 @@ test('the dispatcher asks, denies in plan and read-only, and remembers a session
 async function cli(home: string, cwd: string, args: string[]) {
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
     cwd,
-    env: {...process.env, FUTRYN_HOME: home, HANNES_HOME: home, PARENT_SECRET: 'parent-should-not-leak'},
+    env: {
+      ...process.env,
+      COSMEW_HOME: home,
+      FUTRYN_HOME: home,
+      HANNES_HOME: home,
+      PARENT_SECRET: 'parent-should-not-leak',
+    },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -226,8 +232,9 @@ test('cosmew mcp connects the user file, ignores project files, and status does 
   };
   expect(report.servers).toEqual([{name: 'fixture', transport: 'stdio', state: 'connected', tools: 1}]);
   const projectReal = realpathSync(project);
+  // The prior status command has migrated the legacy project state directory.
   expect(report.ignoredProjectFiles).toEqual([
-    join(projectReal, '.futryn', 'mcp.json'),
+    join(projectReal, '.cosmew', 'mcp.json'),
     join(projectReal, '.mcp.json'),
   ]);
   expect(report.note).toContain('not started');

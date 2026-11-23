@@ -158,7 +158,12 @@ test('an approved unsandboxed command can start in an external cwd and write the
   expect(result.status).toBe('ok');
   expect(result.exitCode).toBe(0);
   expect(readFileSync(join(f.outside, 'native.txt'), 'utf8')).toBe('APPROVED');
-  expect(f.approvals).toHaveLength(1);
+  expect(f.approvals).toEqual([
+    expect.objectContaining({
+      reason: 'outside-working-directories',
+      workdir: f.outside,
+    }),
+  ]);
 });
 
 test('external read session grants stay on the exact target; cancellation cannot grant access', async () => {
@@ -191,7 +196,7 @@ test('external read session grants stay on the exact target; cancellation cannot
 });
 
 test.skipIf(process.platform !== 'darwin' || !existsSync('/usr/bin/sandbox-exec'))(
-  'file approval does not enlarge the actual shell sandbox write roots',
+  'external file and cwd approvals do not enlarge the actual shell sandbox write roots',
   async () => {
     const f = fixture({
       sandbox: () => ({

@@ -13,7 +13,7 @@ import {SAFETY_LIMITS, type TurnHost} from './turn-types';
 /**
  * `/compact` (ADR 0054; Codex `Op::Compact` → `run_compact_task`): checkpoint an idle conversation.
  * The model writes the handoff; any non-cancellation failure falls back to the extractive checkpoint.
- * Durable history is never modified, and a cancelled call changes nothing.
+ * Durable history is never modified. Cancellation preserves billed usage without publishing a checkpoint.
  */
 export async function compactConversation(
   host: TurnHost,
@@ -42,6 +42,7 @@ export async function compactConversation(
   const contextLimit = host.options.contextLimit?.() ?? SAFETY_LIMITS.unknownContextTokens;
   const window = Math.max(1, contextLimit);
   let failure = 'PROTOCOL';
+  let usage: CompactionOutcome['usage'] = null;
   try {
     const summary = await summarizeWithModel({
       model: host.model,
@@ -50,21 +51,20 @@ export async function compactConversation(
       instructions,
       window,
       signal,
+      onUsage: reported => {
+        usage = attributeUsage(reported, {sessionId: host.id});
+        store.addUsage?.(host.id, usage);
+      },
     });
-    // The call was billed whether or not it helps: count it in the session's usage.
-    if (summary.usage) {
-      summary.usage = attributeUsage(summary.usage, {sessionId: host.id});
-      store.addUsage?.(host.id, summary.usage);
-    }
     const handoff = assembleHandoff(summary.text, visible, store.loadPlan?.(host.id));
     const snapshot = modelSnapshot(normalized, handoff, retainRecentUserMessages(normalized));
     const tokensAfter = estimateContextTokens(modelSnapshotMessages(snapshot));
-    if (tokensAfter >= tokensBefore) return unchanged('not_needed', summary.usage);
+    if (tokensAfter >= tokensBefore) return unchanged('not_needed', usage);
     store.saveContextSnapshot?.(host.id, snapshot);
     state.snapshot = snapshot;
-    return {compacted: true, strategy: 'model', tokensBefore, tokensAfter, usage: summary.usage};
+    return {compacted: true, strategy: 'model', tokensBefore, tokensAfter, usage};
   } catch (error) {
-    if (signal?.aborted) throw error;
+    if (signal?.aborted || (error instanceof FutrynError && error.code === 'STORAGE')) throw error;
     failure = error instanceof FutrynError ? error.code : 'ERROR';
   }
 
@@ -76,7 +76,7 @@ export async function compactConversation(
     host.options.compactor,
     signal,
   );
-  if (!snapshot) return unchanged(failure);
+  if (!snapshot) return unchanged(failure, usage);
   store.saveContextSnapshot?.(host.id, snapshot);
   state.snapshot = snapshot;
   return {
@@ -85,7 +85,7 @@ export async function compactConversation(
     fallback: true,
     tokensBefore,
     tokensAfter: estimateContextTokens(useContextSnapshot(normalized, snapshot)),
-    usage: null,
+    usage,
     reason: failure,
   };
 }

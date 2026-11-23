@@ -86,7 +86,7 @@ async function setup(defaultState = false) {
   );
   await app.accounts.add('skills', 'fixture', {kind: 'none'});
   const put = (name: string, body: string, disabled = false) => {
-    const directory = join(root, '.futryn/skills', name);
+    const directory = join(root, '.cosmew/skills', name);
     mkdirSync(directory, {recursive: true});
     writeFileSync(
       join(directory, 'SKILL.md'),
@@ -170,6 +170,27 @@ test('TUI slash skill reaches a model turn and /skills lists source and errors w
   expect(h.server.requests.length).toBe(before);
 });
 
+test('/skill saves workspace visibility on Esc and hides disabled commands from invocation', async () => {
+  const h = await setup();
+  h.client.setToolsEnabled(true);
+  const tui = await openInk(h.client, {width: 120});
+  cleanup.push(() => tui.shutdown());
+  await tui.executeSlashCommand('/skill');
+  await tui.waitFor('/s3-demo [on]');
+  for (const key of [' ', '\r', ' ']) await tui.press(key);
+  await tui.waitFor('/s3-demo [off]');
+  expect(h.client.isSkillCommand('/s3-demo')).toBe(true);
+  await tui.press('\x1b');
+  await tui.waitFor('/skill');
+  expect(h.client.isSkillCommand('/s3-demo')).toBe(false);
+  await tui.submitPrompt('/s3-demo');
+  await tui.waitFor('Skill /s3-demo is disabled in /skills.');
+  const reopened = h.app.createFutrynClient(h.root);
+  reopened.setToolsEnabled(true);
+  expect(reopened.skills().skills.find(skill => skill.name === 's3-demo')?.visibility).toBe('off');
+  expect(reopened.isSkillCommand('/s3-demo')).toBe(false);
+});
+
 test('headless cosmew exec resolves a dollar mention through the same dispatcher', async () => {
   const h = await setup();
   const lines: string[] = [];
@@ -191,12 +212,12 @@ test('headless cosmew exec resolves a dollar mention through the same dispatcher
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.48'});
+  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.63'});
 });
 
 test('default state and user skills coexist through production discovery and dispatcher', async () => {
   const h = await setup(true);
-  const directory = join(h.home, '.futryn/skills/s3-user');
+  const directory = join(h.home, '.cosmew/skills/s3-user');
   mkdirSync(directory, {recursive: true});
   writeFileSync(join(directory, 'SKILL.md'), '---\nname: s3-user\ndescription: User skill\n---\nS3_USER_BODY');
   h.client.setToolsEnabled(true);
@@ -214,6 +235,6 @@ test('model skill tool returns full text and directory through the ordinary turn
   expect(events.some(e => e.type === 'toolResult' && e.result.name === 'skill' && e.result.status === 'ok')).toBe(true);
   const body = h.server.requests.filter(r => r.body?.stream).at(-1)!.body;
   const tool = body.messages.find((m: any) => m.role === 'tool');
-  expect(tool.content).toContain('Skill directory: ' + join(h.root, '.futryn/skills/s3-demo'));
+  expect(tool.content).toContain('Skill directory: ' + join(h.root, '.cosmew/skills/s3-demo'));
   expect(tool.content).toContain('S3_BODY_SECRET_MARKER');
 });

@@ -19,6 +19,8 @@ export interface SessionSummary {
 export interface SessionRecord extends SessionSummary {
   messages: StoredMessage[];
   turns?: import('./telemetry').TurnReceipt[];
+  /** Billed requests with no agent turn receipt (e.g. summarizing a newly forked session). */
+  additionalUsage?: import('./models').Usage;
   recovery?: import('./recovery').RecoveredConversation;
 }
 
@@ -106,6 +108,8 @@ export interface QueuedInputEntry {
 
 export interface ConversationStore {
   create(selection: Selection): string;
+  /** Update the active model/account selection of an idle conversation in place (ADR 0112). */
+  updateSelection?(id: string, selection: Selection): void;
   /** Optional v4 durable execution journal. Production SQLite implements this boundary. */
   /** `carried` lists undelivered steering (by steerId) that this turn consumes as input before `user`. */
   beginExecution?(

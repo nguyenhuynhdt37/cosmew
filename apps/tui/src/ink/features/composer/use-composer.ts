@@ -2,7 +2,7 @@ import type {PromptHistoryEntry, PromptHistoryScope} from '@cosmew/sdk';
 import {useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore} from 'react';
 import {usePaste, type Key} from 'ink';
 import {FutrynError} from '@cosmew/contracts';
-import {SLASH_COMMANDS, acceptSlashSelection, type FutrynClient} from '@cosmew/sdk';
+import {parseSlashCommand, type FutrynClient} from '@cosmew/sdk';
 import {
   useClientEvents,
   useFutrynClient,
@@ -71,6 +71,8 @@ export interface ComposerOptions {
   workspaceAccess?: boolean;
   transcriptItems?: boolean;
   initialValue?: string;
+  /** Override the default startup example; false disables it for custom prompts. */
+  startupSuggestion?: string | false;
   initialHistory?: readonly string[];
   inputWidth?: number;
   onEmptyHomeEnd?: (edge: 'start' | 'end') => void;
@@ -206,22 +208,52 @@ export function useComposer(options: ComposerOptions) {
     options.onNotice?.(message);
   };
   const context = useMemo(() => completionContext(draft.value, draft.cursor), [draft.value, draft.cursor]);
+  const canComplete = !!context && !search && (!vimEnabled || vim.current.mode === 'INSERT');
+  const completionActive = canComplete && !menu.dismissed && (!context.midPrompt || !!context.query || menu.expanded);
+  const needsSkills = completionActive && (context?.prefix === '/' || context?.prefix === '$') && client.toolsEnabled();
+  // Filter the same catalog while a completion menu is open. The SDK still validates a skill when submitted.
+  const completionSkills = useMemo(() => {
+    if (!needsSkills) return [];
+    try {
+      return client.skills().skills.filter(skill => skill.visibility !== 'off');
+    } catch {
+      return undefined;
+    }
+  }, [client, needsSkills]);
   const completionData = useMemo(() => {
-    if (!context || menu.dismissed || search || (vimEnabled && vim.current.mode !== 'INSERT'))
-      return {items: [] as Completion[], error: ''};
+    if (!context || !completionActive) return {items: [] as Completion[], error: ''};
     try {
       const files = context.prefix === '@' && options.workspaceAccess ? client.listWorkspaceFiles(context.query) : [];
       return {
-        items: getCompletions(context, client.skills().skills, files),
+        items: getCompletions(context, completionSkills, files),
         error:
           context.prefix === '@' && !options.workspaceAccess ? 'Approve this folder to suggest workspace files.' : '',
       };
     } catch {
       return {items: [] as Completion[], error: 'Workspace suggestions unavailable from this SDK backend.'};
     }
-  }, [client, context, menu.dismissed, search, options.workspaceAccess, vimEnabled, vim.current.mode]);
+  }, [client, context, completionActive, completionSkills, options.workspaceAccess]);
   const items = completionData.items;
-  const selected = Math.min(menu.selected, Math.max(0, items.length - 1));
+  const selected =
+    menu.selected === null
+      ? items.findIndex(item => item.autoSelect !== false)
+      : Math.min(menu.selected, items.length - 1);
+  const startupSuggestion =
+    !busy &&
+    !draft.value &&
+    !search &&
+    !shortcuts &&
+    footer === null &&
+    status.messageCount === 0 &&
+    (!vimEnabled || vim.current.mode === 'INSERT') &&
+    !client.imageAttachments().length
+      ? (options.startupSuggestion ?? 'Explain this codebase') || undefined
+      : undefined;
+  const acceptStartupSuggestion = () => {
+    if (!startupSuggestion || draftRef.current.value) return false;
+    change(createPasteState(startupSuggestion), false);
+    return true;
+  };
   const rememberUndo = (previous: PasteState, groupInsert: boolean) => {
     redo.current = [];
     if (groupInsert && insertUndo.current) return;
@@ -245,7 +277,8 @@ export function useComposer(options: ComposerOptions) {
     if (previous.value !== next.value) setDeletedHint(false);
     update(next);
     navigation.current = null;
-    menu.setSelected(0);
+    menu.setSelected(null);
+    menu.setExpanded(false);
     menu.setDismissed(!showMenu);
   };
   const paste = (text: string) => {
@@ -324,19 +357,20 @@ export function useComposer(options: ComposerOptions) {
     setSearch(null);
     menu.setDismissed(true);
   };
-  const acceptCompletion = (item: Completion) => {
-    const draft = draftRef.current;
+  const complete = (draft: PasteState, item: Completion) => {
     const active = completionContext(draft.value, draft.cursor);
-    if (!active) return;
+    if (!active) return draft;
     const tail = draft.value.slice(draft.cursor);
-    const suffix = (active.prefix === '/' ? /^\S*/ : /^[^\s@$]*/).exec(tail)?.[0] ?? '';
+    const suffixPattern = active.prefix === '/' ? /^\S*/ : active.prefix === ':' ? /^[a-z0-9_+-]*:?/i : /^[^\s@$]*/;
+    const suffix = suffixPattern.exec(tail)?.[0] ?? '';
     const end = draft.cursor + suffix.length;
     const separator = draft.value[end] ?? '';
     const replacement = /\s/.test(separator) ? item.replacement.trimEnd() : item.replacement;
     const completed = replaceRange(draft, active.start, end, replacement);
     const advance = item.replacement.endsWith(' ') && (separator === ' ' || separator === '\t');
-    change(advance ? moveTo(completed, completed.cursor + 1) : completed, false);
+    return advance ? moveTo(completed, completed.cursor + 1) : completed;
   };
+  const acceptCompletion = (item: Completion) => change(complete(draftRef.current, item), false);
   const accepted = (snapshot: PasteState, content: string) => {
     if (!mounted.current) return;
     acceptanceSequence.current++;
@@ -373,6 +407,7 @@ export function useComposer(options: ComposerOptions) {
       }
       if (accepting.current) return;
       accepting.current = true;
+      menu.setDismissed(true);
       try {
         if ((await options.onCommand(content)) !== false) accepted(snapshot, content);
       } catch {
@@ -483,24 +518,16 @@ export function useComposer(options: ComposerOptions) {
       return;
     }
     const chosen = items[selected];
-    if (chosen && context?.prefix === '@') {
-      acceptCompletion(chosen);
-      return;
-    }
-    if (chosen && context?.prefix === '$') {
+    if (chosen && context && (context.prefix !== '/' || context.midPrompt)) {
       acceptCompletion(chosen);
       return;
     }
     if (chosen && context?.prefix === '/') {
-      if (chosen.kind === 'skill') {
-        void submit(expandPastes(replaceRange(current, context.start, current.cursor, chosen.replacement)));
-        return;
-      }
-      const definition = SLASH_COMMANDS.find(command => command.command === chosen.label);
       const typed = expandPastes(current);
-      // A complete alias (`/cost`, `/stats`) is run as typed: the host maps it to its own panel tab.
-      const alias = definition?.aliases.some(name => name.toLowerCase() === typed.trim().toLowerCase());
-      void submit(alias ? typed : acceptSlashSelection(typed, definition));
+      const parsed = parseSlashCommand(typed);
+      // Preserve exact aliases and existing arguments unless the user chose a different command.
+      if (chosen.kind === 'command' && parsed.definition?.command === chosen.label) void submit(typed);
+      else void submit(expandPastes(complete(current, chosen)));
       return;
     }
     void submit();
@@ -835,6 +862,7 @@ export function useComposer(options: ComposerOptions) {
       return true;
     }
     if (key.leftArrow || key.rightArrow) {
+      if (key.rightArrow && !key.shift && acceptStartupSuggestion()) return true;
       const next = moveCursor(current, key.leftArrow ? -1 : 1, key.shift);
       const cursorInsideWord = /^\S/.test(next.value.slice(next.cursor));
       change(next, !key.shift && cursorInsideWord);
@@ -1001,9 +1029,25 @@ export function useComposer(options: ComposerOptions) {
         'footer:stop': closeFooter,
       },
       Autocomplete: {
-        'autocomplete:accept': listing(() => acceptCompletion(items[selected]!)),
-        'autocomplete:dismiss': listing(() => menu.setDismissed(true)),
-        'autocomplete:previous': listing(() => menu.setSelected((selected - 1 + items.length) % items.length)),
+        'autocomplete:accept': () => {
+          if (dismissShortcuts()) return true;
+          if (searchRef.current) return false;
+          if (canComplete && context.midPrompt && !context.query && (!menu.expanded || menu.dismissed)) {
+            menu.setDismissed(false);
+            menu.setExpanded(true);
+            return true;
+          }
+          const item = items[selected] ?? items[0];
+          if (!item) return acceptStartupSuggestion();
+          acceptCompletion(item);
+          return true;
+        },
+        'autocomplete:dismiss': () => {
+          if (!completionActive || searchRef.current) return false;
+          menu.setDismissed(true);
+          return true;
+        },
+        'autocomplete:previous': listing(() => menu.setSelected(selected <= 0 ? items.length - 1 : selected - 1)),
         'autocomplete:next': listing(() => menu.setSelected((selected + 1) % items.length)),
       },
       HistorySearch: {
@@ -1148,7 +1192,14 @@ export function useComposer(options: ComposerOptions) {
     busy,
     items,
     selected,
-    completionError: completionData.error,
+    completionRunsCommand: completionActive && context?.prefix === '/' && !context.midPrompt,
+    completionError:
+      completionData.error ||
+      (completionActive && context?.prefix === '/' && !context.midPrompt && !context.previousSkills && !items.length
+        ? `No commands match "/${safeText(context.query).slice(0, 80)}"`
+        : ''),
+    startupSuggestion,
+    workspaceAccess: !!options.workspaceAccess,
     submit,
     paste,
     interrupt,

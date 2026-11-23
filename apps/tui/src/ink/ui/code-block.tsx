@@ -50,7 +50,10 @@ export const CodeBlock = memo(function CodeBlock({
   );
 });
 
-const highlights = renderCache<string, string>(128);
+const highlights = renderCache<string, string>(128, {
+  maxWeight: 2 * 1024 * 1024,
+  weight: (key, rendered) => (key.length + rendered.length) * 2,
+});
 
 /** Shared bounded highlighter; callers only invoke it for visible source rows. */
 export function useHighlightedCode(source: string, lang: string) {

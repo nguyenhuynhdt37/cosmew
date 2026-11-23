@@ -19,6 +19,7 @@
     "packages/contracts/src/**/*.ts",
     "packages/core/src/**/*.ts",
     "packages/models/src/**/*.ts",
+    "packages/mcp/src/**/*.ts",
     "packages/security/src/**/*.ts",
     "packages/persistence/src/**/*.ts",
     "packages/sdk/src/**/*.ts",

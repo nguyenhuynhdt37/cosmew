@@ -46,54 +46,83 @@ export function leadingSlashCommand(text: string): RegExpExecArray | null {
 export function wrapRuns<Style>(runs: readonly WrapRun<Style>[], width: number): WrapRun<Style>[][] {
   const limit = Math.max(1, Math.floor(width));
   const lines: WrapRun<Style>[][] = [];
-  const cells = runs.flatMap(({text, style}) =>
-    Array.from(graphemes.segment(text), ({segment}) => ({ch: segment, width: stringCells(segment), style})),
-  );
-  let line: typeof cells = [];
+  let line: WrapRun<Style>[] = [];
   let used = 0;
+  let word: {text: string; width: number; style?: Style}[] = [];
+  let wordWidth = 0;
+  const append = (text: string, style?: Style) => {
+    if (!text) return;
+    const last = line.at(-1);
+    if (last && last.style === style) last.text += text;
+    else line.push(style !== undefined ? {text, style} : {text});
+  };
   const flush = () => {
-    const merged: WrapRun<Style>[] = [];
-    for (const cell of line) {
-      const last = merged.at(-1);
-      if (last && last.style === cell.style) last.text += cell.ch;
-      else merged.push(cell.style !== undefined ? {text: cell.ch, style: cell.style} : {text: cell.ch});
-    }
-    lines.push(merged);
+    lines.push(line);
     line = [];
     used = 0;
   };
-  let at = 0;
-  while (at < cells.length) {
-    const cell = cells[at]!;
-    if (cell.ch === '\n') {
-      flush();
-      at++;
-      continue;
-    }
-    if (cell.ch === ' ') {
-      if (used + 1 <= limit) {
-        line.push(cell);
-        used++;
+  const flushWord = () => {
+    if (!word.length) return;
+    if (used + wordWidth > limit && used > 0) {
+      // Only soft-break spaces disappear. Keep styling attached to the remaining text.
+      while (line.length) {
+        const last = line.at(-1)!;
+        last.text = last.text.replace(/ +$/, '');
+        if (last.text) break;
+        line.pop();
       }
-      at++;
-      continue;
-    }
-    let end = at;
-    let size = 0;
-    while (end < cells.length && cells[end]!.ch !== ' ' && cells[end]!.ch !== '\n') size += cells[end++]!.width;
-    if (used + size > limit && used > 0) {
-      while (line.at(-1)?.ch === ' ') line.pop();
       if (line.length) flush();
       else used = 0;
     }
-    for (let index = at; index < end; index++) {
-      const width = cells[index]!.width;
-      if (used + width > limit && used > 0) flush();
-      line.push(cells[index]!);
-      used += width;
+    for (const part of word) {
+      if (used + part.width <= limit) {
+        append(part.text, part.style);
+        used += part.width;
+      } else if (!/[^\x20-\x7e]/.test(part.text)) {
+        // ASCII spans have one cell per code unit. Slice only at row boundaries;
+        // do not build a million grapheme/cell objects for a large pasted prompt.
+        for (let at = 0; at < part.text.length;) {
+          if (used >= limit) flush();
+          const end = Math.min(part.text.length, at + limit - used);
+          append(part.text.slice(at, end), part.style);
+          used += end - at;
+          at = end;
+        }
+      } else {
+        // Unicode words that fit took the fast path above. Segment only oversized
+        // words, keeping joined emoji, combining marks and zero-width graphemes intact.
+        for (const {segment} of graphemes.segment(part.text)) {
+          const size = stringCells(segment);
+          if (used + size > limit && used > 0) flush();
+          append(segment, part.style);
+          used += size;
+        }
+      }
     }
-    at = end;
+    word = [];
+    wordWidth = 0;
+  };
+  for (const {text, style} of runs) {
+    // Words may cross style/run boundaries, so keep their total width until a
+    // space/newline arrives instead of treating each styled span as a new word.
+    for (const match of text.matchAll(/[^ \r\n]+|\r\n|\r| +|\n/g)) {
+      const part = match[0];
+      if (part === '\n') {
+        flushWord();
+        flush();
+      } else if (part[0] === ' ') {
+        flushWord();
+        const count = Math.max(0, Math.min(part.length, limit - used));
+        append(part.slice(0, count), style);
+        used += count;
+      } else {
+        const size = stringCells(part);
+        word.push(style !== undefined ? {text: part, width: size, style} : {text: part, width: size});
+        wordWidth += size;
+      }
+    }
   }
+  flushWord();
   if (line.length || !lines.length) flush();
   return lines;
 }

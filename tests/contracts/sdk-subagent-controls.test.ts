@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, mkdirSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
@@ -55,6 +55,8 @@ test('production SDK agent_message obeys consent, default approval, deny, revoke
   // An unavailable recorded account intentionally proves controls do not need a provider request.
   const owner = app.conversations.create(selection);
   const other = app.conversations.create(selection);
+  app.conversations.bindWorkspace(owner, realpathSync(project));
+  app.conversations.bindWorkspace(other, realpathSync(project));
   const id = app.conversations.create(selection);
   app.conversations.saveSubagentSession({
     id,

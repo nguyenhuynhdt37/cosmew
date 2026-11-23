@@ -16,7 +16,7 @@ import {
   DEFAULT_SANDBOX_CONFIG,
 } from '@cosmew/tools';
 import {runProcess} from '../../packages/tools/src/exec/process';
-import {waitFor} from '../process-fixtures/observe';
+import {waitFor, observe, live, current, dispose, type Observation} from '../process-fixtures/observe';
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   for (const fn of cleanup.splice(0).reverse()) fn();
@@ -39,7 +39,11 @@ const outcome = (overrides: Partial<CommandOutcome> = {}): CommandOutcome => ({
   durationMs: 1,
   ...overrides,
 });
-function mock(f: ReturnType<typeof fixture>, approve: ConstructorParameters<typeof ToolDispatcher>[0]['approve']) {
+function mock(
+  f: ReturnType<typeof fixture>,
+  approve: ConstructorParameters<typeof ToolDispatcher>[0]['approve'],
+  sandbox?: ConstructorParameters<typeof ToolDispatcher>[0]['sandbox'],
+) {
   let calls = 0;
   const grants = new SessionGrants();
   const runtime: CommandRuntime = {
@@ -56,6 +60,7 @@ function mock(f: ReturnType<typeof fixture>, approve: ConstructorParameters<type
     grants,
     commands: runtime,
     approve,
+    sandbox,
     redact: t => t,
     stateDirectory: f.state,
   });
@@ -183,10 +188,45 @@ test('session execution grants bind command, canonical cwd and sandbox policy an
   expect(commandGrantTarget('printf hello', f.root, 'different')).not.toBe(
     commandGrantTarget('printf hello', f.root, c.runtime.id),
   );
+  await invoke(c.dispatcher, {cmd: 'printf hello', workdir: f.dir});
+  await invoke(c.dispatcher, {cmd: 'printf hello', workdir: f.dir});
+  expect(prompts).toBe(4);
   c.grants.clear();
   await invoke(c.dispatcher, {cmd: 'printf hello'});
-  expect(prompts).toBe(4);
-  expect(c.calls()).toBe(5);
+  expect(prompts).toBe(5);
+  expect(c.calls()).toBe(7);
+});
+
+test('an in-root command approval cannot launch after its additional directory is removed', async () => {
+  const f = fixture();
+  let additionalDirectories = [f.dir];
+  const c = mock(
+    f,
+    async () => {
+      additionalDirectories = [];
+      return 'once';
+    },
+    () => ({...DEFAULT_SANDBOX_CONFIG, additionalDirectories}),
+  );
+  expect(await invoke(c.dispatcher, {cmd: 'pwd', workdir: f.dir})).toMatchObject({status: 'denied', code: 'DENIED'});
+  expect(c.calls()).toBe(0);
+});
+
+test('an existing in-root session grant cannot approve the same cwd after its additional directory is removed', async () => {
+  const f = fixture();
+  let additionalDirectories = [f.dir];
+  let prompts = 0;
+  const c = mock(
+    f,
+    async () => (++prompts === 1 ? 'session' : 'deny'),
+    () => ({...DEFAULT_SANDBOX_CONFIG, additionalDirectories}),
+  );
+  const input = {cmd: 'pwd', workdir: f.dir};
+  expect((await invoke(c.dispatcher, input)).status).toBe('ok');
+  additionalDirectories = [];
+  expect((await invoke(c.dispatcher, input)).status).toBe('denied');
+  expect(prompts).toBe(2);
+  expect(c.calls()).toBe(1);
 });
 
 test('cwd swapped during approval is denied again before execution', async () => {
@@ -314,32 +354,50 @@ osTest('macOS candidate has explicit environment and bounded stdout/stderr; inva
     sandboxFailed: true,
   });
 });
-osTest('macOS candidate cancellation and timeout kill ordinary child process groups', async () => {
-  const f = candidate();
-  for (const cancelled of [false, true]) {
-    const controller = new AbortController();
-    const timer = cancelled ? setTimeout(() => controller.abort(), 150) : undefined;
-    const result = await f.runtime.run(
-      {command: 'sleep 20 & echo CHILD:$!; wait', cwd: f.root, timeoutMs: 300, maxOutputBytes: 100},
-      controller.signal,
-    );
-    clearTimeout(timer);
-    expect(result.kind).toBe(cancelled ? 'cancelled' : 'timeout');
-    const pid = Number(/CHILD:(\d+)/.exec(result.output)?.[1]);
-    expect(pid).toBeGreaterThan(0);
-    // Leader close and the host's child reaping are independent. Bound the observation,
-    // rather than treating a transient zombie returned by kill(pid, 0) as a surviving worker.
-    await waitFor(() => {
-      try {
-        process.kill(pid, 0);
-        return undefined;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
-        return true;
+osTest(
+  'macOS candidate cancellation and timeout kill ordinary child process groups',
+  async () => {
+    const f = candidate();
+    try {
+      for (const cancelled of [false, true]) {
+        const controller = new AbortController();
+        const marker = `COSMEW_CHILD_READY_${crypto.randomUUID()}`;
+        let child: Observation | undefined;
+        // This lease includes sandbox-exec/dyld startup. Readiness is observed
+        // independently before cancellation, rather than racing a 150 ms timer.
+        const pending = f.runtime.run(
+          {
+            command: `/usr/bin/perl -e 'sleep 20' ${marker} & echo CHILD:$!; wait`,
+            cwd: f.root,
+            timeoutMs: 5000,
+            maxOutputBytes: 100,
+          },
+          controller.signal,
+        );
+        try {
+          child = await waitFor(() => observe().find(p => live(p) && p.command.endsWith(` ${marker}`)));
+          expect(current(child)).toBeDefined();
+          if (cancelled) controller.abort();
+          const result = await pending;
+          expect(result.kind).toBe(cancelled ? 'cancelled' : 'timeout');
+          expect(Number(/CHILD:(\d+)/.exec(result.output)?.[1])).toBe(child.pid);
+          // Leader exit and child reaping are independent; a zombie is not a live
+          // worker. Retain the 2.5 s cleanup observation bound and PID identity.
+          await waitFor(() => (current(child!) ? undefined : true));
+        } finally {
+          controller.abort();
+          await pending;
+          // Failure cleanup is identity-scoped and never treated as test evidence.
+          const leftovers = child ? [child] : observe().filter(p => live(p) && p.command.endsWith(` ${marker}`));
+          await dispose(leftovers);
+        }
       }
-    });
-  }
-});
+    } finally {
+      await f.runtime.shutdown();
+    }
+  },
+  15000,
+);
 osTest(
   'mandatory gate negative evidence: setsid child escapes candidate cleanup, so production stays disabled',
   async () => {

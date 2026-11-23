@@ -1,5 +1,11 @@
 import {afterEach, expect, test} from 'bun:test';
-import {McpClient, WebSearchClient, selectSearchProvider} from '@cosmew/mcp';
+import {
+  McpClient,
+  WebSearchClient,
+  selectSearchProvider,
+  MAX_MCP_RESPONSE_BYTES,
+  MAX_MCP_OUTPUT_BYTES,
+} from '@cosmew/mcp';
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -7,7 +13,7 @@ afterEach(async () => {
 });
 
 /** Wire-level MCP fixture: production SDK initialization and calls over real HTTP, no live claim. */
-function fixture(options: {delay?: number; error?: boolean; huge?: boolean} = {}) {
+function fixture(options: {delay?: number; error?: boolean; textBytes?: number; responseBytes?: number} = {}) {
   const calls: {method: string; params?: Record<string, unknown>}[] = [];
   const server = Bun.serve({
     port: 0,
@@ -30,7 +36,7 @@ function fixture(options: {delay?: number; error?: boolean; huge?: boolean} = {}
         });
       if (body.method === 'tools/call') {
         if (options.delay) await Bun.sleep(options.delay);
-        return Response.json({
+        const payload = {
           jsonrpc: '2.0',
           id: body.id,
           result: {
@@ -38,12 +44,16 @@ function fixture(options: {delay?: number; error?: boolean; huge?: boolean} = {}
             content: [
               {
                 type: 'text',
-                text: options.huge
-                  ? 'x'.repeat(300_000)
-                  : 'Title: Fixture\nURL: https://example.com/reference\nText: fixture sk-secret-fixture',
+                text:
+                  options.textBytes !== undefined
+                    ? 'x'.repeat(options.textBytes)
+                    : 'Title: Fixture\nURL: https://example.com/reference\nText: fixture sk-secret-fixture',
               },
             ],
           },
+        };
+        return new Response(JSON.stringify(payload).padEnd(options.responseBytes ?? 0, ' '), {
+          headers: {'content-type': 'application/json'},
         });
       }
       return new Response(null, {status: 501});
@@ -68,12 +78,74 @@ test('MCP HTTP initializes once per endpoint, calls with arguments, bounds and r
   ]);
 });
 
-test('MCP limits response bytes and returns safe upstream errors', async () => {
-  for (const options of [{huge: true}]) {
-    const f = fixture(options);
-    const client = new McpClient({endpoint: f.url, redact: t => t});
+test('MCP default response budget accepts large results while clipping displayed output', async () => {
+  const f = fixture({textBytes: 300_000});
+  const client = new McpClient({endpoint: f.url, redact: t => t});
+  cleanups.push(() => client.close());
+  const result = await client.call('web_search_exa', {query: 'test'});
+  expect(result.text).toContain('[output truncated]');
+  expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(MAX_MCP_OUTPUT_BYTES);
+  const oversized = fixture({textBytes: MAX_MCP_RESPONSE_BYTES + 1});
+  const bounded = new McpClient({endpoint: oversized.url, redact: t => t});
+  cleanups.push(() => bounded.close());
+  await expect(bounded.call('web_search_exa', {query: 'test'})).rejects.toMatchObject({code: 'PROTOCOL'});
+});
+
+test('MCP configurable byte budget accepts an exact-sized JSON response and rejects one extra byte', async () => {
+  for (const responseBytes of [512, 513]) {
+    const f = fixture({responseBytes});
+    const client = new McpClient({endpoint: f.url, redact: t => t, maxResponseBytes: 512});
     cleanups.push(() => client.close());
-    await expect(client.call('web_search_exa', {query: 'test'})).rejects.toThrow();
+    if (responseBytes === 512) expect((await client.call('search', {})).text).toContain('Title: Fixture');
+    else await expect(client.call('search', {})).rejects.toMatchObject({code: 'PROTOCOL'});
+  }
+});
+
+test('MCP counts chunked SSE bytes and cancels an oversized open body instead of waiting for EOF', async () => {
+  const f = fixture();
+  for (const bytes of [512, 513]) {
+    let cancelled = false;
+    const client = new McpClient({
+      endpoint: f.url,
+      redact: t => t,
+      maxResponseBytes: 512,
+      timeoutMs: 5000,
+      fetch: (async (input, init) => {
+        const response = await fetch(input, init);
+        const message = init?.body ? JSON.parse(String(init.body)) : null;
+        if (message?.method !== 'tools/call') return response;
+        await response.body?.cancel();
+        const wire =
+          `event: message\ndata: ${JSON.stringify({jsonrpc: '2.0', id: message.id, result: {content: [{type: 'text', text: 'bounded SSE'}]}})}`.padEnd(
+            bytes - 2,
+            ' ',
+          ) + '\n\n';
+        const encoded = new TextEncoder().encode(wire);
+        let offset = 0;
+        return new Response(
+          new ReadableStream({
+            pull(controller) {
+              if (offset === encoded.length) {
+                if (bytes === 512) controller.close(); // Oversized bodies deliberately stay open.
+                return;
+              }
+              controller.enqueue(encoded.slice(offset, offset + 128));
+              offset = Math.min(offset + 128, encoded.length);
+            },
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          {headers: {'content-type': 'text/event-stream'}},
+        );
+      }) as typeof fetch,
+    });
+    cleanups.push(() => client.close());
+    if (bytes === 512) expect((await client.call('search', {})).text).toBe('bounded SSE');
+    else {
+      await expect(client.call('search', {})).rejects.toMatchObject({code: 'PROTOCOL'});
+      expect(cancelled).toBe(true);
+    }
   }
 });
 

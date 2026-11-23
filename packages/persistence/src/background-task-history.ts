@@ -39,7 +39,13 @@ export class SqliteBackgroundTaskHistory implements BackgroundTaskHistory {
           SELECT rowid FROM background_task_history WHERE conversation=? ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET 200)`,
           )
           .run(sessionId, sessionId);
-        this.db.exec(`DELETE FROM background_task_history WHERE rowid IN (
+        // COUNT(*) uses SQLite's table-count fast path. Avoid walking/sorting the
+        // entire recent index on every update while the table is already bounded.
+        // Recount inside this transaction: concurrent stores or failed writes must
+        // not make a cached counter silently skip retention.
+        const {count} = this.db.query('SELECT COUNT(*) AS count FROM background_task_history').get() as {count: number};
+        if (count > 5000)
+          this.db.exec(`DELETE FROM background_task_history WHERE rowid IN (
           SELECT rowid FROM background_task_history ORDER BY updated_at DESC,rowid DESC LIMIT -1 OFFSET 5000)`);
       })();
     } catch {

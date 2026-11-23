@@ -2,6 +2,7 @@ import {
   DEFAULT_AGENT_MAX_DEPTH,
   DEFAULT_AGENT_MAX_THREADS,
   combineUsage,
+  knownCostUSD,
   type HostAgentsConfig,
   type ModelInfo,
   type SubagentChildLimits,
@@ -177,7 +178,7 @@ export function reserveForChildren(
   const total = {...NO_RESERVATION};
   for (const child of running) {
     const used = child.usage;
-    const cost = used?.costUSD ?? 0;
+    const cost = knownCostUSD(used);
     total.tokens += Math.max(child.limits?.budget.maxTokens ?? 0, tokensOf(used));
     total.outputTokens += Math.max(child.limits?.maxOutputTokens ?? 0, used?.outputTokens ?? 0);
     total.budgetCostUSD += Math.max(child.limits?.budget.maxCostUSD ?? 0, cost);
@@ -190,7 +191,7 @@ export function reserveForChildren(
 export function parentCapsExceeded(parent: SubagentParentLimits | undefined): boolean {
   if (!parent) return false;
   const spent = parent.usage;
-  const cost = spent?.costUSD ?? 0;
+  const cost = knownCostUSD(spent);
   return (
     (parent.budget.maxTokens !== undefined && tokensOf(spent) >= parent.budget.maxTokens) ||
     (parent.budget.maxCostUSD !== undefined && cost >= parent.budget.maxCostUSD) ||
@@ -217,8 +218,8 @@ export function inheritChildLimits(
   if (parent) {
     const spentTokens = tokensOf(parent.usage) + reserved.tokens;
     const spentOutput = (parent.usage?.outputTokens ?? 0) + reserved.outputTokens;
-    const spentBudgetCost = (parent.usage?.costUSD ?? 0) + reserved.budgetCostUSD;
-    const spentCapCost = (parent.usage?.costUSD ?? 0) + reserved.capCostUSD;
+    const spentBudgetCost = knownCostUSD(parent.usage) + reserved.budgetCostUSD;
+    const spentCapCost = knownCostUSD(parent.usage) + reserved.capCostUSD;
     const exhausted = (what: string) => ({
       ok: false as const,
       message: `The parent turn's ${what} is already used up (including subagents), so no new subagent was started. Finish the work yourself or ask the user to raise the limit.`,

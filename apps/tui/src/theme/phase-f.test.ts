@@ -25,10 +25,10 @@ test('auto never queries AppleInterfaceStyle; OSC 11 beats COLORFGBG, then Cosme
       [{}, 'dark'],
       [{COLORFGBG: '15;0'}, 'dark'],
       [{COLORFGBG: '0;15'}, 'light'],
-      [{FUTRYN_THEME_MODE: 'light'}, 'light'],
       [{COSMEW_THEME_MODE: 'light'}, 'light'],
       [{COSMEW_THEME_MODE: 'dark', FUTRYN_THEME_MODE: 'light'}, 'dark'],
-      [{COLORFGBG: '15;0', FUTRYN_THEME_MODE: 'light'}, 'dark'],
+      [{COLORFGBG: '15;0', COSMEW_THEME_MODE: 'light'}, 'dark'],
+      [{COLORFGBG: '0;15', COSMEW_THEME_MODE: 'dark'}, 'light'],
     ] as const) {
       const engine = new ThemeEngine({env});
       await engine.setTheme('auto');

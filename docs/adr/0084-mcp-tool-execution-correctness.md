@@ -14,7 +14,7 @@ Remote schemas are bounded to 8 KiB, 512 structural nodes and depth 16. AJV 8.20
 (MIT, already selected by models) is now also a direct tools dependency. Validation never
 coerces, adds defaults, removes fields, fetches references or runs async validation.
 References, regex/pattern keywords, format, contains and uniqueItems are refused; this is
-a deliberately bounded draft-07 subset, not universal JSON Schema compatibility. Invalid,
+a deliberately bounded draft-07 subset, extended to explicitly declared 2020-12 by [ADR 0104](0104-mcp-dialog-and-json-schema-2020.md), not universal JSON Schema compatibility. Invalid,
 oversized and unsupported schemas disable the tool and omit it from model-facing tool
 descriptors, so unsupported function-schema keywords cannot poison a provider request.
 Direct calls still return explicit schema refusal diagnostics before approval or execution;

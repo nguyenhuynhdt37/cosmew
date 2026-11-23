@@ -290,19 +290,24 @@ test('review cancellation settles after session switch while the diff panel is h
     await ui.submit('first conversation');
     await ui.idle();
     let complete!: (value: WorkspaceDiffReport) => void;
+    let collectionStarted!: () => void;
+    const collecting = new Promise<void>(resolve => {
+      collectionStarted = resolve;
+    });
     let requests = 0;
     client.refreshWorkspaceDiff = () =>
       new Promise(resolve => {
         requests++;
         complete = resolve;
+        collectionStarted();
       });
     await ui.submit('/review original review request');
+    await collecting;
     client.clearSessionView();
-    await settle();
     expect(requests).toBe(1);
     complete(report);
-    await settle();
-    expect(ui.frame()).toContain('Review cancelled');
+    await ui.waitFor('Command cancelled: conversation changed.');
+    expect(ui.frame()).toContain('Command cancelled: conversation changed.');
     expect(client.activeSession()).toBeNull();
     expect(client.mode()).toBe('chat');
   } finally {

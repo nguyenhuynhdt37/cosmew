@@ -84,7 +84,7 @@ export interface TurnToolsOptions {
 export class TurnTools {
   /** Calls actually dispatched this turn; refused over-budget calls are not counted. */
   executed = 0;
-  /** A write was denied this turn: further writes are refused without asking again. */
+  /** A write was denied by user/policy this turn: further writes are refused without asking again. */
   writeDenied = false;
   readonly outcomes = new Map<string, ToolResult>();
   /** Call ids already written to the journal. */
@@ -175,7 +175,10 @@ export class TurnTools {
       this.appliedSteps.push({role: 'assistant', content: '', toolCalls: [call]}, toolMessage(call, result));
     }
     if (result.status === 'ok' && capability === 'fs.read') result = this.markUnchanged(call, result);
-    if (capability === 'fs.write' && result.status === 'denied') this.writeDenied = true;
+    // Revocation invalidates only this approval. A new model call must go through
+    // fresh dispatcher policy/approval; it does not authorize replay of this call.
+    if (capability === 'fs.write' && result.status === 'denied' && result.code !== 'APPROVAL_REVOKED')
+      this.writeDenied = true;
     this.settle(call, result);
     return result;
   }

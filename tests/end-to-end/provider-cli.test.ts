@@ -23,7 +23,7 @@ function context() {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
       env: {
         ...process.env,
-        HANNES_HOME: dir,
+        COSMEW_HOME: dir,
         HANNES_TEST_KEY: 'fixture-e2e-sensitive-value',
         HANNES_WORK_KEY: 'fixture-e2e-work-value',
       },
@@ -114,7 +114,12 @@ test('actual CLI: multi-turn context reaches provider and failure returns safe n
   const chat = await x.cli(['chat'], 'First turn\nSecond turn\n/exit\n');
   expect(chat.code).toBe(0);
   const posts = x.server.requests.filter(r => r.body);
-  expect(posts.at(-1)?.body.messages).toEqual([
+  const messages = posts.at(-1)?.body.messages;
+  expect(messages[0]).toMatchObject({
+    role: 'system',
+    content: expect.stringContaining('No project tools are available in this request.'),
+  });
+  expect(messages.slice(1)).toEqual([
     {role: 'user', content: 'First turn'},
     {role: 'assistant', content: 'Hello fixture'},
     {role: 'user', content: 'Second turn'},
@@ -247,7 +252,7 @@ test('actual CLI emits streaming text before completion and SIGINT cancels witho
   x.server.set({streamDelay: 1000});
   const before = x.server.requests.length;
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'run'], {
-    env: {...process.env, HANNES_HOME: x.dir, HANNES_TEST_KEY: 'fixture-e2e-sensitive-value'},
+    env: {...process.env, COSMEW_HOME: x.dir, HANNES_TEST_KEY: 'fixture-e2e-sensitive-value'},
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -365,7 +370,12 @@ test('slash login chooses saved credentials and model without shell commands; lo
   expect(result.stdout).toContain('Đã đăng xuất backup');
   expect(result.stdout).toContain('Đã đăng xuất personal');
   const posts = x.server.requests.filter(r => r.body);
-  expect(posts.at(-1)?.body.messages).toEqual([
+  const messages = posts.at(-1)?.body.messages;
+  expect(messages[0]).toMatchObject({
+    role: 'system',
+    content: expect.stringContaining('No project tools are available in this request.'),
+  });
+  expect(messages.slice(1)).toEqual([
     {role: 'user', content: 'Ready to chat'},
     {role: 'assistant', content: 'Hello fixture'},
     {role: 'user', content: 'Still on personal'},
@@ -450,7 +460,7 @@ test.skipIf(process.env.HANNES_TEST_KEYRING !== '1' || process.platform === 'win
     });
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'chat'], {
       terminal,
-      env: {...process.env, HANNES_HOME: x.dir},
+      env: {...process.env, COSMEW_HOME: x.dir},
     });
     const waitFor = (needle: string) =>
       new Promise<void>((resolve, reject) => {
@@ -556,7 +566,7 @@ test.skipIf(process.platform === 'win32')(
     });
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'chat'], {
       terminal,
-      env: {...process.env, HANNES_HOME: x.dir},
+      env: {...process.env, COSMEW_HOME: x.dir},
     });
     const timeout = setTimeout(() => child.kill(), 6000);
     try {

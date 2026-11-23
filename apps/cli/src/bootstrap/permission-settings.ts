@@ -1,4 +1,4 @@
-import {existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
+import {lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {dirname, join} from 'node:path';
 import {
@@ -27,11 +27,13 @@ import {
   type SettingsFile,
   type SettingsLayer,
 } from '@cosmew/security';
+import {adoptLegacyStateDirectory} from './paths';
 
 /**
  * The Claude Code style settings files (ADR 0061), owned by the composition root:
  * `<state directory>/settings.json` (user), `<project>/.cosmew/settings.json` and
- * `<project>/.cosmew/settings.local.json`. Existing `.futryn`/`.hannes` roots are compatibility layers. Precedence local > project > user; deny and ask rules of
+ * `<project>/.cosmew/settings.local.json`. A project `.futryn` or `.hannes` directory is renamed to
+ * `.cosmew` once when `.cosmew` is absent. Precedence local > project > user; deny and ask rules of
  * every file apply, but a repository file (project/local) can loosen anything only after the user
  * approved its exact content (hash). Reads are cached by mtime/size so `status()` stays cheap.
  */
@@ -40,11 +42,7 @@ const MAX_BYTES = 64 * 1024;
 const MAX_TRUSTED_HASHES = 50;
 
 function projectSettingsDirectory(workspace: string): string {
-  for (const name of ['.cosmew', '.futryn', '.hannes']) {
-    const directory = join(workspace, name);
-    if (existsSync(directory)) return directory;
-  }
-  return join(workspace, '.cosmew');
+  return adoptLegacyStateDirectory(workspace);
 }
 
 export interface FilePermissionSettingsOptions {

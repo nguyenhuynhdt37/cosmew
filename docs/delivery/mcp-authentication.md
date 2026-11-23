@@ -1,0 +1,35 @@
+# MCP authentication
+
+Implemented 2026-11-22 using the existing `@modelcontextprotocol/sdk`1.32.2. This is fixture verification, not real-service compatibility or OS keyring acceptance evidence.
+
+`McpOAuthService` supplies an SDK `OAuthClientProvider` per canonical HTTP endpoint. Transport authentication can refresh existing credentials but cannot open a browser or dynamically register a new client. The host must explicitly call `login`, injecting its browser-opening port. The login owns an actual ephemeral IPv4 loopback HTTP listener, random256-bit state, single-use callback and120-second default deadline. SDK authorization-code flow generates the PKCE verifier and S256 challenge. The verifier stays in memory and is cleared at completion/cancellation.
+
+The callback validates method, loopback Host/path, duplicate parameters, constant-time state, deadline, OAuth error, supplied issuer and resource before any code exchange. When the server advertises RFC9207 issuer-response support, the callback must include its issuer. Discovery metadata must echo its discovered issuer; a protected-resource identifier must exactly equal the canonical MCP endpoint. Both registration and token data must carry the same issuer. An endpoint or issuer change cannot reuse the previous credentials. HTTP OAuth endpoints are restricted to loopback fixtures/development; external endpoints require HTTPS.
+
+`FileMcpAuthStore` owns durable writes. Its0600 atomic/fsynced records contain only endpoint-bound opaque keyring references; OAuth tokens, client registration (including any client secret), discovery state and static bearer credentials are encoded as base64url JSON in the injected credential vault. Base64url is a storage envelope, not encryption: protection is provided by the vault backend. No model-provider credential is reused. Decoded access/refresh tokens and client secrets register with the injected redactor individually. The existing vault limit is8192 encoded bytes; excessive records fail instead of writing plaintext fallback. Owned directory/record symlinks and changed canonical roots are refused. Tests use an in-memory vault and temporary directories.
+
+`logout` first fences old providers and aborts pending login, then clears local records, including malformed auth records. If valid discovery advertises an RFC7009 revocation endpoint, it attempts refresh-token and access-token revocation. Its result separately reports local clearing and remote `revoked`, `unsupported`, `failed`, or `not-needed`. A successful remote result means the advertised endpoint accepted the requests; it is not a guarantee about every server session or separately issued token. Remote failure never restores local credentials.
+
+Static bearer credentials use separate endpoint-bound `setBearer`, `bearer` and `clearBearer` operations. Status exposes only authentication state and supplied token scopes, with no inferred account identity.
+
+## Evidence and limitations
+
+`tests/mcp/oauth.test.ts` uses a real local OAuth HTTP fixture, real loopback callback and the SDK Streamable HTTP transport. It verifies PKCE, malformed/denied callbacks, state/issuer/resource binding, cancellation/timeouts, ambient browser refusal, persistent restart refresh after401, logout during pending login, supported/failed/unsupported revocation, corrupt-state clearing, static credential binding, secret-free metadata and symlink refusal. These tests perform no real external OAuth, paid-provider calls or user keyring writes. Real provider OAuth/DCR compatibility and OS keyring integration: Needs verification.
+
+Upstream source inspected2026-11-22: installed SDK1.32.2 `dist/esm/client/auth.{js,d.ts}`, `dist/esm/shared/auth.{js,d.ts}` and `dist/esm/client/streamableHttp.js`. Public SDK package source: https://github.com/modelcontextprotocol/typescript-sdk/tree/v1.32.2/src/client . Protocol references: https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization , https://www.rfc-editor.org/rfc/rfc7636 , https://www.rfc-editor.org/rfc/rfc9207 and https://www.rfc-editor.org/rfc/rfc7009 . No competitor runtime behavior is asserted from these fixture tests.
+
+## Review hardening
+
+OAuth fetches validate every destination before SDK discovery can contact it. External destinations require HTTPS and every DNS answer must be public; private/reserved IPv4, non-global IPv6 and mixed public/private DNS answers are denied. Loopback is allowed only when the configured MCP root itself is explicitly loopback. Production OAuth HTTP requests use Node HTTP/HTTPS with a pinned validated DNS answer, retain the original hostname for Host and TLS certificate verification, disable connection pooling, refuse redirects and bound response bodies to 256 KiB. Injected fixture fetches receive the same destination preflight. MCP configured headers are added only for the configured MCP origin, outside the SDK's shared RequestInit; OAuth-generated client Basic authentication remains separate.
+
+Auth reference metadata uses durable epoch/revision tombstones and compare-and-swap writes. Logout changes the epoch; a provider in another process cannot save a refresh result from the old epoch. Each vault update gets an immutable keyring reference. Metadata reads and atomic writes use descriptor-relative MemoryDirectory operations, which refuse symlinks/hardlinks. The per-endpoint kernel flock remains held across asynchronous vault operations, retries contention asynchronously for at most ten seconds, and is released by the kernel after process death. No PID-based lock stealing is used. A SIGKILL fixture verifies recovery while a writer is paused inside its vault save.
+
+The focused regression suite also verifies configured secrets never reach cross-origin resource/authorization metadata, legitimate generated Basic authentication survives, link-local/private DNS targets are refused before fetch, selected DNS answers remain pinned at the wire adapter, cross-instance refresh cannot resurrect logout, and concurrent vault writes serialize with logout. Live external TLS/OAuth and Linux OS keyring acceptance remain Needs verification.
+
+## GitHub remote MCP
+
+For an official GitHub MCP endpoint, use `cosmew mcp login NAME` in a terminal or **Set GitHub personal access token** in `/mcp`. Both use masked input and the endpoint-bound vault. Non-interactive automation can use `cosmew mcp credentials NAME --bearer-stdin` with a secure stdin source. Browser OAuth on GitHub requires a host-registered app. [ADR 0107](../adr/0107-github-mcp-authentication.md)
+
+## New-server OAuth discovery and recovery
+
+Cosmew reads the OAuth challenge before explicit login when discovery has not been saved. It verifies the advertised issuer and resource, negotiates supported registration methods, and shows a diagnosis by stage. When a provider supplies a bearer token, **Set bearer credential** in the server details or `cosmew mcp credentials NAME` uses the existing vault. See [ADR 0109](../adr/0109-mcp-oauth-discovery-and-recovery.md).

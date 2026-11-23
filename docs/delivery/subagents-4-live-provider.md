@@ -50,22 +50,24 @@ it proves progress does not depend on parent-stream traffic. Bounded evidence
 includes `outOfTurnProgressObserved: true`. The original lifecycle assertions
 also passed again. No additional global settings/model selection changes.
 
-The normal suite skips this test and makes no provider calls. An existing Cosmew
-login and a cached supported model are required. Opting in may incur provider
-charges:
+The normal suite skips this test and makes no provider calls. For a live run,
+create a private, disposable state directory under the OS temp directory with
+`mktemp -d`. Use `COSMEW_HOME` when signing in and caching a supported model in
+that fixture.
+Pass the same directory to the test. Opting in may incur provider charges.
 
 ```sh
 COSMEW_LIVE_SUBAGENTS=1 \
+COSMEW_LIVE_SUBAGENTS_STATE="$fixture_state" \
 COSMEW_LIVE_ACCOUNT=chatgpt-api \
 COSMEW_LIVE_MODEL=gpt-6.2-sol \
-bun --config=/dev/null --no-env-file test tests/end-to-end/subagent-live-provider.test.ts
+bun --no-env-file test tests/end-to-end/subagent-live-provider.test.ts
 ```
 
-Omit account/model overrides to use the saved active account and its default
-model. `COSMEW_HOME` selects an existing state directory using normal Cosmew
-semantics; do not point it at a repository settings file. The harness never
-creates a login, extracts a secret, approves repository settings, connects MCP
-servers, changes global account/model selection, or writes permission rules.
+Omit account/model overrides to use the fixture's active account and its default
+model. The harness never creates a login, extracts a secret, approves repository
+settings, connects MCP servers, changes global account/model selection, or
+writes permission rules.
 Normal application session/usage/journal persistence still occurs in the selected
 Cosmew state directory. Model selection and work budgets are session-only.
 

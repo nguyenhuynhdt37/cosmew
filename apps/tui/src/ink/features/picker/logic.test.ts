@@ -3,7 +3,7 @@ import {defaultAppearance, FutrynError, type PendingQuestion} from '@cosmew/cont
 import {SLASH_COMMANDS} from '@cosmew/sdk';
 import {permissionChoices, isEscalation} from '../permissions';
 import {stateFor, choose, answersFor, collect} from '../question';
-import {connectionChoices, parseHeaderDraft, describeProviderError} from '../connect';
+import {connectionChoices, maskQuickProviderDraft, parseHeaderDraft, describeProviderError} from '../connect';
 import {configurationRows, settingsRows, clampStep, SETTINGS_SECTIONS} from '../settings';
 import {formatDuration, tokenTotal, transcriptLines, typeRow, childRow} from '../agents';
 import {helpItems} from '../help';
@@ -99,6 +99,11 @@ test('header parsing and provider errors never echo secret input', () => {
     envHttpHeaders: {Authorization: 'API_TOKEN'},
   });
   expect(parseHeaderDraft('private-secret-value')).not.toContain('private-secret-value');
+  const masked = maskQuickProviderDraft('https://gateway.example/v1 | sk-fixture-secret-only | model-a');
+  expect(masked).toContain('https://gateway.example/v1');
+  expect(masked).toContain('model-a');
+  expect(masked).not.toContain('sk-fixture-secret-only');
+  expect(maskQuickProviderDraft('https://gateway.example/v1')).toBe('https://gateway.example/v1');
   const fixture = dialogFixture();
   expect(describeProviderError(fixture.client, new Error('private-secret'), provider.id)).not.toContain(
     'private-secret',

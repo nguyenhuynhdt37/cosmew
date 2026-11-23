@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {memo, useCallback, useEffect, useRef, useState} from 'react';
+import {memo, useEffect, useState} from 'react';
 import {useFutrynClient, useStatus, useKeymap, useTextInput} from '../../hooks';
 import {Box, Text} from 'ink';
 import {useTheme} from '../../theme';
@@ -24,34 +24,11 @@ export function useUsage({
   useStatus();
   const [details, setDetails] = useState(false);
   const [offset, setOffset] = useState(0);
-  const [, update] = useState(0);
-  const [error, setError] = useState('');
-  const request = useRef<AbortController | null>(null);
-  const refresh = useCallback(() => {
-    if (request.current || kind !== 'usage') return;
-    const abort = new AbortController();
-    request.current = abort;
-    setError('');
-    void client
-      .refreshLimits(abort.signal)
-      .catch(() => {
-        if (!abort.signal.aborted) setError('Limits refresh failed. R to retry.');
-      })
-      .finally(() => {
-        if (!abort.signal.aborted) update(n => n + 1);
-        if (request.current === abort) request.current = null;
-      });
-  }, [client, kind]);
   useEffect(() => {
     setOffset(0);
     setDetails(false);
-    refresh();
     if (kind === 'status' && client.toolsEnabled()) void client.refreshWorkspaceDiff().catch(() => {});
-    return () => {
-      request.current?.abort();
-      request.current = null;
-    };
-  }, [client, kind, refresh]);
+  }, [client, kind]);
   // Status and usage are tabs of the settings panel, which owns its keys; only /context scrolls here.
   const own = isActive && kind === 'context';
   useKeymap(
@@ -66,7 +43,6 @@ export function useUsage({
         setDetails(v => !v);
         setOffset(0);
       }
-      if (input.toLowerCase() === 'r') refresh();
       if (key.pageDown) setOffset(n => n + 8);
       if (key.pageUp) setOffset(n => Math.max(0, n - 8));
     },
@@ -80,7 +56,6 @@ export function useUsage({
     },
     details,
     offset,
-    error,
   };
 }
 export interface UsageProps {

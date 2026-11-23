@@ -61,6 +61,12 @@ for (const count of process.env.TRANSCRIPT_BENCH ? [300, 1000, 3000] : [3000]) {
     });
     client.trustWorkspace();
     client.createSession();
+    const status = client.status.bind(client);
+    let statusReads = 0;
+    client.status = (...args) => {
+      statusReads++;
+      return status(...args);
+    };
     const context = client.context.bind(client);
     let contextMs = 0;
     let contextCalls = 0;
@@ -90,7 +96,9 @@ for (const count of process.env.TRANSCRIPT_BENCH ? [300, 1000, 3000] : [3000]) {
       await measure('leave', '\x0f', frame => !frame.includes('detailed transcript'));
       previous = ui.frame();
       await measure('normal scroll', '\x1b[5~', frame => frame !== previous && frame.includes('Jump to bottom'));
+      statusReads = 0;
       await measure('typing', 'Z', frame => frame.includes('❯ Z'));
+      expect(statusReads, 'editing the draft should reuse the SDK status snapshot').toBe(0);
       await ui.press('\x15');
       await ui.press('\x1b[1;5F');
       await ui.press('/context');

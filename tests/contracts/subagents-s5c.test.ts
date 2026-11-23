@@ -116,6 +116,8 @@ function manager(options: {
   depth?: number;
   limits?: () => SubagentParentLimits | undefined;
   worktrees?: SubagentWorktreePort;
+  handoff?: () => string;
+  redact?: (text: string) => string;
   models?: Record<string, string>;
   run?: (context: ChildRunContext, signal: AbortSignal) => Promise<string>;
 }) {
@@ -151,13 +153,14 @@ function manager(options: {
     availableModelIds: () => ['parent-model'],
     store,
     worktrees: options.worktrees,
+    worktreeHandoff: options.handoff,
     runChildTurn: async function* (context, signal) {
       contexts.push(context);
       yield {type: 'started', requestId: crypto.randomUUID()} as never;
       yield {type: 'textDelta', text: await (options.run?.(context, signal) ?? Promise.resolve('done'))} as never;
     },
     addParentUsage: () => undefined,
-    redact: text => text,
+    redact: options.redact ?? (text => text),
     waitMinMs: 5,
   });
   return {subagents, store, parentId, contexts, selection};
@@ -346,4 +349,56 @@ test('agent_message cannot resume an idle child into a background loop below the
   expect(outcome).toMatchObject({status: 'error', code: 'UNSUPPORTED'});
   expect(m.contexts).toHaveLength(0);
   expect(m.subagents.scheduler.activeCount()).toBe(0);
+});
+
+test('foreground and background suppress whole machine handoffs if raw or decoded patch content requires redaction', async () => {
+  const secret = 'secret<&token';
+  const redact = (text: string) => text.replaceAll(secret, '[REDACTED]');
+  for (const escaped of [false, true])
+    for (const background of [false, true]) {
+      const patch = '*** Begin Patch\n*** Add File: token.txt\n+' + secret + '\n*** End Patch';
+      const input = {patch, expected_files: {'token.txt': null}};
+      let json = JSON.stringify(input);
+      if (escaped) json = json.replaceAll('<', '\\u003c').replaceAll('&', '\\u0026');
+      const m = manager({worktrees: fakeWorktrees({changed: true}).port, handoff: () => json, redact});
+      const delivered: string[] = [];
+      (m.subagents as unknown as {deps: {deliverToParent: (p: string, t: string) => 'queued'}}).deps.deliverToParent = (
+        _p,
+        text,
+      ) => {
+        delivered.push(text);
+        return 'queued';
+      };
+      const result = await spawn(m, {isolation: 'worktree', background});
+      if (background)
+        for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+      const output = background ? delivered[0]! : result.content;
+      expect(output).toContain('Automatic patch suppressed');
+      expect(output).not.toContain(secret);
+      expect(output).not.toContain('secret');
+      expect(output).not.toContain('*** Begin Patch');
+      expect(output).not.toContain('expected_files');
+    }
+});
+
+test('an unchanged machine handoff remains byte-exact in foreground and background', async () => {
+  const json = JSON.stringify({
+    patch: '*** Begin Patch\n*** Add File: x\n+safe\n*** End Patch',
+    expected_files: {x: null},
+  });
+  for (const background of [false, true]) {
+    const m = manager({worktrees: fakeWorktrees({changed: true}).port, handoff: () => json, redact: text => text});
+    const delivered: string[] = [];
+    (m.subagents as unknown as {deps: {deliverToParent: (p: string, t: string) => 'queued'}}).deps.deliverToParent = (
+      _p,
+      text,
+    ) => {
+      delivered.push(text);
+      return 'queued';
+    };
+    const result = await spawn(m, {isolation: 'worktree', background});
+    if (background)
+      for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    expect(background ? delivered[0]! : result.content).toContain(json);
+  }
 });

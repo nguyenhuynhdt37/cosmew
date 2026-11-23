@@ -4,6 +4,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {openPrivateDatabase} from '@cosmew/persistence';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
+import {adoptLegacyStateDirectory} from '../../apps/cli/src/bootstrap/paths';
 import {memoryVault} from '../fixtures';
 
 const cleanups: (() => void)[] = [];
@@ -96,6 +97,11 @@ function seededVault() {
 
 test('migrations v7 + v8 delete every runtime account and credential (Codex included), keep API accounts and re-select one', async () => {
   const dir = legacyHome();
+  // A prior startup action can legitimately enqueue a notice in the shared channel.
+  const priorHome = mkdtempSync(join(tmpdir(), 'cosmew-migration-notice-'));
+  cleanups.push(() => rmSync(priorHome, {recursive: true, force: true}));
+  mkdirSync(join(priorHome, '.futryn'));
+  adoptLegacyStateDirectory(priorHome);
   const vault = seededVault();
   const app = startup(dir, {vault});
   try {
@@ -113,16 +119,20 @@ test('migrations v7 + v8 delete every runtime account and credential (Codex incl
     expect(state.reasoningPreferences).toEqual({[`${ID.openai}:gpt-5`]: 'low'});
     // User data beyond the removed providers is untouched.
     expect(app.db.query("SELECT id FROM conversations WHERE id='keep-me'").get()).toBeTruthy();
-    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(11);
+    expect((app.db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(13);
     // ADR 0081 adds the default-off notice after the two migration notices; all are one-time.
     const notices = app.takeStartupNotices();
-    expect(notices).toHaveLength(3);
-    expect(notices[0]).toContain('grok');
-    expect(notices[0]).toContain('copilot');
-    expect(notices[1]).toContain('Codex');
-    expect(notices[1]).toContain('Active account is now openai');
-    expect(notices[2]).toContain('Sandbox is now off by default');
-    expect(notices[2]).toContain('/sandbox');
+    expect(notices).toContain('Moved .futryn to .cosmew.');
+    // Other startup channels (for example state-directory migration) may add notices.
+    // Each required migration/defaults notice must still occur exactly once.
+    const runtime = notices.filter(notice => notice.includes('grok') && notice.includes('copilot'));
+    const codex = notices.filter(notice => notice.includes('Codex'));
+    const sandbox = notices.filter(notice => notice.includes('Sandbox is now off by default'));
+    expect(runtime).toHaveLength(1);
+    expect(codex).toHaveLength(1);
+    expect(codex[0]).toContain('Active account is now openai');
+    expect(sandbox).toHaveLength(1);
+    expect(sandbox[0]).toContain('/sandbox');
     expect(existsSync(join(dir, 'settings.json'))).toBe(true);
     expect(app.takeStartupNotices()).toEqual([]);
   } finally {

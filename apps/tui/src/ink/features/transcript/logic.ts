@@ -1,6 +1,6 @@
 import {changeReceipt} from '../diff/logic';
 import {diffStats, diffSummary} from '../../ui/diff';
-import type {HookRanEvent, Message, ModelEvent, ToolCall, ToolResult, Usage} from '@cosmew/contracts';
+import type {HookRanEvent, Message, ModelEvent, SessionRecord, ToolCall, ToolResult, Usage} from '@cosmew/contracts';
 import type {ContextBlock} from '../usage/logic';
 /** `at` is the arrival time (ms) of a text/reasoning part; the detailed transcript prints it with the model. */
 export type TranscriptPart =
@@ -30,6 +30,7 @@ export interface TranscriptItem {
   durationMs?: number;
   errorText?: string;
   notices?: string[];
+  commandPending?: boolean;
   /** `/context` output: drawn as the coloured grid under the `❯ /context` line. */
   context?: ContextBlock;
 }
@@ -76,7 +77,124 @@ function storedResult(message: Message): ToolResult {
     ...(exit ? {exitCode: Number(exit[1])} : signalled ? {exitCode: null} : {}),
   };
 }
-export function messagesToTranscript(messages: readonly Message[], idPrefix = 'history'): TranscriptItem[] {
+/** Map each message index to the model that generated its turn, omitting user-shell turns. */
+function turnModelsForMessages(
+  messages: readonly Message[],
+  record?: SessionRecord,
+): (string | undefined)[] | undefined {
+  const receipts = record?.turns;
+  if (!receipts?.length) return undefined;
+  const models: (string | undefined)[] = Array(messages.length).fill(undefined);
+  const durableTurns = record?.recovery?.turns ?? [];
+  if (durableTurns.length) {
+    const byId = new Map(receipts.map(receipt => [receipt.requestId, receipt]));
+    const descriptors = durableTurns
+      .map(turn => {
+        let acceptedContent: string | undefined;
+        let carriedCount = 0;
+        const pendingSteers: string[] = [];
+        const deliveredSteers: string[] = [];
+        let requests = 0;
+        for (const {data} of turn.events) {
+          if (data.type === 'user.accepted') {
+            acceptedContent = data.message.content;
+            carriedCount = data.carried?.length ?? 0;
+          } else if (data.type === 'user.steered') {
+            pendingSteers.push(data.message.content);
+          } else if (data.type === 'model.requested' && requests++ > 0) {
+            deliveredSteers.push(...pendingSteers.splice(0));
+          }
+        }
+        if (acceptedContent === undefined) return undefined;
+        const receipt = byId.get(turn.id);
+        return {
+          acceptedContent,
+          carriedCount,
+          deliveredSteers,
+          modelId: receipt && receipt.kind !== 'user-shell' ? receipt.modelId : undefined,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+    if (!descriptors.length) return models;
+
+    // Right-to-left latest possible start for each turn avoids confusing a delivered steer with the next turn's prompt.
+    const latestStart = Array<number>(descriptors.length).fill(messages.length);
+    let reverseCursor = messages.length - 1;
+    for (let t = descriptors.length - 1; t >= 0; t--) {
+      while (
+        reverseCursor >= 0 &&
+        !(
+          messages[reverseCursor]!.role === 'user' &&
+          messages[reverseCursor]!.content === descriptors[t]!.acceptedContent
+        )
+      )
+        reverseCursor--;
+      if (reverseCursor < 0) break;
+      latestStart[t] = reverseCursor;
+      reverseCursor--;
+    }
+
+    const starts: {start: number; modelId: string | undefined}[] = [];
+    let cursor = 0;
+    for (let t = 0; t < descriptors.length; t++) {
+      const turn = descriptors[t]!;
+      let skippedCarried = 0;
+      while (cursor < messages.length && skippedCarried < turn.carriedCount) {
+        if (messages[cursor]!.role === 'user') skippedCarried++;
+        cursor++;
+      }
+      let start = -1;
+      for (let i = cursor; i <= Math.min(messages.length - 1, latestStart[t]!); i++) {
+        if (messages[i]!.role === 'user' && messages[i]!.content === turn.acceptedContent) {
+          start = i;
+          break;
+        }
+      }
+      if (start < 0) continue;
+      starts.push({start, modelId: turn.modelId});
+      cursor = start + 1;
+      const limit = t + 1 < descriptors.length ? latestStart[t + 1]! : messages.length;
+      let steerIdx = 0;
+      for (let i = cursor; i < limit && steerIdx < turn.deliveredSteers.length; i++) {
+        if (messages[i]!.role === 'user' && messages[i]!.content === turn.deliveredSteers[steerIdx]) {
+          steerIdx++;
+          cursor = i + 1;
+        }
+      }
+    }
+
+    for (let t = 0; t < starts.length; t++) {
+      const from = starts[t]!.start;
+      const to = t + 1 < starts.length ? starts[t + 1]!.start : messages.length;
+      const modelId = starts[t]!.modelId;
+      if (!modelId) continue;
+      for (let i = from; i < to; i++) {
+        if (messages[i]!.role === 'assistant') models[i] = modelId;
+      }
+    }
+    return models;
+  }
+
+  let receiptIdx = 0;
+  let currentModel: string | undefined;
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i]!;
+    if (message.role === 'user') {
+      const receipt = receipts[receiptIdx++];
+      currentModel = receipt && receipt.kind !== 'user-shell' ? receipt.modelId : undefined;
+    } else if (message.role === 'assistant' && currentModel) {
+      models[i] = currentModel;
+    }
+  }
+  return models;
+}
+
+export function messagesToTranscript(
+  messages: readonly Message[],
+  idPrefix = 'history',
+  record?: SessionRecord,
+): TranscriptItem[] {
+  const models = turnModelsForMessages(messages, record);
   const items: TranscriptItem[] = [];
   let pending: TranscriptItem | undefined;
   const flush = () => {
@@ -93,7 +211,15 @@ export function messagesToTranscript(messages: readonly Message[], idPrefix = 'h
       items.push({id: `${idPrefix}-${index}`, role: message.role, content: message.content});
       return;
     }
-    pending ??= {id: `${idPrefix}-${index}`, role: 'assistant', content: '', parts: []};
+    const model = models?.[index];
+    pending ??= {
+      id: `${idPrefix}-${index}`,
+      role: 'assistant',
+      content: '',
+      parts: [],
+      ...(model ? {model} : {}),
+    };
+    if (!pending.model && model) pending.model = model;
     if (message.content) {
       pending.content += message.content;
       appendText(pending, 'text', message.content);
@@ -203,7 +329,10 @@ export function toolDisplay(
     return {
       title,
       status,
-      lines: [`User rejected ${titles[call.name]?.split('(')[0] ?? call.name}`, ...(content ? [content] : [])],
+      lines: [
+        `${titles[call.name]?.split('(')[0] ?? call.name} ${result?.code === 'APPROVAL_REVOKED' ? 'needs a new approval' : 'denied'}`,
+        ...(content ? [content] : []),
+      ],
     };
   if (call.name === 'exec_command' || call.name === 'write_stdin') {
     const raw = content ? content.replace(/\n$/, '').split('\n') : [];
@@ -298,6 +427,7 @@ interface ResponseMark {
 export interface TranscriptState {
   items: TranscriptItem[];
   responseMark?: ResponseMark;
+  activeId?: string;
 }
 export type TranscriptAction =
   | {type: 'reset'; items: TranscriptItem[]}
@@ -306,11 +436,18 @@ export type TranscriptAction =
   | {type: 'finish'; error?: string; cancelled?: boolean; now: number}
   | {type: 'notice'; text: string}
   | {type: 'notification'; id: string; text: string}
-  /** A finished slash command: `❯ /export` on the user background and its `⎿` result lines (spec 7). */
-  | {type: 'command'; id: string; command: string; lines: string[]; context?: ContextBlock};
+  | {type: 'command'; id: string; command: string; lines: string[]; context?: ContextBlock; pending?: boolean}
+  | {type: 'commandResult'; id: string; lines: string[]};
 /** Immutable turn presentation reducer. Host feeds SDK sendMessage events; never sends commands itself. */
 export function reduceTranscript(state: TranscriptState, action: TranscriptAction): TranscriptState {
   if (action.type === 'reset') return {items: action.items};
+  if (action.type === 'commandResult') {
+    const index = state.items.findIndex(item => item.id === action.id && item.commandPending);
+    if (index < 0) return state;
+    const items = [...state.items];
+    items[index] = {...items[index]!, commandPending: false, notices: action.lines.slice(-16)};
+    return {...state, items};
+  }
   if (action.type === 'notification') {
     if (state.items.some(item => item.id === action.id)) return state;
     const item: TranscriptItem = {id: action.id, role: 'assistant', content: action.text};
@@ -334,14 +471,18 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
           role: 'user',
           content: action.command,
           notices: action.lines.slice(-16),
+          ...(action.pending ? {commandPending: true} : {}),
           ...(action.context ? {context: action.context} : {}),
         },
       ],
     };
   if (action.type === 'begin')
     return {
+      activeId: action.id,
       items: [
-        ...state.items,
+        ...state.items.map(item =>
+          item.streaming ? {...item, streaming: false, awaitingModel: false, interrupted: true} : item,
+        ),
         {id: `${action.id}:user`, role: 'user', content: action.prompt},
         {
           id: action.id,
@@ -355,7 +496,9 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
         },
       ],
     };
-  const previous = state.items.at(-1);
+  const activeIndex = state.activeId ? state.items.findIndex(item => item.id === state.activeId) : -1;
+  const targetIndex = activeIndex >= 0 ? activeIndex : state.items.length - 1;
+  const previous = state.items[targetIndex];
   if (!previous)
     return action.type === 'notice'
       ? {items: [{id: 'notice:0', role: 'assistant', content: '', notices: [action.text]}]}
@@ -371,7 +514,8 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
     notices: [...(previous.notices ?? [])],
   };
   let responseMark = state.responseMark;
-  const items = state.items.slice(0, -1);
+  const items = state.items.slice(0, targetIndex);
+  const tail = state.items.slice(targetIndex + 1);
   const notice = (text: string) => {
     item.notices = [...(item.notices ?? []), text].slice(-16);
   };
@@ -453,6 +597,7 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
           {id: `${event.steerId}:user`, role: 'user', content: event.content},
         );
         return {
+          activeId: event.steerId,
           items: [
             ...items,
             {
@@ -465,6 +610,7 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
               startedAt: action.now,
               ...(item.model ? {model: item.model} : {}),
             },
+            ...tail,
           ],
         };
       case 'inputDeferred':
@@ -481,11 +627,15 @@ export function reduceTranscript(state: TranscriptState, action: TranscriptActio
         break;
     }
   }
-  return {items: [...items, item], ...(responseMark ? {responseMark} : {})};
+  return {
+    items: [...items, item, ...tail],
+    ...(action.type !== 'finish' && state.activeId ? {activeId: state.activeId} : {}),
+    ...(responseMark ? {responseMark} : {}),
+  };
 }
 /** Only a settled prefix may enter Static. Keep a bounded live tail for focus/expansion. */
 export function transcriptWindow(items: readonly TranscriptItem[], liveItems = 8) {
-  const running = items.findIndex(item => item.streaming);
+  const running = items.findIndex(item => item.streaming || item.commandPending);
   const split = Math.min(Math.max(0, items.length - Math.max(1, liveItems)), running < 0 ? items.length : running);
   return {settled: items.slice(0, split), live: items.slice(split)};
 }

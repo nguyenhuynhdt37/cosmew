@@ -318,6 +318,94 @@ test('Tab accepts the highlighted suggestion; unbound Tab never types', async ()
   await key(plain, '\t');
   expect(controller.content).toBe('text');
 });
+test('a typo shows a nearby slash command and requires an explicit selection', async () => {
+  const commands: string[] = [];
+  const options = {initialValue: '/usege', onCommand: (command: string) => void commands.push(command)};
+  const literal = await mount(options);
+  expect(literal.lastFrame()).toContain('/usage');
+  expect(literal.lastFrame()).toContain('enter send as typed');
+  await key(literal, '\r');
+  expect(commands).toEqual(['/usege']);
+
+  const tab = await mount(options);
+  await key(tab, '\t');
+  expect(controller.content).toBe('/usage');
+  expect(commands).toEqual(['/usege']);
+
+  const arrow = await mount(options);
+  await key(arrow, ARROW.down);
+  await key(arrow, '\r');
+  expect(commands).toEqual(['/usege', '/usage']);
+});
+
+test('Tab and Right fill the startup suggestion without sending, and typing replaces the hint', async () => {
+  const sent: string[] = [];
+  const options = {onSubmit: (text: string) => void sent.push(text)};
+  const tab = await mount(options);
+  expect(tab.lastFrame()).toContain('accept suggestion');
+  await key(tab, '\t');
+  expect(controller.content).toBe('Explain this codebase');
+  expect(sent).toEqual([]);
+  await key(tab, '\r');
+  expect(sent).toEqual(['Explain this codebase']);
+
+  const right = await mount(options);
+  await key(right, ARROW.right);
+  expect(controller.content).toBe('Explain this codebase');
+  expect(sent).toHaveLength(1);
+
+  const typed = await mount(options);
+  await key(typed, 'Review this diff');
+  await key(typed, '\t');
+  expect(controller.content).toBe('Review this diff');
+});
+
+test('mid-prompt slash completion inserts text and keeps Enter literal until a row is selected', async () => {
+  const sent: string[] = [];
+  const options = {initialValue: 'Run tests, then /comp', onSubmit: (text: string) => void sent.push(text)};
+  const literal = await mount(options);
+  expect(literal.lastFrame()).toContain('/compact');
+  await key(literal, '\r');
+  expect(sent).toEqual(['Run tests, then /comp']);
+
+  const completed = await mount(options);
+  await key(completed, ARROW.down);
+  await key(completed, '\r');
+  expect(controller.content).toBe('Run tests, then /compact');
+  expect(sent).toHaveLength(1);
+  await key(completed, '\r');
+  expect(sent).toEqual(['Run tests, then /comp', 'Run tests, then /compact']);
+});
+
+test('Tab opens suggestions for a bare mid-prompt slash, and Esc keeps the draft', async () => {
+  const view = await mount({initialValue: 'Run the tests then /'});
+  expect(controller.items).toHaveLength(0);
+  await key(view, '\t');
+  expect(controller.items.length).toBeGreaterThan(0);
+  expect(controller.content).toBe('Run the tests then /');
+  await key(view, '\x1b');
+  expect(controller.items).toHaveLength(0);
+  expect(controller.content).toBe('Run the tests then /');
+  await key(view, '\t');
+  expect(controller.items.length).toBeGreaterThan(0);
+});
+
+test('Tab preserves a complete command alias that selects a different view', async () => {
+  const commands: string[] = [];
+  const view = await mount({initialValue: '/cost', onCommand: command => void commands.push(command)});
+  await key(view, '\t');
+  expect(controller.content).toBe('/cost');
+  await key(view, '\r');
+  expect(commands).toEqual(['/cost']);
+});
+
+test('emoji suggestions complete with Tab without submitting the prompt', async () => {
+  const view = await mount({initialValue: 'Ship it :roc'});
+  expect(view.lastFrame()).toContain(':rocket:');
+  await key(view, '\t');
+  expect(controller.content).toBe('Ship it 🚀');
+});
+
 test('completing inside a word replaces the whole token and the hint follows the remapped key', async () => {
   keymapStore.set(
     buildKeymap(

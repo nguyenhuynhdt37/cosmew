@@ -1,3 +1,6 @@
+export const SKILL_VISIBILITIES = ['on', 'name-only', 'user-invocable-only', 'off'] as const;
+export type SkillVisibility = (typeof SKILL_VISIBILITIES)[number];
+
 /** S3 / ADR 0056: content-free catalog; metadata never grants permissions. */
 export interface SkillMetadata {
   name: string;
@@ -7,6 +10,7 @@ export interface SkillMetadata {
   shortPath: string;
   source: 'project' | 'user' | 'system';
   disableModelInvocation: boolean;
+  visibility?: SkillVisibility;
   argumentHint?: string;
 }
 export interface SkillDiagnostic {

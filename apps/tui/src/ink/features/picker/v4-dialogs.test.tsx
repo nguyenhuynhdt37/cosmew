@@ -12,6 +12,47 @@ import {SettingsDialog} from '../settings';
 import {Usage, useUsage} from '../usage';
 import {dialogFixture} from './test-fixture';
 afterEach(cleanup);
+
+test('Usage shows historical quota and unreported accounts without re-reading quota while scrolling', async () => {
+  const grok = crypto.randomUUID();
+  const openai = crypto.randomUUID();
+  let reads = 0;
+  const fixture = dialogFixture({
+    listAccounts: () => [
+      {id: grok, alias: 'grok', providerId: 'xai', credential: {kind: 'none'}, status: 'valid', validatedAt: null},
+      {
+        id: openai,
+        alias: 'work',
+        providerId: 'chatgpt-api',
+        credential: {kind: 'none'},
+        status: 'valid',
+        validatedAt: null,
+      },
+    ],
+    listQuotaSources: () => {
+      reads++;
+      return [
+        {
+          accountId: grok,
+          providerId: 'xai',
+          modelId: 'grok-4.7',
+          quota: [
+            {name: 'tokens', kind: 'rate-limit', usedPercent: 1.3, observedAt: '2026-11-22T11:53:00Z', resetAt: null},
+          ],
+        },
+      ];
+    },
+  });
+  const view = renderInk(<SettingsDialog initialTab="Usage" />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('1.3% used');
+  expect(view.lastFrame()).toContain('Current quota unknown');
+  expect(view.lastFrame()).toContain('chatgpt-api / work · Quota not reported');
+  const before = reads;
+  await key(view, '\u001b[B');
+  expect(reads).toBe(before);
+});
+
 test('Settings slash enters search without filtering by slash; Space toggles outside search and remains text inside', async () => {
   const fixture = dialogFixture();
   const view = renderInk(<SettingsDialog />, {fixture});

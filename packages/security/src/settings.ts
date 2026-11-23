@@ -10,8 +10,7 @@ import {
 
 /**
  * Claude Code style settings (ADR 0061): `~/.cosmew/settings.json` (user), `<project>/.cosmew/settings.json`
- * (project, shared) and `<project>/.cosmew/settings.local.json` (local); existing `.futryn`/`.hannes` roots remain
- * readable compatibility layers, with precedence local > project > user
+ * (project, shared) and `<project>/.cosmew/settings.local.json` (local). Precedence is local > project > user
  * (a `--permission-mode`/`--allowedTools` launch overlay is the highest). Pure: parsing, merging, trust
  * and the pieces of the sandbox derived from rules. File access belongs to the composition root.
  *

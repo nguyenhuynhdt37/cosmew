@@ -76,6 +76,42 @@ function Inline({tokens, width}: {tokens: Token[]; width?: number}) {
     </Fragment>
   ));
 }
+/** Long paragraphs need row windowing too, even when they contain no newline. */
+function LongParagraph({
+  token,
+  width,
+  color,
+}: {
+  token: Tokens.Paragraph | Tokens.Text;
+  width: number;
+  color: string | undefined;
+}) {
+  const theme = useTheme();
+  const lines = useMemo(() => wrapRuns(inlineRuns(token.tokens ?? Lexer.lexInline(token.text)), width), [token, width]);
+  return (
+    <WindowedRows count={lines.length}>
+      {(first, end) => (
+        <Text color={color}>
+          {lines.slice(first, end).map((line, row) => (
+            <Fragment key={first + row}>
+              {row ? '\n' : null}
+              {line.length
+                ? line.map(({text, style}, at) => {
+                    const {colorToken, ...modifiers} = style ?? {};
+                    return (
+                      <Text key={at} {...modifiers} color={colorToken ? theme.color(colorToken) : undefined}>
+                        {text}
+                      </Text>
+                    );
+                  })
+                : ' '}
+            </Fragment>
+          ))}
+        </Text>
+      )}
+    </WindowedRows>
+  );
+}
 function Blocks({
   tokens,
   width,
@@ -113,7 +149,12 @@ function Blocks({
             break;
           case 'paragraph':
           case 'text':
-            content = <Text color={prose}>{inline(token as Tokens.Paragraph)}</Text>;
+            content =
+              token.raw.length > 4096 ? (
+                <LongParagraph token={token as Tokens.Paragraph} width={width} color={prose} />
+              ) : (
+                <Text color={prose}>{inline(token as Tokens.Paragraph)}</Text>
+              );
             break;
           case 'code':
             content =
@@ -262,7 +303,10 @@ function singleLineBlocks(tokens: Token[], width: number): (Token | null)[] | un
   }
   return rows;
 }
-const markdownTokens = renderCache<string, Token[]>(32);
+const markdownTokens = renderCache<string, Token[]>(32, {
+  maxWeight: 2 * 1024 * 1024,
+  weight: source => source.length * 2,
+});
 export const Markdown = memo(function Markdown({text, width = 80, tone}: MarkdownProps) {
   const tokens = useMemo(() => {
     const source = safeText(text.slice(0, 262144));

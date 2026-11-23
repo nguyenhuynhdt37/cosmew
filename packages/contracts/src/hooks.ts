@@ -12,9 +12,9 @@ export interface HooksSnapshot {
 export interface McpServersSnapshot {
   servers: {
     name: string;
-    status: 'connected' | 'needs-auth' | 'failed' | 'disabled';
+    status: import('./mcp-management').McpConnectionState;
     toolCount: number;
     source: string;
   }[];
-  supported: {stdioManagement: false; oauthManagement: false};
+  supported: {stdioManagement: boolean; oauthManagement: boolean};
 }

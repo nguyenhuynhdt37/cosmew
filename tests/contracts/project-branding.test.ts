@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, writeFileSync, rmSync, symlinkSync, readFileSync} from 'node:fs';
+import {existsSync, mkdtempSync, writeFileSync, rmSync, symlinkSync, readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 const root = resolve(import.meta.dir, '../..');
@@ -33,42 +33,50 @@ test('cosmew resolves from another project and display Cosmew help', () => {
   }
 });
 
-test('new storage names preserve legacy accounts without merging or moving state', async () => {
+test('new storage uses .cosmew and ignores legacy environment overrides', async () => {
   const {defaultStateDirectory} = await import('../../apps/cli/src/bootstrap/paths');
-  const {mkdirSync} = await import('node:fs');
+  const {existsSync, mkdirSync} = await import('node:fs');
   const home = mkdtempSync(join(tmpdir(), 'futryn-state-home-'));
   cleanup.push(home);
   expect(defaultStateDirectory({}, home)).toBe(join(home, '.cosmew'));
   mkdirSync(join(home, '.hannes'));
-  expect(defaultStateDirectory({}, home)).toBe(join(home, '.hannes'));
+  expect(defaultStateDirectory({}, home)).toBe(join(home, '.cosmew'));
+  expect(existsSync(join(home, '.hannes'))).toBe(false);
   mkdirSync(join(home, '.futryn'));
-  expect(defaultStateDirectory({}, home)).toBe(join(home, '.futryn'));
-  expect(defaultStateDirectory({HANNES_HOME: '/legacy-state'}, home)).toBe('/legacy-state');
+  expect(defaultStateDirectory({}, home)).toBe(join(home, '.cosmew'));
+  expect(existsSync(join(home, '.futryn'))).toBe(true);
+  expect(defaultStateDirectory({HANNES_HOME: '/legacy-state'}, home)).toBe(join(home, '.cosmew'));
   expect(
     defaultStateDirectory(
       {COSMEW_HOME: '/cosmew-state', FUTRYN_HOME: '/new-state', HANNES_HOME: '/legacy-state'},
       home,
     ),
   ).toBe('/cosmew-state');
-  expect(defaultStateDirectory({FUTRYN_HOME: '/new-state', HANNES_HOME: '/legacy-state'}, home)).toBe('/new-state');
+  expect(defaultStateDirectory({FUTRYN_HOME: '/new-state', HANNES_HOME: '/legacy-state'}, home)).toBe(
+    join(home, '.cosmew'),
+  );
 });
-test('cosmew uses FUTRYN_HOME from a different project and keeps HANNES_HOME as a fallback', () => {
+test('cosmew uses COSMEW_HOME and ignores legacy home overrides', () => {
   const project = mkdtempSync(join(tmpdir(), 'futryn-external-project-'));
   cleanup.push(project);
   const binary = join(project, 'cosmew');
   symlinkSync(resolve(root, 'apps/cli', manifest('apps/cli/package.json').bin.cosmew), binary);
-  for (const name of ['FUTRYN_HOME', 'HANNES_HOME']) {
-    const state = join(project, name);
-    const child = Bun.spawnSync([binary, 'status', '--json'], {
-      cwd: project,
-      env: {...process.env, FUTRYN_HOME: undefined, HANNES_HOME: undefined, [name]: state},
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(child.exitCode).toBe(0);
-    expect(JSON.parse(child.stdout.toString()).sessionId).toBeNull();
-    expect(readFileSync(join(state, 'provider-auth.sqlite')).length).toBeGreaterThan(0);
-  }
+  const state = join(project, 'state');
+  const child = Bun.spawnSync([binary, 'status', '--json'], {
+    cwd: project,
+    env: {
+      ...process.env,
+      COSMEW_HOME: state,
+      FUTRYN_HOME: join(project, 'ignored-a'),
+      HANNES_HOME: join(project, 'ignored-b'),
+    },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  expect(child.exitCode).toBe(0);
+  expect(JSON.parse(child.stdout.toString()).sessionId).toBeNull();
+  expect(readFileSync(join(state, 'provider-auth.sqlite')).length).toBeGreaterThan(0);
+  expect(existsSync(join(project, 'ignored-a'))).toBe(false);
 });
 test('the legacy error alias keeps instanceof compatible and both state directory names deny writes', async () => {
   const {FutrynError, HannesError} = await import('@cosmew/contracts');

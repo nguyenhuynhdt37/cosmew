@@ -6,6 +6,8 @@ import {
   closeSync,
   fstatSync,
   fchmodSync,
+  realpathSync,
+  lstatSync,
   readSync,
   writeFileSync,
   fsyncSync,
@@ -28,6 +30,7 @@ const load = () => {
       fdopendir: {args: ['i32'], returns: 'ptr'},
       readdir: {args: ['ptr'], returns: 'ptr'},
       closedir: {args: ['ptr'], returns: 'i32'},
+      flock: {args: ['i32', 'i32'], returns: 'i32'},
       openat: {args: ['i32', 'buffer', 'i32', 'u32'], returns: 'i32'},
       mkdirat: {args: ['i32', 'buffer', 'u32'], returns: 'i32'},
       unlinkat: {args: ['i32', 'buffer', 'i32'], returns: 'i32'},
@@ -49,12 +52,16 @@ const errno = () => {
 
 const closeOnExec = process.platform === 'darwin' ? 0x1000000 : 0x80000;
 const directoryFlags = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW | closeOnExec;
+const heldLocks = new Set<string>();
+const lockWait = new Int32Array(new SharedArrayBuffer(4));
+const temporaryName = /^\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/;
 const fail = (): never => {
   throw new FutrynError('STORAGE');
 };
-const removedir = process.platform === 'darwin' ? 0x80 : 0x200;
 /** Descriptor-relative operations; directory swaps cannot redirect reads or writes. */
 export class MemoryDirectory {
+  private lockFd: number | undefined;
+  private lockIdentity: string | undefined;
   private constructor(readonly fd: number) {}
   static open(root: string, id: string, create: boolean): MemoryDirectory | undefined {
     if (!native) return fail();
@@ -88,7 +95,31 @@ export class MemoryDirectory {
       throw error;
     }
   }
+  /** Private descriptor for sibling persistence stores; never follows directory symlinks. */
+  static openPrivate(root: string): MemoryDirectory {
+    if (!native) return fail();
+    const original = lstatSync(root);
+    if (!original.isDirectory() || original.isSymbolicLink()) return fail();
+    const canonical = realpathSync(root);
+    let fd = openSync('/', directoryFlags);
+    try {
+      for (const part of canonical.split('/').filter(Boolean)) {
+        const next = native.symbols.openat(fd, c(part), directoryFlags, 0);
+        if (next < 0) return fail();
+        closeSync(fd);
+        fd = next;
+      }
+      const stat = fstatSync(fd);
+      if (process.getuid && stat.uid !== process.getuid()) return fail();
+      fchmodSync(fd, 0o700);
+      return new MemoryDirectory(fd);
+    } catch (error) {
+      closeSync(fd);
+      throw error;
+    }
+  }
   close(): void {
+    this.unlock();
     closeSync(this.fd);
   }
   private file(name: string): number | undefined {
@@ -145,7 +176,7 @@ export class MemoryDirectory {
       closeSync(fd);
     }
   }
-  names(): string[] {
+  names(cleanTemporaryFiles = false): string[] {
     const copy = native!.symbols.openat(this.fd, c('.'), directoryFlags, 0);
     if (copy < 0) return fail();
     const directory = native!.symbols.fdopendir(copy);
@@ -155,27 +186,101 @@ export class MemoryDirectory {
     }
     try {
       const names: string[] = [];
+      let visited = 0;
       while (true) {
         const entry = native!.symbols.readdir(directory);
         if (!entry) break;
         const name = new CString(Number(entry) + (process.platform === 'darwin' ? 21 : 19)).toString();
-        if (name !== '.' && name !== '..') names.push(name);
-        if (names.length > 259) return fail();
+        if (name === '.' || name === '..') continue;
+        // Stream cleanup rather than collecting abandoned files into the bounded
+        // memory list. A huge directory still makes progress before failing closed.
+        if (++visited > 4096) return fail();
+        if (cleanTemporaryFiles && temporaryName.test(name)) {
+          this.delete(name);
+          continue;
+        }
+        names.push(name);
+        if (names.length > 264) return fail();
       }
       return names.sort();
     } finally {
       native!.symbols.closedir(directory);
     }
   }
-  lock(): void {
-    if (native!.symbols.mkdirat(this.fd, c('.lock'), 0o700) !== 0) fail();
+  lock(name = '.lock', waitMs = 250): boolean {
+    if (!/^\.[a-z][a-z0-9.-]*$/.test(name)) return fail();
+    if (this.lockFd !== undefined) return fail();
+    // Never unlink this inode: flock is released by the kernel even after SIGKILL.
+    // There is no PID/timeout ownership inference, so PID reuse cannot steal a lock.
+    const fd = native!.symbols.openat(
+      this.fd,
+      c(name),
+      constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK | closeOnExec,
+      0o600,
+    );
+    if (fd < 0) {
+      if (errno() === 21) {
+        const error = new FutrynError('STORAGE');
+        error.message =
+          'Legacy memory .lock directory has no verifiable owner. Stop all Cosmew processes using this memory directory, then remove only the empty .lock directory and retry. Never remove a regular .lock file.';
+        throw error;
+      }
+      return fail();
+    }
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.nlink !== 1 || (process.getuid && stat.uid !== process.getuid())) return fail();
+      const identity = `${stat.dev}:${stat.ino}`;
+      // Synchronous ports cannot let another holder on this JS thread progress.
+      if (heldLocks.has(identity)) {
+        if (waitMs === 0) return false;
+        return fail();
+      }
+      const deadline = performance.now() + waitMs;
+      while (native!.symbols.flock(fd, 2 | 4) !== 0) {
+        const code = errno();
+        if (code !== (process.platform === 'darwin' ? 35 : 11) && code !== 4) return fail();
+        const remaining = deadline - performance.now();
+        if (remaining <= 0) {
+          if (waitMs === 0) return false;
+          return fail();
+        }
+        Atomics.wait(lockWait, 0, 0, Math.min(10, remaining));
+      }
+      fchmodSync(fd, 0o600);
+      const current = this.file(name);
+      if (current === undefined) return fail();
+      try {
+        const check = fstatSync(current);
+        if (check.dev !== stat.dev || check.ino !== stat.ino) return fail();
+      } finally {
+        closeSync(current);
+      }
+      this.lockIdentity = identity;
+      heldLocks.add(identity);
+      this.lockFd = fd;
+      return true;
+    } finally {
+      if (this.lockFd !== fd) closeSync(fd);
+    }
   }
   unlock(): void {
-    if (native!.symbols.unlinkat(this.fd, c('.lock'), removedir) !== 0) fail();
+    if (this.lockFd === undefined) return;
+    const fd = this.lockFd;
+    this.lockFd = undefined;
+    if (this.lockIdentity) heldLocks.delete(this.lockIdentity);
+    this.lockIdentity = undefined;
+    // close also releases the lock if flock itself fails.
+    try {
+      if (native!.symbols.flock(fd, 8) !== 0) return fail();
+    } finally {
+      closeSync(fd);
+    }
   }
   delete(name: string): void {
     if (this.size(name) === undefined) return;
     if (native!.symbols.unlinkat(this.fd, c(name), 0) !== 0) fail();
+    fsyncSync(this.fd);
   }
   atomic(name: string, text: string): void {
     this.size(name); // Reject symlinks/hardlinks, including dangling links, before replace.

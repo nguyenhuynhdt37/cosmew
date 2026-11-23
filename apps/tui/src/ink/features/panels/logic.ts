@@ -15,7 +15,15 @@ export const notImplementedResult = (command: string) => commandResult(command, 
 export const cancelledResult = (command: string, noun: string) => commandResult(command, `${noun} cancelled`);
 export const closedResult = (command: string, noun: string) => commandResult(command, `Closed ${noun}`);
 /** Status glyphs of `/mcp`: connected, needs sign-in, failed, not connected. */
-export const MCP_GLYPH = {connected: '✔', 'needs-auth': '⚠', failed: '✘', disabled: '◯'} as const;
+export const MCP_GLYPH = {
+  connected: '✔',
+  'needs-auth': '⚠',
+  failed: '✘',
+  disabled: '◯',
+  stopped: '◯',
+  connecting: '…',
+  reconnecting: '…',
+} as const;
 export type McpState = keyof typeof MCP_GLYPH;
 export interface McpServerRow {
   name: string;

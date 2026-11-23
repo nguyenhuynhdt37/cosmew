@@ -20,6 +20,10 @@ import {
   type PromptHistoryEntry,
   type HookRanEvent,
   type McpServersSnapshot,
+  type McpManagerSnapshot,
+  type McpManagementAction,
+  type McpManagementResult,
+  type McpConnectionState,
   type BackgroundTask,
   type BackgroundTaskEvent,
   type Account,
@@ -29,7 +33,9 @@ import {
   type Attachment,
   type CommandOutputChunk,
   type ToolResult,
+  SKILL_VISIBILITIES,
   type SkillsReport,
+  type SkillVisibility,
   type MemoryInfo,
   type MemoryWrite,
   memoryWriteSchema,
@@ -93,6 +99,7 @@ import {
   type SubagentSummaryView,
   type ThemeManifest,
   type Usage,
+  type UsageBreakdown,
   type WorkspaceDiffFile,
   type WorkspaceDiffReport,
   type WorkspaceDiffOptions,
@@ -166,6 +173,29 @@ export interface ConnectAccountInput {
   authorizationCode?: string;
 }
 
+export interface QuickConnectProviderInput {
+  /** One-line format: `https://host/v1 | api-key | model (optional)`. */
+  raw?: string;
+  baseURL?: string;
+  apiKey?: string;
+  modelId?: string;
+  alias?: string;
+  project?: string;
+  /** Choose a model before generation or storage. An empty list allows a manual ID. */
+  chooseModel?: (models: readonly ModelInfo[], signal?: AbortSignal) => Promise<string>;
+}
+
+export interface QuickConnectProviderResult {
+  provider: Provider;
+  account: Account;
+  model: ModelInfo;
+  modelsCount: number;
+  protocol: Provider['protocol'];
+  catalog: Provider['catalog'];
+  reusedProvider: boolean;
+  summary: string;
+}
+
 export interface TerminalRuntimeReport {
   label: string;
   available: boolean;
@@ -180,8 +210,18 @@ export interface TerminalRuntimeReport {
 /** What `/mcp` may show. No command line, environment, URL or headers. */
 export interface McpStatusReport {
   configPath: string;
-  servers: {name: string; transport: 'stdio' | 'http'; state: 'connected' | 'failed'; tools: number; error?: string}[];
+  servers: {name: string; transport: 'stdio' | 'http'; state: McpConnectionState; tools: number; error?: string}[];
   problems: string[];
+}
+
+/** Sanitized host management failure; arbitrary transport errors never become UI messages. */
+export class McpManagementError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export type AccountVerification =
@@ -224,6 +264,9 @@ export interface FutrynBackendPorts {
   /** Host-owned user appearance storage; absent ports retain legacy embedding behavior. */
   appearanceStore?: AppearanceStore;
   workspace: string;
+  createCommandFile?(filename: string, content: string, signal?: AbortSignal): Promise<ToolResult>;
+  renameSession?(id: string, title: string): boolean;
+  generateSessionTitle?(id: string, signal?: AbortSignal): Promise<string>;
   checkpoints?(sessionId: string): CheckpointView[];
   rewindCheckpoint?(
     sessionId: string,
@@ -234,6 +277,7 @@ export interface FutrynBackendPorts {
   ): Promise<RewindOutcome>;
   prepareImage?(input: ImageAttachmentInput): Promise<Attachment>;
   skills?(): SkillsReport;
+  saveSkillOverrides?(changes: Readonly<Record<string, SkillVisibility>>): void;
   memories?(): MemoryInfo[];
   memoryDirectory?(): string | null;
   openMemoryDirectory?(): Promise<void>;
@@ -247,6 +291,8 @@ export interface FutrynBackendPorts {
    * Absent means the integration is not wired, which status reports as `not-implemented`.
    */
   mcpStatus?(): McpStatusReport;
+  mcpManagerSnapshot?(): Promise<McpManagerSnapshot>;
+  manageMcp?(action: McpManagementAction, signal?: AbortSignal): Promise<McpManagementResult>;
   searchMcpStatus?(): McpServersSnapshot['servers'];
   /** `!command` shell mode (ADR 0034): the same exec_command dispatcher, approval and sandbox as model calls. */
   runShellCommand?(
@@ -310,6 +356,8 @@ export interface FutrynBackendPorts {
   listProviderPresets(): Provider[];
   addProvider(provider: Provider): Provider;
   removeProvider(id: string): void;
+  /** Quick third-party provider login: auto-probe `/models`, wire protocol and metadata, save config + keyring (ADR 0113). */
+  quickConnectProvider?(input: QuickConnectProviderInput, signal?: AbortSignal): Promise<QuickConnectProviderResult>;
   /** Problems found in the user-level host config (ADR 0046); empty when it is fine or absent. */
   hostConfigDiagnostics?(): string[];
   /** Why a custom provider would be refused by the host config rules, or null when it is fine. */
@@ -327,9 +375,11 @@ export interface FutrynBackendPorts {
     generate?: boolean,
   ): Promise<{models: number; validation: string}>;
   /** Optional: session-scoped tool grants ('Allow for session'), as workspace-relative targets. */
-  toolGrants?: {list(): string[]; clear(): void};
+  toolGrants?: {list(): string[]; clear(capability?: string): void};
   /** Optional: live balance/quota from providers that expose one (e.g. OpenRouter key credit). */
   fetchAccountLimits?: FetchAccountLimits;
+  /** Quota-bearing sources from this workspace's turn receipts and standalone usage. */
+  listQuotaSources?(): Pick<UsageBreakdown, 'accountId' | 'providerId' | 'modelId' | 'quota'>[];
   discoverModels(
     account: Account,
     signal?: AbortSignal,
@@ -343,6 +393,7 @@ export interface FutrynBackendPorts {
   listSessions(): SessionSummary[];
   getSession(id: string): SessionRecord | undefined;
   deleteSession(id: string): boolean;
+  setSessionSelection?(id: string, selection: Selection): {id: string; selection: Selection; messages: Message[]};
   forkSession?(id: string, selection: Selection): {id: string; selection: Selection; messages: Message[]};
   startSession(project?: string, selection?: Selection): {id: string; selection: Selection; messages: Message[]};
   resumeSession(id: string): {id: string; selection: Selection; messages: Message[]};
@@ -447,7 +498,7 @@ export class FutrynClient {
     return true;
   }
 
-  private currentSession: {id: string; selection: Selection; messages: Message[]} | null = null;
+  private currentSession: {id: string; selection: Selection; messages: Message[]; title?: string} | null = null;
   private sessionSelection: Selection | null = null;
   private readonly sessionEfforts = new Map<string, string>();
   private readonly transientSessionModes = new Map<string, AgentMode>();
@@ -488,7 +539,7 @@ export class FutrynClient {
   private readonly eventListeners = new Set<(event: ReactiveAgentEvent) => void>();
   private readonly interactionListeners = new Set<(event: InteractionEvent) => void>();
   private readonly permissions = new Map<string, PermissionPromptRequest>();
-  private readonly sessionGrants = new Set<string>();
+  private readonly sessionGrants = new Map<string, string>();
   private readonly permissionWaiters = new Map<string, (resolution: PermissionPromptResolution) => void>();
   /** Workspace tools are offered only after the UI obtained folder consent (ADR 0014/0017). */
   private toolsAllowed = false;
@@ -553,9 +604,10 @@ export class FutrynClient {
   }
 
   /** A policy change makes every unresolved authorization prompt stale, never an approval. */
-  private denyPendingPermissions(): void {
-    this.cancelPlanApproval();
+  private denyPendingPermissions(capability?: string): void {
+    if (capability === undefined) this.cancelPlanApproval();
     for (const request of this.permissions.values()) {
+      if (capability !== undefined && request.capability !== capability) continue;
       // A trust prompt is about a file's content, not about the policy that just changed.
       if (request.capability === 'settings.trust') continue;
       if (request.status === 'pending') {
@@ -655,10 +707,29 @@ export class FutrynClient {
     );
   }
 
+  saveSkillOverrides(changes: Readonly<Record<string, SkillVisibility>>): void {
+    if (!this.toolsEnabled() || !this.ports.saveSkillOverrides) throw new FutrynError('UNSUPPORTED');
+    const catalog = new Map(this.skills().skills.map(skill => [skill.name, skill]));
+    const updates = Object.entries(changes);
+    if (
+      updates.some(
+        ([name, visibility]) =>
+          !catalog.has(name) || catalog.get(name)?.disableModelInvocation || !SKILL_VISIBILITIES.includes(visibility),
+      )
+    )
+      throw new FutrynError('INVALID_INPUT');
+    this.ports.saveSkillOverrides(changes);
+    this.notifyStateChange();
+  }
+
+  skillForCommand(input: string) {
+    const name = /^\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})(?:\s|$)/.exec(input.trim())?.[1];
+    return name ? this.skills().skills.find(skill => skill.name === name) : undefined;
+  }
   isSkillCommand(input: string): boolean {
     if (parseSlashCommand(input).definition) return false;
-    const name = /^\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})(?:\s|$)/.exec(input.trim())?.[1];
-    return !!name && this.skills().skills.some(skill => skill.name === name);
+    const skill = this.skillForCommand(input);
+    return !!skill && skill.visibility !== 'off';
   }
 
   projectContext(): ProjectContextReport | null {
@@ -871,6 +942,42 @@ export class FutrynClient {
     }
   }
 
+  invalidateMcpPermissions(): void {
+    // Advance the dispatcher's MCP epoch before waking stale prompt waiters.
+    this.ports.toolGrants?.clear('mcp.call');
+    for (const [scopeHash, capability] of this.sessionGrants)
+      if (capability === 'mcp.call') this.sessionGrants.delete(scopeHash);
+    this.denyPendingPermissions('mcp.call');
+    this.notifyStateChange();
+  }
+
+  /** Refresh UI projections when background MCP connection status changes without revoking unrelated grants. */
+  notifyMcpStatusChanged(): void {
+    this.notifyStateChange();
+  }
+
+  async mcpManager(): Promise<McpManagerSnapshot> {
+    return structuredClone(
+      (await this.ports.mcpManagerSnapshot?.()) ?? {supported: false, configPath: '', servers: [], problems: []},
+    );
+  }
+
+  async manageMcp(action: McpManagementAction, signal?: AbortSignal): Promise<McpManagementResult> {
+    if (!this.ports.manageMcp) throw new FutrynError('UNSUPPORTED');
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
+    const mutating = !['search', 'recommended', 'doctor'].includes(action.type);
+    if (mutating) this.invalidateMcpPermissions();
+    try {
+      return structuredClone(await this.ports.manageMcp(action, signal));
+    } catch (error) {
+      if (error instanceof FutrynError)
+        throw new McpManagementError(error.code, this.ports.sanitizeText(error.message).slice(0, 300));
+      throw error;
+    } finally {
+      this.notifyStateChange();
+    }
+  }
+
   hooks(): HooksSnapshot {
     return {supported: false, hooks: []};
   }
@@ -891,7 +998,7 @@ export class FutrynClient {
           source: this.ports.sanitizeText(server.source),
         })),
       ],
-      supported: {stdioManagement: false, oauthManagement: false},
+      supported: {stdioManagement: Boolean(this.ports.manageMcp), oauthManagement: Boolean(this.ports.manageMcp)},
     };
   }
 
@@ -1563,6 +1670,7 @@ export class FutrynClient {
       activeModel,
       workspaceReadStatus,
       activeSessionId: this.currentSession?.id ?? null,
+      sessionTitle: this.currentSession?.title ?? null,
       messageCount: this.currentSession?.messages.length ?? 0,
       lastUsage: usage.last?.usage ?? this.lastUsage,
       usage,
@@ -1614,6 +1722,26 @@ export class FutrynClient {
   removeProvider(id: string): void {
     this.ports.removeProvider(id);
     this.notifyStateChange();
+  }
+
+  async quickConnectProvider(
+    input: QuickConnectProviderInput,
+    signal?: AbortSignal,
+  ): Promise<QuickConnectProviderResult> {
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.quickConnectProvider) throw new FutrynError('UNSUPPORTED');
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
+    const result = await this.ports.quickConnectProvider(input, signal);
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
+    this.clearSessionAuthorization();
+    this.currentSession = null;
+    this.sessionSelection = null;
+    this.lastUsage = null;
+    this.notifyStateChange();
+    return {
+      ...result,
+      summary: this.ports.sanitizeText(result.summary),
+    };
   }
 
   listAccounts(): Account[] {
@@ -1897,32 +2025,64 @@ export class FutrynClient {
     const targetId = options?.accountId ?? this.status().activeAccount?.id ?? state.activeAccountId;
     if (!targetId) throw new FutrynError('AUTH');
     const account = this.ports.getAccount(targetId);
+    if (account.status === 'logged-out') throw new FutrynError('AUTH');
     const models = this.ports.cachedModels(account);
     const model = models.find(m => m.id === modelId);
     if (!model) throw new FutrynError('NOT_FOUND');
     const previousSelection = this.currentSession?.selection;
     if (this.sending) throw new FutrynError('POLICY');
+    const changed = Boolean(
+      this.currentSession && (previousSelection?.accountId !== account.id || previousSelection?.modelId !== model.id),
+    );
     if (options?.scope === 'session') {
       const selection = {accountId: account.id, modelId: model.id};
-      if (
-        this.currentSession &&
-        (previousSelection?.accountId !== account.id || previousSelection?.modelId !== model.id)
-      ) {
-        if (!this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
-        const fork = this.ports.forkSession(this.currentSession.id, selection);
-        this.transientSessionModes.set(fork.id, this.currentMode);
-        this.clearSessionAuthorization();
-        this.currentSession = fork;
-        this.lastUsage = null;
+      if (this.currentSession && changed) {
+        if (this.ports.setSessionSelection) {
+          const updated = this.ports.setSessionSelection(this.currentSession.id, selection);
+          this.transientSessionModes.set(updated.id, this.currentMode);
+          this.clearSessionAuthorization();
+          this.currentSession = {...updated, title: this.currentSession.title};
+          this.lastUsage = null;
+        } else if (this.ports.forkSession) {
+          const fork = this.ports.forkSession(this.currentSession.id, selection);
+          this.transientSessionModes.set(fork.id, this.currentMode);
+          this.clearSessionAuthorization();
+          this.currentSession = fork;
+          this.lastUsage = null;
+        } else {
+          throw new FutrynError('UNSUPPORTED');
+        }
       }
       this.sessionSelection = this.currentSession ? null : selection;
       this.notifyStateChange();
       return {...selection};
     }
+    if (this.currentSession && changed && this.ports.setSessionSelection) {
+      const targetSelection = {accountId: account.id, modelId: model.id};
+      const sessionId = this.currentSession.id;
+      const title = this.currentSession.title;
+      const updated = this.ports.setSessionSelection(sessionId, targetSelection);
+      let selection: Selection;
+      try {
+        selection = this.ports.selectModel(account, model, options?.projectScoped ? this.ports.workspace : undefined);
+      } catch (error) {
+        try {
+          this.ports.setSessionSelection(sessionId, previousSelection!);
+        } catch {
+          /* preserve primary error */
+        }
+        throw error;
+      }
+      this.sessionSelection = null;
+      this.clearSessionAuthorization();
+      this.currentSession = {...updated, title};
+      this.lastUsage = null;
+      this.notifyStateChange();
+      return selection;
+    }
     this.sessionSelection = null;
     const selection = this.ports.selectModel(account, model, options?.projectScoped ? this.ports.workspace : undefined);
-    // Conversation adapters and durable selections are pinned. Starting fresh
-    // avoids advertising one model while the backend still invokes another.
+    // Fallback for minimal embeddings without in-place session selection updates.
     if (
       previousSelection &&
       (previousSelection.accountId !== selection.accountId || previousSelection.modelId !== selection.modelId)
@@ -1987,7 +2147,7 @@ export class FutrynClient {
     const session = this.ports.resumeSession(id);
     if (this.currentSession) this.claimedNextTurn.delete(this.currentSession.id);
     this.clearSessionAuthorization();
-    this.currentSession = session;
+    this.currentSession = {...session, title: stored?.title};
     this.sessionSelection = null;
     this.currentMode = mode;
     this.lastUsage = stored?.turns?.at(-1)?.usage ?? null;
@@ -2064,6 +2224,44 @@ export class FutrynClient {
 
   checkpoints(): CheckpointView[] {
     return this.currentSession ? (this.ports.checkpoints?.(this.currentSession.id) ?? []) : [];
+  }
+
+  async createCommandFile(filename: string, content: string, signal?: AbortSignal): Promise<ToolResult> {
+    if (this.sending || !this.toolsEnabled()) throw new FutrynError('POLICY');
+    if (!this.ports.createCommandFile) throw new FutrynError('UNSUPPORTED');
+    if (
+      filename.length > 240 ||
+      filename.split('/').some(part => !/^[\p{L}\p{N}][\p{L}\p{N}._ -]{0,119}$/u.test(part) || part.endsWith(' ')) ||
+      Buffer.byteLength(content) > 512 * 1024
+    )
+      throw new FutrynError('INVALID_INPUT');
+    signal?.throwIfAborted();
+    return this.ports.createCommandFile(filename, this.ports.sanitizeText(content), signal);
+  }
+
+  async renameCurrentSession(name?: string, signal?: AbortSignal): Promise<string> {
+    if (this.sending) throw new FutrynError('POLICY');
+    const session = this.currentSession;
+    if (!session) throw new FutrynError('NOT_FOUND');
+    if (!this.ports.renameSession) throw new FutrynError('UNSUPPORTED');
+    if (name === undefined && !this.ports.generateSessionTitle) throw new FutrynError('UNSUPPORTED');
+    signal?.throwIfAborted();
+    const source = name ?? (await this.ports.generateSessionTitle!(session.id, signal));
+    signal?.throwIfAborted();
+    if (this.currentSession !== session || this.sending) throw new FutrynError('POLICY');
+    const title = [
+      ...this.ports
+        .sanitizeText(source)
+        .replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\s]+/gu, ' ')
+        .trim(),
+    ]
+      .slice(0, 200)
+      .join('');
+    if (!title) throw new FutrynError('INVALID_INPUT');
+    if (!this.ports.renameSession(session.id, title)) throw new FutrynError('NOT_FOUND');
+    this.currentSession = {...session, title};
+    this.notifyStateChange();
+    return title;
   }
 
   async rewind(
@@ -2459,6 +2657,7 @@ export class FutrynClient {
         0,
         (record?.messages.filter(m => m.role === 'user' && m.state === 'committed').length ?? 0) - completed - steered,
       ),
+      record?.additionalUsage,
     );
   }
 
@@ -2498,14 +2697,17 @@ export class FutrynClient {
     };
     // Session selection changes and sort order do not identify the account that made a request.
     // Scan all saved turns, including child/compaction sources; never borrow their quota for a parent.
-    for (const summary of this.ports.listSessions()) {
-      for (const turn of this.ports.getSession(summary.id)?.turns ?? []) {
-        if (turn.usage?.breakdown) {
-          for (const source of turn.usage.breakdown)
+    if (this.ports.listQuotaSources) {
+      for (const source of this.ports.listQuotaSources())
+        collect(source.accountId, source.providerId, source.quota, source.modelId);
+    } else {
+      for (const summary of this.ports.listSessions()) {
+        const record = this.ports.getSession(summary.id);
+        const usages = [...(record?.turns ?? []).map(turn => turn.usage), record?.additionalUsage];
+        for (const usage of usages) {
+          for (const source of usage?.breakdown ?? [])
             collect(source.accountId, source.providerId, source.quota, source.modelId);
         }
-        // Legacy aggregate quota has no trustworthy source: a child could have supplied it.
-        // Keep it in history, but do not advertise it as the parent account's allowance.
       }
     }
     return accounts.map(account => {
@@ -2801,6 +3003,25 @@ export class FutrynClient {
         (!source ? catalog.models.find(m => isCodingModel(m)) : undefined));
     if (!model) throw new FutrynError('NOT_FOUND');
     const selection = {accountId: target.id, modelId: model.id};
+    if (continueHistory && source && this.ports.setSessionSelection) {
+      const updated = this.ports.setSessionSelection(source.id, selection);
+      try {
+        this.ports.selectModel(target, model);
+      } catch (error) {
+        try {
+          this.ports.setSessionSelection(source.id, source.selection);
+        } catch {
+          /* preserve primary error */
+        }
+        throw error;
+      }
+      this.sessionSelection = null;
+      this.clearSessionAuthorization();
+      this.currentSession = {...updated, title: source.title};
+      this.lastUsage = null;
+      this.emitReactiveEvent('idle', 'Account switched');
+      return target;
+    }
     if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
     const fork = continueHistory && source?.messages.length ? this.ports.forkSession!(source.id, selection) : null;
     try {
@@ -2815,6 +3036,7 @@ export class FutrynClient {
       }
       throw error;
     }
+    this.sessionSelection = null;
     this.clearSessionAuthorization();
     this.currentSession = fork;
     this.lastUsage = null;
@@ -3133,7 +3355,7 @@ export class FutrynClient {
             ? 'approved_always'
             : 'denied';
     if (decision === 'session' && !trust) {
-      this.sessionGrants.add(req.scopeHash);
+      this.sessionGrants.set(req.scopeHash, req.capability);
     }
     if (trust) {
       this.trustPrompts.delete(approvalId);
@@ -3173,7 +3395,7 @@ export class FutrynClient {
       scopeKey?: string;
       diffPreview?: string;
       kind?: PermissionKind;
-      /** External file access asks even in acceptEdits unless a rule permits it. */
+      /** Ask even in acceptEdits. External command cwd also asks in bypass while sandboxing remains enabled. */
       requiresApproval?: boolean;
       /** Approvals offered (ADR 0055); default once + session. */
       decisions?: PermissionPromptRequest['decisions'];
@@ -3251,15 +3473,20 @@ export class FutrynClient {
     if (input.capability === 'network.search' && target !== null)
       ruled = strongest(ruled, permissionRuleDecision(judged, {tool: 'Tool', target: 'web_search'}));
     const mode = this.permissionModeValue;
+    const explicitCommandApproval =
+      input.capability === 'process.execute' &&
+      requiresApproval &&
+      ignoreAllowRules &&
+      input.commandSandbox !== 'disabled';
     let decision: 'allow' | 'ask' | 'deny';
     if (ruled === 'deny') decision = 'deny';
     // Plan mode refuses writes and execution whatever an allow rule says.
     else if (mode === 'plan' && PLAN_REFUSED_KINDS.has(kind)) decision = 'deny';
-    else
-      decision =
-        ruled ?? (requiresApproval && mode !== 'bypassPermissions' ? 'ask' : permissionModeDecision(mode, kind));
-    // bypassPermissions means no prompts: even an ask rule is answered (deny rules and plan are not).
-    if (decision === 'ask' && mode === 'bypassPermissions') decision = 'allow';
+    else if (explicitCommandApproval) decision = 'ask';
+    else {
+      decision = ruled ?? (requiresApproval ? 'ask' : permissionModeDecision(mode, kind));
+      if (decision === 'ask' && mode === 'bypassPermissions' && ruled !== 'ask') decision = 'allow';
+    }
     if (decision !== 'ask') {
       this.emitReactiveEvent(
         decision === 'allow' ? 'done' : 'error',

@@ -6,7 +6,7 @@ const root = join(import.meta.dir, '../..');
 const read = (path: string) => readFileSync(join(root, path), 'utf8');
 
 test('active project documentation and CLI help use Cosmew as the product name', () => {
-  expect(read('README.md')).toMatch(/^# Cosmew CLI/m);
+  expect(read('README.md')).toMatch(/^# Cosmew$/m);
   expect(read('CLAUDE.md')).toContain('Cosmew');
   expect(read('AGENTS.md')).toContain('Cosmew');
   expect(read('docs/README.md')).toContain('Cosmew');

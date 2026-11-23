@@ -27,6 +27,8 @@ bun run test:integration  # provider adapters + tests/security
 bun run test:e2e          # tests/end-to-end (PTY/CLI flows)
 ```
 
+From the repository root, `bun test apps`, `bun test tests`, and the test scripts above all use `tests/preload.ts`. The preload assigns a temporary `HOME` and `COSMEW_HOME`, clears the legacy state overrides, and removes the temporary directory on exit. When launching the CLI with a separate fixture, set `COSMEW_HOME` explicitly in the child environment. The guard fingerprints the OS account's Cosmew and legacy user state files at startup, checks their metadata after each test, and verifies their SHA-256 hashes at teardown. It fails the run and names any changed file.
+
 Optional, touches real OS keyring / network (opt-in via env): `COSMEW_VERIFY_KEYRING=1 bun scripts/verify-keyring.ts`, `COSMEW_TEST_KEYRING=1 bun test tests/end-to-end/provider-cli.test.ts`, `COSMEW_LIVE_PUBLIC=1 bun scripts/smoke-public-catalogs.ts`. `model doctor --generate` makes a billable request.
 
 ## Architecture

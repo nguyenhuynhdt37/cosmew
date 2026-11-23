@@ -76,7 +76,7 @@ export function parsePermissionFlags(args: string[]): LaunchPermissionFlags {
 
 /**
  * The command runtime for this host (ADR 0035, 0062): the OS sandbox, or nothing when disabled.
- * `COSMEW_COMMAND_BACKEND` is canonical; `FUTRYN_COMMAND_BACKEND` and `HANNES_COMMAND_BACKEND` remain fallbacks.
+ * `COSMEW_COMMAND_BACKEND` selects the backend. Legacy environment names are not read.
  */
 export function createCommandRuntime(
   workspaceRoot: string,
@@ -85,7 +85,7 @@ export function createCommandRuntime(
   skillDirectories: readonly string[] = [],
   readOnlySkillDirectories: readonly string[] = [],
 ): CommandRuntime {
-  const requested = env.COSMEW_COMMAND_BACKEND ?? env.FUTRYN_COMMAND_BACKEND ?? env.HANNES_COMMAND_BACKEND;
+  const requested = env.COSMEW_COMMAND_BACKEND;
   if (requested === 'docker')
     return new UnsupportedRuntime('The Docker command backend was removed (ADR 0062). Unset COSMEW_COMMAND_BACKEND.');
   const backend = commandBackendFromEnv(requested);
@@ -96,8 +96,7 @@ export function createCommandRuntime(
     backend,
     skillDirectories,
     readOnlySkillDirectories,
-    hideSecrets:
-      (env.COSMEW_SANDBOX_HIDE_SECRETS ?? env.FUTRYN_SANDBOX_HIDE_SECRETS ?? env.HANNES_SANDBOX_HIDE_SECRETS) === '1',
+    hideSecrets: env.COSMEW_SANDBOX_HIDE_SECRETS === '1',
   });
 }
 

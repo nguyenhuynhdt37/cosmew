@@ -1,5 +1,5 @@
 import {afterEach, expect, test} from 'bun:test';
-import {mkdtempSync, rmSync, writeFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 
@@ -10,7 +10,7 @@ afterEach(() => {
 
 async function cli(dir: string, args: string[]) {
   const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-    env: {...process.env, HANNES_HOME: dir},
+    env: {...process.env, COSMEW_HOME: dir},
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -27,6 +27,7 @@ test('CLI exposes the Claude Code appearances and rejects retired color themes',
   const dir = mkdtempSync(join(tmpdir(), 'futryn-themes-cli-'));
   cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
   expect((await cli(dir, ['themes', 'set', 'dark'])).code).toBe(0);
+  expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({theme: 'dark'});
   const listed = JSON.parse((await cli(dir, ['themes', 'list', '--json'])).stdout);
   expect(listed.themes.map((theme: {id: string}) => theme.id)).toEqual([
     'auto',

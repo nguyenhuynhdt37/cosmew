@@ -1,8 +1,8 @@
-import {type Message, type ModelPort, type PlanState, type Selection, type Usage} from '@cosmew/contracts';
+import {FutrynError, type Message, type ModelPort, type PlanState, type Selection, type Usage} from '@cosmew/contracts';
 import {extractiveSummary} from './compaction';
 import {assembleHandoff, SUMMARY_PREFIX, summarizeWithModel} from './model-compaction';
 
-/** Summarize exactly the checkpoint suffix. Pure until the host commits a fork after cancellation checks. */
+/** Summarize the checkpoint suffix without context writes; the host accounts billing separately. */
 export async function summarizeCheckpointSpan(input: {
   model: ModelPort;
   selection: Selection;
@@ -17,11 +17,16 @@ export async function summarizeCheckpointSpan(input: {
   let strategy: 'model' | 'excerpt' = 'model';
   let usage: Usage | null = null;
   try {
-    const summary = await summarizeWithModel({...input, visible: input.messages});
+    const summary = await summarizeWithModel({
+      ...input,
+      visible: input.messages,
+      onUsage: reported => {
+        usage = reported;
+      },
+    });
     text = summary.text;
-    usage = summary.usage;
   } catch (error) {
-    if (input.signal?.aborted) throw error;
+    if (input.signal?.aborted || (error instanceof FutrynError && error.code === 'STORAGE')) throw error;
     strategy = 'excerpt';
     text = extractiveSummary(input.messages);
   }

@@ -227,15 +227,20 @@ test('review refresh cannot send its old request into a newly selected session',
   await c.tui.submitPrompt('First conversation.');
   const source = c.client.activeSession()!.id;
   let complete!: (report: Awaited<ReturnType<typeof c.client.refreshWorkspaceDiff>>) => void;
+  let collectionStarted!: () => void;
+  const collecting = new Promise<void>(resolve => {
+    collectionStarted = resolve;
+  });
   c.client.refreshWorkspaceDiff = () =>
     new Promise(resolve => {
       complete = resolve;
+      collectionStarted();
     });
   await c.tui.submit('/review original review request');
+  await collecting;
   const requests = c.server.requests.length;
   // Ctrl+N is history navigation now; start the new conversation the way `/clear` does while the command is pending.
   c.client.clearSessionView();
-  await Bun.sleep(100);
   complete({
     workspace: c.dir,
     gitAvailable: true,
@@ -251,12 +256,12 @@ test('review refresh cannot send its old request into a newly selected session',
     totalAdditions: 1,
     totalDeletions: 0,
   });
-  await Bun.sleep(300);
+  await c.tui.waitFor('Command cancelled: conversation changed.');
   expect(c.client.mode()).toBe('chat');
   expect(c.server.requests).toHaveLength(requests);
   expect(c.client.activeSession()).toBeNull();
   expect(c.client.listSessions().map(session => session.id)).toContain(source);
-  expect(c.tui.frame()).toContain('Review cancelled');
+  expect(c.tui.frame()).toContain('Command cancelled: conversation changed.');
 });
 
 test('Shift+Tab and /permissions cycle the Claude Code modes, bypassPermissions is launch-only, and [3] saves an allowed domain', async () => {
@@ -298,7 +303,7 @@ test('interactive CLI/TUI entry accepts the Claude Code launch flags, warns on b
   cleanup.push(() => rmSync(home, {recursive: true, force: true}));
   const run = async (args: string[]) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, COSMEW_HOME: home, FUTRYN_HOME: home},
+      env: {...process.env, COSMEW_HOME: home},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',

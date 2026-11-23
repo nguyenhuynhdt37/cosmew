@@ -38,7 +38,26 @@ test.skipIf(process.platform === 'win32')(
       await send('\r');
       await wait('manual mode on');
       await wait('Read 1 file'); // replayed history merges tool calls into one summary line
+      const typingStart = plain().length;
+      await send('native paint probe');
+      await wait('native paint probe', typingStart);
+      expect(plain().slice(typingStart)).not.toContain('Read 1 file');
+      await send('\x15'); // clear the probe before sending a real draft
+      await send('/compact');
+      const compactStart = plain().length;
+      await send('\r');
+      await wait('Running… · Esc to cancel', compactStart);
+      await wait('Context compacted', compactStart);
       expect(output).toContain('\x1b[?1000h\x1b[?1006h');
+      const selectionStart = output.length;
+      await send('\x11');
+      await wait('Text selection enabled');
+      const selectionOutput = output.slice(selectionStart);
+      expect(selectionOutput).toContain('\x1b[?1006l\x1b[?1000l');
+      expect(selectionOutput).not.toContain('\x1b[?1049l');
+      await send('\x11');
+      await wait('Mouse scrolling resumed.');
+      expect(output.slice(selectionStart)).toContain('\x1b[?1000h\x1b[?1006h');
       await send('\x1b[<64;20;10M'.repeat(10));
       await wait('Jump to bottom');
       await send('\x1b[<65;20;10M'.repeat(10));

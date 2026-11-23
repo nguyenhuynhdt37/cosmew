@@ -16,3 +16,25 @@ export {
   type SearchKeys,
   type WebSearchOptions,
 } from './web-search';
+
+export {
+  McpOAuthService,
+  McpOAuthError,
+  canonicalMcpEndpoint,
+  type McpAuthStore,
+  type McpOAuthOptions,
+  type McpOAuthStatus,
+  type McpLogoutResult,
+} from './oauth';
+export {
+  McpCatalog,
+  recommendedMcpRecipes,
+  publicMcpMetadataUrl,
+  readBoundedMcpJson,
+  MCP_NPM_NAME,
+  MCP_EXACT_VERSION,
+  OFFICIAL_MCP_REGISTRY,
+  type McpCatalogEntry,
+  type McpCatalogRecipe,
+  type McpCatalogPage,
+} from './catalog';

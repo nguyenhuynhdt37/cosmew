@@ -1,6 +1,10 @@
 import {expect, test} from 'bun:test';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {FutrynError, type Account, type SessionRecord, type Usage, type UsageQuota} from '@cosmew/contracts';
 import {parseRateLimitHeaders} from '@cosmew/models';
+import {openPrivateDatabase, SqliteConversations} from '@cosmew/persistence';
 import {FutrynClient, quotaItems, type FutrynBackendPorts, type FetchAccountLimits} from '@cosmew/sdk';
 
 const account = (providerId = 'openai'): Account => ({
@@ -132,6 +136,53 @@ test('unknown source identity and mismatched provider identity never lend quota 
     }),
   ];
   expect(client([a], records).limits()[0]?.items).toEqual([]);
+});
+
+test('SQLite quota projection reads receipts and standalone usage without opening session history', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cosmew-quota-'));
+  const db = openPrivateDatabase(dir);
+  try {
+    const a = account('xai');
+    const selection = {accountId: a.id, modelId: 'model'};
+    const store = new SqliteConversations(db);
+    const quotaUsage = (percent: number, at: string): Usage => ({
+      ...usage(quota(percent, at)),
+      breakdown: [{...usage(quota(percent, at)), ...selection, providerId: a.providerId}],
+    });
+    const receipt = session(a, a, quotaUsage(25, '2026-01-01T00:00:00Z')).turns![0]!;
+    const turn = store.create(selection);
+    store.bindWorkspace(turn, '/first');
+    store.append(turn, {role: 'user', content: 'unneeded transcript'}, 'committed', receipt);
+    const standalone = store.create(selection);
+    store.bindWorkspace(standalone, '/first');
+    store.addUsage(standalone, quotaUsage(55, '2026-01-02T00:00:00Z'));
+    const other = store.create(selection);
+    store.bindWorkspace(other, '/other');
+    store.addUsage(other, quotaUsage(95, '2026-01-03T00:00:00Z'));
+    expect(
+      store
+        .listQuotaSources('/first')
+        .map(row => row.quota?.[0]?.usedPercent)
+        .sort(),
+    ).toEqual([25, 55]);
+
+    const c = new FutrynClient({
+      settings: {read: () => ({})},
+      listAccounts: () => [a],
+      listProviders: () => [],
+      listQuotaSources: () => store.listQuotaSources('/first'),
+      listSessions: () => {
+        throw new Error('Quota must not load session summaries');
+      },
+      getSession: () => {
+        throw new Error('Quota must not load transcripts');
+      },
+    } as unknown as FutrynBackendPorts);
+    expect(c.limits()[0]?.items[0]?.usedPercent).toBe(55);
+  } finally {
+    db.close();
+    rmSync(dir, {recursive: true, force: true});
+  }
 });
 
 test('unsupported refresh stays explicit and unknown; OAuth does not imply plan allowance', async () => {

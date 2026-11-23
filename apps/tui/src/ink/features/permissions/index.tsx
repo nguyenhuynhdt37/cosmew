@@ -245,6 +245,9 @@ export function PermissionRequestDialog({
             <TextLine color={kind === 'process.execute' ? ui.color('command') : undefined}>
               {previewTarget(request.target, compact ? 1 : Math.max(1, Math.min(8, size.visibleRows)))}
             </TextLine>
+            {kind === 'process.execute' && request.action.endsWith(' (outside the working directories)') ? (
+              <TextLine color={ui.color('path')}>{request.action}</TextLine>
+            ) : null}
             {!compact ? <TextLine color={muted}>{request.reason}</TextLine> : null}
           </Box>
         )}

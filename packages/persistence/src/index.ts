@@ -179,3 +179,8 @@ export {SqliteToolOutputArchive} from './output-archive';
 export {CheckpointStore} from './checkpoint-store';
 
 export {SqliteBackgroundTaskHistory, type BackgroundTaskHistory} from './background-task-history';
+
+export {FileMcpAuthStore} from './mcp-auth';
+export {FileMcpInstallStore, type ManagedMcpInstallRecord} from './mcp-install';
+
+export {FileMcpSettings, type McpSettingsDocument, type McpSettingsRead} from './mcp-settings';

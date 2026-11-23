@@ -34,10 +34,13 @@ test('mentions at the cursor preserve the suffix; dollar suggestions use skills 
   ).toEqual(['@src/你好.ts']);
 });
 
-test('command filtering ignores Claude separator punctuation and keeps typos out', () => {
+test('command filtering ignores separator punctuation and shows typos without auto-selecting them', () => {
   expect(getCompletions(completionContext('/allowedtools', 12))[0]?.label).toBe('/permissions');
   expect(getCompletions(completionContext('/tools', 6)).some(item => item.label === '/permissions')).toBe(true);
-  expect(getCompletions(completionContext('/permssions', 11)).some(item => item.label === '/permissions')).toBe(false);
+  expect(getCompletions(completionContext('/permssions', 11))[0]).toMatchObject({
+    label: '/permissions',
+    autoSelect: false,
+  });
 });
 test('Autocomplete viewport follows selected item, clamps empty list and sanitizes paths', async () => {
   const items = getCompletions(completionContext('@', 1), [], ['a', 'b', 'c', '\u001b]52;c;evil\u0007d']);

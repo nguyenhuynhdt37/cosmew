@@ -147,6 +147,7 @@ export const DEFAULT_BINDINGS: readonly DefaultBinding[] = [
   b('Global', 'app:exit', ['ctrl+d'], 'Exit on an empty input (twice); delete the character after the cursor'),
   b('Global', 'app:toggleTodos', ['ctrl+t'], 'Show or hide the todo checklist'),
   b('Global', 'app:toggleTranscript', ['ctrl+o'], 'Detailed transcript'),
+  b('Global', 'app:toggleTextSelection', ['ctrl+q'], 'Toggle native text selection and mouse scrolling'),
   b('Global', 'history:search', ['ctrl+r'], 'Search prompt history'),
   ...VIM_COMMANDS.map(({token, keys, description}) =>
     b('Vim', `vim:${token === ' ' ? 'space' : token}`, keys, description),

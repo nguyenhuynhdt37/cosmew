@@ -12,8 +12,12 @@ import {useDialogRows} from '../../ui/dialog-layout';
 import {useDialogRefresh, useDialogSize, useDialogTask, type DialogProps} from '../picker';
 import {mcpRowText, rewindRows} from './logic';
 export * from './logic';
-/** Read-only metadata: no endpoint, environment or header values cross the snapshot. */
+import {McpManagerDialog} from '../mcp-manager';
 export function McpDialog(props: DialogProps) {
+  return <McpManagerDialog {...props} fallback={<LegacyMcpDialog {...props} />} />;
+}
+/** Read-only metadata: no endpoint, environment or header values cross the snapshot. */
+function LegacyMcpDialog(props: DialogProps) {
   const client = useFutrynClient();
   useDialogRefresh();
   const {color} = useTheme();

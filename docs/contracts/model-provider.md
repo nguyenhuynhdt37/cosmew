@@ -162,3 +162,26 @@ Reasoning deltas, usage and private provider replay continue through the existin
 ## Source-owned usage and quota (ADR 0094, contract 1.48)
 
 Adapters bind actual provider/account/model identity to flat usage breakdowns. API rate limits, subscription windows and API credits are distinct kinds. Codex primary/secondary subscription headers are parsed when returned on ordinary requests; no subscription quota endpoint is probed. Unsupported integrations remain explicit, and API list cost is not a subscription bill. Historical aggregates without source identity remain unassigned.
+
+## Request validation and tool capability (2026-11-22)
+
+[ADR 0105](../adr/0105-preserve-tools-on-request-validation-errors.md) corrects early INVALID_INPUT handling: neither generic HTTP 400 nor local schema validation proves a model lacks tools. Core preserves the original error and never downgrades catalog tool capability from that alone. The adapter supports explicitly declared 2020-12 schemas using the appropriate installed AJV dialect; it does not strip the declaration or relax invalid/async/duplicate rejection.
+
+## Large tool catalogs (contract 1.59)
+
+[ADR 0114](../adr/0114-large-mcp-tool-catalogs.md) removes the 32-descriptor ceiling
+on `ModelRequest.tools`. MCP discovery bounds, per-descriptor validation,
+context admission, and ToolDispatcher permissions still apply.
+
+## Gateway model selection (contract 1.60)
+
+[ADR 0115](../adr/0115-gateway-model-selection.md) adds the optional SDK model
+chooser before streaming validation and account storage. The validated account
+uses the discovered catalog, including the selected model's context and
+output limits when advertised.
+
+## Usage quota projection (contract 1.61)
+
+[ADR 0116](../adr/0116-usage-quota-projection.md) adds an optional SDK backend
+projection for source-owned quota. Usage shows historical percentages with an
+unknown current quota when their reset is missing or has passed.

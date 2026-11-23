@@ -33,7 +33,7 @@ export type PreparedTool = {
   /** Subagent delegation (Wave 2 S5a): child tools enforce the same dispatcher/policy invariants. */
   | {kind: 'agent'; target: string; agentType: string}
   /** A user-configured MCP tool. The target is `mcp__server__tool`. */
-  | {kind: 'mcp'; target: string}
+  | {kind: 'mcp'; target: string; identity?: string}
   | {kind: 'web-search'; target: string}
   | {kind: 'web-fetch'; url: string; authorize?: (url: string, signal?: AbortSignal) => Promise<boolean>}
   /** Resolved asynchronously before policy (LSP rename asks the server first, ADR 0043). */
@@ -44,6 +44,7 @@ export type PreparedTool = {
       file: ResolvedPath;
       command: string;
       workdir: string;
+      outsideCwd: boolean;
       label: string;
       runtime: CommandRuntime;
       runtimeId: string;
@@ -71,5 +72,5 @@ export interface ToolHandler {
   available(): boolean;
   /** Registered tools may be unavailable without becoming unknown (e.g. the closed exec gate). */
   unavailable?: ToolOutput;
-  prepare(input: unknown): PreparedTool | ToolOutput;
+  prepare(input: unknown, userSkill?: boolean): PreparedTool | ToolOutput;
 }

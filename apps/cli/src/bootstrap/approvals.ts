@@ -165,26 +165,38 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
     });
   }
   if (request.capability === 'process.execute') {
-    // The action names directory and sandbox, so a "session" answer is bound to all three.
+    const outsideCwd = request.reason === 'outside-working-directories';
+    const workdir = request.workdir ?? '.';
+    const displayDir = workdir.length > 159 ? `${workdir.slice(0, 79)}…${workdir.slice(-79)}` : workdir;
     const justification = request.justification
       ? ` Model's reason: ${request.justification}`
       : request.unsandboxed
         ? ' The model gave no reason.'
         : '';
-    // An escape from the sandbox is never answered by an Allow rule and never saved as one.
-    const rule = request.unsandboxed ? null : commandRule('Bash', request);
+    const rule = outsideCwd || request.unsandboxed ? null : commandRule('Bash', request);
+    const reason = outsideCwd
+      ? request.tool === 'write_stdin'
+        ? request.sandbox === 'sandbox off'
+          ? reasonText('stdin-unsandboxed')
+          : reasonText('stdin-sandboxed')
+        : request.unsandboxed || request.excluded
+          ? reasonText(request.unsandboxed ? 'unsandboxed-escalation' : 'excluded-command')
+          : `Runs a shell command there · ${request.sandbox ?? 'sandbox'}.`
+      : reasonText(request.reason);
     return withSubagent({
       capability: request.capability,
-      ...(kind ? {kind} : {}),
+      ...(outsideCwd ? {kind: 'command' as const, requiresApproval: true} : kind ? {kind} : {}),
       // Rules judge Codex's parsed sub-commands; an unparsed script never matches an allow rule.
       ...(request.commands !== undefined ? {ruleSegments: request.commands} : {}),
       ruleTool: 'Bash',
-      ...(request.unsandboxed ? {ignoreAllowRules: true} : {}),
-      action: request.unsandboxed
-        ? `Run WITHOUT SANDBOX in ${(request.workdir ?? '.').slice(0, 60)}`
-        : `Run in ${(request.workdir ?? '.').slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
+      ...(outsideCwd || request.unsandboxed ? {ignoreAllowRules: true} : {}),
+      action: outsideCwd
+        ? `Run in ${displayDir} (outside the working directories)`
+        : request.unsandboxed
+          ? `Run WITHOUT SANDBOX in ${workdir.slice(0, 60)}`
+          : `Run in ${workdir.slice(0, 80)} · ${request.sandbox ?? 'sandbox'}`,
       target: request.target,
-      reason: withAlwaysRule(reasonText(request.reason) + justification, rule),
+      reason: withAlwaysRule(reason + justification, rule),
       ...(request.commandSandbox ? {commandSandbox: request.commandSandbox} : {}),
       riskLevel: request.unsandboxed || request.excluded ? 'high' : 'medium',
       scopeKey: request.scopeKey,

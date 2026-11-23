@@ -84,16 +84,14 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
           target: file.relative,
         };
 
+      const outsideCwd = outsideWorkingDirectories(options, file.absolute);
       const sessions = !!runtime.writeStdin;
       const label = options.redact(`${file.relative === '.' ? '' : file.relative + ': '}${input.cmd}`).slice(0, 1024);
       const request = buildRequest(input, file.absolute, sandbox, shell!, sessions);
       request.taskSessionId = options.sessionId?.();
       // Seatbelt writable roots stay off an unsandboxed or read-only command. The cwd
       // roots include the exact external cwd for this invocation and are checked by the runtime.
-      request.cwdRoots = [
-        ...config.additionalDirectories,
-        ...(outsideWorkingDirectories(options, file.absolute) ? [file.absolute] : []),
-      ];
+      request.cwdRoots = [...config.additionalDirectories, ...(outsideCwd ? [file.absolute] : [])];
       // A sandbox denial may be retried unsandboxed only when the settings allow it and the user can still be asked.
       const canEscalate = config.enabled && !escalated && config.allowUnsandboxed;
       // The approval scope binds everything that changes authority or lifetime, not just the text.
@@ -111,6 +109,7 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
         file,
         command: input.cmd,
         workdir: input.workdir ?? '.',
+        outsideCwd,
         label,
         runtime,
         runtimeId: runtime.id,

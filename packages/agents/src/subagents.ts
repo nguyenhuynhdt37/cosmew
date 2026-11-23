@@ -143,6 +143,8 @@ export interface SubagentManagerDeps {
   onNotice?(notice: SubagentNotice): void;
   /** S5c: host-owned Git worktrees for `isolation: "worktree"`; absent means isolation is unsupported. */
   worktrees?: SubagentWorktreePort;
+  /** Read-only review instructions; integration still uses the parent's ordinary file tools. */
+  worktreeHandoff?(agentId: string): string;
   /** Override Codex's 10 s minimum `agent_wait` timeout (tests only). */
   waitMinMs?: number;
 }
@@ -683,7 +685,7 @@ export class SubagentManager implements SubagentExecutionPort {
       closeWorktree();
       const finishedAt = new Date().toISOString();
       const durationMs = Math.max(0, Date.now() - startedAt);
-      const summary = this.deps.redact([finalText.trim(), worktreeNote].filter(Boolean).join('\n\n'));
+      const summary = [worktreeNote, this.deps.redact(finalText.trim())].filter(Boolean).join('\n\n');
       task.status = 'completed';
       task.finishedAt = Date.now();
       task.currentTool = undefined;
@@ -802,9 +804,33 @@ export class SubagentManager implements SubagentExecutionPort {
     try {
       const outcome = this.deps.worktrees?.finish(agentId);
       if (!outcome) return '';
-      return outcome.changed
-        ? `Worktree kept with changes: ${outcome.worktree.path} (branch ${outcome.worktree.branch}). Review it and merge the branch or copy the changes; remove it with "git worktree remove" when done.`
-        : 'The isolated worktree had no changes and was removed.';
+      if (!outcome.changed) return 'The isolated worktree had no changes and was removed.';
+      const header = this.deps.redact(
+        `Worktree kept with changes: ${outcome.worktree.path} (branch ${outcome.worktree.branch}).`,
+      );
+      const handoff =
+        this.deps.worktreeHandoff?.(agentId) ??
+        'Review committed and uncommitted changes through normal read tools, then use approved file tools in the parent workspace. Branch merge alone does not copy uncommitted changes. Keep the worktree until integration is verified; resolve conflicts without overwriting parent edits.';
+      const redacted = this.deps.redact(handoff);
+      // Redaction of an after-image would silently change what the parent applies. Suppress the entire
+      // machine patch instead. Inspect decoded JSON too: XML-safe JSON may unicode-escape secret bytes.
+      const unsafe =
+        redacted !== handoff ||
+        handoff.split('\n').some(line => {
+          if (!line.startsWith('{"patch":')) return false;
+          try {
+            const input = JSON.parse(line) as {patch?: unknown};
+            return typeof input.patch !== 'string' || this.deps.redact(input.patch) !== input.patch;
+          } catch {
+            return true;
+          }
+        });
+      return [
+        header,
+        unsafe
+          ? 'Automatic patch suppressed because handoff content required redaction. Keep the worktree for manual review through normal approved tools; no changes were integrated. Do not reconstruct or apply a redacted patch.'
+          : redacted,
+      ].join('\n');
     } catch {
       return 'The isolated worktree could not be inspected and was left in place.';
     }
@@ -1005,7 +1031,7 @@ export class SubagentManager implements SubagentExecutionPort {
           const continues = status === 'completed' && task.inbox.length > 0 && !this.scheduler.closed;
           if (!continues && task.isolation === 'worktree') {
             const note = this.finishWorktree(task.agentId);
-            if (note) summary = [summary, note].filter(Boolean).join('\n\n');
+            if (note) summary = [note, summary].filter(Boolean).join('\n\n');
           }
           const storedUsage = this.deps.store.get?.(task.agentId)?.turns?.at(-1)?.usage;
           const finalUsage = storedUsage ?? latestUsage;

@@ -21,7 +21,7 @@ function context() {
   );
   const spawn = (args: string[], input = '', extraEnv: Record<string, string | undefined> = {}) => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), ...args], {
-      env: {...process.env, COSMEW_HOME: home, FUTRYN_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret', ...extraEnv},
+      env: {...process.env, COSMEW_HOME: home, EXEC_FIXTURE_KEY: 'exec-fixture-secret', ...extraEnv},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -106,7 +106,7 @@ test('exec validates arguments (64), stdin and missing tool account (2) without 
   cleanup.push(() => rmSync(home, {recursive: true, force: true}));
   const cli = async (args: string[], input = '') => {
     const child = Bun.spawn([process.execPath, resolve('apps/cli/src/index.ts'), 'exec', ...args], {
-      env: {...process.env, FUTRYN_HOME: home},
+      env: {...process.env, COSMEW_HOME: home},
       stdin: 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -161,7 +161,7 @@ test('exec streams valid JSONL, reads stdin -, selects account/model and saves o
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({contractVersion: '1.48', type: 'turn.completed'});
+  expect(events.at(-1)).toMatchObject({contractVersion: '1.63', type: 'turn.completed'});
   expect(events.some(e => e.type === 'toolResult' && e.result.status === 'ok')).toBe(true);
   expect(readFileSync(output, 'utf8')).toBe('FINAL [REDACTED]\n');
   expect(JSON.stringify(x.server.requests)).toContain('stdin prompt');
@@ -252,7 +252,7 @@ async function scripted(
   const result = await x.cli(
     ['exec', 'work', '--cd', x.root, '--json', '--account', 'exec-test', '--model', 'fixture-model', ...flags],
     '',
-    {FUTRYN_COMMAND_BACKEND: 'native'},
+    {COSMEW_COMMAND_BACKEND: 'native'},
   );
   const events = result.stdout
     .trim()
@@ -309,9 +309,41 @@ test.skipIf(process.platform !== 'darwin')(
     expect(bypass.results[1].code).toBe('SANDBOX_DENIED');
     expect(existsSync(outside)).toBe(false);
     expect(bypass.events.some(e => e.type === 'permission.requested')).toBe(false);
-    expect(bypass.events.at(-1)).toMatchObject({contractVersion: '1.48', type: 'turn.completed'});
+    expect(bypass.events.at(-1)).toMatchObject({contractVersion: '1.63', type: 'turn.completed'});
   },
   60_000,
+);
+
+test.skipIf(process.platform !== 'darwin')(
+  'exec bypass with sandbox off permits external cwd, while ask and deny rules still prevent execution without a TTY',
+  async () => {
+    const x = context();
+    await x.configure();
+    const outside = mkdtempSync(join(tmpdir(), 'cosmew-bypass-cwd-'));
+    cleanup.push(() => rmSync(outside, {recursive: true, force: true}));
+    const proof = join(outside, 'proof.txt');
+    const call = {name: 'exec_command', input: {cmd: 'printf approved > proof.txt', workdir: outside}};
+    const normal = await scripted(x, [call], []);
+    expect(normal.results[0].status).toBe('denied');
+    expect(existsSync(proof)).toBe(false);
+    const bypass = await scripted(x, [call], ['--dangerously-skip-permissions']);
+    expect(bypass.code).toBe(0);
+    expect(bypass.results[0].status).toBe('ok');
+    expect(readFileSync(proof, 'utf8')).toBe('approved');
+    expect(bypass.events.some(event => event.type === 'permission.requested')).toBe(false);
+    rmSync(proof);
+    writeFileSync(
+      join(x.home, 'settings.json'),
+      JSON.stringify({permissions: {ask: ['Bash(printf:*)']}, sandbox: {enabled: false}}),
+    );
+    const asked = await scripted(x, [call], ['--dangerously-skip-permissions']);
+    expect(asked.results[0].status).toBe('denied');
+    expect(existsSync(proof)).toBe(false);
+    const denied = await scripted(x, [call], ['--dangerously-skip-permissions', '--disallowedTools', 'Bash(printf:*)']);
+    expect(denied.results[0].status).toBe('denied');
+    expect(existsSync(proof)).toBe(false);
+  },
+  30000,
 );
 
 test.skipIf(process.platform !== 'darwin')(

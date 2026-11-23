@@ -109,12 +109,16 @@ test('image media and nested AGENTS.md survive a restart; nested instructions lo
   // A second read in the same directory does not repeat the nested instructions.
   first.server.set({
     script: view =>
-      view.results.some(r => r.input.path === 'pkg/sub/x.ts' && r.content.includes('again'))
+      view.results.some(r => r.input.path === 'pkg/sub/x.ts' && r.input.offset === 1)
         ? {text: 'OK'}
         : {calls: [{name: 'read', input: {path: 'pkg/sub/x.ts', offset: 1}}]},
   });
   await first.tui.submitPrompt('again');
-  const again = first.tui.getTranscript().at(-1)!.toolResults!.at(-1)!;
+  const secondTurn = first.tui.getTranscript().at(-1)!;
+  expect(secondTurn.content).toBe('OK');
+  expect(secondTurn.toolCalls).toHaveLength(1);
+  expect(secondTurn.toolCalls![0]!.input).toMatchObject({path: 'pkg/sub/x.ts', offset: 1});
+  const again = secondTurn.toolResults!.at(-1)!;
   expect(again.content).not.toContain('NESTED-PKG-RULE');
   // The next turn's project context carries the nested source.
   expect(bodyText(first.server.requests.at(-1)!.body)).toContain('NESTED-PKG-RULE');

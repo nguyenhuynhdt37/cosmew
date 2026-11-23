@@ -1,6 +1,27 @@
 # Feature parity theo capability
 
-Đây là backlog mục tiêu; mọi hàng **Not implemented**. Nguồn tham khảo mô tả công khai, không chứng minh Cosmew tương đương.
+## Trạng thái mã nguồn hiện tại — 2026-11-23
+
+Đây là kiểm kê implementation, không phải chứng nhận tương thích toàn bộ provider/OS hay Product MVP complete. Các bảng P0–P9 cũ ở cuối trang là lịch sử thiết kế.
+
+| Capability | Trạng thái hiện tại | Giới hạn / bằng chứng |
+|---|---|---|
+| Agent headless và file/shell tools | Có CLI, SDK, dispatcher, stdin/JSONL, shell/PTY/background | [Hợp đồng](../contracts/agent-events.md), [test strategy](../delivery/test-strategy.md); mọi tool vẫn qua policy/approval/audit |
+| Provider abstraction | Có adapters/protocols, provider tùy chỉnh, API/OAuth | [Providers/auth](../subsystems/providers-and-auth.md); xác minh live theo từng model/endpoint, không chạy CLI agent bên ngoài |
+| Streaming/TUI | Có Ink fullscreen, queue/steer, hủy, search, transcript windowing | [Performance](../delivery/tui-v4/performance-transcript.md); cần kiểm tra lại tải dài và PTY sau các sửa mới |
+| Session/context/recovery | Có resume theo workspace, compaction, checkpoints, rewind, rename/export | [Stability delivery](../delivery/product-stability-fixes-2026-11-22.md); export hiện là plain text, không phải mọi định dạng |
+| Git/LSP/worktrees | Có diff, search, LSP/rename, isolated agents và handoff qua patch | [ADR 0097](../adr/0097-worktree-review-handoff.md); binary/symlink/oversized có đường review thủ công |
+| MCP | Có stdio/HTTP, manager, reconnect, OAuth/bearer, discovery và managed npm install | [ADR 0102](../adr/0102-mcp-manager.md); model tool_search/resources/prompts còn backlog |
+| Skills và memory | Có discovery/visibility, memory CRUD/index/citations/recovery | Auto memory extraction chưa có; settings trust và quyền ghi vẫn áp dụng |
+| Hooks/plugins | Chưa có executor hooks hoặc general plugin host | Snapshot/status không chứng minh thực thi hook |
+| Subagents/background/sandbox | Có agents, budget, cancel, background tasks và sandbox tùy chọn | macOS có native tests; Linux bubblewrap/network và Windows cần acceptance riêng |
+| IDE/ACP, web/desktop product, marketplace | Backlog | LSP đã có không đồng nghĩa IDE bridge hoặc giao diện web/desktop đã có |
+
+Ưu tiên lỗi và tính năng được theo dõi trong [audit hiện tại](../delivery/next-priorities-2026-11-22.md). Đọc báo cáo kiểm thử mới nhất trước khi dùng các số liệu acceptance cũ.
+
+## Lịch sử backlog Phase 0
+
+Bảng dưới đây ghi backlog mục tiêu tại Phase 0; nhãn **Not implemented** là trạng thái lịch sử, được thay thế bởi kiểm kê hiện tại ở trên. Nguồn tham khảo mô tả công khai, không chứng minh Cosmew tương đương.
 
 | Capability | Cảm hứng | Đích Cosmew | Acceptance / phase |
 |---|---|---|---|

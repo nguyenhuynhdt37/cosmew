@@ -1,4 +1,5 @@
 import Ajv, {type ValidateFunction} from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
 
 /** Remote schemas are untrusted. Bound compilation and refuse expensive/recursive features. */
 export function mcpValidator(schema: Record<string, unknown>): ValidateFunction | undefined {
@@ -36,19 +37,35 @@ export function mcpValidator(schema: Record<string, unknown>): ValidateFunction 
         if (['properties', 'definitions', '$defs', 'dependentSchemas', 'dependencies'].includes(key)) {
           if (item && typeof item === 'object' && !Array.isArray(item))
             for (const child of Object.values(item)) checkSchema(child);
-        } else if (['allOf', 'anyOf', 'oneOf', 'items'].includes(key) && Array.isArray(item)) {
+        } else if (['allOf', 'anyOf', 'oneOf', 'items', 'prefixItems'].includes(key) && Array.isArray(item)) {
           for (const child of item) checkSchema(child);
         } else if (
-          ['items', 'additionalItems', 'additionalProperties', 'propertyNames', 'not', 'if', 'then', 'else'].includes(
-            key,
-          )
+          [
+            'items',
+            'additionalItems',
+            'additionalProperties',
+            'unevaluatedItems',
+            'unevaluatedProperties',
+            'propertyNames',
+            'contentSchema',
+            'not',
+            'if',
+            'then',
+            'else',
+          ].includes(key)
         ) {
           checkSchema(item);
         }
       }
     };
     checkSchema(schema);
-    const ajv = new Ajv({
+    // Preserve dialect semantics: never strip $schema to compile newer schemas as draft-07.
+    const Validator =
+      schema.$schema === 'https://json-schema.org/draft/2020-12/schema' ||
+      schema.$schema === 'https://json-schema.org/draft/2020-12/schema#'
+        ? Ajv2020
+        : Ajv;
+    const ajv = new Validator({
       strict: true,
       allErrors: false,
       coerceTypes: false,

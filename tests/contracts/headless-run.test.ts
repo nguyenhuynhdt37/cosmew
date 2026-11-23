@@ -13,10 +13,11 @@ afterEach(async () => {
 });
 
 /** Provider wire fixture through the existing fetch port; no socket or OS execution claim. */
-async function setup() {
+async function setup(allow?: string[]) {
   const root = mkdtempSync(join(tmpdir(), 'fyn-headless-run-'));
   let failure = false;
   let tool = 'read';
+  let toolInput: Record<string, unknown> | undefined;
   const views: ScriptedView[] = [];
   const fetchFixture = (async (input, init) => {
     const request = new Request(input, init);
@@ -35,7 +36,9 @@ async function setup() {
             type: 'function',
             function: {
               name: tool,
-              arguments: JSON.stringify(tool === 'read' ? {path: 'in.txt'} : {url: 'https://example.com'}),
+              arguments: JSON.stringify(
+                toolInput ?? (tool === 'read' ? {path: 'in.txt'} : {url: 'https://example.com'}),
+              ),
             },
           },
         ];
@@ -70,7 +73,36 @@ async function setup() {
       headers: {'content-type': 'text/event-stream'},
     });
   }) as typeof fetch;
-  const app = startup(join(root, 'state'), {vault: memoryVault(), fetch: fetchFixture});
+  const app = startup(join(root, 'state'), {
+    vault: memoryVault(),
+    fetch: fetchFixture,
+    ...(allow
+      ? {
+          permissions: {allow},
+          commands: () => ({
+            id: 'headless-command-fixture',
+            label: 'headless fixture',
+            availability: () => ({ok: true}),
+            capabilities: () => ({
+              modes: ['danger-full-access'],
+              network: true,
+              tty: false,
+              unsandboxed: true,
+              shells: ['bash'],
+              tools: [],
+            }),
+            run: async () => ({
+              kind: 'exited',
+              exitCode: 0,
+              signal: null,
+              output: 'fixture command ran',
+              omittedBytes: 0,
+              durationMs: 1,
+            }),
+          }),
+        }
+      : {}),
+  });
   cleanup.push(async () => {
     await app.shutdownCommands();
     app.db.close();
@@ -97,9 +129,10 @@ async function setup() {
     app,
     root,
     views,
-    set: (options: {failure?: boolean; tool?: string}) => {
+    set: (options: {failure?: boolean; tool?: string; toolInput?: Record<string, unknown>}) => {
       failure = options.failure ?? failure;
       tool = options.tool ?? tool;
+      toolInput = options.toolInput;
     },
   };
 }
@@ -129,7 +162,7 @@ test('headless runner uses real dispatcher, JSONL order and final response outpu
     .split('\n')
     .map(line => JSON.parse(line));
   expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i + 1));
-  expect(events.every(e => e.contractVersion === '1.48')).toBe(true);
+  expect(events.every(e => e.contractVersion === '1.63')).toBe(true);
   expect(events.some(e => e.type === 'toolResult' && e.result.content.includes('real file'))).toBe(true);
   expect(events.at(-1).type).toBe('turn.completed');
   expect(readFileSync(join(x.root, 'last.txt'), 'utf8')).toBe('FINAL [REDACTED]\n');
@@ -159,6 +192,28 @@ for (const mode of ['default', 'acceptEdits', 'plan'] as const) {
     expect(events.some(e => e.type === 'permission.requested')).toBe(false);
   });
 }
+
+test('headless Bash allow rules cannot authorize an external cwd without a TTY', async () => {
+  const x = await setup(['Bash(printf:*)']);
+  x.set({tool: 'exec_command', toolInput: {cmd: 'printf fixture', workdir: '..'}});
+  const lines: string[] = [];
+  const output = spyOn(process.stdout, 'write').mockImplementation(value => {
+    lines.push(String(value));
+    return true;
+  });
+  try {
+    const status = await runExec(x.app, {
+      prompt: 'Run fixture command',
+      workspace: x.root,
+      json: true,
+    });
+    if (status !== 0) throw new Error(lines.join(''));
+  } finally {
+    output.mockRestore();
+  }
+  expect(x.views.at(-1)!.results[0]!.content).toMatch(/denied/i);
+  expect(lines.join('')).not.toContain('"type":"permission.requested"');
+});
 
 test('provider errors and cancellation return exit 1 with safe terminal JSONL', async () => {
   const x = await setup();

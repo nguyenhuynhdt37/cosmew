@@ -1,14 +1,30 @@
 /** @jsxImportSource react */
 import {useEffect, useRef, useState} from 'react';
-import {providerSchema, modelIdSchema, type Provider, type ProviderAuthChallenge} from '@cosmew/contracts';
+import {
+  FutrynError,
+  isCodingModel,
+  providerSchema,
+  modelIdSchema,
+  type Provider,
+  type ProviderAuthChallenge,
+} from '@cosmew/contracts';
+import type {QuickConnectProviderInput} from '@cosmew/sdk';
 import {useFutrynClient, useTextInput} from '../../hooks';
 import {useOverlay} from '../../core';
 import {TextLine} from '../../ui';
 import {Dialog, PickerDialog, TextEntry, useDialogRefresh, useDialogTask, type DialogProps} from '../picker';
-import {ModelsDialog} from '../models';
-import {connectionChoices, describeProviderError, ENV_NAME, PROVIDER_ID, parseHeaderDraft} from './logic';
+import {ModelsDialog, modelLimitsLabel} from '../models';
+import {
+  connectionChoices,
+  describeProviderError,
+  ENV_NAME,
+  PROVIDER_ID,
+  isValidCustomBaseURL,
+  maskQuickProviderDraft,
+  parseHeaderDraft,
+} from './logic';
 import {createInitialConnectProviderState, type ConnectProviderState, type ConnectStep} from './types';
-export {connectionChoices, describeProviderError, parseHeaderDraft} from './logic';
+export {connectionChoices, describeProviderError, maskQuickProviderDraft, parseHeaderDraft} from './logic';
 export interface ConnectDialogProps extends DialogProps {
   initialStep?: 'provider' | 'accounts';
   accountId?: string;
@@ -44,6 +60,7 @@ export function ConnectDialog({
     query: initialQuery,
   }));
   const challengeRef = useRef<ProviderAuthChallenge | null>(null);
+  const chooseQuickModel = useRef<((id: string) => void) | null>(null);
   const live = useRef(true);
   useEffect(() => {
     live.current = true;
@@ -159,17 +176,68 @@ export function ConnectDialog({
         }
       }
     });
+  const runQuickConnect = async (input: QuickConnectProviderInput, signal: AbortSignal) => {
+    const savedUrl = input.baseURL ?? input.raw?.split('|')[0]?.trim();
+    next('busy', {
+      statusMessage: 'Loading models… Esc cancels.',
+      quickUrl: savedUrl,
+    });
+    try {
+      await client.quickConnectProvider(
+        {
+          ...input,
+          chooseModel: discovered =>
+            new Promise<string>((resolve, reject) => {
+              if (signal.aborted) return reject(new FutrynError('CANCELLED'));
+              const abort = () => {
+                chooseQuickModel.current = null;
+                reject(new FutrynError('CANCELLED'));
+              };
+              signal.addEventListener('abort', abort, {once: true});
+              chooseQuickModel.current = id => {
+                signal.removeEventListener('abort', abort);
+                chooseQuickModel.current = null;
+                next('busy', {statusMessage: `Testing ${id}… Esc cancels.`, quickModels: undefined});
+                resolve(id);
+              };
+              const entries = discovered.filter(model => isCodingModel(model));
+              next(entries.length ? 'custom-models' : 'custom-model', {
+                quickModels: entries,
+                statusMessage: entries.length ? undefined : 'Enter the model ID from your gateway.',
+              });
+            }),
+        },
+        signal,
+      );
+      if (signal.aborted || !live.current) return;
+      if (onOnboardingDone) onOnboardingDone();
+      else {
+        onChanged?.();
+        router.close();
+      }
+    } catch (error) {
+      if (signal.aborted || !live.current) return;
+      const retryKey = error instanceof FutrynError && ['AUTH', 'FORBIDDEN'].includes(error.code);
+      next(retryKey && savedUrl ? 'custom-key' : 'custom-quick', {
+        quickUrl: savedUrl,
+        quickModels: undefined,
+        statusMessage: describeProviderError(client, error, undefined),
+      });
+    }
+  };
   useTextInput((input, key) => {
     if (key.eventType === 'release') return;
     if (key.ctrl && input === 'a' && !task.busy && (state.step === 'provider' || state.step === 'accounts'))
       next(state.step === 'provider' ? 'accounts' : 'provider', {accountId: undefined, providerId: undefined});
+    if (key.tab && !task.busy && state.step === 'custom-quick')
+      next('custom-id', {custom: {}, accountId: undefined, quickUrl: undefined});
   });
   const activate = (id: string) =>
     execute(async signal => {
       const st = state;
       if (st.step === 'provider') {
         if (id === '__skip-onboarding' && onOnboardingDone) onOnboardingDone();
-        else if (id === '__custom') next('custom-id', {custom: {}, accountId: undefined});
+        else if (id === '__custom') next('custom-quick', {custom: {}, accountId: undefined, quickUrl: undefined});
         else
           next('method', {
             providerId: id,
@@ -300,6 +368,29 @@ export function ConnectDialog({
           return;
         }
         await authenticate(st, value, signal);
+      } else if (st.step === 'custom-quick') {
+        const trimmed = value.trim();
+        if (trimmed.includes('|')) {
+          const parts = trimmed.split('|');
+          if (parts.length > 3 || !isValidCustomBaseURL(parts[0] ?? '')) {
+            task.setMessage('Expected "https://host/v1 | api-key | model (optional)".');
+            return;
+          }
+          const modelPart = parts[2]?.trim();
+          if (modelPart && !modelIdSchema.safeParse(modelPart).success) {
+            task.setMessage('Invalid model ID in third segment.');
+            return;
+          }
+          await runQuickConnect({raw: trimmed}, signal);
+        } else {
+          if (!isValidCustomBaseURL(trimmed)) {
+            task.setMessage('Use an HTTPS (or localhost HTTP) base URL without credentials, query or fragment.');
+            return;
+          }
+          next('custom-key', {quickUrl: trimmed.replace(/\/$/, '')});
+        }
+      } else if (st.step === 'custom-key') {
+        await runQuickConnect({baseURL: st.quickUrl!, apiKey: value.trim() || undefined}, signal);
       } else if (st.step === 'custom-id') {
         if (!PROVIDER_ID.test(value)) {
           task.setMessage('Use letters, numbers, dots or dashes.');
@@ -355,6 +446,9 @@ export function ConnectDialog({
   );
   if (onOnboardingDone && state.step === 'provider') choices.unshift({id: '__skip-onboarding', label: 'Skip for now'});
   const labels: Partial<Record<ConnectStep, string>> = {
+    'custom-quick': 'Base URL',
+    'custom-key': 'API key (hidden)',
+    'custom-model': 'Model ID',
     'custom-id': 'Custom provider ID',
     url: 'Base URL',
     secret: 'API key · hidden · OS keyring',
@@ -363,6 +457,11 @@ export function ConnectDialog({
     manual: 'Manual model ID',
     headers: 'Headers · Name=Value; Name=$ENV_VAR (empty to skip)',
     rename: 'Account alias',
+  };
+  const stepTitles: Partial<Record<ConnectStep, string>> = {
+    'custom-quick': 'Connect a gateway',
+    'custom-key': 'Connect a gateway',
+    'custom-model': 'Enter a model ID',
   };
   const message = task.message || state.statusMessage;
   const challenge = state.authChallenge;
@@ -374,7 +473,13 @@ export function ConnectDialog({
           {challenge.userCode ? <TextLine>{`Code: ${challenge.userCode}`}</TextLine> : null}
         </>
       ) : null}
-      <TextLine>Ctrl+A providers / accounts · Esc cancels sign-in</TextLine>
+      {state.step === 'custom-quick' ? (
+        <TextLine>Example https://gateway.example/v1 · Tab for advanced · Esc cancels</TextLine>
+      ) : state.step === 'custom-key' ? (
+        <TextLine>Enter without a key for public or local gateways · Esc cancels</TextLine>
+      ) : state.step === 'custom-model' || state.step === 'busy' ? null : (
+        <TextLine>Ctrl+A providers / accounts · Esc cancels sign-in</TextLine>
+      )}
       {state.step === 'confirm' ? (
         <TextLine>
           {state.pendingAction === 'switch'
@@ -384,6 +489,28 @@ export function ConnectDialog({
       ) : null}
     </>
   );
+  if (state.step === 'custom-models')
+    return (
+      <PickerDialog
+        title="Choose a model"
+        {...props}
+        filterable
+        showSearch
+        placeholder="Search model name or ID"
+        items={[
+          ...(state.quickModels ?? []).map(model => ({
+            id: model.id,
+            label: [model.id, modelLimitsLabel(model, true)].filter(Boolean).join(' · '),
+            keywords: `${model.id} ${model.name}`,
+          })),
+          {id: '!manual', label: 'Enter a model ID'},
+        ]}
+        onSelect={item => {
+          if (item.id === '!manual') next('custom-model');
+          else chooseQuickModel.current?.(item.id);
+        }}
+      />
+    );
   if (state.step === 'busy')
     return (
       <Dialog title="Connecting" {...props} message={message}>
@@ -406,16 +533,25 @@ export function ConnectDialog({
       </PickerDialog>
     );
   return (
-    <Dialog title={`Connect · ${state.step}`} {...props} message={message}>
+    <Dialog title={stepTitles[state.step] ?? `Connect · ${state.step}`} {...props} message={message}>
       {info}
       <TextEntry
         key={state.step}
         label={labels[state.step] ?? state.step}
-        initialValue={state.step === 'env' ? state.draft : ''}
-        hidden={['secret', 'oauth', 'headers'].includes(state.step)}
-        maxLength={state.step === 'secret' ? 8192 : 2048}
-        allowEmpty={state.step === 'headers'}
-        onSubmit={submit}
+        initialValue={state.step === 'custom-quick' ? (state.quickUrl ?? '') : state.step === 'env' ? state.draft : ''}
+        hidden={['secret', 'oauth', 'headers', 'custom-key'].includes(state.step)}
+        mask={state.step === 'custom-quick' ? maskQuickProviderDraft : undefined}
+        maxLength={['secret', 'custom-quick', 'custom-key'].includes(state.step) ? 8192 : 2048}
+        allowEmpty={['headers', 'custom-key'].includes(state.step)}
+        onSubmit={
+          state.step === 'custom-model'
+            ? value => {
+                const model = modelIdSchema.safeParse(value.trim());
+                if (model.success) chooseQuickModel.current?.(model.data);
+                else task.setMessage('Enter a valid model ID.');
+              }
+            : submit
+        }
       />
     </Dialog>
   );

@@ -39,7 +39,7 @@ Explicit --cd grants folder consent. Like \`claude -p\`, there is no one to ask 
 prompt is denied (file edits in default mode, commands outside the sandbox, new network domains). --allowedTools /
 --disallowedTools take comma or space separated rules such as "Bash(npm test:*) Edit". --dangerously-skip-permissions
 (bypassPermissions) approves everything without asking; the OS sandbox and deny rules still apply. Settings come from
-~/.cosmew/settings.json and the project's .cosmew/settings.json / settings.local.json (legacy .futryn/.hannes roots are read); repository settings that loosen
+~/.cosmew/settings.json and the project's .cosmew/settings.json / settings.local.json; repository settings that loosen
 anything are ignored here unless approved earlier in the TUI.
 Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 3 provider billing, 64 invalid arguments.
 `;

@@ -1,17 +1,19 @@
 import type {TurnReceipt, Usage, UsageBreakdown} from '@cosmew/contracts';
 
 /** Source totals are a partition of usage, never additions to receipt totals. */
-export function summarizeUsage(receipts: TurnReceipt[], historicalTurns: number) {
+export function summarizeUsage(receipts: TurnReceipt[], historicalTurns: number, additionalUsage?: Usage) {
   const turns = receipts.filter(turn => turn.kind !== 'user-shell');
   const sum = (values: (number | null | undefined)[]): number | null => {
     const known = values.filter((n): n is number => typeof n === 'number');
     return known.length ? known.reduce((a, b) => a + b, 0) : null;
   };
-  const known = (field: keyof Usage) => sum(turns.map(t => t.usage?.[field] as number | null | undefined));
-  const sources = turns.flatMap((turn, turnIndex) =>
-    (turn.usage?.breakdown?.length ? turn.usage.breakdown : turn.usage ? [unknownSource(turn.usage)] : []).map(
-      source => ({source, turnIndex}),
-    ),
+  const usages = [...turns.map(t => t.usage), ...(additionalUsage ? [additionalUsage] : [])];
+  const known = (field: keyof Usage) => sum(usages.map(usage => usage?.[field] as number | null | undefined));
+  const sources = usages.flatMap((usage, index) =>
+    (usage?.breakdown?.length ? usage.breakdown : usage ? [unknownSource(usage)] : []).map(source => ({
+      source,
+      turnIndex: index < turns.length ? index : null,
+    })),
   );
   const group = <K extends 'providerId' | 'accountId' | 'modelId' | 'agentId' | 'sessionId'>(fields: K[]) => {
     const groups = new Map<string, typeof sources>();
@@ -28,7 +30,7 @@ export function summarizeUsage(receipts: TurnReceipt[], historicalTurns: number)
       >;
       return {
         ...identity,
-        turns: new Set(entries.map(entry => entry.turnIndex)).size,
+        turns: new Set(entries.filter(entry => entry.turnIndex !== null).map(entry => entry.turnIndex)).size,
         sources: entries.length,
         inputTokens: sum(entries.map(entry => entry.source.inputTokens)),
         outputTokens: sum(entries.map(entry => entry.source.outputTokens)),
@@ -57,14 +59,14 @@ export function summarizeUsage(receipts: TurnReceipt[], historicalTurns: number)
     outputTokens: known('outputTokens'),
     costUSD: known('costUSD'),
     premiumRequests: known('premiumRequests'),
-    estimatedCost: turns.some(t => t.usage?.costEstimated),
+    estimatedCost: usages.some(usage => usage?.costEstimated),
     estimatedCostUSD: sum(
       sources.filter(entry => entry.source.costEstimated === true).map(entry => entry.source.costUSD),
     ),
     reportedCostUSD: sum(
       sources.filter(entry => entry.source.costEstimated !== true).map(entry => entry.source.costUSD),
     ),
-    breakdownTruncated: turns.some(turn => turn.usage?.breakdownTruncated),
+    breakdownTruncated: usages.some(usage => usage?.breakdownTruncated),
     unknownCostSources: sources.filter(entry => entry.source.costUSD == null).length,
     unknownSourceTurns: turns.filter(
       turn =>

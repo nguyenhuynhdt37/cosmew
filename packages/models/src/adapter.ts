@@ -4,6 +4,7 @@ import {createAnthropic} from '@ai-sdk/anthropic';
 import {createGoogle} from '@ai-sdk/google';
 import {createOpenAICompatible} from '@ai-sdk/openai-compatible';
 import Ajv, {type ValidateFunction} from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
 import {parseRateLimitHeaders} from './limits';
 import {resolveThinkingWire} from './effort-wire';
 import {
@@ -169,7 +170,18 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
   flush();
   return out;
 }
-import {normalizeError, ProviderTransport, wait} from './http';
+import {isEncryptedHistoryError, normalizeError, ProviderTransport, wait} from './http';
+
+export function stripProviderReplay(request: ModelRequest): ModelRequest {
+  return {
+    ...request,
+    messages: request.messages.map(m => {
+      if (!m.providerReplay) return m;
+      const {providerReplay: _providerReplay, ...rest} = m;
+      return rest;
+    }),
+  };
+}
 
 type ChatUsageConverter = NonNullable<Parameters<typeof createOpenAICompatible>[0]['convertUsage']>;
 /** Provider usage fields are user supplied JSON. Invalid/negative counters are unknown, never zero. */
@@ -480,10 +492,24 @@ export class ProviderAdapter implements ModelPort {
       validateFormats: true,
       logger: false,
     });
+    let ajv2020: Ajv2020 | undefined;
     for (const descriptor of request.tools) {
       let validate: ValidateFunction;
       try {
-        validate = ajv.compile(descriptor.inputSchema);
+        const dialect = descriptor.inputSchema.$schema;
+        const validator =
+          dialect === 'https://json-schema.org/draft/2020-12/schema' ||
+          dialect === 'https://json-schema.org/draft/2020-12/schema#'
+            ? (ajv2020 ??= new Ajv2020({
+                strict: true,
+                coerceTypes: false,
+                removeAdditional: false,
+                useDefaults: false,
+                validateFormats: true,
+                logger: false,
+              }))
+            : ajv;
+        validate = validator.compile(descriptor.inputSchema);
         if (('$async' in validate && validate.$async) || names.has(descriptor.name)) throw new Error();
       } catch {
         throw new FutrynError('INVALID_INPUT');
@@ -588,6 +614,29 @@ export class ProviderAdapter implements ModelPort {
   }
 
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
+    const hasReplay = request.messages.some(m => m.providerReplay);
+    let started = false;
+    let observedOutput = false;
+    try {
+      for await (const event of this.doStream(request, signal)) {
+        if (event.type === 'started') started = true;
+        else observedOutput = true;
+        yield event;
+      }
+    } catch (e) {
+      // A streamed tool may already have executed in core. Retrying here after
+      // observable output would duplicate work without the loop's discard protocol.
+      if (hasReplay && !observedOutput && !signal?.aborted && isEncryptedHistoryError(e)) {
+        for await (const event of this.doStream(stripProviderReplay(request), signal, started)) {
+          yield event;
+        }
+        return;
+      }
+      throw e;
+    }
+  }
+
+  private async *doStream(request: ModelRequest, signal?: AbortSignal, skipStarted = false): AsyncIterable<ModelEvent> {
     const options = await this.options(request, signal);
     let complete = false;
     const calls = new Set<string>();
@@ -597,7 +646,7 @@ export class ProviderAdapter implements ModelPort {
     // calls are emitted at once so the agent loop can dispatch them while the response still streams.
     const held: ToolCall[] = [];
     try {
-      yield {type: 'started', requestId: request.requestId};
+      if (!skipStarted) yield {type: 'started', requestId: request.requestId};
       const result = streamText({...options, onError: () => {}, onChunk: () => {}});
       for await (const part of result.fullStream) {
         options.abortSignal.throwIfAborted();
@@ -649,7 +698,26 @@ export class ProviderAdapter implements ModelPort {
       options.controller.abort();
     }
   }
+
   async generate(
+    request: ModelRequest,
+    signal?: AbortSignal,
+  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {
+    const hasReplay = request.messages.some(m => m.providerReplay);
+    // OAuth Responses generation delegates to stream(), which owns its one retry.
+    const streamOwnsRecovery =
+      this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses';
+    try {
+      return await this.doGenerate(request, signal);
+    } catch (e) {
+      if (hasReplay && !streamOwnsRecovery && !signal?.aborted && isEncryptedHistoryError(e)) {
+        return await this.doGenerate(stripProviderReplay(request), signal);
+      }
+      throw e;
+    }
+  }
+
+  private async doGenerate(
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {

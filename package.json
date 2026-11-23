@@ -21,14 +21,18 @@
   "scripts": {
     "cosmew": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts",
     "tui": "bun --config=/dev/null --no-env-file apps/cli/src/index.ts tui",
-    "test": "bun test tests",
+    "test": "bun scripts/test.ts all",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && prettier --check \"**/*.{ts,tsx,js}\" && git diff --check",
-    "test:integration": "bun test tests/contracts/provider-adapters.test.ts tests/security",
-    "test:e2e": "bun test tests/end-to-end",
+    "test:integration": "bun scripts/test.ts integration",
+    "test:e2e": "bun scripts/test.ts e2e",
     "link:cli": "bun link --cwd apps/cli",
     "format": "prettier --write \"**/*.{ts,tsx,js}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,js}\""
+    "format:check": "prettier --check \"**/*.{ts,tsx,js}\"",
+    "quality": "bun run typecheck && bun run lint && bun run test",
+    "test:native": "bun scripts/test.ts native",
+    "test:pty": "bun scripts/test.ts pty",
+    "test:live": "bun scripts/test.ts live"
   },
   "devDependencies": {
     "@cosmew/agents": "workspace:*",

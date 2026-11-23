@@ -218,22 +218,26 @@ test('file suggestions stay gated before consent, replace only mention, and keep
   expect(controller.draft.cursor).toBe('read @src/main.ts '.length);
 });
 test('skill slash and dollar completion come from the public SDK catalog', async () => {
+  let catalogReads = 0;
   const fixture = createClientFixture({
-    skills: () => ({
-      skills: [
-        {
-          name: 'reviewer',
-          description: 'Review changes',
-          source: 'user',
-          path: '/skills/reviewer/SKILL.md',
-          shortPath: 'reviewer',
-          directory: '/skills/reviewer',
-          disableModelInvocation: false,
-        },
-      ],
-      errors: [],
-      warnings: [],
-    }),
+    skills: () => {
+      catalogReads++;
+      return {
+        skills: [
+          {
+            name: 'reviewer',
+            description: 'Review changes',
+            source: 'user',
+            path: '/skills/reviewer/SKILL.md',
+            shortPath: 'reviewer',
+            directory: '/skills/reviewer',
+            disableModelInvocation: false,
+          },
+        ],
+        errors: [],
+        warnings: [],
+      };
+    },
   });
   fixture.client.setToolsEnabled(true);
   const sent: string[] = [];
@@ -246,7 +250,9 @@ test('skill slash and dollar completion come from the public SDK catalog', async
     {fixture},
   );
   await settle();
-  await key(view, '$rev');
+  await key(view, '$re');
+  await key(view, 'v');
+  expect(catalogReads).toBe(1);
   await key(view, '\t');
   expect(controller.content).toBe('$reviewer ');
   await key(view, '\r');
@@ -528,7 +534,7 @@ test('skill completion preserves the full pasted argument beyond the cursor', as
   controller.setDraft({...controller.draft, cursor: 5});
   await settle();
   await key(view, '\r');
-  expect(sent).toEqual(['/deployer  a\nb\nc\nd\ne']);
+  expect(sent).toEqual(['/deployer a\nb\nc\nd\ne']);
 });
 
 test('a host-rendered shell success has no duplicate footer or persistent status notice', async () => {

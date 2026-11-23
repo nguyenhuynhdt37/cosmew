@@ -1,20 +1,28 @@
 import {expect, test} from 'bun:test';
 import {mkdtempSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {isAbsolute, join, relative, sep} from 'node:path';
 import {FutrynError, type ModelEvent, type SubagentNotice} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 
-/** Explicit opt-in: this test uses the saved account through Cosmew's real provider transport and may bill it. */
+/** Explicit opt-in: this test uses an account in disposable fixture state and may bill it. */
 const live = process.env.COSMEW_LIVE_SUBAGENTS === '1' ? test : test.skip;
 
 live(
   'real provider: background child output, parent continuation, completion and targeted stop',
   async () => {
+    const fixtureState = process.env.COSMEW_LIVE_SUBAGENTS_STATE;
+    if (!fixtureState)
+      throw new Error('Set COSMEW_LIVE_SUBAGENTS_STATE to a disposable state directory in the OS temp directory');
+    const state = realpathSync(fixtureState);
+    const fromTemp = relative(realpathSync(tmpdir()), state);
+    if (!fromTemp || isAbsolute(fromTemp) || fromTemp === '..' || fromTemp.startsWith('..' + sep)) {
+      throw new Error('COSMEW_LIVE_SUBAGENTS_STATE must resolve to a child of the OS temp directory');
+    }
     const project = realpathSync(mkdtempSync(join(tmpdir(), 'cosmew-subagent-live-')));
     writeFileSync(join(project, 'sample.txt'), 'SYNTHETIC_LIVE_SAMPLE: amber, birch, cedar.\n');
     // No fake fetch, model, vault, command runtime or subagent runner. User MCP servers are never connected.
-    const app = startup(undefined, {
+    const app = startup(state, {
       offline: true,
       skillsHome: project,
       memoriesHome: project,
@@ -57,7 +65,7 @@ live(
       const account = process.env.COSMEW_LIVE_ACCOUNT
         ? accounts.find(a => [a.id, a.alias].includes(process.env.COSMEW_LIVE_ACCOUNT!))
         : client.status().activeAccount;
-      if (!account) throw new Error('LIVE_NO_ACCOUNT: sign in with Cosmew before opting in');
+      if (!account) throw new Error('LIVE_NO_ACCOUNT: sign in to the disposable Cosmew state before opting in');
       const modelId = process.env.COSMEW_LIVE_MODEL ?? account.defaultModel;
       if (!modelId) throw new Error('LIVE_NO_MODEL: select a saved model or set COSMEW_LIVE_MODEL');
       // Session scope avoids changing the active account or the user's saved model preference.

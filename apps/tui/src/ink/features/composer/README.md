@@ -110,15 +110,20 @@ Evidence từng luồng và giới hạn tại
 
 ## TUI v4 phase C (2026-11-19)
 
-Rows 5–10: full-width shared `Rule`s, `❯`, rotating Cosmew examples, pink
-shell prompt/rules and memory prompt/rules. Prefixes remain in the underlying
-draft for dispatch; caret/selection offsets account for the display prefix.
-Advertised SDK effort renders above the top rule on the right; Shift+↑/↓ calls
-`setReasoningEffort`, retaining SDK rejection while a turn is running.
-Autocomplete uses the shared Pointer, a fixed name column (40 cells at 100
-columns, reduced at narrow widths), two cell-aware description lines with `…`,
-five visible choices, and existing Tab/Enter acceptance semantics.
-The old hint rows are gone. Composer owns one footer (mode, temporary message,
+Rows 5–10 use full-width shared `Rule`s and the `❯` prompt. Tab and Right accept
+the static startup example into the editable draft. It requires no model call.
+Advertised SDK effort renders above the top rule on the right. Shift+↑/↓ calls
+`setReasoningEffort` when available.
+Autocomplete shows command and alias prefixes, nearby typos, skills, file
+mentions and emoji. Typos and inline slash matches start without a selection.
+Tab inserts a match. Enter runs a selected leading command, inserts a selected
+inline match or sends the unchanged draft if nothing is selected. Arrows select
+a match. Esc closes the menu and keeps the draft. Hints use the current keymap.
+
+Behavior checked against the Claude Code command and interactive mode references
+on 2026-11-22. Installed Claude Code version 2.1.330. Live visual parity needs
+verification. [Commands](https://code.claude.com/docs/en/commands#how-the-command-menu-matches-what-you-type) · [Interactive mode](https://code.claude.com/docs/en/interactive-mode)
+Composer shows one contextual key hint row and a footer (mode, temporary message,
 current measured context warning, or three-column shortcuts); `StatusLine` is a
 compatibility no-op. Context/cost remain available through report dialogs.
 `?` on empty input opens shortcuts; input closes it without inserting/submitting.

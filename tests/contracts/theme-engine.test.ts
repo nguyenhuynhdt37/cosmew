@@ -199,15 +199,15 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
   });
 
   test('system mode reacts to a changed terminal/system preference', async () => {
-    const env: Record<string, string> = {FUTRYN_THEME_MODE: 'dark'};
+    const env: Record<string, string> = {COSMEW_THEME_MODE: 'dark'};
     const engine = new ThemeEngine({env});
     await engine.initialize();
     expect(engine.getEffectiveMode()).toBe('dark');
-    env.FUTRYN_THEME_MODE = 'light';
+    env.COSMEW_THEME_MODE = 'light';
     engine.refreshSystemPreference();
     expect(engine.getEffectiveMode()).toBe('light');
     await engine.setMode('dark');
-    env.FUTRYN_THEME_MODE = 'light';
+    env.COSMEW_THEME_MODE = 'light';
     engine.refreshSystemPreference();
     expect(engine.getEffectiveMode()).toBe('dark');
   });

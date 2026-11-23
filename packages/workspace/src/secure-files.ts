@@ -205,7 +205,7 @@ export class SecureFiles {
         hash: null,
         dev: null,
         ino: null,
-        mode: 0o644,
+        mode: 0o644 & ~process.umask(),
         parents: parent.parents,
         ...located,
       };

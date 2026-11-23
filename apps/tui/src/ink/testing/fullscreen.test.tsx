@@ -246,7 +246,7 @@ for (const [columns, rows, rule] of [
       expect(isRule(frame[rule]), frame.join('\n')).toBe(true);
       expect(frame[rule + 1]).toContain('❯ ');
       expect(isRule(frame[rule + 2])).toBe(true);
-      expect(frame[rule + 3]).toContain('enter send · ctrl+j new line · shift+tab permissions');
+      expect(frame[rule + 3]).toContain('tab/→ accept suggestion · ? shortcuts · shift+tab permissions');
       expect(frame.at(-1)).toContain('manual mode on');
       expect(frame.at(-1)).toBe(frame[rule + 4]);
     } finally {
@@ -495,7 +495,7 @@ test('theme auto bounds the query and startup drain for a silent terminal, then 
   light.applyTerminalBackground(undefined);
   expect(light.getEffectiveMode()).toBe('light');
   expect(new ThemeEngine({env: {}}).getEffectiveMode()).toBe('dark');
-  expect(new ThemeEngine({env: {FUTRYN_THEME_MODE: 'light'}}).getEffectiveMode()).toBe('light');
+  expect(new ThemeEngine({env: {COSMEW_THEME_MODE: 'light'}}).getEffectiveMode()).toBe('light');
 });
 
 for (const width of [80, 36])

@@ -1,10 +1,14 @@
-import type {AuthMethod, Provider, ProviderAuthChallenge} from '@cosmew/contracts';
+import type {AuthMethod, ModelInfo, Provider, ProviderAuthChallenge} from '@cosmew/contracts';
 
 export type ConnectStep =
   | 'provider'
   | 'method'
   | 'secret'
   | 'env'
+  | 'custom-quick'
+  | 'custom-key'
+  | 'custom-models'
+  | 'custom-model'
   | 'custom-id'
   | 'url'
   | 'protocol'
@@ -33,6 +37,8 @@ export interface ConnectProviderState {
   method?: AuthMethod['id'];
   custom?: Partial<Provider>;
   customModelId?: string;
+  quickUrl?: string;
+  quickModels?: readonly ModelInfo[];
   authChallenge?: ProviderAuthChallenge;
   pendingAction?: 'logout' | 'remove' | 'switch';
   switchOnly?: boolean;

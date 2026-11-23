@@ -2,8 +2,8 @@
 import {useTerminalSize} from '../../hooks/use-terminal-size';
 import {useBindingLabel} from '../../hooks/keymap';
 import {Box, Text} from 'ink';
-import {useEffect, useMemo, useState, type ReactNode} from 'react';
-import {nextGrapheme} from '../../../input/text';
+import {useMemo, type ReactNode} from 'react';
+import {nextGrapheme, textWidth} from '../../../input/text';
 import {useTheme} from '../../theme';
 import {Rule, TextLine, leadingSlashCommand, safeText} from '../../ui';
 import {useUiTheme} from '../../ui/ui-theme';
@@ -15,15 +15,6 @@ import {useComposer, type ComposerController, type ComposerOptions} from './use-
 export {useComposer, type ComposerController, type ComposerOptions, type SubmitAcceptance} from './use-composer';
 export {visualRows, moveCursor, edit, insertText, verticalMove} from './logic';
 
-/** The first four are the reference's phrases (spec 2); the first is what a fresh input shows. */
-export const EXAMPLES = [
-  'write a test for <filepath>',
-  'fix lint errors',
-  'edit <filepath> to…',
-  'fix typecheck errors',
-  'explain this codebase',
-  'review the current diff',
-] as const;
 /** Editor named in the multi-line hint: `$VISUAL`/`$EDITOR` when set, else the literal variable. */
 export function editorName(env: Record<string, string | undefined> = process.env): string {
   const raw = (env.VISUAL || env.EDITOR || '').trim().split(/\s+/)[0] ?? '';
@@ -69,29 +60,49 @@ function ComposerHint({controller, width, bash}: {controller: ComposerController
   const send = useBindingLabel('Chat', 'chat:submit');
   const newline = useBindingLabel('Chat', 'chat:newline').split('/')[0]!;
   const mode = useBindingLabel('Chat', 'chat:cycleMode');
+  const history = useBindingLabel('Global', 'history:search');
   const suggestions = [[previous, next].filter(key => key !== 'unbound').join('/'), 'select'];
+  const enterAction = controller.selected < 0 ? 'send as typed' : controller.completionRunsCommand ? 'run' : 'insert';
   const hints = controller.items.length
-    ? [[complete, 'complete'], suggestions, [dismiss, 'dismiss']]
-    : [
-        [send, controller.busy ? 'queue' : bash ? 'run shell' : 'send'],
-        [newline, 'new line'],
-        [mode, 'permissions'],
-        ...(controller.draft.value
-          ? []
-          : [['/', 'commands'], ['@', 'files'], ...(controller.vimMode ? [] : [['?', 'shortcuts']])]),
-      ];
+    ? [[complete, 'complete'], [send, enterAction], suggestions, [dismiss, 'dismiss']]
+    : controller.startupSuggestion
+      ? [
+          [[complete, '→'].filter(key => key !== 'unbound').join('/'), 'accept suggestion'],
+          ...(controller.vimMode ? [] : [['?', 'shortcuts']]),
+          [mode, 'permissions'],
+          ['/', 'commands'],
+          ...(controller.workspaceAccess ? [['@', 'files']] : []),
+          [history, 'history'],
+        ]
+      : [
+          [send, controller.busy ? 'queue' : bash ? 'run shell' : 'send'],
+          [newline, 'new line'],
+          [mode, 'permissions'],
+          ...(!controller.draft.value && !controller.busy
+            ? [['/', 'commands'], ...(controller.workspaceAccess ? [['@', 'files']] : []), [history, 'history']]
+            : []),
+        ];
+  const vimHint = controller.vimMode === 'INSERT' ? '-- INSERT --' : '';
+  let remaining = Math.max(0, width - 2 - textWidth(vimHint));
+  const displayed: string[][] = [];
+  for (const hint of hints) {
+    const [key, label] = hint;
+    if (!key || key === 'unbound') continue;
+    const size = textWidth(`${key} ${label}`) + (vimHint || displayed.length ? 3 : 0);
+    if (size > remaining) continue;
+    displayed.push(hint);
+    remaining -= size;
+  }
   return (
     <Box width={width} paddingLeft={2}>
       <Text wrap="truncate-end" color={ui.color('dim')}>
-        {controller.vimMode === 'INSERT' ? '-- INSERT -- · ' : null}
-        {hints
-          .filter(([key]) => key && key !== 'unbound')
-          .map(([key, label], index) => (
-            <Text key={label}>
-              {index ? ' · ' : ''}
-              <Text color={ui.color('command')}>{key}</Text> {label}
-            </Text>
-          ))}
+        {vimHint}
+        {displayed.map(([key, label], index) => (
+          <Text key={label}>
+            {vimHint || index ? ' · ' : ''}
+            <Text color={ui.color('command')}>{key}</Text> {label}
+          </Text>
+        ))}
       </Text>
     </Box>
   );
@@ -130,12 +141,6 @@ export function ComposerView({
   const manageKey = useBindingLabel('Chat', 'history:next');
   const {color} = useTheme();
   const ui = useUiTheme();
-  const [example, setExample] = useState(0);
-  useEffect(() => {
-    if (controller.draft.value || !isActive || placeholder) return;
-    const timer = setInterval(() => setExample(value => (value + 1) % EXAMPLES.length), 8000);
-    return () => clearInterval(timer);
-  }, [controller.draft.value, isActive, placeholder]);
   const queued = controller.queued;
   const taskRows = (terminalRows ?? 24) < 24 ? 1 : 3;
   const taskStart = Math.max(0, controller.tasks.findIndex(task => task.id === controller.selectedTask) - taskRows + 1);
@@ -144,7 +149,7 @@ export function ComposerView({
     ? queued.length
       ? 'Press up to edit queued messages'
       : ''
-    : (placeholder ?? `Try "${EXAMPLES[example]}"`);
+    : (placeholder ?? controller.startupSuggestion ?? (controller.draft.value === '!' ? 'Type a shell command' : ''));
   // `#` is only a dispatch prefix now: it keeps the normal prompt and rules (spec 2).
   const mode = controller.draft.value.startsWith('!') ? 'bash' : 'prompt';
   const promptColor =
@@ -354,7 +359,11 @@ export interface ComposerProps extends Omit<ComposerOptions, 'inputWidth'> {
 }
 export function Composer({width, maxRows, placeholder, ...options}: ComposerProps) {
   const {columns} = useTerminalSize();
-  const controller = useComposer({...options, inputWidth: Math.max(1, (width ?? columns ?? 80) - 3)});
+  const controller = useComposer({
+    ...options,
+    startupSuggestion: placeholder === undefined ? options.startupSuggestion : false,
+    inputWidth: Math.max(1, (width ?? columns ?? 80) - 3),
+  });
   return (
     <ComposerView
       controller={controller}

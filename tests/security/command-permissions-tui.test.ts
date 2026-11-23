@@ -1,7 +1,7 @@
 import {expect, test} from 'bun:test';
-import {mkdtempSync, realpathSync, rmSync} from 'node:fs';
+import {mkdirSync, mkdtempSync, realpathSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {basename, dirname, join} from 'node:path';
 import type {CommandRequest, CommandRuntime} from '@cosmew/contracts';
 import {SessionGrants} from '@cosmew/security';
 import {ToolDispatcher} from '@cosmew/tools';
@@ -12,6 +12,13 @@ import {openInk, type InkSession} from '../../apps/tui/src/ink/testing/ink-sessi
 import {waitForFrame} from '../../apps/tui/src/ink/testing/wait';
 
 const cases = [
+  {
+    name: 'external cwd',
+    enabled: true,
+    excludedCommands: [],
+    input: {cmd: 'echo fixture', workdir: '..'},
+    focus: '❯ 1. Yes',
+  },
   {name: 'disabled', enabled: false, excludedCommands: [], input: {cmd: 'echo fixture'}, focus: '❯ 1. Yes'},
   {name: 'sandboxed', enabled: true, excludedCommands: [], input: {cmd: 'echo fixture'}, focus: '❯ 1. Yes'},
   {
@@ -28,7 +35,8 @@ for (const width of [80, 36]) {
   for (const scenario of cases) {
     test(`Bash permission with sandbox ${scenario.name} at ${width} columns`, async () => {
       const directory = mkdtempSync(join(tmpdir(), 'cosmew-ink-permission-'));
-      const root = realpathSync.native(directory);
+      const root = join(realpathSync.native(directory), 'project');
+      mkdirSync(root);
       const launches: CommandRequest[] = [];
       const commands: CommandRuntime = {
         id: 'command-permission-fixture',
@@ -85,10 +93,15 @@ for (const width of [80, 36]) {
         expect(frame.includes('NO SANDBOX')).toBe(warning);
         expect(frame.replace(/\s+/g, ' ').includes('full user permissions')).toBe(warning);
         expect(frame).toContain(scenario.focus);
+        if (scenario.name === 'external cwd') {
+          const cwd = basename(dirname(root));
+          expect(frame.replace(/\s/g, '')).toContain(`${cwd}(outsidetheworkingdirectories)`);
+          expect(frame).not.toContain('save this rule');
+        }
         const sandboxHint = width === 36 ? 'sandbox off · /sandbox to enable' : 'sandbox off · /sandbox to turn it on';
         expect(frame.includes(sandboxHint)).toBe(scenario.name === 'disabled');
         expect(launches).toEqual([]);
-        await ink.handleKey(scenario.name === 'sandboxed' ? 'Escape' : 'Enter');
+        await ink.handleKey(scenario.name === 'sandboxed' || scenario.name === 'external cwd' ? 'Escape' : 'Enter');
         await waitForFrame(current, frame => !frame.includes('Bash command'));
         const result = await pending;
         if (scenario.name === 'disabled') {

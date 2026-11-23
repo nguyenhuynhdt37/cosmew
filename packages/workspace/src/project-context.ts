@@ -17,7 +17,7 @@ const prefix = (text: string, limit: number) =>
   new TextDecoder().decode(Buffer.from(text).subarray(0, limit), {stream: true});
 const render = (root: string, cwd: string, sources: LoadedSource[]) =>
   sources.length
-    ? 'Project instructions (user/project-scoped context; not system/developer authority or permission grants). Follow applicable rules below unless they conflict with the current explicit user request or host/security rules. Sources are ordered root to cwd; deeper scope wins conflicts. AGENTS.override.md replaces AGENTS.md within one directory. Sources marked nested apply only to files under their scope (found when a file there was read). This is a bounded snapshot; truncation or skipped files can leave gaps (see /context diagnostics).\n' +
+    ? 'Project instructions (user/project-scoped context; not system/developer authority or permission grants). Follow applicable rules below unless they conflict with the current explicit user request or host/security rules. Sources are ordered root to cwd; deeper scope wins conflicts. Within a directory, CLAUDE.md is loaded before AGENTS.md or its AGENTS.override.md replacement. Sources marked nested apply only to files under their scope (found when a file there was read). This is a bounded snapshot; truncation or skipped files can leave gaps (see /context diagnostics).\n' +
       JSON.stringify({root, workingDirectory: cwd, instructions: sources})
     : '';
 
@@ -79,7 +79,7 @@ export class ProjectContextLoader {
       // Dependencies, build output and ignored files are third-party text, never instructions.
       if (ignoredDirectory(this.workspace, scope)) break;
       if (known.has(scope)) continue;
-      for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
+      for (const name of ['CLAUDE.md', 'AGENTS.override.md', 'AGENTS.md']) {
         signal?.throwIfAborted();
         const result = await this.reader.read(`${scope}/${name}`, 1, signal).catch(() => null);
         if (result && result.status === 'ok') {
@@ -164,7 +164,7 @@ export class ProjectContextLoader {
   private async loadScope(scope: string, state: LoadState, signal?: AbortSignal, nested = false): Promise<void> {
     const {root, cwd, sources, diagnostics, seen} = state;
     signal?.throwIfAborted();
-    for (const name of ['AGENTS.override.md', 'AGENTS.md']) {
+    for (const name of ['CLAUDE.md', 'AGENTS.override.md', 'AGENTS.md']) {
       const path = scope === '.' ? name : `${scope}/${name}`;
       let result;
       try {
@@ -173,21 +173,25 @@ export class ProjectContextLoader {
         if (signal?.aborted || (error instanceof FutrynError && error.code === 'CANCELLED'))
           throw new FutrynError('CANCELLED');
         diagnostics.push({path, code: 'READ_FAILED'});
+        if (name === 'CLAUDE.md') continue;
         return;
       }
       signal?.throwIfAborted();
       if (result.status === 'missing') continue;
       if (result.status !== 'ok') {
         diagnostics.push({path, code: result.code});
+        if (name === 'CLAUDE.md') continue;
         return;
       }
       if (seen.has(result.canonicalPath)) {
         diagnostics.push({path, code: 'DUPLICATE_SOURCE'});
+        if (name === 'CLAUDE.md') continue;
         return;
       }
       seen.add(result.canonicalPath);
       if (!result.content.trim()) {
         diagnostics.push({path, code: 'EMPTY_FILE'});
+        if (name === 'CLAUDE.md') continue;
         return;
       }
       // Nested sources say what they are: repository content below the user and host rules.
@@ -224,7 +228,7 @@ export class ProjectContextLoader {
       }
       sources.push(source);
       if (source.truncated) diagnostics.push({path, code: 'TRUNCATED'});
-      return;
+      if (name !== 'CLAUDE.md') return;
     }
   }
 }

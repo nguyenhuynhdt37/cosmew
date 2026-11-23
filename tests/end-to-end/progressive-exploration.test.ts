@@ -345,11 +345,13 @@ test('rereading an unchanged file returns a short notice; a changed file returns
   expect(c.targets()).toEqual(['read notes.txt', 'read notes.txt', 'read notes.txt']);
 });
 
-test('no tools, no guidance: a chat without folder consent is sent unchanged', async () => {
+test('chat without folder consent has no tools and states the execution limitation', async () => {
   const c = await make(() => ({text: 'plain'}), repository);
   c.client.setToolsEnabled(false);
   expect((await ask(c.client, 'hello')).answer).toBe('plain');
-  expect(c.views()[0]).toMatchObject({system: '', tools: []});
+  expect(c.views()[0]).toMatchObject({tools: []});
+  expect(c.views()[0]!.system).toContain('No project tools are available in this request.');
+  expect(c.views()[0]!.system).toContain('do not claim work is running');
 });
 
 for (const protocol of ['chat', 'anthropic'] as const)

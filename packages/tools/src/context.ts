@@ -142,6 +142,7 @@ export interface ToolDispatcherOptions {
       description: string;
       inputSchema: Record<string, unknown>;
       readOnlyHint?: boolean;
+      identity?: string;
     }[];
     call(
       name: string,

@@ -147,17 +147,58 @@ test('external reads show an approval prompt; refusal exposes no content', async
   expect(JSON.stringify(c.server.requests)).not.toContain('EXTERNAL_CONTENT_CANARY_92');
 });
 
-test('a provider that rejects tools marks the model unsupported and the next turn chats without tools', async () => {
+for (const capability of ['supported', 'unknown'] as const) {
+  test(`a generic provider 400 preserves ${capability} tools and the next turn can read files`, async () => {
+    const c = await make({name: 'read', args: '{"path":"notes.txt"}'});
+    expect(await c.client.verifyAccount()).toEqual({ok: true});
+    c.app.settings.update(settings => {
+      settings.catalogs[0]!.models[0]!.capabilities.tools = capability;
+    });
+    c.server.set({status: 400});
+    await c.tui.submitPrompt('read notes');
+    expect(c.tui.frame()).toContain('Request failed [INVALID_INPUT]');
+    expect(c.tui.frame().replace(/\s+/g, ' ')).toContain('Tool access was not changed');
+    expect(c.tui.frame()).not.toContain('Tools are now off');
+    expect(c.client.status().activeModel?.capabilities.tools).toBe(capability);
+    expect(c.client.status().toolsEnabled).toBe(true);
+    c.server.set({status: 200});
+    const before = c.server.requests.length;
+    await c.tui.submitPrompt('read notes again');
+    expect(c.server.requests.slice(before).some(r => r.body?.tools?.length)).toBe(true);
+    expect(c.tui.getTranscript().at(-1)!.content).toContain('banana');
+    expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]?.status).toBe('ok');
+  });
+}
+
+test('a stale unsupported effort does not disable tools and a valid effort restores file reads', async () => {
   const c = await make({name: 'read', args: '{"path":"notes.txt"}'});
-  // Authenticate/verify the selected model through the public path before testing tool rejection.
   expect(await c.client.verifyAccount()).toEqual({ok: true});
-  c.server.set({status: 400});
-  await c.tui.submitPrompt('hello');
-  expect(c.tui.frame()).toContain('does not accept workspace tools');
-  expect(c.client.status().activeModel?.capabilities.tools).toBe('unsupported');
-  c.server.set({status: 200, toolCall: null});
-  const before = c.server.requests.length;
-  await c.tui.submitPrompt('hello again');
-  expect(c.server.requests.slice(before).every(r => !r.body?.tools?.length)).toBe(true);
-  expect(c.tui.getTranscript().at(-1)!.content).toContain('Hello fixture');
+  c.app.settings.update(settings => {
+    const model = settings.catalogs[0]!.models[0]!;
+    model.capabilities.tools = 'supported';
+    model.capabilities.reasoning = 'supported';
+    model.reasoningEfforts = ['low', 'high'];
+  });
+  c.client.setReasoningEffort('high', {scope: 'session'});
+  // A refreshed catalog can remove a level after a session chose it. Exercise
+  // the real SDK -> adapter preflight path, rather than injecting a tool error.
+  c.app.settings.update(settings => {
+    settings.catalogs[0]!.models[0]!.reasoningEfforts = ['low'];
+  });
+  const beforeFailure = c.server.requests.length;
+  await c.tui.submitPrompt('read notes with the selected effort');
+  expect(c.server.requests).toHaveLength(beforeFailure);
+  expect(c.tui.frame()).toContain('Request failed [UNSUPPORTED]');
+  expect(c.tui.frame().replace(/\s+/g, ' ')).toContain('Check /model and /effort');
+  expect(c.tui.frame()).not.toContain('does not accept workspace tools');
+  expect(c.tui.frame()).not.toContain('Tools are now off');
+  expect(c.client.status().activeModel?.capabilities.tools).toBe('supported');
+  expect(c.client.status().toolsEnabled).toBe(true);
+  c.client.setReasoningEffort('low', {scope: 'session'});
+  await c.tui.submitPrompt('read notes with the valid effort');
+  const requests = c.server.requests.slice(beforeFailure).filter(r => r.body?.tools?.length);
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests[0]!.body.reasoning_effort).toBe('low');
+  expect(c.tui.getTranscript().at(-1)!.content).toContain('banana');
+  expect(c.tui.getTranscript().at(-1)!.toolResults?.[0]?.status).toBe('ok');
 });

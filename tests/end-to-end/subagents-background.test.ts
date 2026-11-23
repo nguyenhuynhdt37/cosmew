@@ -416,7 +416,7 @@ test('custom agents: project agent text stays out of instructions, tools only na
   const h = await setup({
     files: {
       '.claude/agents/reviewer.md': REVIEWER,
-      '.futryn/agents/reader.md': READER,
+      '.cosmew/agents/reader.md': READER,
       '.agents/agents/explore.md': CLASH,
       'src/a.ts': 'export const a = 1;\n',
     },
@@ -498,7 +498,7 @@ test('/agents lists types and children, shows a transcript and stops a running b
     release = resolve;
   });
   const h = await setup({
-    files: {'.futryn/agents/reader.md': READER},
+    files: {'.cosmew/agents/reader.md': READER},
     script: async (view, _body, signal) => {
       if (isExplore(view)) {
         await Promise.race([gate, new Promise(resolve => signal.addEventListener('abort', resolve))]);

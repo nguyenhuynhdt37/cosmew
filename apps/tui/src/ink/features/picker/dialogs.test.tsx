@@ -215,7 +215,7 @@ test('the permissions dialog lists the Claude Code modes; bypassPermissions is n
   await key(view, down);
   await key(view, enter);
   expect(fixture.client.permissionMode()).toBe('acceptEdits');
-  expect(BYPASS_PERMISSIONS_WARNING).toContain('skips every permission prompt');
+  expect(BYPASS_PERMISSIONS_WARNING).toContain('External working directories still require approval for commands.');
 });
 test('permission rules can be added and removed through SDK validation', async () => {
   const fixture = dialogFixture();
@@ -489,32 +489,39 @@ test('agents expose types, transcript and stopping through SDK', async () => {
   await key(transcript, enter);
   expect(transcript.lastFrame()).toContain('Found layout issue');
 });
-test('skills retain source, explicit-only state and discovery diagnostics', async () => {
+test('skills group by source, filter, and cycle visibility with Enter and Space', async () => {
+  const entry = {
+    path: '/fixture/SKILL.md',
+    directory: '/fixture',
+    shortPath: 'skills/review',
+  };
   const fixture = dialogFixture({
     skills: () => ({
       skills: [
-        {
-          name: 'review',
-          description: 'Review changes',
-          source: 'project',
-          path: '/fixture/SKILL.md',
-          directory: '/fixture',
-          shortPath: 'skills/review',
-          disableModelInvocation: true,
-        },
+        {...entry, name: 'audit', description: 'Audit state', source: 'project', disableModelInvocation: false},
+        {...entry, name: 'review', description: 'Review changes', source: 'user', disableModelInvocation: true},
       ],
       errors: [{code: 'INVALID_SKILL'}],
       warnings: [],
     }),
   });
-  const invoked: string[] = [];
-  const view = renderInk(<SkillsDialog onInvoke={command => invoked.push(command)} />, {fixture});
+  const changes: unknown[] = [];
+  const view = renderInk(<SkillsDialog visibleRows={8} onChange={value => changes.push(value)} />, {fixture});
   await settle();
+  expect(view.lastFrame()).toContain('Project');
+  expect(view.lastFrame()).toContain('Personal');
   expect(view.lastFrame()).toContain('INVALID_SKILL');
+  await key(view, 't');
+  expect(view.lastFrame()).toContain('tokens');
   await key(view, enter);
-  expect(view.lastFrame()).toContain('Explicit invocation only');
+  expect(view.lastFrame()).toContain('/audit [name-only]');
+  await key(view, ' ');
+  expect(view.lastFrame()).toContain('/audit [user-only]');
+  await key(view, 'Personal');
+  expect(view.lastFrame()).toContain('/review [user-only · locked]');
+  expect(view.lastFrame()).not.toContain('/audit');
   await key(view, enter);
-  expect(invoked).toEqual(['/review']);
+  expect(changes).toEqual([{audit: 'name-only'}, {audit: 'user-invocable-only'}]);
 });
 test('help renders canonical keymap and slash metadata', async () => {
   const view = renderInk(<HelpDialog visibleRows={40} />);
@@ -691,6 +698,8 @@ test('custom provider wizard saves user config with environment-backed headers',
   await settle();
   await key(view, 'Custom provider');
   await key(view, enter);
+  // Tab switches from quick setup to the advanced custom provider wizard.
+  await key(view, '\t');
   await key(view, 'gateway');
   await key(view, enter);
   await key(view, 'https://gateway.example.test/v1');
@@ -714,6 +723,62 @@ test('custom provider wizard saves user config with environment-backed headers',
     envHttpHeaders: {Authorization: 'GATEWAY_TOKEN'},
   });
   expect(view.frames.join('')).not.toContain('Authorization=$GATEWAY_TOKEN');
+});
+
+test('custom provider quick setup masks keys and chooses a model with limits before connecting', async () => {
+  const calls: {raw?: string; baseURL?: string; apiKey?: string; modelId?: string}[] = [];
+  const richModel = {
+    ...model,
+    id: 'ag/gemini-3-flash',
+    name: 'Gemini 3 Flash',
+    contextLimit: 1_048_576,
+    outputLimit: 65_536,
+  };
+  const fixture = dialogFixture({
+    quickConnectProvider: async (input, signal) => {
+      calls.push(input);
+      const selectedId = input.raw?.split('|')[2]?.trim() || (await input.chooseModel?.([richModel, model], signal));
+      expect(selectedId).toBe(richModel.id);
+      return {
+        provider: {...provider, id: 'gateway.example.test', name: 'gateway.example.test'},
+        account,
+        model: richModel,
+        modelsCount: 24,
+        protocol: 'chat',
+        catalog: 'openai',
+        reusedProvider: false,
+        summary: 'Connected gateway.example.test · chat · 24 models · ag/gemini-3-flash (1M ctx · 64k out)',
+      };
+    },
+  });
+  // 1) One-line paste with explicit model: masks secret and closes directly into chat.
+  const oneLine = routed(<ConnectDialog />, fixture);
+  await settle();
+  await key(oneLine, 'Custom provider');
+  await key(oneLine, enter);
+  await key(oneLine, 'https://gateway.example.test/v1 | sk-fixture-secret-only | ag/gemini-3-flash');
+  expect(oneLine.frames.join('')).not.toContain('sk-fixture-secret-only');
+  await key(oneLine, enter);
+  expect(calls[0]?.raw).toBe('https://gateway.example.test/v1 | sk-fixture-secret-only | ag/gemini-3-flash');
+  expect(oneLine.frames.join('')).not.toContain('sk-fixture-secret-only');
+  oneLine.unmount();
+
+  // 2) URL and key lead directly to the discovered model picker.
+  const stepped = routed(<ConnectDialog />, fixture);
+  await settle();
+  await key(stepped, 'Custom provider');
+  await key(stepped, enter);
+  await key(stepped, 'https://gateway.example.test/v1');
+  await key(stepped, enter);
+  await key(stepped, 'sk-fixture-secret-only');
+  expect(stepped.frames.join('')).not.toContain('sk-fixture-secret-only');
+  await key(stepped, enter);
+  expect(calls[1]).toMatchObject({baseURL: 'https://gateway.example.test/v1', apiKey: 'sk-fixture-secret-only'});
+  expect(stepped.lastFrame()).toContain('Choose a model');
+  expect(stepped.lastFrame()).toContain('1M ctx · 64k out');
+  await key(stepped, enter);
+  expect(stepped.lastFrame()).not.toContain('Choose a model');
+  expect(stepped.frames.join('')).not.toContain('sk-fixture-secret-only');
 });
 
 test('the mode cycling hook follows default -> acceptEdits -> plan -> default', async () => {

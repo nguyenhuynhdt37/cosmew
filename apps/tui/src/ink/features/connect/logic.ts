@@ -143,6 +143,33 @@ export const ENV_NAME = /^[A-Z_][A-Z0-9_]{0,99}$/;
 /** Custom provider IDs. */
 export const PROVIDER_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/;
 
+/** Mask the middle API-key segment of a pasted `URL | API_KEY | MODEL` line on screen. */
+export function maskQuickProviderDraft(value: string): string {
+  const parts = value.split('|');
+  if (parts.length < 2) return value;
+  const rawKey = parts[1]!;
+  const trimmedKey = rawKey.trim();
+  const maskedKey = trimmedKey ? ` ${'•'.repeat(Math.min(16, Array.from(trimmedKey).length))} ` : rawKey;
+  return [parts[0], maskedKey, ...parts.slice(2)].join('|');
+}
+
+/** Validate a custom base URL on the UI side before probing (HTTPS or loopback HTTP, no creds/query/hash). */
+export function isValidCustomBaseURL(raw: string): boolean {
+  try {
+    const url = new URL(raw.trim());
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+    return (
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      (url.protocol === 'https:' || (url.protocol === 'http:' && loopback))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** `Name=Value; Name2=$ENV_VAR` → static and environment-backed headers; a string is an error message. */
 export function parseHeaderDraft(
   draft: string,

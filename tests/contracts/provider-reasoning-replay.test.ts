@@ -1,12 +1,13 @@
 import {expect, test} from 'bun:test';
 import {ProviderAdapter, ProviderTransport} from '@cosmew/models';
-import {providerSchema, type Message, type ModelRequest} from '@cosmew/contracts';
+import {providerSchema, type Message, type ModelRequest, type ModelEvent} from '@cosmew/contracts';
 import {memoryVault} from '../fixtures';
 
 function fixture(
   protocol: 'gemini' | 'responses' | 'anthropic' | 'chat',
   response: unknown,
   modelId = 'gemini-3-pro-preview',
+  auth: 'none' | 'oauth' = 'none',
 ) {
   const requests: any[] = [];
   const provider = providerSchema.parse({
@@ -14,7 +15,7 @@ function fixture(
     name: 'Fixture',
     protocol,
     baseURL: 'https://fixture.invalid/v1',
-    auth: 'none',
+    auth,
     catalog: 'manual',
     metadataVersion: 1,
     ...(protocol === 'chat' ? {replayReasoning: true} : {}),
@@ -31,6 +32,8 @@ function fixture(
     } as any,
     memoryVault(),
     {authorize() {}},
+    undefined,
+    async () => 'fixture-oauth-token',
   );
   transport.request = async (_url, init) => {
     requests.push(JSON.parse(String(init?.body)));
@@ -47,7 +50,7 @@ function fixture(
     messages: [{role: 'user', content: 'read'}],
     tools: [{name: 'read', description: 'read', inputSchema: {type: 'object'}}],
   };
-  return {adapter, request, requests};
+  return {adapter, request, requests, provider, account: transport.account};
 }
 
 test('Gemini parallel signatures retain original ordered parts in the real serializer', async () => {
@@ -684,4 +687,255 @@ test('same provider/model/endpoint account switches drop prior account signature
     ],
   });
   expect(JSON.stringify(secondAccount.requests[0])).not.toContain('first-account-private-signature');
+});
+
+function encryptedRequest(x: ReturnType<typeof fixture>): ModelRequest {
+  return {
+    ...x.request,
+    messages: [
+      ...x.request.messages,
+      {
+        role: 'assistant',
+        content: 'old answer',
+        providerReplay: {
+          version: 1,
+          providerId: x.provider.id,
+          accountId: x.account.id,
+          protocol: 'responses',
+          modelId: x.request.modelId,
+          endpointHash: new Bun.CryptoHasher('sha256').update(x.provider.baseURL).digest('hex'),
+          parts: [
+            {
+              type: 'reasoning',
+              text: '',
+              metadata: {itemId: 'item_1', reasoningEncryptedContent: 'expired-encrypted-content'},
+            },
+            {type: 'text', text: 'old answer'},
+          ],
+        },
+      },
+      {role: 'user', content: 'new question'},
+    ],
+  };
+}
+
+const encryptedError = () =>
+  new Response(
+    JSON.stringify({
+      error: {
+        message: 'This conversation contains encrypted history for the original account.',
+        type: 'invalid_request_error',
+      },
+    }),
+    {status: 400, headers: {'content-type': 'application/json'}},
+  );
+
+test('an encrypted-history rejection retries once with canonical history without changing the original bound replay', async () => {
+  const x = fixture(
+    'responses',
+    (req: any) =>
+      JSON.stringify(req).includes('expired-encrypted-content')
+        ? encryptedError()
+        : responsesStream([
+            {
+              type: 'message',
+              id: 'msg_recovered',
+              role: 'assistant',
+              status: 'completed',
+              content: [{type: 'output_text', text: 'recovered answer', annotations: []}],
+            },
+          ]),
+    'gpt-5',
+  );
+  const request = encryptedRequest(x);
+  const original = JSON.stringify(request);
+  const events: ModelEvent[] = await Array.fromAsync(x.adapter.stream(request));
+  expect(x.requests).toHaveLength(2);
+  expect(JSON.stringify(x.requests[0])).toContain('expired-encrypted-content');
+  expect(JSON.stringify(x.requests[1])).not.toContain('expired-encrypted-content');
+  expect(JSON.stringify(x.requests[1])).toContain('old answer');
+  expect(JSON.stringify(x.requests[1])).toContain('new question');
+  expect(
+    events
+      .filter(e => e.type === 'textDelta')
+      .map(e => e.text)
+      .join(''),
+  ).toBe('recovered answer');
+  expect(events.filter(e => e.type === 'started')).toHaveLength(1);
+  expect(events.filter(e => e.type === 'completed')).toHaveLength(1);
+  expect(JSON.stringify(request)).toBe(original);
+});
+
+test('an encrypted-history rejection is retried at most once', async () => {
+  const x = fixture('responses', () => encryptedError(), 'gpt-5');
+  const request = encryptedRequest(x);
+  await expect(Array.fromAsync(x.adapter.stream(request))).rejects.toMatchObject({code: 'INVALID_INPUT'});
+  expect(x.requests).toHaveLength(2);
+  expect(request.messages[1]?.providerReplay).toBeDefined();
+});
+
+for (const kind of ['text', 'tool'] as const) {
+  test(`encrypted-history errors after a streamed ${kind} do not silently retry observed work`, async () => {
+    const message = {type: 'message', id: 'msg_partial', role: 'assistant', status: 'in_progress', content: []};
+    const call = {
+      type: 'function_call',
+      id: 'fc_partial',
+      call_id: 'read_partial',
+      name: 'read',
+      arguments: '{}',
+      status: 'completed',
+    };
+    const prefix = [
+      {
+        type: 'response.created',
+        response: {
+          id: 'resp_partial',
+          object: 'response',
+          created_at: 1,
+          model: 'gpt-5',
+          status: 'in_progress',
+          output: [],
+        },
+      },
+      {type: 'response.output_item.added', output_index: 0, item: kind === 'text' ? message : {...call, arguments: ''}},
+      ...(kind === 'text'
+        ? [
+            {
+              type: 'response.content_part.added',
+              output_index: 0,
+              item_id: message.id,
+              content_index: 0,
+              part: {type: 'output_text', text: '', annotations: []},
+            },
+            {
+              type: 'response.output_text.delta',
+              output_index: 0,
+              item_id: message.id,
+              content_index: 0,
+              delta: 'partial answer',
+            },
+          ]
+        : [
+            {type: 'response.function_call_arguments.delta', output_index: 0, item_id: call.id, delta: call.arguments},
+            {type: 'response.output_item.done', output_index: 0, item: call},
+          ]),
+    ];
+    const x = fixture(
+      'responses',
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(prefix.map(e => `data: ${JSON.stringify(e)}\n\n`).join('')));
+              setTimeout(() => {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    `data: ${JSON.stringify({type: 'error', sequence_number: 10, code: 'invalid_encrypted_content', message: 'encrypted history mismatch', param: null})}\n\n`,
+                  ),
+                );
+                controller.close();
+              }, 15);
+            },
+          }),
+          {headers: {'content-type': 'text/event-stream'}},
+        ),
+      'gpt-5',
+    );
+    const request = encryptedRequest(x);
+    const original = JSON.stringify(request);
+    const events: ModelEvent[] = [];
+    await expect(
+      (async () => {
+        for await (const event of x.adapter.stream(request)) events.push(event);
+      })(),
+    ).rejects.toMatchObject({code: 'INVALID_INPUT'});
+    expect(events.some(event => event.type === (kind === 'text' ? 'textDelta' : 'toolCallComplete'))).toBe(true);
+    expect(x.requests).toHaveLength(1);
+    expect(events.some(event => event.type === 'completed')).toBe(false);
+    expect(JSON.stringify(request)).toBe(original);
+  });
+}
+
+test('cancelling an encrypted-history stream after observed text never triggers recovery', async () => {
+  const x = fixture(
+    'responses',
+    responsesStream([
+      {
+        type: 'message',
+        id: 'msg_cancel',
+        role: 'assistant',
+        status: 'completed',
+        content: [{type: 'output_text', text: 'partial answer', annotations: []}],
+      },
+    ]),
+    'gpt-5',
+  );
+  const request = encryptedRequest(x);
+  const original = JSON.stringify(request);
+  const abort = new AbortController();
+  await expect(
+    (async () => {
+      for await (const event of x.adapter.stream(request, abort.signal)) {
+        if (event.type === 'textDelta') abort.abort();
+      }
+    })(),
+  ).rejects.toMatchObject({code: 'CANCELLED'});
+  expect(x.requests).toHaveLength(1);
+  expect(JSON.stringify(request)).toBe(original);
+});
+
+for (const auth of ['none', 'oauth'] as const) {
+  test(`generate ${auth} bounds encrypted-history recovery to two requests and preserves the original request`, async () => {
+    const x = fixture('responses', () => encryptedError(), 'gpt-5', auth);
+    const request = encryptedRequest(x);
+    const original = JSON.stringify(request);
+    await expect(x.adapter.generate(request)).rejects.toMatchObject({code: 'INVALID_INPUT'});
+    expect(x.requests).toHaveLength(2);
+    expect(JSON.stringify(x.requests[0])).toContain('expired-encrypted-content');
+    expect(JSON.stringify(x.requests[1])).not.toContain('expired-encrypted-content');
+    expect(JSON.stringify(request)).toBe(original);
+  });
+
+  test(`generate ${auth} cancellation at the first encrypted rejection never starts another request`, async () => {
+    const abort = new AbortController();
+    const x = fixture(
+      'responses',
+      () => {
+        abort.abort();
+        return encryptedError();
+      },
+      'gpt-5',
+      auth,
+    );
+    const request = encryptedRequest(x);
+    const original = JSON.stringify(request);
+    await expect(x.adapter.generate(request, abort.signal)).rejects.toMatchObject({code: 'CANCELLED'});
+    expect(x.requests).toHaveLength(1);
+    expect(JSON.stringify(request)).toBe(original);
+  });
+}
+
+test('OAuth generate keeps the stream-owned successful encrypted-history recovery', async () => {
+  const x = fixture(
+    'responses',
+    (req: any) =>
+      JSON.stringify(req).includes('expired-encrypted-content')
+        ? encryptedError()
+        : responsesStream([
+            {
+              type: 'message',
+              id: 'msg_generated',
+              role: 'assistant',
+              status: 'completed',
+              content: [{type: 'output_text', text: 'recovered generation', annotations: []}],
+            },
+          ]),
+    'gpt-5',
+    'oauth',
+  );
+  const request = encryptedRequest(x);
+  const original = JSON.stringify(request);
+  expect((await x.adapter.generate(request)).text).toBe('recovered generation');
+  expect(x.requests).toHaveLength(2);
+  expect(JSON.stringify(request)).toBe(original);
 });

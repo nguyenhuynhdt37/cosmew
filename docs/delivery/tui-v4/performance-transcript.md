@@ -29,6 +29,10 @@ The 3,000-item dimensioned run retained 264, 265 and 265 MiB of JS heap after th
 
 ## Reproduction and scope
 
+Typing on the native alternate screen updates changed lines through Ink's incremental renderer. The native PTY regression checks that typing a draft does not resend a visible transcript summary. Composer edits reuse the SDK status until its reactive revision changes. Slash and skill completion reuse the skill catalog while the menu is open. A slow first-send account check displays a cancellable check message while preserving the draft.
+
+`/compact`, `/doctor` and `/code-review` echo the submitted command before waiting for the provider or workspace report. The transcript replaces the progress line with the result or cancellation in place.
+
 Set `TRANSCRIPT_BENCH=1` and run `bun test apps/tui/src/ink/testing/transcript-performance.test.tsx` for all sizes and the retained-heap sample. The default test exercises the 3,000-item fixture with generous regression budgets. Related fullscreen tests cover both scroll ends, oldest-match reveal in 5,000 items, Ctrl+E semantics, and complete scrollback/editor export past the mounted range.
 
 Ctrl+O follows the latest content when switching modes. Fullscreen Ctrl+E remains disabled under the Task 5 virtual-scroll branch. Inline rendering preserves the 30-item window and Ctrl+E expands it. Complex Markdown with wrapping, nested structures or multiline fences uses the regular renderer within the item window.
@@ -45,3 +49,35 @@ harness in `apps/tui/src/ink/testing/`.
 Job 1 verification passed typecheck and lint, with 133 passing tests and two skips. The final
 post-expansion run passed typecheck and lint again, with 384 passing tests and four skips across
 35 files. No golden frames were re-recorded.
+
+## Long unbroken streaming paragraphs (2026-11-22)
+
+A further synthetic SDK/Ink reproduction uses 1,000 historical messages, a 100×36 viewport and a 1,140,000-character streaming paragraph without newlines. The existing settled-history benchmark did not exercise this case. `liveTail` limited newline count but passed the whole paragraph to Markdown; Markdown then parsed/wrapped up to its existing 262,144-character ceiling. Repeating that work during input caused stalls, and newer text beyond that ceiling was not visible while streaming.
+
+The live preview now bounds its source by viewport width as well as newline count and preserves valid UTF-16 boundaries. Source transcript content is unchanged. Completed long Markdown paragraphs use physical row windowing, including inline styles, so finishing/cancelling does not mount thousands of text nodes. Existing Markdown size limits remain unchanged. There are no shared contract, permission, persistence or dependency changes.
+
+In isolated local runs on macOS/Bun 1.4.4, initial stream paint fell from 254–391 ms to 15 ms and draft typing from 69–77 ms to 3 ms. An additional delta at the end of the paragraph painted in 11 ms; Esc through settled UI took 118 ms. These are synthetic fixture measurements, not a live provider or the maintainer's running-session measurement.
+
+Regression commands:
+
+```sh
+bun test apps/tui/src/ink/testing/long-stream-performance.test.tsx
+bun test apps/tui/src/ink/features/transcript apps/tui/src/ink/features/composer apps/tui/src/ink/testing/fullscreen.test.tsx apps/tui/src/ink/testing/transcript-performance.test.tsx apps/tui/src/ink/testing/long-stream-performance.test.tsx apps/tui/src/ink/testing/integration.test.tsx
+bun test apps/tui/src/ink/testing/native-pty.test.ts
+```
+
+The long-stream test failed before the fix (391 ms paint against a 150 ms budget). Coverage also checks newest-delta visibility, cancellation reaching the SDK signal, Unicode tail integrity and scrolling a completed styled paragraph from end to beginning without changing stored content. Scoped TUI suite: 290 pass, 2 skip, 0 fail; native PTY lifecycle: 1 pass. The PTY test covers terminal input/resize/exit with synthetic provider ports, not long-stream latency. Repository typecheck still reports two pre-existing errors in `tests/contracts/provider-reasoning-replay.test.ts` (private `account` access and missing `ModelEvent` import); no new typecheck errors remain in these UI changes.
+
+## Reducing wrapper allocation and retained rendering content (2026-11-23)
+
+The 2026-11-22 aggregate run still failed the giant-paragraph regression despite isolated passes: next-delta paint 329 ms and settled Esc 1,070 ms. A narrowed fullscreen/integration/performance run passed but already spent 261 ms settling Esc, so isolated success was not treated as full acceptance.
+
+A tight additional regression sends a 1,140,000-character prompt through the same word wrapper used by user messages, Markdown and tool output. Before the change it took 184.5 ms against the existing 150 ms input-work budget. Profiling twenty 266,000-character wraps attributed 788 ms inclusive to constructing a complete grapheme/cell array (`Intl.Segmenter` iterator, `Array.from`, `flatMap`) before layout. Five standalone wraps grew sampled JS heap from about 44 MiB to 102 MiB. This is allocation/work that the renderer performed even though it later displayed a small physical row window.
+
+`wrapRuns` now measures word/style spans and slices oversized ASCII words at row boundaries. It segments only oversized Unicode words, keeping graphemes and style changes intact; words still span styled runs and only soft-break spaces are removed. A temporary deterministic differential harness compared 20,000 Unicode/styled/whitespace cases with the prior algorithm, including CRLF, zero-width characters, joined emoji and combining marks; outputs matched. Permanent focused tests cover those contracts. The new large-prompt regression passed at 28.8 ms without raising its budget. Five standalone paragraph wraps then used a sampled 39–41 MiB JS heap, rather than materializing hundreds of thousands of character objects per render. These samples are indicative allocation evidence, not a process-wide memory ceiling.
+
+The presentation, Markdown token and highlight caches additionally evict by estimated retained UTF-16 content weight as well as count (4 MiB, 2 MiB and 2 MiB respectively). Oversized transient entries are not retained and do not flush useful small entries. The limits account for source/content references, not exact object/AST heap size. This closes the previous count-only cache behavior where forty-eight large stream snapshots or many large highlighted sources could retain a disproportionately large working set. LRU/weight eviction has a red/green regression.
+
+Scoped validation after the changes: 292 pass / 2 skip / 0 fail across 18 files (transcript, composer, fullscreen/integration and performance/cache tests). The long-stream sample measured initial paint 8.4 ms, typing 3.3 ms, next delta 12.0 ms, settled Esc 122.9 ms. The 3,000-item settled transcript sample remained within all existing budgets. Separate wrapper semantics/cache validation: 3 pass. Source formatting and scoped diff checks pass. No performance budget was increased and no provider/OS evidence was inferred from fixture results. The root coordinator must append the aggregate quality result; these scoped runs do not alone prove the prior full-suite stall is resolved.
+
+Independent review additionally identified retained payloads omitted by the first presentation-cache estimate: tool arguments and part/hook text. The final presentation cache estimates the entire immutable item graph, including those fields, with memoized object weights, an early weight cutoff and a depth cap. It performs no whole-item JSON serialization on deltas; cycles/deep unknown tool input conservatively bypass reuse. A real empty-content, 3 MiB patch-input snapshot and independent large hook/text parts now bypass the cache while a small cached item survives. Both payload tests failed with the prior text-only weigher and pass with graph accounting. The focused payload/depth tests pass; the original performance budgets remain unchanged.

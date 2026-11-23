@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto';
 import {
   constants,
   closeSync,
@@ -16,6 +17,8 @@ import {
   FutrynError,
   attachmentSchema,
   combineUsage,
+  usageSchema,
+  usageBreakdownSchema,
   planStateSchema,
   planProposalSchema,
   type PlanProposal,
@@ -26,6 +29,7 @@ import {
   type PlanState,
   turnReceiptSchema,
   type TurnReceipt,
+  type UsageBreakdown,
   messageSchema,
   selectionSchema,
   subagentSessionRecordSchema,
@@ -577,6 +581,28 @@ export class SqliteConversations implements ConversationStore {
       throw new FutrynError('STORAGE');
     }
   }
+  updateSelection(id: string, selection: Selection): void {
+    const parsed = selectionSchema.safeParse(selection);
+    if (!parsed.success) throw new FutrynError('INVALID_INPUT');
+    try {
+      this.db
+        .transaction(() => {
+          const exists = this.db.query('SELECT 1 FROM conversations WHERE id=?').get(id);
+          if (!exists) throw new FutrynError('NOT_FOUND');
+          if (
+            this.db
+              .query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")
+              .get(id)
+          )
+            throw new FutrynError('POLICY');
+          this.db.query('UPDATE conversations SET selection=? WHERE id=?').run(JSON.stringify(parsed.data), id);
+        })
+        .immediate();
+    } catch (error) {
+      if (error instanceof FutrynError) throw error;
+      throw new FutrynError('STORAGE');
+    }
+  }
   fork(id: string, selection: Selection): SessionRecord {
     return this.db
       .transaction(() => {
@@ -595,6 +621,16 @@ export class SqliteConversations implements ConversationStore {
             state: 'unfinished',
             pending: ['Revalidate prior artifact evidence in this workspace before making changes.'],
           });
+        if (source.recovery?.compaction) {
+          const compaction = source.recovery.compaction;
+          const copied = this.recover(next).messages;
+          if (compaction.throughRevision <= copied.length) {
+            const prefixHash = createHash('sha256')
+              .update(JSON.stringify(copied.slice(0, compaction.throughRevision)))
+              .digest('hex');
+            if (prefixHash === compaction.sourceHash) this.saveContextSnapshot(next, compaction);
+          }
+        }
         return this.get(next)!;
       })
       .immediate();
@@ -689,19 +725,32 @@ export class SqliteConversations implements ConversationStore {
       .run(JSON.stringify(turnReceiptSchema.parse(this.clean(receipt))), id, revision);
     if (result.changes !== 1) throw new FutrynError('STORAGE');
   }
-  /** Fold a compaction call's usage into the latest agent turn so session usage counts it (ADR 0054). */
+  /** Fold into an agent receipt when available; otherwise retain separate session billing. */
   addUsage(id: string, usage: import('@cosmew/contracts').Usage): void {
     try {
-      const rows = this.db
-        .query('SELECT revision,data FROM turn_receipts WHERE conversation=? ORDER BY revision DESC')
-        .all(id) as {revision: number; data: string}[];
-      for (const row of rows) {
-        const receipt = turnReceiptSchema.parse(JSON.parse(row.data));
-        if (receipt.kind === 'user-shell') continue;
-        receipt.usage = combineUsage(receipt.usage, usage);
-        this.writeReceipt(id, row.revision, receipt);
-        return;
-      }
+      this.db
+        .transaction(() => {
+          const rows = this.db
+            .query('SELECT revision,data FROM turn_receipts WHERE conversation=? ORDER BY revision DESC')
+            .all(id) as {revision: number; data: string}[];
+          for (const row of rows) {
+            const receipt = turnReceiptSchema.parse(JSON.parse(row.data));
+            if (receipt.kind === 'user-shell') continue;
+            receipt.usage = combineUsage(receipt.usage, usage);
+            this.writeReceipt(id, row.revision, receipt);
+            return;
+          }
+          const previous = this.db.query('SELECT data FROM session_usage WHERE conversation=?').get(id) as {
+            data: string;
+          } | null;
+          const total = combineUsage(previous ? usageSchema.parse(JSON.parse(previous.data)) : null, usage);
+          this.db
+            .query(
+              'INSERT INTO session_usage(conversation,data) VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET data=excluded.data',
+            )
+            .run(id, JSON.stringify(usageSchema.parse(this.clean(total))));
+        })
+        .immediate();
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -745,6 +794,13 @@ export class SqliteConversations implements ConversationStore {
   bindWorkspace(id: string, workspace: string): void {
     this.db.query('UPDATE conversations SET workspace=? WHERE id=? AND workspace IS NULL').run(workspace, id);
   }
+  /** Read identity without triggering conversation recovery or loading its history. */
+  workspace(id: string): string | null | undefined {
+    const row = this.db.query('SELECT workspace FROM conversations WHERE id=?').get(id) as {
+      workspace: string | null;
+    } | null;
+    return row?.workspace;
+  }
   private recordPrompt(sessionId: string, id: string, content: string): void {
     const owner = this.db.query('SELECT workspace FROM conversations WHERE id=?').get(sessionId) as {
       workspace: string | null;
@@ -785,17 +841,19 @@ export class SqliteConversations implements ConversationStore {
       .all(...args, limit) as PromptHistoryEntry[];
     return rows.map(r => ({...r, id: `${r.sessionId}:${r.id}`, content: this.redact(r.content).slice(0, 16000)}));
   }
-  list(): SessionSummary[] {
+  list(workspace?: string): SessionSummary[] {
     try {
       const rows = this.db
         .query(
-          'SELECT id, selection, revision, rowid FROM conversations WHERE id NOT IN (SELECT id FROM subagent_sessions) ORDER BY rowid DESC LIMIT 200',
+          `SELECT id, selection, revision, rowid, title FROM conversations WHERE id NOT IN (SELECT id FROM subagent_sessions)
+          ${workspace === undefined ? '' : 'AND workspace=?'} ORDER BY rowid DESC LIMIT 200`,
         )
-        .all() as {
+        .all(...(workspace === undefined ? [] : [workspace])) as {
         id: string;
         selection: string;
         revision: number;
         rowid: number;
+        title: string | null;
       }[];
       return rows.map(row => {
         const selection = selectionSchema.parse(JSON.parse(row.selection));
@@ -808,7 +866,9 @@ export class SqliteConversations implements ConversationStore {
         ).map(decodeRow);
         const firstUser = msgs.find(m => m.role === 'user')?.content ?? '';
         const lastMsg = msgs.at(-1);
-        const title = firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`;
+        const title =
+          row.title ??
+          (firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`);
         const preview = lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet';
         return {
           id: row.id,
@@ -824,12 +884,48 @@ export class SqliteConversations implements ConversationStore {
       throw new FutrynError('STORAGE');
     }
   }
+  /** Read quota-bearing sources without loading transcripts, attachments, or recovery journals. */
+  listQuotaSources(workspace: string): Pick<UsageBreakdown, 'accountId' | 'providerId' | 'modelId' | 'quota'>[] {
+    try {
+      const rows = this.db
+        .query(
+          `
+        WITH receipts AS (
+          SELECT r.data, '$.usage.breakdown' AS path
+          FROM conversations c JOIN turn_receipts r ON r.conversation = c.id
+          WHERE c.workspace = ?1 AND c.id NOT IN (SELECT id FROM subagent_sessions)
+          UNION ALL
+          SELECT u.data, '$.breakdown'
+          FROM conversations c JOIN session_usage u ON u.conversation = c.id
+          WHERE c.workspace = ?1 AND c.id NOT IN (SELECT id FROM subagent_sessions)
+        )
+        SELECT source.value AS data
+        FROM receipts, json_each(receipts.data, receipts.path) AS source
+        WHERE source.type = 'object' AND json_type(source.value, '$.quota') = 'array'
+          AND json_type(source.value, '$.accountId') = 'text'
+      `,
+        )
+        .all(workspace) as {data: string}[];
+      return rows.flatMap(row => {
+        const parsed = usageBreakdownSchema.safeParse(JSON.parse(row.data));
+        if (!parsed.success) return [];
+        const {accountId, providerId, modelId, quota} = parsed.data;
+        return [{accountId, providerId, modelId, quota}];
+      });
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
+  }
+  rename(id: string, title: string): boolean {
+    return this.db.query('UPDATE conversations SET title=? WHERE id=?').run(title, id).changes === 1;
+  }
   get(id: string): SessionRecord | undefined {
     try {
-      const row = this.db.query('SELECT id, selection, revision FROM conversations WHERE id=?').get(id) as {
+      const row = this.db.query('SELECT id, selection, revision, title FROM conversations WHERE id=?').get(id) as {
         id: string;
         selection: string;
         revision: number;
+        title: string | null;
       } | null;
       if (!row) return undefined;
       const selection = selectionSchema.parse(JSON.parse(row.selection));
@@ -841,18 +937,24 @@ export class SqliteConversations implements ConversationStore {
           )
           .all(row.id) as StoredRow[]
       ).map(decodeRow);
+      const extraUsage = this.db.query('SELECT data FROM session_usage WHERE conversation=?').get(id) as {
+        data: string;
+      } | null;
       const withMedia = this.withAttachments(id, messages);
       const firstUser = messages.find(m => m.role === 'user')?.content ?? '';
       const lastMsg = messages.at(-1);
       return {
         id: row.id,
-        title: firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`,
+        title:
+          row.title ??
+          (firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`),
         selection,
         revision: row.revision,
         messageCount: messages.filter(m => m.state === 'committed').length,
         lastState: lastMsg?.state ?? 'idle',
         preview: lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet',
         messages: withMedia,
+        ...(extraUsage ? {additionalUsage: usageSchema.parse(JSON.parse(extraUsage.data))} : {}),
         recovery,
         turns: (
           this.db.query('SELECT data FROM turn_receipts WHERE conversation=? ORDER BY revision').all(id) as {

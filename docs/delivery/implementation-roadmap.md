@@ -1,5 +1,7 @@
 # Implementation roadmap
 
+> **Historical roadmap.** The gate-closed and Not implemented statements below record Phase 0 / early task decisions. Current native tool execution, Ink TUI, sessions, MCP manager, memory, LSP and subagents exist. Use the [current capability inventory](../product/feature-parity.md), [latest audit](next-priorities-2026-11-22.md), [test strategy](test-strategy.md) and later ADRs for current implementation and acceptance limits. These historical gates do not disable current tools or certify unsupported hosts.
+
 Task 03B: supervision hardening and adversarial OS evidence under [ADR 0023](../adr/0023-process-supervision.md); [acceptance](process-supervision-acceptance.md). Production gate remains CLOSED: detached/reparented processes and supervisor crash are not contained. No later task is enabled.
 
 Task 03A: bounded exec_command foundation and candidate OS tests under [ADR 0022](../adr/0022-sandboxed-exec-command-foundation.md). **Gate closed**: detached descendant cleanup failed on macOS; Linux/Windows remain unsupported. Tool exposure is disabled; this is not production execution acceptance. See [evidence](exec-command-foundation.md).

@@ -46,7 +46,7 @@ test('idle frame matches reference 01-ready rows 24-29 (effort row, rules, place
   const got = tail(view.lastFrame()!, 6);
   // `low` is shorter than `medium` and stays right aligned two cells from the edge.
   expect(got[0]).toBe(' '.repeat(100 - 2 - '◐ low · /effort'.length) + '◐ low · /effort');
-  expect(got.slice(1, 4)).toEqual([want[1]!, want[2]!, want[3]!]);
+  expect(got.slice(1, 4)).toEqual([want[1]!, '❯ Explain this codebase', want[3]!]);
   expect(got[4]).toContain('shift+tab permissions');
   expect(got[5]).toMatch(/^  ⏸ manual mode on +Context \[----------\] ~0\/100k · 0%$/);
   expect(want[5]).toBe('  ⏸ manual mode on · ← 1 agent');
@@ -156,8 +156,7 @@ test('multi-line hint, deleted-text hint and ctrl+y restore (reference 07-multil
 test('bash mode: ! prompt, shell footer, no mode text (reference 06-bash-mode)', async () => {
   const {view} = await mount({initialValue: '!'});
   const got = tail(view.lastFrame()!, 6);
-  expect(got[2]).toBe('! Try "write a test for <filepath>"');
-  expect((await reference('06-bash-mode', 26, 26))[0]).toBe('! Try "write a test for <filepath>"');
+  expect(got[2]).toBe('! Type a shell command');
   expect(got[5]).toBe('  ! for shell mode');
   expect(view.lastFrame()).not.toContain('manual mode');
 });
@@ -169,7 +168,7 @@ test('# keeps the dispatch prefix but uses the normal prompt and footer (referen
   expect(got[5]).toMatch(/^  ⏸ manual mode on +Context \[----------\] ~0\/100k · 0%$/);
 });
 
-test('a running turn shows an empty prompt without the rotating example', async () => {
+test('a running turn shows an empty prompt without the startup example', async () => {
   const fixture = withEffort();
   fixture.client.createSession();
   const view = renderInk(<Harness onSubmit={() => {}} busy />, {fixture});
@@ -177,9 +176,10 @@ test('a running turn shows an empty prompt without the rotating example', async 
   expect(tail(view.lastFrame()!, 5)[1]).toBe('❯');
 });
 
-test('rotating placeholder starts with the reference phrase', async () => {
+test('the empty input shows an actionable startup suggestion', async () => {
   const {view} = await mount();
-  expect(view.lastFrame()).toContain('Try "write a test for <filepath>"');
+  expect(view.lastFrame()).toContain('Explain this codebase');
+  expect(view.lastFrame()).toContain('tab/→ accept suggestion');
 });
 
 test('messages typed while a turn runs show as "❯ text" + Queued hint; Up retracts them atomically', async () => {

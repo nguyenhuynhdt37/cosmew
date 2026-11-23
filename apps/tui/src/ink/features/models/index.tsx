@@ -22,6 +22,29 @@ function useEffortMetadata(accountId?: string, modelId?: string) {
   return loading;
 }
 const levelsFor = (model?: ModelInfo | null) => model?.reasoningEfforts ?? [];
+function formatModelLimit(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    if (tokens === 1_048_576 || tokens === 1_000_000) return '1M';
+    if (tokens === 2_097_152 || tokens === 2_000_000) return '2M';
+    const millions = tokens / 1_000_000;
+    return `${Number.isInteger(millions) ? String(millions) : millions.toFixed(1).replace(/\.0$/, '')}M`;
+  }
+  if (tokens >= 1_000) {
+    if (tokens >= 4096 && tokens % 1024 === 0 && tokens % 1000 !== 0) return `${tokens / 1024}k`;
+    if (tokens % 1000 === 0) return `${tokens / 1000}k`;
+    return `${Math.round(tokens / 1000)}k`;
+  }
+  return String(tokens);
+}
+export function modelLimitsLabel(model: ModelInfo, showUnknown = false): string {
+  const parts: string[] = [];
+  if (model.contextLimit) parts.push(`${formatModelLimit(model.contextLimit)} ctx`);
+  else if (showUnknown) parts.push('context unknown');
+  if (model.outputLimit) parts.push(`${formatModelLimit(model.outputLimit)} out`);
+  const caps = (['tools', 'vision', 'reasoning'] as const).filter(cap => model.capabilities[cap] === 'supported');
+  if (caps.length) parts.push(caps.join('/'));
+  return parts.join(' · ');
+}
 const budgetHint = (model?: ModelInfo | null, provider?: Provider | null) =>
   (provider?.protocol === 'anthropic' || provider?.protocol === 'gemini') &&
   levelsFor(model).some(level => level !== 'none') &&
@@ -186,13 +209,17 @@ export function ModelsDialog({accountId, onChanged, isStreaming = false, ...prop
       }}
       {...props}
       message={task.busy ? 'Discovering models…' : loading ? 'Loading effort levels…' : task.message}
-      items={models.map(m => ({
-        id: m.id,
-        keywords: m.name,
-        label: m.id,
-        current: m.id === client.status().selection?.modelId,
-        description: levelsFor(m).join(' · ') || 'No effort levels known · provider default',
-      }))}
+      items={models.map(m => {
+        const limits = modelLimitsLabel(m);
+        const efforts = levelsFor(m).join(' · ') || 'No effort levels known · provider default';
+        return {
+          id: m.id,
+          keywords: m.name,
+          label: m.id,
+          current: m.id === client.status().selection?.modelId,
+          description: limits ? `${limits} · ${efforts}` : efforts,
+        };
+      })}
       onHighlight={item => setHighlight(item.id)}
       onSelect={item => (effortPick[item.id] ? select(item.id, effortPick[item.id]) : setModel(item.id))}
     >

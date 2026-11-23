@@ -12,12 +12,38 @@ export const applyPatchDescriptor = {
   capability: 'fs.write' as const,
   inputSchema: {
     type: 'object',
-    properties: {patch: {type: 'string', description: 'The complete Codex patch text.'}},
+    properties: {
+      patch: {type: 'string', description: 'The complete Codex patch text.'},
+      expected_files: {
+        type: 'object',
+        description:
+          'Optional exact preimage guard: canonical target path to lowercase SHA-256 of current UTF-8 bytes, or null for an absent file. Must cover every source and destination exactly. Conflicts refuse the entire patch before approval.',
+        additionalProperties: {anyOf: [{type: 'string', pattern: '^[a-f0-9]{64}$'}, {type: 'null'}]},
+      },
+      expected_modes: {
+        type: 'object',
+        description:
+          'Optional mode guard accompanying expected_files, with the same exact target key set. Values are permission bits (0..511), or null for an absent file.',
+        additionalProperties: {anyOf: [{type: 'integer', minimum: 0, maximum: 511}, {type: 'null'}]},
+      },
+    },
     required: ['patch'],
     additionalProperties: false,
   },
 };
-const input = z.strictObject({patch: z.string().min(1)});
+const input = z.strictObject({
+  patch: z.string().min(1),
+  expected_files: z
+    .record(
+      z.string().min(1),
+      z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .nullable(),
+    )
+    .optional(),
+  expected_modes: z.record(z.string().min(1), z.number().int().min(0).max(0o777).nullable()).optional(),
+});
 export class ApplyPatchHandler implements ToolHandler {
   readonly descriptor = applyPatchDescriptor;
   readonly unavailable: ToolOutput = {
@@ -54,6 +80,41 @@ export class ApplyPatchHandler implements ToolHandler {
       };
     try {
       const plan = this.runtime.verify(parsePatch(parsed.data.patch));
+      if (parsed.data.expected_modes && !parsed.data.expected_files)
+        throw new PatchError('PATCH_CONFLICT', 'Mode guards require expected_files. No changes were made.');
+      if (parsed.data.expected_files) {
+        const expected = parsed.data.expected_files;
+        const touched = new Set(plan.changes.map(change => change.snapshot.identity ?? change.snapshot.path));
+        if (
+          Object.keys(expected).length !== touched.size ||
+          Object.keys(expected).some(path => !touched.has(path)) ||
+          plan.changes.some(change => {
+            const path = change.snapshot.identity ?? change.snapshot.path;
+            return !Object.hasOwn(expected, path) || expected[path] !== change.snapshot.hash;
+          })
+        )
+          throw new PatchError(
+            'PATCH_CONFLICT',
+            'Expected file hashes do not match every patch target. No changes were made. Review the current files before retrying.',
+          );
+      }
+      if (parsed.data.expected_modes) {
+        const expected = parsed.data.expected_modes;
+        const touched = new Set(plan.changes.map(change => change.snapshot.identity ?? change.snapshot.path));
+        if (
+          Object.keys(expected).length !== touched.size ||
+          Object.keys(expected).some(path => !touched.has(path)) ||
+          plan.changes.some(change => {
+            const path = change.snapshot.identity ?? change.snapshot.path;
+            const mode = change.snapshot.content === null ? null : change.snapshot.mode & 0o777;
+            return !Object.hasOwn(expected, path) || expected[path] !== mode;
+          })
+        )
+          throw new PatchError(
+            'PATCH_CONFLICT',
+            'Expected file modes do not match every patch target. No changes were made.',
+          );
+      }
       return {
         kind: 'patch',
         plan,

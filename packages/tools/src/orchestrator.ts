@@ -64,6 +64,7 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
     onEvent?: (event: SubagentEvent) => void,
+    userSkill = false,
   ): Promise<ToolResult> {
     signal?.throwIfAborted();
     const audit: Audit = record =>
@@ -142,7 +143,7 @@ export class ToolOrchestrator {
     try {
       const resolved = this.router.resolve(call.name);
       if (!('handler' in resolved)) return finish(resolved);
-      let prepared = resolved.handler.prepare(call.input);
+      let prepared = resolved.handler.prepare(call.input, userSkill);
       // A tool that must ask a helper (language server) before it knows its effect resolves first;
       // what it resolves to then goes through the same validation, policy and approval (ADR 0043).
       if ('kind' in prepared && prepared.kind === 'deferred') {
@@ -193,7 +194,7 @@ export class ToolOrchestrator {
                         : prepared.kind === 'agent'
                           ? await this.authorizeAgent(call, prepared, audit, signal)
                           : prepared.kind === 'mcp'
-                            ? await this.authorizeMcp(call.name, prepared.target, audit, signal)
+                            ? await this.authorizeMcp(call.name, prepared.target, audit, signal, prepared.identity)
                             : await this.authorizeSearch(call.name, prepared, audit, signal);
       authorizationScopeHash = authorization.scopeHash;
       if (authorization.gate) return finish(authorization.gate);
@@ -469,7 +470,7 @@ export class ToolOrchestrator {
     signal?: AbortSignal,
     allowPrompt = true,
   ): Promise<Authorization> {
-    const generation = this.options.grants.generation;
+    const generation = this.options.grants.generationFor(request.capability);
     const scopeHash = createHash('sha256')
       .update(JSON.stringify([request.capability, grant]))
       .digest('hex');
@@ -491,17 +492,19 @@ export class ToolOrchestrator {
       };
     const answer = await this.options.approve(request, signal);
     signal?.throwIfAborted();
-    if (this.options.grants.generation !== generation)
+    if (this.options.grants.generationFor(request.capability) !== generation) {
+      audit({target, phase: 'decided', decision: 'deny', reason: 'approval-revoked', scopeHash});
       return {
         gate: {
           status: 'denied',
-          code: 'DENIED',
-          content: 'Permissions were revoked while approval was pending. Request access again.',
+          code: 'APPROVAL_REVOKED',
+          content: 'Permissions changed while approval was pending. No changes were made. Request access again.',
           target,
         },
         viaSession: false,
         scopeHash,
       };
+    }
     audit({target, phase: 'decided', decision: answer, reason: 'user', scopeHash});
     // Fail closed even if an injected approval adapter returns an unexpected value. `always` was
     // saved as a project rule by the adapter; it authorizes this call like `once` (ADR 0055).
@@ -708,7 +711,13 @@ export class ToolOrchestrator {
   }
 
   /** MCP tools can change remote state. Plan mode and a read-only agent never call them. */
-  private async authorizeMcp(tool: string, target: string, audit: Audit, signal?: AbortSignal): Promise<Authorization> {
+  private async authorizeMcp(
+    tool: string,
+    target: string,
+    audit: Audit,
+    signal?: AbortSignal,
+    identity?: string,
+  ): Promise<Authorization> {
     const config = sandboxConfig(this.options);
     if (this.options.analysisOnly?.() || config.permissionMode === 'plan' || config.readOnly) {
       audit({target, phase: 'decided', decision: 'deny', reason: 'mcp-read-only'});
@@ -724,8 +733,8 @@ export class ToolOrchestrator {
     }
     return this.permission(
       {effect: 'ask', reason: 'mcp-call'},
-      {tool, capability: 'mcp.call', target, reason: 'mcp-call', scopeKey: `mcp:${target}`},
-      target,
+      {tool, capability: 'mcp.call', target, reason: 'mcp-call', scopeKey: `mcp:${target}:${identity ?? 'legacy'}`},
+      identity ? `${target}:${identity}` : target,
       target,
       audit,
       'MCP call denied by policy.',
@@ -913,27 +922,40 @@ export class ToolOrchestrator {
   /** Exec policy for a launch, or stdin review for input to an owned session (ADR 0034, 0061). */
   private commandDecision(prepared: Extract<PreparedTool, {kind: 'command'}>, file: ResolvedPath): PermissionDecision {
     const config = sandboxConfig(this.options);
-    if (prepared.stdin) {
-      // Input is not a command: only its session's working directory is checked, never the text.
-      const location = evaluateRead(file.relative === '.' ? '.' : file.relative + '/', file.absolute, {
-        stateDirectory: this.options.stateDirectory,
-      });
-      if (location.effect === 'deny') return location;
-      return evaluateStdin({
-        ...prepared.stdin,
-        current: {mode: this.currentSandboxMode()},
-        autoAllow: config.autoAllowBash,
-      });
-    }
-    return evaluateExec(prepared.command, file.relative, file.absolute, {
+    const decision = prepared.stdin
+      ? this.stdinDecision(prepared.stdin, file, config.autoAllowBash)
+      : evaluateExec(prepared.command, file.relative, file.absolute, {
+          stateDirectory: this.options.stateDirectory,
+          sandbox: prepared.sandbox,
+          escalation: prepared.escalation === true,
+          unsandboxedAllowed: config.allowUnsandboxed,
+          autoAllow: config.autoAllowBash,
+          excluded: prepared.excluded === true,
+          classification: prepared.classification,
+        });
+    // Preserve hard denials and terminal transport (polls and interrupts).
+    if (decision.effect !== 'ask' || !prepared.outsideCwd) return decision;
+    if (config.permissionMode === 'plan') return {effect: 'deny', reason: 'plan-mode'};
+    return {effect: 'ask', reason: 'outside-working-directories'};
+  }
+
+  private stdinDecision(
+    stdin: NonNullable<Extract<PreparedTool, {kind: 'command'}>['stdin']>,
+    file: ResolvedPath,
+    autoAllow: boolean,
+  ): PermissionDecision {
+    const location = evaluateRead(file.relative === '.' ? '.' : file.relative + '/', file.absolute, {
       stateDirectory: this.options.stateDirectory,
-      sandbox: prepared.sandbox,
-      escalation: prepared.escalation === true,
-      unsandboxedAllowed: config.allowUnsandboxed,
-      autoAllow: config.autoAllowBash,
-      excluded: prepared.excluded === true,
-      classification: prepared.classification,
     });
+    if (location.effect === 'deny') return location;
+    return evaluateStdin({...stdin, current: {mode: this.currentSandboxMode()}, autoAllow});
+  }
+
+  private commandGrant(prepared: Extract<PreparedTool, {kind: 'command'}>): string {
+    const {command, file, runtimeId, executionKey, excluded, outsideCwd} = prepared;
+    // An in-root grant cannot substitute for consent to an external cwd after trust changes.
+    const scope = excluded || outsideCwd ? JSON.stringify([executionKey, Boolean(excluded), outsideCwd]) : executionKey;
+    return commandGrantTarget(prepared.grantCommand ?? command, file.absolute, runtimeId, scope);
   }
 
   private async authorizeCommand(
@@ -941,7 +963,7 @@ export class ToolOrchestrator {
     audit: Audit,
     signal?: AbortSignal,
   ): Promise<Authorization> {
-    const {command, file, runtime, runtimeId, label} = prepared;
+    const {command, file, runtime, label} = prepared;
     if (!prepared.stdin) {
       // Codex-style classification (ADR 0040); a parser that cannot load fails closed.
       const ready = await ensureShellParser();
@@ -986,14 +1008,10 @@ export class ToolOrchestrator {
         viaSession: false,
       };
     }
-    const grant = commandGrantTarget(
-      prepared.grantCommand ?? command,
-      file.absolute,
-      runtimeId,
-      prepared.excluded ? `${prepared.executionKey}:excluded` : prepared.executionKey,
-    );
-    let commandSandbox: ApprovalRequest['commandSandbox'];
-    let sandbox = runtime.label;
+    const grant = this.commandGrant(prepared);
+    let commandSandbox: ApprovalRequest['commandSandbox'] =
+      prepared.stdin?.launch.unsandboxed && !sandboxConfig(this.options).enabled ? 'disabled' : undefined;
+    let sandbox = prepared.stdin?.launch.unsandboxed ? 'sandbox off' : runtime.label;
     if (prepared.sandbox) {
       if (prepared.escalation || prepared.excluded) {
         commandSandbox = prepared.escalation ? 'escape' : 'excluded';
@@ -1012,7 +1030,7 @@ export class ToolOrchestrator {
         tool: prepared.toolName ?? 'exec_command',
         capability: 'process.execute',
         target: command,
-        workdir: file.relative,
+        workdir: prepared.outsideCwd ? file.absolute : file.relative,
         sandbox,
         ...(commandSandbox ? {commandSandbox} : {}),
         // The approval is bound to exactly this command, directory and sandbox (ADR 0055).
@@ -1049,13 +1067,8 @@ export class ToolOrchestrator {
     viaSession: boolean,
     audit: Audit,
   ): ToolOutput | null {
-    const {command, file, runtime, runtimeId, label} = prepared;
-    const grant = commandGrantTarget(
-      prepared.grantCommand ?? command,
-      file.absolute,
-      runtimeId,
-      prepared.excluded ? `${prepared.executionKey}:excluded` : prepared.executionKey,
-    );
+    const {file, runtime, runtimeId, label} = prepared;
+    const grant = this.commandGrant(prepared);
     const again = resolveWorkspacePath(this.options, prepared.workdir);
     const current = this.commandDecision(prepared, again);
     // The configured sandbox is part of the approval: a change before launch voids it (no retrofit).
@@ -1074,6 +1087,7 @@ export class ToolOrchestrator {
     if (
       again.absolute !== file.absolute ||
       again.kind !== 'directory' ||
+      outsideWorkingDirectories(this.options, again.absolute) !== prepared.outsideCwd ||
       current.effect === 'deny' ||
       sandboxChanged ||
       runtime.id !== runtimeId ||

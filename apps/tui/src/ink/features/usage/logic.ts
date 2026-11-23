@@ -61,6 +61,18 @@ export function limitSnapshotText(account: AccountLimits, now = Date.now()): str
   return `source ${account.source} · observed ${account.observedAt ?? 'unknown'} · ${age}${account.stale ? ' · STALE' : ''}`;
 }
 
+/** Reply percentages need a provider-reported reset to be presented as part of a current window. */
+export function isHistoricalLimit(account: AccountLimits, item: LimitItem, now = Date.now()): boolean {
+  const source = item.source ?? account.source;
+  const reset = item.resetAt ? Date.parse(item.resetAt) : NaN;
+  return (
+    (Number.isFinite(reset) && reset <= now) ||
+    (source === 'last-turn' && item.unit !== 'USD' && !Number.isFinite(reset)) ||
+    (source === 'live' && Boolean(account.error)) ||
+    (!item.source && Boolean(account.stale))
+  );
+}
+
 /** Each item can come from a different reply or credit lookup. Never borrow the newest sibling timestamp. */
 export function limitItemSnapshotText(account: AccountLimits, item: LimitItem, now = Date.now()): string {
   const legacy = !item.source && account.source !== 'mixed';
@@ -71,7 +83,8 @@ export function limitItemSnapshotText(account: AccountLimits, item: LimitItem, n
     (source === 'live' && account.error) ||
     (legacy && account.stale),
   );
-  return limitSnapshotText({...account, source, observedAt, stale}, now);
+  const snapshot = limitSnapshotText({...account, source, observedAt, stale}, now);
+  return isHistoricalLimit(account, item, now) ? `${snapshot} · Current quota unknown` : snapshot;
 }
 
 /** One block per connected account; only provider-reported numbers, never local guesses. */
@@ -132,49 +145,93 @@ export function usageBreakdownRows(usage: ReturnType<FutrynClient['usage']>): st
   ];
 }
 
+function short(value: number | null | undefined): string {
+  if (value == null) return '—';
+  return value >= 10000
+    ? `${(value / 1000).toLocaleString('en-US', {maximumFractionDigits: 1})}k`
+    : value.toLocaleString('en-US');
+}
+const field = (label: string, value: string) => label.padEnd(16) + value;
+const tokens = (input: number | null | undefined, output: number | null | undefined) =>
+  input == null && output == null ? 'Not reported' : `${short(input)} in · ${short(output)} out`;
+
+export function usageSummaryRows(usage: ReturnType<FutrynClient['usage']>): string[] {
+  if (!usage.turns && !usage.historicalTurns) return ['No usage yet in this session.'];
+  return [
+    field('Session tokens', tokens(usage.inputTokens, usage.outputTokens)),
+    field('API estimate', money(usage.estimatedCostUSD)),
+    ...(usage.reportedCostUSD == null ? [] : [field('Reported USD', money(usage.reportedCostUSD))]),
+  ];
+}
+
+function usageReportRows(usage: ReturnType<FutrynClient['usage']>, limits: string[], details: boolean): string[] {
+  if (!details) {
+    if (!usage.turns && !usage.historicalTurns)
+      return ['No usage yet.', 'Send a message or resume a conversation.', '', ...limits];
+    return [
+      field('Input total', short(usage.inputTokens)),
+      field('Output total', short(usage.outputTokens)),
+      field('API estimate', money(usage.estimatedCostUSD)),
+      field('Reported USD', money(usage.reportedCostUSD)),
+      'API estimates and reported USD are not subscription bills.',
+      ...(usage.premiumRequests != null ? [field('Premium units', short(usage.premiumRequests))] : []),
+      '',
+      field('Last turn', tokens(usage.last?.usage?.inputTokens, usage.last?.usage?.outputTokens)),
+      ...(usage.last && ['failed', 'cancelled', 'interrupted'].includes(usage.last.outcome)
+        ? [field('Outcome', [usage.last.outcome, usage.last.errorCode].filter(Boolean).join(' · '))]
+        : usage.last?.stopReason === 'context_window'
+          ? [field('Stopped', 'Context window')]
+          : []),
+      'All requests; input may repeat. Context: /context.',
+      field('Reported', `${usage.reportedTurns} / ${usage.turns + usage.historicalTurns} turns`),
+      ...(usage.unknownTurns ? ['', 'Some turns have no usage data.'] : []),
+      '',
+      ...usageBreakdownRows(usage),
+      '',
+      ...limits,
+    ];
+  }
+  return [
+    'SESSION USAGE · local observations, not account billing',
+    'Totals sum all model requests, including repeated input across tool rounds.',
+    'These totals are not context occupancy; /context shows the current window.',
+    `Coverage: ${usage.reportedTurns}/${usage.turns + usage.historicalTurns} turns with input/output counts`,
+    `Unknown or historical turns: ${usage.unknownTurns}`,
+    `Input subtotal: ${count(usage.inputTokens)} · Output subtotal: ${count(usage.outputTokens)}`,
+    `API estimate subtotal: ${money(usage.estimatedCostUSD)} · Provider-reported USD subtotal: ${money(usage.reportedCostUSD)} · priced turns ${usage.pricedTurns}/${usage.turns + usage.historicalTurns}`,
+    'Missing prices/usage are excluded, never counted as free.',
+    `Premium request units: ${count(usage.premiumRequests)} (not USD)`,
+    'API estimates and provider-reported USD are not subscription bills.',
+    '',
+    'LAST TURN',
+    `Outcome: ${usage.last?.outcome === 'pending' ? 'Pending / unfinalized' : (usage.last?.outcome ?? 'No recorded turn')}`,
+    ...(usage.last?.errorCode
+      ? [`Error: ${usage.last.errorCode}`]
+      : usage.last?.stopReason === 'context_window'
+        ? ['Stopped at the context window.']
+        : []),
+    `Input: ${count(usage.last?.usage?.inputTokens)} · Output: ${count(usage.last?.usage?.outputTokens)}`,
+    `Cache read: ${count(usage.last?.usage?.cacheReadTokens)} · Cache write: ${count(usage.last?.usage?.cacheWriteTokens)}`,
+    `Reasoning tokens: ${count(usage.last?.usage?.reasoningTokens)} (subset of output; not added twice)`,
+    'Cache read/write counts are subsets of input tokens.',
+    `USD subtotal${usage.last?.usage?.costEstimated ? ' (includes API estimates)' : ' (provider-reported)'}: ${money(usage.last?.usage?.costUSD)}`,
+    `Price source: ${usage.last?.usage?.pricingSource ?? 'Unavailable'}`,
+    `Price observed: ${usage.last?.usage?.pricingAt ?? 'Unknown'}`,
+    '',
+    ...usageBreakdownRows(usage),
+    '',
+    ...limits,
+  ];
+}
+
 export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', details = false): string[] {
-  const status = client.status();
   const usage = client.usage();
+  if (kind === 'usage') return usageReportRows(usage, limitRows(client.limits()), details);
+  const status = client.status();
   const context = client.context(draft);
   const project = client.projectContext();
   const git = client.toolsEnabled() ? client.getWorkspaceDiff() : null;
-  const limits = kind === 'usage' ? limitRows(client.limits()) : [];
   if (!details) {
-    const short = (value: number | null | undefined) =>
-      value == null
-        ? '—'
-        : value >= 10000
-          ? `${(value / 1000).toLocaleString('en-US', {maximumFractionDigits: 1})}k`
-          : value.toLocaleString('en-US');
-    const field = (label: string, value: string) => label.padEnd(16) + value;
-    const tokens = (input: number | null | undefined, output: number | null | undefined) =>
-      input == null && output == null ? 'Not reported' : `${short(input)} in · ${short(output)} out`;
-    if (kind === 'usage') {
-      if (!usage.turns && !usage.historicalTurns)
-        return ['No usage yet.', 'Send a message or resume a conversation.', '', ...limits];
-      return [
-        field('Input total', short(usage.inputTokens)),
-        field('Output total', short(usage.outputTokens)),
-        field('API estimate', money(usage.estimatedCostUSD)),
-        field('Reported USD', money(usage.reportedCostUSD)),
-        'API estimates and reported USD are not subscription bills.',
-        ...(usage.premiumRequests != null ? [field('Premium units', short(usage.premiumRequests))] : []),
-        '',
-        field('Last turn', tokens(usage.last?.usage?.inputTokens, usage.last?.usage?.outputTokens)),
-        ...(usage.last && ['failed', 'cancelled', 'interrupted'].includes(usage.last.outcome)
-          ? [field('Outcome', [usage.last.outcome, usage.last.errorCode].filter(Boolean).join(' · '))]
-          : usage.last?.stopReason === 'context_window'
-            ? [field('Stopped', 'Context window')]
-            : []),
-        'All requests; input may repeat. Context: /context.',
-        field('Reported', `${usage.reportedTurns} / ${usage.turns + usage.historicalTurns} turns`),
-        ...(usage.unknownTurns ? ['', 'Some turns have no usage data.'] : []),
-        '',
-        ...usageBreakdownRows(usage),
-        '',
-        ...limits,
-      ];
-    }
     if (kind === 'context') {
       const display = contextDisplay(context);
       const ratio = display.ratio;
@@ -260,37 +317,6 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
       ),
     ];
   }
-  const usageRows = [
-    'SESSION USAGE · local observations, not account billing',
-    'Totals sum all model requests, including repeated input across tool rounds.',
-    'These totals are not context occupancy; /context shows the current window.',
-    `Coverage: ${usage.reportedTurns}/${usage.turns + usage.historicalTurns} turns with input/output counts`,
-    `Unknown or historical turns: ${usage.unknownTurns}`,
-    `Input subtotal: ${count(usage.inputTokens)} · Output subtotal: ${count(usage.outputTokens)}`,
-    `API estimate subtotal: ${money(usage.estimatedCostUSD)} · Provider-reported USD subtotal: ${money(usage.reportedCostUSD)} · priced turns ${usage.pricedTurns}/${usage.turns + usage.historicalTurns}`,
-    'Missing prices/usage are excluded, never counted as free.',
-    `Premium request units: ${count(usage.premiumRequests)} (not USD)`,
-    'API estimates and provider-reported USD are not subscription bills.',
-    '',
-    'LAST TURN',
-    `Outcome: ${usage.last?.outcome === 'pending' ? 'Pending / unfinalized' : (usage.last?.outcome ?? 'No recorded turn')}`,
-    ...(usage.last?.errorCode
-      ? [`Error: ${usage.last.errorCode}`]
-      : usage.last?.stopReason === 'context_window'
-        ? ['Stopped at the context window.']
-        : []),
-    `Input: ${count(usage.last?.usage?.inputTokens)} · Output: ${count(usage.last?.usage?.outputTokens)}`,
-    `Cache read: ${count(usage.last?.usage?.cacheReadTokens)} · Cache write: ${count(usage.last?.usage?.cacheWriteTokens)}`,
-    `Reasoning tokens: ${count(usage.last?.usage?.reasoningTokens)} (subset of output; not added twice)`,
-    'Cache read/write counts are subsets of input tokens.',
-    `USD subtotal${usage.last?.usage?.costEstimated ? ' (includes API estimates)' : ' (provider-reported)'}: ${money(usage.last?.usage?.costUSD)}`,
-    `Price source: ${usage.last?.usage?.pricingSource ?? 'Unavailable'}`,
-    `Price observed: ${usage.last?.usage?.pricingAt ?? 'Unknown'}`,
-    '',
-    ...usageBreakdownRows(usage),
-    '',
-    ...limits,
-  ];
   const contextRows = [
     'CONTEXT WINDOW',
     `Model: ${status.selection?.modelId ?? 'None'}`,
@@ -328,7 +354,6 @@ export function reportRows(client: FutrynClient, kind: ReportKind, draft = '', d
     'Session cumulative token consumption is not context occupancy.',
     `At ${CONTEXT_COMPACTION_FRACTION * 100}% of the context window, automatic compaction tries to summarize older history. /compact runs on demand when idle.`,
   ];
-  if (kind === 'usage') return usageRows;
   if (kind === 'context') return contextRows;
   return [
     'CONNECTION & SESSION',

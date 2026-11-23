@@ -69,13 +69,13 @@ export class ChatInput {
     if (answer === undefined || answer.trim() === '/cancel') throw new FutrynError('CANCELLED');
     return answer.trim() || defaultValue || '';
   }
-  async secret(): Promise<string> {
+  async secret(options: {allowEmpty?: boolean; label?: string} = {}): Promise<string> {
     if (!process.stdin.isTTY || this.queue.length) {
       this.queue = [];
       this.queuedBytes = 0;
       throw new FutrynError('INVALID_INPUT');
     }
-    process.stderr.write('API key (hidden): ');
+    process.stderr.write(`${options.label ?? 'API key (hidden)'}: `);
     this.hidden = true;
     try {
       const answer = await this.line();
@@ -86,6 +86,7 @@ export class ChatInput {
         throw new FutrynError('INVALID_INPUT');
       }
       if (answer === '/cancel') throw new FutrynError('CANCELLED');
+      if (options.allowEmpty && !answer) return '';
       if (!answer || answer.length > 8192 || /[\x00-\x20\x7f]/.test(answer)) throw new FutrynError('INVALID_INPUT');
       return answer;
     } finally {
@@ -110,9 +111,9 @@ export async function ask(label: string, defaultValue?: string): Promise<string>
     input.close();
   }
 }
-export async function secretInput(): Promise<string> {
+export async function secretInput(label = 'API key'): Promise<string> {
   if (!process.stdin.isTTY || !process.stdin.setRawMode) throw new FutrynError('INVALID_INPUT');
-  process.stderr.write('API key (hidden): ');
+  process.stderr.write(`${label} (hidden): `);
   process.stdin.setRawMode(true);
   process.stdin.setEncoding('utf8');
   process.stdin.resume();

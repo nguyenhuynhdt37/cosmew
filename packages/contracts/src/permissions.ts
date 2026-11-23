@@ -69,8 +69,8 @@ export type PermissionPromptResolution = z.infer<typeof permissionPromptResoluti
  * - acceptEdits: edits inside the working directory (and `additionalDirectories`) are approved;
  *   commands follow `default`.
  * - plan: read-only research; edits, commands and network are refused.
- * - bypassPermissions: nothing prompts (`--dangerously-skip-permissions`). The OS sandbox still
- *   applies when it is enabled. Deny rules and the hard path denials never change.
+ * - bypassPermissions: skips ordinary prompts (`--dangerously-skip-permissions`). External
+ *   command working directories still require approval. The OS sandbox and hard denials still apply.
  * The mode answers only what policy and rules left as `ask`; deny rules (and protected paths) win.
  */
 export const permissionModeSchema = z.enum(['default', 'acceptEdits', 'plan', 'bypassPermissions']);
@@ -87,7 +87,7 @@ export const PERMISSION_MODE_LABELS: Record<PermissionMode, string> = {
 };
 /** Shown whenever bypassPermissions is entered (`--dangerously-skip-permissions`, `/permissions`). */
 export const BYPASS_PERMISSIONS_WARNING =
-  'WARNING: bypassPermissions skips every permission prompt: file edits, commands and sandbox network requests are approved without asking. The OS sandbox (when enabled), deny rules and the audit trail still apply. Use it only in a disposable environment.';
+  'WARNING: bypassPermissions auto-approves ordinary file edits, commands and sandbox network requests. External working directories still require approval for commands. The OS sandbox (when enabled), deny rules and the audit trail still apply. Use it only in a disposable environment.';
 
 /**
  * Internal enforcement mode of one command (not user configuration): `read-only` and
@@ -141,7 +141,7 @@ export const PERMISSION_MODE_HINTS: Record<PermissionMode, string> = {
   default: 'Asks before file edits and before commands that no rule or the sandbox auto-allow covers.',
   acceptEdits: 'File edits in the working directory are approved; commands follow default.',
   plan: 'Read-only: edits, commands and network are refused.',
-  bypassPermissions: 'No prompts. The OS sandbox (when enabled) and deny rules still apply.',
+  bypassPermissions: 'Skips ordinary prompts. Commands in external directories still require approval.',
 };
 
 /**

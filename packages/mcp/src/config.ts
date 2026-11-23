@@ -1,7 +1,7 @@
 /** One server from the user file `~/.cosmew/mcp.json` (or `COSMEW_HOME/mcp.json`; legacy roots remain supported). */
 export type McpServerSpec =
-  | {name: string; transport: 'stdio'; command: string; args: string[]; env: Record<string, string>}
-  | {name: string; transport: 'http'; url: string; headers: Record<string, string>};
+  | {name: string; transport: 'stdio'; command: string; args: string[]; env: Record<string, string>; enabled?: boolean}
+  | {name: string; transport: 'http'; url: string; headers: Record<string, string>; enabled?: boolean};
 
 const SERVER_NAME = /^[A-Za-z0-9_-]{1,32}$/;
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -64,7 +64,14 @@ export function parseMcpConfig(text: string): McpConfigParse {
       continue;
     }
     const spec = entry.url !== undefined ? httpServer(name, entry, problems) : stdioServer(name, entry, problems);
-    if (spec) servers.push(spec);
+    if (spec) {
+      if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+        problems.push(`${name}: enabled must be boolean.`);
+        continue;
+      }
+      if (typeof entry.enabled === 'boolean') spec.enabled = entry.enabled;
+      servers.push(spec);
+    }
   }
   return {servers, problems};
 }

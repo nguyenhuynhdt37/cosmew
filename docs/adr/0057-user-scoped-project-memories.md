@@ -148,3 +148,73 @@ Regression tests bao phủ Read Only, plan/analysisOnly, untrusted, Auto và pro
 ## Update (ADR 0061)
 
 The permission model changed to Claude Code's: memory write/delete is refused in `plan` mode (and in Plan/Review agent mode and read-only subagents), is an `edit` otherwise (`default` asks, `acceptEdits`/`bypassPermissions` write) and project deny rules (`Tool(memory)`) still win. The Read Only/Auto/untrusted wording above is historical.
+
+## Crash recovery update (2026-11-22, internal storage only)
+
+This update supersedes the stale-lock/manual-rebuild limitation above. No public
+contract, SQLite schema, package edge or dependency changes.
+
+Memory operations now acquire a descriptor-relative regular `.lock` file with
+kernel `flock`, supplied by the already trusted system libc. The file
+is persistent and must never be removed during normal operation. Kernel ownership
+ends on close/process death, including SIGKILL: no PID, PID start time, timeout or
+stale lease can authorize stealing another process's lock. Independent-process
+contention retries nonblocking acquisition for at most 250 ms in steps of at most
+10 ms, then fails closed; callers can retry. A process-local inode ownership set
+refuses same-process contention immediately, so a synchronous caller cannot block
+its own owner. Symlinks, hardlinks, nonregular files, foreign owners,
+and inode replacement detected after acquisition are rejected. List and context
+also lock so they cannot observe an interrupted mutation before reconciliation.
+
+**Legacy migration:** the previous empty `.lock` directory has no PID/owner record.
+There is no safe way to distinguish a live old executable from a crashed one.
+It is never removed automatically. Storage reports an actionable diagnostic: stop
+all Cosmew processes using that memory directory, remove only its empty `.lock`
+directory, and retry. Never delete a regular `.lock` file; doing so can split kernel
+lock ownership. Do not run old and new executables against the same memory root.
+
+Before changing a memory, an atomic/fsynced bounded `.pending.json` journal stores
+its validated slug, before/after content hashes and intended usage state. Content,
+index and usage still commit by individual atomic rename/fsync; deletes now fsync
+the directory too. On every subsequent open, under the kernel lock, recovery
+validates the journal and actual Markdown files, repairs the affected generated
+index link from current frontmatter, filters usage records to existing files and
+finishes/removes the journal durably. It never stores/replays a memory body, so
+user changes or deletions made after a crash remain authoritative. If actual
+content matches the intended commit, planned usage metadata is retained; otherwise
+current usage plus actual file mtime is retained. Unrelated custom index lines,
+including blank lines, are preserved; the generated link for the affected slug is
+owned by reconciliation. Normal successful explicit mutations retain their existing
+full-index rebuild behavior. A second crash during recovery can be reconciled again.
+Exclusive UUID temporary files abandoned by a killed atomic write are removed
+under the same lock, with the same no-symlink/no-hardlink checks. Cleanup streams
+through abandoned temporary files before applying the 264-entry list bound. A
+scan processes at most 4,096 directory entries; if that limit is reached it fails
+closed after deleting the temporary files already visited, so subsequent retries
+continue making progress through a larger finite backlog. Corrupt journal JSON
+and schema diagnostics become the standard bounded `STORAGE` error.
+
+Evidence: `tests/contracts/memory-recovery.test.ts`, real child processes running
+production storage methods, paused after completed durable operations and killed
+with SIGKILL. Covers live-holder exclusion and post-kill reopening, journal/content/
+index/usage/delete boundaries, a second crash during recovery, body/index user edits,
+stale/reused PID text ignored, malicious journal slugs and lock/journal symlinks.
+No test-only crash hook was added to production. macOS arm64 / Bun 1.4.4 verified;
+Linux libc/flock and power-loss certification remain **Needs verification**. These
+are process-crash tests, not claims of hardware/filesystem power-loss behavior.
+
+### Independent review follow-up (2026-11-22)
+
+Verified section 3.4 of the local read-only review against the implementation.
+Regression tests first reproduced immediate interprocess contention failure,
+raw JSON/schema errors, and inability to reopen with 300 abandoned temporary files.
+The fixes above are covered by actual child processes releasing locks after a short
+hold, a child killed after leaving 300 exclusive-name temporary files, immediate
+same-process contention refusal, and existing long-held live-owner/SIGKILL tests.
+The temporary-file fixture uses the reserved atomic-write namespace with real
+filesystem writes; this proves backlog cleanup and process-death exclusion, not
+300 independently observed crashes or hardware power-loss behavior.
+
+Focused validation after this follow-up: memory recovery, memory contract and
+memory end-to-end tests **47 pass / 0 fail / 243 assertions**; typecheck, scoped
+Prettier and diff checks passed on macOS arm64 / Bun 1.4.4. No guard bypass.
