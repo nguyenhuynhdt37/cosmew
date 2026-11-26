@@ -281,7 +281,7 @@ export class SecureFiles {
         if (native!.symbols.unlinkat(parent.fd, parent.name, 0) !== 0) fail('WRITE_FAILED');
         return;
       }
-      const temp = c('.hannes-patch-' + randomUUID());
+      const temp = c('.cosmew-patch-' + randomUUID());
       const fd = native!.symbols.openat(
         parent.fd,
         temp,

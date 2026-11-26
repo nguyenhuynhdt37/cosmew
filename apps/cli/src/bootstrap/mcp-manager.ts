@@ -10,6 +10,7 @@ import {
   type McpManagementResult,
 } from '@cosmew/contracts';
 import {FileMcpSettings, FileMcpAuthStore} from '@cosmew/persistence';
+import {registerConfigSecrets} from '@cosmew/security';
 import {
   McpHub,
   McpCatalog,
@@ -116,8 +117,7 @@ export class McpManager {
   }
   private register(specs: McpServerSpec[]) {
     for (const spec of specs)
-      for (const secret of Object.values(spec.transport === 'http' ? spec.headers : spec.env))
-        if (secret) this.options.registerSecret(secret);
+      registerConfigSecrets(spec.transport === 'http' ? spec.headers : spec.env, this.options.registerSecret);
   }
   private read() {
     const saved = this.store.read();

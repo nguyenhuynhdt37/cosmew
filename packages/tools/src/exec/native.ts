@@ -231,6 +231,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private closed = false;
 
   private readonly serviceSandbox?: NativeSandbox;
+  private readonly bwrapPath?: string;
 
   constructor(private readonly options: NativeRuntimeOptions) {
     const os = options.platform ?? process.platform;
@@ -262,6 +263,7 @@ export class NativeCommandRuntime implements CommandRuntime {
     const toolchains = [...new Set([...toolchainDirectories(pathDirectories, home), ...rustup.readable])];
     this.deniedFiles = cargoSecretFiles([...pathDirectories, ...toolchains], home);
 
+    const bwrap = os === 'linux' ? findExecutable('bwrap', this.path) : undefined;
     if (os === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
       this.sandbox = new SeatbeltSandbox({
         workspace: this.canonicalWorkspaceRoot,
@@ -282,9 +284,10 @@ export class NativeCommandRuntime implements CommandRuntime {
         denied: this.deniedFiles,
         loopback: false,
       });
-    } else if (os === 'linux' && findExecutable('bwrap', this.path)) {
+    } else if (os === 'linux' && bwrap) {
+      this.bwrapPath = bwrap;
       this.sandbox = new BubblewrapSandbox({
-        bwrap: findExecutable('bwrap', this.path)!,
+        bwrap,
         workspace: this.canonicalWorkspaceRoot,
         state: this.canonicalStateDirectory,
         scratch: this.scratch,
@@ -292,7 +295,7 @@ export class NativeCommandRuntime implements CommandRuntime {
         hideSecrets: options.hideSecrets === true,
       });
       this.serviceSandbox = new BubblewrapSandbox({
-        bwrap: findExecutable('bwrap', this.path)!,
+        bwrap,
         workspace: this.canonicalWorkspaceRoot,
         state: this.canonicalStateDirectory,
         scratch: this.scratch,
@@ -373,8 +376,11 @@ export class NativeCommandRuntime implements CommandRuntime {
   }
 
   private runSelfTest(probe: string): boolean {
+    const probeSettings = '{"probe":true}';
     writeFileSync(join(probe, '.env'), 'PROBE_SECRET');
     mkdirSync(join(probe, '.git'));
+    mkdirSync(join(probe, '.cosmew'));
+    writeFileSync(join(probe, '.cosmew', 'settings.json'), probeSettings);
     const outside = join(dirname(probe), 'fyn-probe-outside-' + randomUUID());
     // A throwaway "home": its credential directory must be unreadable while the rest of it, like
     // the rest of the system, stays readable (ADR 0061).
@@ -393,21 +399,28 @@ export class NativeCommandRuntime implements CommandRuntime {
               home: probeHome,
               secrets: secretPatterns(),
             })
-          : this.sandbox!;
+          : new BubblewrapSandbox({
+              bwrap: this.bwrapPath!,
+              workspace: probe,
+              scratch: this.scratch,
+              home: probeHome,
+              hideSecrets: true,
+            });
       const script = [
         'echo ok > made',
         '! cat .env 2>/dev/null | grep -q PROBE',
         '! touch .git/x 2>/dev/null',
+        '! cat .cosmew/settings.json >/dev/null 2>&1',
+        '! touch .cosmew/x 2>/dev/null',
+        "! /bin/sh -c 'echo pwned > .cosmew/settings.json' 2>/dev/null",
         `! touch ${JSON.stringify(outside)} 2>/dev/null`,
-        ...(this.sandbox!.name === 'macos-seatbelt'
-          ? [
-              `! cat ${JSON.stringify(join(probeHome, '.ssh', 'id_probe'))} >/dev/null 2>&1`,
-              `grep -q VISIBLE ${JSON.stringify(join(probeHome, 'visible.txt'))}`,
-              `! touch ${JSON.stringify(join(probeHome, 'planted'))} 2>/dev/null`,
-            ]
-          : []),
+        `! cat ${JSON.stringify(join(probeHome, '.ssh', 'id_probe'))} >/dev/null 2>&1`,
+        `grep -q VISIBLE ${JSON.stringify(join(probeHome, 'visible.txt'))}`,
+        `! touch ${JSON.stringify(join(probeHome, 'planted'))} 2>/dev/null`,
         `! kill -0 ${process.pid} 2>/dev/null`,
-        '! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null',
+        ...(this.sandbox!.name === 'macos-seatbelt'
+          ? ['! /usr/bin/open -g -j -a /System/Applications/Calculator.app 2>/dev/null']
+          : []),
       ].join(' && ');
       const argv = sandbox.wrap(
         ['/bin/bash', '--noprofile', '--norc', '-c', script],
@@ -424,8 +437,11 @@ export class NativeCommandRuntime implements CommandRuntime {
       return (
         result.status === 0 &&
         readFileSync(join(probe, 'made'), 'utf8') === 'ok\n' &&
+        readFileSync(join(probe, '.cosmew', 'settings.json'), 'utf8') === probeSettings &&
         !existsSync(outside) &&
-        !existsSync(join(probe, '.git', 'x'))
+        !existsSync(join(probe, '.git', 'x')) &&
+        !existsSync(join(probe, '.cosmew', 'x')) &&
+        !existsSync(join(probeHome, 'planted'))
       );
     } finally {
       rmSync(probeHome, {recursive: true, force: true});

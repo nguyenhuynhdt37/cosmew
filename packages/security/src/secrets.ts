@@ -1,9 +1,77 @@
 import {FutrynError, credentialRefSchema, type CredentialRef, type CredentialVault} from '@cosmew/contracts';
 
+const AUTH_SCHEME_VALUE = /^(?:Bearer|Basic|Digest|Token|ApiKey)\s+(.+)$/i;
+const URL_USER_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:([^/\s@]+)@/i;
+const SENSITIVE_KEY_WORD =
+  /^(?:key|keys|secret|secrets|token|tokens|password|passwords|passwd|pwd|auth|authorization|proxy-authorization|credential|credentials|cookie|cookies|set-cookie|private|bearer|pat|jwt|session|sessions|dsn|signature|signatures|cert|certs)$/i;
+const SECRET_VALUE_PATTERN =
+  /^(?:sk-|rk-|pk-|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|npm_|pypi-|AIza[0-9A-Za-z_-]{16,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|ak_|pat_)/;
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function isSensitiveConfigKey(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (/^(?:authorization|proxy-authorization|cookie|set-cookie)$/.test(normalized)) return true;
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-zA-Z])([0-9])/g, '$1 $2')
+    .replace(/([0-9])([a-zA-Z])/g, '$1 $2')
+    .split(/[-_.\s/:]+/)
+    .filter(Boolean);
+  return words.some(word => SENSITIVE_KEY_WORD.test(word));
+}
+
+const NON_SECRET_CONFIG_VALUES =
+  /^(?:true|false|yes|no|null|none|undefined|on|off|0|1|dev|development|prod|production|test|testing|stage|staging|local|debug|info|warn|warning|error|trace|utf-?8|ascii|json|text|html)$/i;
+
+/**
+ * Register only credentials and secret-bearing values from config maps (such as MCP `env` or `headers`),
+ * avoiding short or benign config strings like `"1"`, `"dev"`, `"info"`, `"true"`, or `"application/json"`.
+ */
+export function registerConfigSecrets(entries: Record<string, string>, register: (secret: string) => void): void {
+  if (!entries || typeof entries !== 'object') return;
+  const emit = (candidate: string) => {
+    const normalized = candidate.trim();
+    if (normalized.length >= 4 && !NON_SECRET_CONFIG_VALUES.test(normalized)) register(normalized);
+  };
+  for (const [key, value] of Object.entries(entries)) {
+    if (typeof value !== 'string') continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    let registeredWhole = false;
+    const authMatch = AUTH_SCHEME_VALUE.exec(trimmed);
+    if (authMatch) {
+      emit(trimmed);
+      registeredWhole = true;
+      const credential = authMatch[1];
+      if (credential) emit(credential);
+    }
+
+    const urlMatch = URL_USER_PASSWORD.exec(trimmed);
+    if (urlMatch?.[1]) {
+      const rawPassword = urlMatch[1];
+      const decodedPassword = safeDecodeURIComponent(rawPassword);
+      emit(rawPassword);
+      if (decodedPassword !== rawPassword) emit(decodedPassword);
+    }
+
+    if (!registeredWhole && (isSensitiveConfigKey(key) || SECRET_VALUE_PATTERN.test(trimmed))) emit(trimmed);
+  }
+}
+
 export class Redactor {
   private readonly secrets = new Set<string>();
   register(secret: string) {
-    if (secret) this.secrets.add(secret);
+    if (!secret || secret.trim().length < 3) return;
+    this.secrets.add(secret);
   }
   text(value: string): string {
     let result = value;

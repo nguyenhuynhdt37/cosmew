@@ -3,6 +3,7 @@ import {mkdtempSync, realpathSync, rmSync, writeFileSync, readFileSync, symlinkS
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {FileMcpSettings} from '@cosmew/persistence';
+import {Redactor} from '@cosmew/security';
 import {McpManager} from '../../apps/cli/src/bootstrap/mcp-manager';
 import type {CredentialVault} from '@cosmew/contracts';
 const clean: (() => void | Promise<void>)[] = [];
@@ -417,4 +418,73 @@ test('new MCP configuration diagnoses a registered-client requirement and fences
     }),
   ).rejects.toMatchObject({code: 'POLICY'});
   expect(await f.manager.auth.bearer(url)).toBeUndefined();
+});
+
+test('McpManager registers only sensitive env and header secrets without over-redacting normal config values', async () => {
+  const f = fixture();
+  writeFileSync(
+    join(f.directory, 'mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        local: {
+          command: process.execPath,
+          args: [resolve('tests/fixtures/mcp-stdio-server.ts')],
+          env: {
+            DEBUG: '1',
+            NODE_ENV: 'dev',
+            LOG_LEVEL: 'info',
+            PORT: '3000',
+            API_TOKEN: 'secret-token-alpha-99',
+            CUSTOM_VAR: 'ghp_1234567890abcdef',
+          },
+          enabled: false,
+        },
+        remote: {
+          url: 'https://example.com/mcp',
+          headers: {
+            Accept: 'application/json',
+            'X-Client': 'cosmew',
+            Authorization: 'Bearer secret-bearer-omega-88',
+            'X-Webhook-Url': 'https://user:url-pass-7777@example.com/hook',
+          },
+          enabled: false,
+        },
+      },
+    }),
+  );
+  const redactor = new Redactor();
+  const manager = new McpManager({
+    directory: f.directory,
+    vault: f.vault,
+    redact: text => redactor.text(text),
+    registerSecret: secret => redactor.register(secret),
+    openURL: async () => {
+      throw new Error('no browser');
+    },
+  });
+  clean.push(() => manager.hub.close());
+  await manager.snapshot();
+
+  const sample =
+    'Step 1 in dev mode on port 3000 logs info as application/json from cosmew with secret-token-alpha-99, ghp_1234567890abcdef, secret-bearer-omega-88, and url-pass-7777.';
+  const expected =
+    'Step 1 in dev mode on port 3000 logs info as application/json from cosmew with [REDACTED], [REDACTED], [REDACTED], and [REDACTED].';
+  expect(redactor.text(sample)).toBe(expected);
+
+  const stream = redactor.stream();
+  const chunks = [
+    'Step 1 in dev ',
+    'mode on port 3000 ',
+    'logs info as application/',
+    'json from cosmew with secret-',
+    'token-alpha-99, ghp_123456',
+    '7890abcdef, secret-bearer-',
+    'omega-88, and url-pass-',
+    '7777.',
+  ];
+  const streamed = chunks.map(chunk => stream.push(chunk)).join('') + stream.finish();
+  expect(streamed).toContain('Step 1 in dev mode on port 3000 logs info as application/json from cosmew');
+  expect(streamed).toBe(expected);
+  for (const leaked of ['secret-token-alpha-99', 'ghp_1234567890abcdef', 'secret-bearer-omega-88', 'url-pass-7777'])
+    expect(streamed).not.toContain(leaked);
 });

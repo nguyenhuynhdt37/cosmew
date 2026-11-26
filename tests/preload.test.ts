@@ -13,8 +13,8 @@ test('the repository preload isolates inherited home and state and removes its t
 test('prints the test environment', () => console.log('isolation ' + JSON.stringify({
   home: process.env.HOME,
   state: process.env.COSMEW_HOME,
-  futryn: process.env.FUTRYN_HOME,
-  hannes: process.env.HANNES_HOME,
+  legacyFirst: process.env.FUTRYN_HOME,
+  legacySecond: process.env.HANNES_HOME,
   backend: process.env.COSMEW_COMMAND_BACKEND,
 })));
 `,
@@ -24,8 +24,8 @@ test('prints the test environment', () => console.log('isolation ' + JSON.string
         ...process.env,
         HOME: home,
         COSMEW_HOME: join(home, 'cosmew'),
-        FUTRYN_HOME: join(home, 'futryn'),
-        HANNES_HOME: join(home, 'hannes'),
+        FUTRYN_HOME: join(home, 'legacy-first'),
+        HANNES_HOME: join(home, 'legacy-second'),
         COSMEW_COMMAND_BACKEND: undefined,
       },
       stderr: 'pipe',
@@ -34,8 +34,8 @@ test('prints the test environment', () => console.log('isolation ' + JSON.string
     const env = JSON.parse(child.stdout.toString().match(/^isolation (.*)$/m)![1]!);
     expect(env.home).not.toBe(home);
     expect(env.state).toBe(join(env.home, 'state'));
-    expect(env.futryn).toBeUndefined();
-    expect(env.hannes).toBeUndefined();
+    expect(env.legacyFirst).toBeUndefined();
+    expect(env.legacySecond).toBeUndefined();
     expect(env.backend).toBe('none');
     expect(existsSync(env.home)).toBe(false);
   } finally {

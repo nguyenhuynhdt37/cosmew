@@ -1,6 +1,15 @@
 import {createHash} from 'node:crypto';
 import {FutrynError, isFileChangeTool, type Message} from '@cosmew/contracts';
 export const contextHash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+/**
+ * Durable message fingerprint for ContextSnapshot validation. User attachments are ephemeral and
+ * `tool_attachments` may be evicted past `MAX_SESSION_ATTACHMENT_BYTES`, so neither can invalidate
+ * a persisted snapshot.
+ */
+export function snapshotSourceHash(messages: readonly Message[]): string {
+  return contextHash(messages.map(({attachments: _attachments, ...durable}) => durable));
+}
 /** Conservative UTF-8 estimate; provider metadata supplies the actual window and measured usage. */
 /**
  * Conservative token estimate (about 3 bytes per token). Attachments (ADR 0041) are not counted by

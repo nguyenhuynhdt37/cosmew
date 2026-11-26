@@ -1,7 +1,7 @@
 import {SandboxDialog} from './features/sandbox';
 /** @jsxImportSource react */
 import {useTerminalSize} from './hooks/use-terminal-size';
-import {useTerminalMouseCapture, useTerminalWheel} from './hooks/use-terminal-wheel';
+import {useTerminalMouseCapture, useTerminalSelectionCopied, useTerminalWheel} from './hooks/use-terminal-wheel';
 import {useCallback, useEffect, useMemo, useRef, useState, type ReactNode} from 'react';
 import {spawn} from 'node:child_process';
 import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
@@ -32,7 +32,7 @@ import {
 } from './hooks';
 import {useTheme} from './theme';
 import {Panel, TextLine, safeText, spinnerTip} from './ui';
-import {deliverClipboard, readMacClipboardImage, writeMacClipboard} from '../clipboard';
+import {copyToClipboard, readMacClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
 import {verificationMessage} from './features/startup-gate/logic';
@@ -778,13 +778,8 @@ export function IntegratedShell({
       }
     },
     copyText: async text => {
-      if (!text || Buffer.byteLength(text) > 65536 || !('isTTY' in stdout && stdout.isTTY)) return false;
-      await deliverClipboard(
-        `\x1b]52;c;${Buffer.from(text).toString('base64')}\x07`,
-        sequence => stdout.write(sequence),
-        process.platform === 'darwin' ? writeMacClipboard : undefined,
-      );
-      return true;
+      if (!text || !('isTTY' in stdout && stdout.isTTY)) return false;
+      return copyToClipboard(text, {terminal: sequence => stdout.write(sequence)});
     },
     exit: () => gate.exit(),
   };
@@ -943,6 +938,14 @@ export function IntegratedShell({
     },
   });
   controls.current = composer;
+  useTerminalSelectionCopied(text => {
+    const lineCount = text.split('\n').length;
+    if (detail.detailed) {
+      setViewerStatus(lineCount > 1 ? `copied ${lineCount} lines` : 'copied to clipboard');
+    } else {
+      composer.flash(lineCount > 1 ? `Copied ${lineCount} lines to clipboard` : 'Copied to clipboard', 2000);
+    }
+  }, ready);
   useEffect(() => {
     if (ready && !started.current) {
       started.current = true;
@@ -1544,6 +1547,13 @@ export function IntegratedShell({
           </Box>
         ) : null}
       </InputScope>
+      {ready && detail.detailed && !overlay.active && textSelection ? (
+        <Box paddingLeft={Math.min(2, width)} width={width} flexShrink={0}>
+          <Text color={color('info')} wrap="truncate-end">
+            {`Text selection enabled: drag to select, ${process.platform === 'darwin' ? 'Cmd+C' : 'Ctrl+Shift+C'} to copy. ${selectionKey} resumes mouse scrolling.`}
+          </Text>
+        </Box>
+      ) : null}
       {ready && detail.detailed && !overlay.active && searchOpen ? (
         <SearchBar
           width={width}

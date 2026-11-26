@@ -5,7 +5,7 @@ import {
   type ContextSnapshot,
   type Message,
 } from '@cosmew/contracts';
-import {contextHash, estimateContextTokens, toolOutputReferences} from './builder';
+import {contextHash, estimateContextTokens, snapshotSourceHash, toolOutputReferences} from './builder';
 import {modelSnapshotMessages} from './model-compaction';
 
 export interface CompactionInput {
@@ -24,7 +24,10 @@ export class DeterministicCompactor implements ContextCompactor {
 export function useContextSnapshot(messages: readonly Message[], snapshot?: ContextSnapshot): Message[] {
   if (!snapshot) return [...messages];
   const source = messages.slice(0, snapshot.throughRevision);
-  if (source.length !== snapshot.throughRevision || contextHash(source) !== snapshot.sourceHash)
+  if (
+    source.length !== snapshot.throughRevision ||
+    (snapshotSourceHash(source) !== snapshot.sourceHash && contextHash(source) !== snapshot.sourceHash)
+  )
     throw new FutrynError('STORAGE');
   if (snapshot.strategy === 'model')
     return [...modelSnapshotMessages(snapshot), ...messages.slice(snapshot.throughRevision)];
@@ -58,7 +61,7 @@ export async function compactHistory(
   const snapshot: ContextSnapshot = {
     version: 1,
     throughRevision: end,
-    sourceHash: contextHash(source),
+    sourceHash: snapshotSourceHash(source),
     createdAt: new Date().toISOString(),
     strategy: 'deterministic',
     summary,

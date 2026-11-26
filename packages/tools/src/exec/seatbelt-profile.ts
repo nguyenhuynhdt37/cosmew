@@ -267,7 +267,7 @@ export class SeatbeltSandbox implements NativeSandbox {
     for (const root of this.writableRoots(sandbox)) {
       const r = escapeRegex(root);
       rules.push(
-        `(deny file-read* file-write* (regex #"^${r}/(.*/)?\\.(futryn|hannes)(/|$)") (regex #"^${r}/(.*/)?\\.(futryn|hannes)-patch-"))`,
+        `(deny file-read* file-write* (regex #"^${r}/(.*/)?\\.(cosmew|futryn|hannes)(/|$)") (regex #"^${r}/(.*/)?\\.(cosmew|futryn|hannes)-patch-"))`,
       );
     }
     rules.push(...this.skillRules());

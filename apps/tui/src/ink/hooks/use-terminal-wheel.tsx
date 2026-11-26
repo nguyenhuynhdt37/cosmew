@@ -77,3 +77,17 @@ export function useTerminalMouseCapture(enabled: boolean): void {
     return () => source?.setCaptureEnabled?.(true);
   }, [source, enabled]);
 }
+
+export function useTerminalSelectionCopied(handler: (text: string) => void, isActive = true): void {
+  const source = useContext(MouseContext);
+  const enabled = useInputEnabled(isActive);
+  const latest = useRef({handler, enabled});
+  latest.current = {handler, enabled};
+  useEffect(
+    () =>
+      source?.subscribeCopied?.(text => {
+        if (latest.current.enabled) latest.current.handler(text);
+      }),
+    [source],
+  );
+}

@@ -5,10 +5,20 @@
  * cases run the real macOS Seatbelt sandbox and observe the host.
  */
 import {test, expect, describe, afterEach} from 'bun:test';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync} from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {NativeCommandRuntime, ToolDispatcher, type ApprovalRequest, type ApprovalDecision} from '@cosmew/tools';
+import {BubblewrapSandbox} from '../../packages/tools/src/exec/bubblewrap';
 import {SeatbeltSandbox} from '../../packages/tools/src/exec/seatbelt-profile';
 import {SessionGrants, evaluateExec, evaluateStdin, APPROVAL_KIND_FOR_REASON} from '@cosmew/security';
 import {permissionModeDecision, type PermissionKind, type PermissionMode} from '@cosmew/contracts';
@@ -72,9 +82,14 @@ describe('seatbelt profile', () => {
     expect(text).toContain('(subpath "/Users/dev/.futryn")');
     expect(text).toContain('(allow file-write* (subpath "/Users/dev/outer/app") (subpath "/Users/dev/extra"))');
     expect(text).not.toContain('(subpath "/private/tmp")');
-    // `.git` and Futryn state are protected in every writable root.
+    // `.git` and Cosmew state are protected in every writable root.
     expect(text).toContain('(deny file-write* (regex #"^/Users/dev/extra/(.*/)?\\.[gG][iI][tT](/|$)"))');
-    expect(text).toContain('(regex #"^/Users/dev/extra/(.*/)?\\.(futryn|hannes)(/|$)")');
+    expect(text).toContain(
+      '(deny file-read* file-write* (regex #"^/Users/dev/outer/app/(.*/)?\\.(cosmew|futryn|hannes)(/|$)") (regex #"^/Users/dev/outer/app/(.*/)?\\.(cosmew|futryn|hannes)-patch-"))',
+    );
+    expect(text).toContain(
+      '(deny file-read* file-write* (regex #"^/Users/dev/extra/(.*/)?\\.(cosmew|futryn|hannes)(/|$)") (regex #"^/Users/dev/extra/(.*/)?\\.(cosmew|futryn|hannes)-patch-"))',
+    );
     expect(text).toContain('(deny file-read* file-write* (regex #"^/Users/dev/outer/app/private/');
     expect(text).toContain('(deny file-write* (regex #"^/Users/dev/outer/app/dist/');
     // The workspace itself is exempt from the home secret-name rule (dev tools read their own `.env`).
@@ -244,6 +259,258 @@ describe('real Seatbelt', () => {
     expect(outcome.output).not.toContain(`=${real}/`);
     expect(outcome.output).toMatch(/npm_config_cache=.*fyn-exec-/);
     expect(outcome.output).toMatch(/XDG_CACHE_HOME=.*fyn-exec-/);
+  });
+
+  nativeTest('.cosmew settings and patch temp files cannot be read or written inside writable roots', async () => {
+    const extra = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-extra-cosmew-')));
+    clean.push(() => rmSync(extra, {recursive: true, force: true}));
+    const h = nested();
+    const settingsJson = '{"permissions":{"allow":["Bash(*)"]}}';
+    mkdirSync(join(h.root, '.cosmew'), {recursive: true});
+    writeFileSync(join(h.root, '.cosmew', 'settings.json'), settingsJson);
+    writeFileSync(join(h.root, '.cosmew-patch-123'), 'PATCH_TEMP');
+    mkdirSync(join(extra, '.cosmew'), {recursive: true});
+    writeFileSync(join(extra, '.cosmew', 'settings.json'), settingsJson);
+    writeFileSync(join(extra, '.cosmew-patch-456'), 'PATCH_EXTRA');
+
+    for (const command of [
+      'cat .cosmew/settings.json',
+      'echo pwned > .cosmew/settings.json',
+      'touch .cosmew/evil.json',
+      'cat .cosmew-patch-123',
+      'echo pwned > .cosmew-patch-123',
+      `cat ${extra}/.cosmew/settings.json`,
+      `echo pwned > ${extra}/.cosmew/settings.json`,
+      `touch ${extra}/.cosmew/evil.json`,
+      `cat ${extra}/.cosmew-patch-456`,
+      `echo pwned > ${extra}/.cosmew-patch-456`,
+    ]) {
+      const out = await h.run(command, {writableRoots: [extra]});
+      expect(out.exitCode).not.toBe(0);
+      expect(out.output).not.toContain('Bash(*)');
+      expect(out.output).not.toContain('PATCH_TEMP');
+      expect(out.output).not.toContain('PATCH_EXTRA');
+    }
+    expect(readFileSync(join(h.root, '.cosmew', 'settings.json'), 'utf8')).toBe(settingsJson);
+    expect(existsSync(join(h.root, '.cosmew', 'evil.json'))).toBe(false);
+    expect(readFileSync(join(h.root, '.cosmew-patch-123'), 'utf8')).toBe('PATCH_TEMP');
+    expect(readFileSync(join(extra, '.cosmew', 'settings.json'), 'utf8')).toBe(settingsJson);
+    expect(existsSync(join(extra, '.cosmew', 'evil.json'))).toBe(false);
+    expect(readFileSync(join(extra, '.cosmew-patch-456'), 'utf8')).toBe('PATCH_EXTRA');
+  });
+});
+
+function hasArgSequence(argv: string[], sequence: string[]): boolean {
+  return indexOfArgSequence(argv, sequence) !== -1;
+}
+
+function indexOfArgSequence(argv: string[], sequence: string[]): number {
+  outer: for (let i = 0; i <= argv.length - sequence.length; i++) {
+    for (let j = 0; j < sequence.length; j++) {
+      if (argv[i + j] !== sequence[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
+}
+
+describe('bubblewrap sandbox and linux self-test', () => {
+  function bwrapFixture() {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), 'fyn-bwrap-')));
+    clean.push(() => rmSync(base, {recursive: true, force: true}));
+    const workspace = join(base, 'ws');
+    const extra = join(base, 'extra');
+    const home = join(base, 'home');
+    const scratch = join(base, 'scratch');
+    mkdirSync(workspace, {recursive: true});
+    mkdirSync(extra, {recursive: true});
+    mkdirSync(home, {recursive: true});
+    mkdirSync(join(scratch, 'home'), {recursive: true});
+    mkdirSync(join(scratch, 'tmp'), {recursive: true});
+    return {base, workspace, extra, home, scratch};
+  }
+
+  test('BubblewrapSandbox masks .cosmew/.futryn/.hannes, patch files and .git across workspace and writableRoots without writable /tmp', () => {
+    const f = bwrapFixture();
+    for (const root of [f.workspace, f.extra]) {
+      mkdirSync(join(root, '.git'));
+      writeFileSync(join(root, '.git', 'config'), '[core]\n');
+      mkdirSync(join(root, '.cosmew'));
+      writeFileSync(join(root, '.cosmew', 'settings.json'), '{}');
+      mkdirSync(join(root, '.futryn'));
+      mkdirSync(join(root, '.hannes'));
+      writeFileSync(join(root, '.cosmew-patch-abc'), 'TEMP');
+    }
+    writeFileSync(join(f.workspace, '.env'), 'SECRET=1');
+
+    const argv = new BubblewrapSandbox({
+      bwrap: '/usr/bin/bwrap',
+      workspace: f.workspace,
+      scratch: f.scratch,
+      home: f.home,
+      hideSecrets: true,
+    }).wrap(
+      ['/bin/bash', '-c', 'true'],
+      {mode: 'workspace-write', network: false, writableRoots: [f.extra]},
+      f.workspace,
+    );
+
+    expect(hasArgSequence(argv, ['--tmpfs', '/tmp'])).toBe(false);
+    expect(hasArgSequence(argv, ['--bind', join(f.scratch, 'tmp'), join(f.scratch, 'tmp')])).toBe(true);
+    expect(hasArgSequence(argv, ['--bind', join(f.scratch, 'home'), join(f.scratch, 'home')])).toBe(true);
+    expect(hasArgSequence(argv, ['--bind', f.workspace, f.workspace])).toBe(true);
+    expect(hasArgSequence(argv, ['--bind', f.extra, f.extra])).toBe(true);
+    expect(hasArgSequence(argv, ['--ro-bind', '/dev/null', join(f.workspace, '.env')])).toBe(true);
+
+    for (const root of [f.workspace, f.extra]) {
+      expect(hasArgSequence(argv, ['--ro-bind', join(root, '.git'), join(root, '.git')])).toBe(true);
+      expect(hasArgSequence(argv, ['--ro-bind', '/dev/null', join(root, '.git', 'config')])).toBe(true);
+      for (const dirName of ['.cosmew', '.futryn', '.hannes']) {
+        const dir = join(root, dirName);
+        expect(hasArgSequence(argv, ['--tmpfs', dir, '--remount-ro', dir])).toBe(true);
+      }
+      expect(hasArgSequence(argv, ['--ro-bind', '/dev/null', join(root, '.cosmew-patch-abc')])).toBe(true);
+    }
+  });
+
+  test('BubblewrapSandbox enforces denyRead and denyWrite for /**, /* and literal paths', () => {
+    const f = bwrapFixture();
+    mkdirSync(join(f.workspace, 'private', 'nested'), {recursive: true});
+    writeFileSync(join(f.workspace, 'private', 'nested', 'secret.txt'), 'SECRET');
+    mkdirSync(join(f.workspace, 'restricted'), {recursive: true});
+    writeFileSync(join(f.workspace, 'restricted', 'a.txt'), 'A');
+    writeFileSync(join(f.workspace, 'secret-file.txt'), 'FILE');
+    mkdirSync(join(f.workspace, 'secret-dir'), {recursive: true});
+    mkdirSync(join(f.workspace, 'dist', '.cosmew'), {recursive: true});
+    writeFileSync(join(f.workspace, 'dist', '.cosmew', 'settings.json'), '{}');
+    mkdirSync(join(f.workspace, 'gen'), {recursive: true});
+    writeFileSync(join(f.workspace, 'locked.txt'), 'LOCKED');
+    mkdirSync(join(f.workspace, 'readonly-dir'), {recursive: true});
+
+    const argv = new BubblewrapSandbox({
+      bwrap: '/usr/bin/bwrap',
+      workspace: f.workspace,
+      scratch: f.scratch,
+      home: f.home,
+      hideSecrets: false,
+    }).wrap(
+      ['/bin/bash', '-c', 'true'],
+      {
+        mode: 'workspace-write',
+        network: false,
+        denyRead: [
+          join(f.workspace, 'private/**'),
+          join(f.workspace, 'restricted/*'),
+          join(f.workspace, 'secret-file.txt'),
+          join(f.workspace, 'secret-dir'),
+        ],
+        denyWrite: [
+          join(f.workspace, 'dist/**'),
+          join(f.workspace, 'gen/*'),
+          join(f.workspace, 'locked.txt'),
+          join(f.workspace, 'readonly-dir'),
+        ],
+      },
+      f.workspace,
+    );
+
+    const wsBind = indexOfArgSequence(argv, ['--bind', f.workspace, f.workspace]);
+    expect(wsBind).toBeGreaterThan(-1);
+
+    for (const dir of [
+      join(f.workspace, 'private'),
+      join(f.workspace, 'restricted'),
+      join(f.workspace, 'secret-dir'),
+    ]) {
+      expect(hasArgSequence(argv, ['--tmpfs', dir, '--remount-ro', dir])).toBe(true);
+    }
+    expect(hasArgSequence(argv, ['--ro-bind', '/dev/null', join(f.workspace, 'secret-file.txt')])).toBe(true);
+
+    for (const target of [
+      join(f.workspace, 'dist'),
+      join(f.workspace, 'gen'),
+      join(f.workspace, 'locked.txt'),
+      join(f.workspace, 'readonly-dir'),
+    ]) {
+      const roIdx = indexOfArgSequence(argv, ['--ro-bind', target, target]);
+      expect(roIdx).toBeGreaterThan(wsBind);
+    }
+
+    // Protected paths inside a denyWrite directory must still be masked after the read-only bind.
+    const distRo = indexOfArgSequence(argv, ['--ro-bind', join(f.workspace, 'dist'), join(f.workspace, 'dist')]);
+    const distCosmew = indexOfArgSequence(argv, [
+      '--tmpfs',
+      join(f.workspace, 'dist', '.cosmew'),
+      '--remount-ro',
+      join(f.workspace, 'dist', '.cosmew'),
+    ]);
+    expect(distCosmew).toBeGreaterThan(distRo);
+  });
+
+  test('NativeCommandRuntime Linux self-test builds a fresh BubblewrapSandbox for probe and probeHome without macOS open', () => {
+    const f = bwrapFixture();
+    const fakeBin = join(f.base, 'bin');
+    const logFile = join(f.base, 'bwrap-argv.bin');
+    mkdirSync(fakeBin, {recursive: true});
+    const fakeBwrap = join(fakeBin, 'bwrap');
+    // Stub binary only to inspect the exact argv produced by runSelfTest on platform: 'linux'.
+    writeFileSync(
+      fakeBwrap,
+      [
+        '#!/bin/sh',
+        `printf '%s\\0' "$@" > ${JSON.stringify(logFile)}`,
+        'chdir=""',
+        'prev=""',
+        'for arg in "$@"; do',
+        '  if [ "$prev" = "--chdir" ]; then',
+        '    chdir="$arg"',
+        '    break',
+        '  fi',
+        '  prev="$arg"',
+        'done',
+        'if [ -n "$chdir" ]; then',
+        '  printf "ok\\n" > "$chdir/made"',
+        'fi',
+        'exit 0',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(fakeBwrap, 0o755);
+
+    const runtime = new NativeCommandRuntime({
+      workspaceRoot: f.workspace,
+      platform: 'linux',
+      hostPath: fakeBin,
+      home: f.home,
+    });
+    clean.push(() => runtime.shutdown());
+
+    expect(runtime.availability()).toEqual({ok: true});
+    const argv = readFileSync(logFile, 'utf8').split('\0').slice(0, -1);
+    const chdirIdx = argv.indexOf('--chdir');
+    expect(chdirIdx).toBeGreaterThan(-1);
+    const probe = argv[chdirIdx + 1]!;
+    expect(probe).not.toBe(f.workspace);
+    expect(hasArgSequence(argv, ['--bind', probe, probe])).toBe(true);
+    expect(hasArgSequence(argv, ['--bind', f.workspace, f.workspace])).toBe(false);
+    expect(hasArgSequence(argv, ['--tmpfs', '/tmp'])).toBe(false);
+    expect(hasArgSequence(argv, ['--tmpfs', join(probe, '.cosmew'), '--remount-ro', join(probe, '.cosmew')])).toBe(
+      true,
+    );
+    expect(hasArgSequence(argv, ['--ro-bind', '/dev/null', join(probe, '.env')])).toBe(true);
+    expect(hasArgSequence(argv, ['--ro-bind', join(probe, '.git'), join(probe, '.git')])).toBe(true);
+
+    const sshMaskIdx = argv.findIndex((arg, idx) => argv[idx - 1] === '--tmpfs' && arg.endsWith('/.ssh'));
+    expect(sshMaskIdx).toBeGreaterThan(-1);
+    expect(argv[sshMaskIdx]!).not.toBe(join(f.home, '.ssh'));
+
+    const script = argv.at(-1)!;
+    expect(script).toContain('.cosmew/settings.json');
+    expect(script).toContain('.ssh/id_probe');
+    expect(script).toContain('visible.txt');
+    expect(script).toContain('planted');
+    expect(script).not.toContain('/usr/bin/open');
+    expect(script).not.toContain('Calculator.app');
   });
 });
 

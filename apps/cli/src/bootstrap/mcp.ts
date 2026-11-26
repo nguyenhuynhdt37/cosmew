@@ -1,6 +1,7 @@
 import {existsSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {McpHub, parseMcpConfig, type McpSnapshot} from '@cosmew/mcp';
+import {registerConfigSecrets} from '@cosmew/security';
 
 /**
  * User MCP file only (`<state>/mcp.json`, normally `~/.cosmew/mcp.json`; legacy roots are reused). Project files are not
@@ -22,10 +23,8 @@ export function openUserMcp(
     }
   }
   const parsed = text ? parseMcpConfig(text) : {servers: [], problems: []};
-  for (const server of parsed.servers) {
-    const values = server.transport === 'stdio' ? Object.values(server.env) : Object.values(server.headers);
-    for (const value of values) if (value) register(value);
-  }
+  for (const server of parsed.servers)
+    registerConfigSecrets(server.transport === 'stdio' ? server.env : server.headers, register);
   return new McpHub(parsed.servers, {redact, configPath, problems: [...problems, ...parsed.problems]});
 }
 

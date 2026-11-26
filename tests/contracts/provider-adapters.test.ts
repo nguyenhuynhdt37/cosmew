@@ -10,6 +10,7 @@ import {
   ProviderAdapter,
   ProviderRegistry,
   ProviderTransport,
+  estimateRequestInputTokens,
   normalizeModel,
   normalizeError,
   retryAfter,
@@ -443,6 +444,108 @@ test('estimated cost guard rejects unknown/unaffordable models before network an
   expect(response.usage.costUSD).toBe(0.000008);
   expect(response.usage.costEstimated).toBe(true);
   x.db.close();
+});
+
+test('estimated cost guard prices base64 image and PDF attachments by media token budget rather than raw bytes', async () => {
+  const pricing = {inputPerMillion: 3, outputPerMillion: 15, currency: 'USD' as const};
+
+  const xImage = setup('chat');
+  try {
+    const info = normalizeModel('fixture-model', 'fixture');
+    info.pricing = pricing;
+    const adapter = new ProviderAdapter(xImage.transport, 'fixture-model', info);
+    const pngBase64 = Buffer.alloc(1024 * 1024, 7).toString('base64');
+    const imageRequest: ModelRequest = {
+      ...xImage.request,
+      maxOutputTokens: 1000,
+      messages: [
+        {
+          role: 'user',
+          content: 'Phân tích ảnh chụp màn hình lỗi kết nối mạng và đề xuất cách xử lý chi tiết.',
+          attachments: [{mime: 'image/png', data: pngBase64, name: 'screenshot.png'}],
+        },
+      ],
+    };
+
+    await expect(adapter.generate({...imageRequest, maxEstimatedCostUSD: 0.01})).rejects.toMatchObject({
+      code: 'BUDGET',
+    });
+    expect(xImage.f.requests).toHaveLength(0);
+
+    const response = await adapter.generate({...imageRequest, maxEstimatedCostUSD: 0.05});
+    expect(response.text).toBe('Hello fixture');
+    expect(xImage.f.requests).toHaveLength(1);
+
+    const streamEvents = await Array.fromAsync(adapter.stream({...imageRequest, maxEstimatedCostUSD: 0.05}));
+    expect(streamEvents.at(-1)?.type).toBe('completed');
+    expect(xImage.f.requests).toHaveLength(2);
+
+    const smallPngBase64 = Buffer.alloc(1024, 7).toString('base64');
+    const smallImageRequest: ModelRequest = {
+      ...imageRequest,
+      messages: [
+        {
+          ...imageRequest.messages[0]!,
+          attachments: [{mime: 'image/png', data: smallPngBase64, name: 'screenshot.png'}],
+        },
+      ],
+    };
+    expect(estimateRequestInputTokens(imageRequest)).toBe(estimateRequestInputTokens(smallImageRequest));
+  } finally {
+    xImage.db.close();
+  }
+
+  const xPdf = setup('anthropic');
+  try {
+    const info = normalizeModel('fixture-model', 'fixture');
+    info.pricing = pricing;
+    const adapter = new ProviderAdapter(xPdf.transport, 'fixture-model', info);
+    const pdfBase64 = Buffer.alloc(300 * 1024, 9).toString('base64');
+    const pdfRequest: ModelRequest = {
+      ...xPdf.request,
+      maxOutputTokens: 1000,
+      messages: [
+        {role: 'user', content: 'Đọc giúp tài liệu PDF đính kèm.'},
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{id: 'call-pdf-1', name: 'read_file', input: {path: 'spec.pdf'}}],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call-pdf-1',
+          toolName: 'read_file',
+          content: 'Đã đọc nội dung tệp PDF.',
+          attachments: [{mime: 'application/pdf', data: pdfBase64, name: 'spec.pdf'}],
+        },
+      ],
+    };
+
+    const smallPdfBase64 = Buffer.alloc(10 * 1024, 9).toString('base64');
+    const smallPdfRequest: ModelRequest = {
+      ...pdfRequest,
+      messages: [
+        pdfRequest.messages[0]!,
+        pdfRequest.messages[1]!,
+        {
+          ...pdfRequest.messages[2]!,
+          attachments: [{mime: 'application/pdf', data: smallPdfBase64, name: 'spec.pdf'}],
+        },
+      ],
+    };
+    expect(estimateRequestInputTokens(pdfRequest) - estimateRequestInputTokens(smallPdfRequest)).toBe(10240 - 1600);
+
+    await expect(adapter.generate({...pdfRequest, maxEstimatedCostUSD: 0.03})).rejects.toMatchObject({
+      code: 'BUDGET',
+    });
+    expect(xPdf.f.requests).toHaveLength(0);
+
+    const response = await adapter.generate({...pdfRequest, maxEstimatedCostUSD: 0.06});
+    expect(response.text).toBe('Hello fixture');
+    expect(xPdf.f.requests).toHaveLength(1);
+  } finally {
+    xPdf.db.close();
+  }
 });
 
 test('chat HTTP usage preserves explicit zero breakdowns without inventing missing counters', async () => {

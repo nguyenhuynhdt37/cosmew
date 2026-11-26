@@ -10,10 +10,16 @@ export interface TerminalClick {
   column: number;
   row: number;
 }
+
+export interface TerminalSelectionEvent {
+  phase: 'start' | 'move' | 'end';
+  column: number;
+  row: number;
+}
 export type TerminalMouseEvent = TerminalWheel | TerminalClick;
 
-export const ENABLE_TERMINAL_MOUSE = '\x1b[?1000h\x1b[?1006h';
-export const DISABLE_TERMINAL_MOUSE = '\x1b[?1006l\x1b[?1000l';
+export const ENABLE_TERMINAL_MOUSE = '\x1b[?1000h\x1b[?1006h\x1b[?1002h';
+export const DISABLE_TERMINAL_MOUSE = '\x1b[?1002l\x1b[?1006l\x1b[?1000l';
 
 /** Bounded incremental decoder; pasted text and terminal strings cannot generate wheel events. */
 export class MouseInputFilter {
@@ -21,6 +27,7 @@ export class MouseInputFilter {
   private paste = false;
   private string = false;
   private stringEscape = false;
+  private leftPressed = false;
 
   get hasPending(): boolean {
     return this.pending.length > 0;
@@ -33,11 +40,19 @@ export class MouseInputFilter {
     this.pending = '';
     return text;
   }
+  resetSelection(): void {
+    this.leftPressed = false;
+  }
   reset(): void {
     this.pending = '';
-    this.paste = this.string = this.stringEscape = false;
+    this.paste = this.string = this.stringEscape = this.leftPressed = false;
   }
-  feed(chunk: string, onWheel: (event: TerminalWheel) => void, onClick?: (event: TerminalClick) => void): string {
+  feed(
+    chunk: string,
+    onWheel: (event: TerminalWheel) => void,
+    onClick?: (event: TerminalClick) => void,
+    onSelection?: (event: TerminalSelectionEvent) => void,
+  ): string {
     const text = this.pending + chunk;
     this.pending = '';
     let output = '';
@@ -93,8 +108,16 @@ export class MouseInputFilter {
         const button = text.charCodeAt(at + 3) - 32;
         const column = text.charCodeAt(at + 4) - 32;
         const row = text.charCodeAt(at + 5) - 32;
-        this.wheel(button, column, row, onWheel);
-        if (button === 0 && column > 0 && row > 0) onClick?.({kind: 'click', column, row});
+        if (column > 0 && row > 0) {
+          if (button === 3) {
+            if (this.leftPressed) {
+              this.leftPressed = false;
+              onSelection?.({phase: 'end', column, row});
+            }
+          } else {
+            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection);
+          }
+        }
         at += 6;
         continue;
       }
@@ -107,13 +130,16 @@ export class MouseInputFilter {
       const sequence = text.slice(at, end + 1);
       const mouse = /^\x1b\[<(\d{1,6});(\d{1,6});(\d{1,6})([Mm])$/.exec(sequence);
       if (mouse) {
-        if (mouse[4] === 'M') {
-          const button = Number(mouse[1]),
-            column = Number(mouse[2]),
-            row = Number(mouse[3]);
-          this.wheel(button, column, row, onWheel);
-          // Only plain left-button presses activate controls; never motion or selection modifiers.
-          if (button === 0 && column > 0 && row > 0) onClick?.({kind: 'click', column, row});
+        const button = Number(mouse[1]),
+          column = Number(mouse[2]),
+          row = Number(mouse[3]);
+        if (column > 0 && row > 0) {
+          if (mouse[4] === 'M') {
+            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection);
+          } else if ((button & 3) === 0 && this.leftPressed) {
+            this.leftPressed = false;
+            onSelection?.({phase: 'end', column, row});
+          }
         }
       } else {
         output += sequence;
@@ -122,6 +148,25 @@ export class MouseInputFilter {
       at = end + 1;
     }
     return output;
+  }
+  private handlePressOrMotion(
+    button: number,
+    column: number,
+    row: number,
+    onWheel: (event: TerminalWheel) => void,
+    onClick?: (event: TerminalClick) => void,
+    onSelection?: (event: TerminalSelectionEvent) => void,
+  ): void {
+    this.wheel(button, column, row, onWheel);
+    // Only plain left-button presses activate controls; never motion or selection modifiers.
+    if (button === 0) {
+      onClick?.({kind: 'click', column, row});
+      this.leftPressed = true;
+      onSelection?.({phase: 'start', column, row});
+    } else if (button === 32) {
+      this.leftPressed = true;
+      onSelection?.({phase: 'move', column, row});
+    }
   }
   private wheel(button: number, column: number, row: number, emit: (event: TerminalWheel) => void): void {
     const code = button & ~28; // Shift, Alt and Ctrl do not change the wheel's direction.
@@ -134,6 +179,9 @@ export interface TerminalMouseInput {
   stdin: MouseStdin;
   subscribe(listener: (event: TerminalWheel) => void): () => void;
   subscribeMouse?(listener: (event: TerminalMouseEvent) => void): () => void;
+  subscribeSelection?(listener: (event: TerminalSelectionEvent) => void): () => void;
+  subscribeCopied?(listener: (text: string) => void): () => void;
+  notifyCopied?(text: string): void;
   /** Release mouse reporting for native terminal text selection, without leaving raw input. */
   setCaptureEnabled?(enabled: boolean): void;
   dispose(): void;
@@ -147,6 +195,8 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
   const filter = new MouseInputFilter();
   const listeners = new Set<(event: TerminalWheel) => void>();
   const mouseListeners = new Set<(event: TerminalMouseEvent) => void>();
+  const selectionListeners = new Set<(event: TerminalSelectionEvent) => void>();
+  const copiedListeners = new Set<(text: string) => void>();
   let active = false;
   let disposed = false;
   let captureEnabled = true;
@@ -166,7 +216,7 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
     filter.reset();
   };
   const emit = (event: TerminalWheel) => {
-    if (!captureEnabled) return;
+    if (!captureEnabled || disposed) return;
     for (const listener of listeners) listener(event);
     for (const listener of mouseListeners) listener(event);
   };
@@ -180,10 +230,18 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
     while ((chunk = source.read()) !== null) {
       if (!active) return chunk;
       clearTimeout(timer);
-      const text = filter.feed(String(chunk), emit, event => {
-        if (!captureEnabled) return;
-        for (const listener of mouseListeners) listener(event);
-      });
+      const text = filter.feed(
+        String(chunk),
+        emit,
+        event => {
+          if (!captureEnabled || disposed) return;
+          for (const listener of mouseListeners) listener(event);
+        },
+        event => {
+          if (!captureEnabled || disposed) return;
+          for (const listener of selectionListeners) listener(event);
+        },
+      );
       if (filter.hasPending && !filter.awaitingReport) {
         // Keep standalone Escape responsive while allowing split CSI/mouse reports to join.
         timer = setTimeout(() => {
@@ -227,9 +285,26 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
         mouseListeners.delete(listener);
       };
     },
+    subscribeSelection(listener) {
+      selectionListeners.add(listener);
+      return () => {
+        selectionListeners.delete(listener);
+      };
+    },
+    subscribeCopied(listener) {
+      copiedListeners.add(listener);
+      return () => {
+        copiedListeners.delete(listener);
+      };
+    },
+    notifyCopied(text) {
+      if (disposed || !text) return;
+      for (const listener of copiedListeners) listener(text);
+    },
     setCaptureEnabled(enabled) {
-      if (disposed) return;
+      if (disposed || captureEnabled === enabled) return;
       captureEnabled = enabled;
+      filter.resetSelection();
       syncReporting();
     },
     dispose() {
@@ -239,6 +314,8 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
       clear();
       listeners.clear();
       mouseListeners.clear();
+      selectionListeners.clear();
+      copiedListeners.clear();
     },
   };
 }

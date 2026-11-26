@@ -3,9 +3,10 @@ import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {McpHub, parseMcpConfig} from '@cosmew/mcp';
-import {SessionGrants} from '@cosmew/security';
+import {Redactor, SessionGrants, registerConfigSecrets} from '@cosmew/security';
 import {DEFAULT_SANDBOX_CONFIG, ToolDispatcher, type ApprovalRequest} from '@cosmew/tools';
 import {WorkspaceRoot} from '@cosmew/workspace';
+import {openUserMcp} from '../../apps/cli/src/bootstrap/mcp';
 
 const SECRET = 'fixture-token-value';
 const FIXTURE = resolve('tests/fixtures/mcp-stdio-server.ts');
@@ -248,3 +249,132 @@ test('cosmew mcp connects the user file, ignores project files, and status does 
   expect(rejected.code).toBe(1);
   expect(rejected.stderr).toContain('INVALID_INPUT');
 }, 30000);
+
+test('openUserMcp registers only sensitive config secrets and URL passwords without over-redacting normal values', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'futryn-open-user-mcp-'));
+  cleanup.push(() => rmSync(dir, {recursive: true, force: true}));
+  writeFileSync(
+    join(dir, 'mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        local: {
+          command: process.execPath,
+          args: [FIXTURE],
+          env: {
+            DEBUG: '1',
+            NODE_ENV: 'dev',
+            LOG_LEVEL: 'info',
+            PORT: '3000',
+            API_TOKEN: 'secret-token-alpha-99',
+            CUSTOM_VAR: 'ghp_1234567890abcdef',
+          },
+        },
+        remote: {
+          url: 'https://example.com/mcp',
+          headers: {
+            Accept: 'application/json',
+            'X-Client': 'cosmew',
+            Authorization: 'Bearer secret-bearer-omega-88',
+            'X-Webhook-Url': 'https://user:url-pass-7777@example.com/hook',
+          },
+        },
+      },
+    }),
+  );
+  const redactor = new Redactor();
+  const hub = openUserMcp(
+    dir,
+    text => redactor.text(text),
+    secret => redactor.register(secret),
+  );
+  cleanup.push(() => void hub.close());
+
+  const sample =
+    'Step 1 in dev mode on port 3000 logs info as application/json from cosmew with secret-token-alpha-99, ghp_1234567890abcdef, secret-bearer-omega-88, and url-pass-7777.';
+  const expected =
+    'Step 1 in dev mode on port 3000 logs info as application/json from cosmew with [REDACTED], [REDACTED], [REDACTED], and [REDACTED].';
+  expect(redactor.text(sample)).toBe(expected);
+
+  const stream = redactor.stream();
+  const chunks = [
+    'Step 1 in dev ',
+    'mode on port 3000 ',
+    'logs info as application/',
+    'json from cosmew with secret-',
+    'token-alpha-99, ghp_123456',
+    '7890abcdef, secret-bearer-',
+    'omega-88, and url-pass-',
+    '7777.',
+  ];
+  const streamed = chunks.map(chunk => stream.push(chunk)).join('') + stream.finish();
+  expect(streamed).toContain('Step 1 in dev mode on port 3000 logs info as application/json from cosmew');
+  expect(streamed).toBe(expected);
+  for (const leaked of ['secret-token-alpha-99', 'ghp_1234567890abcdef', 'secret-bearer-omega-88', 'url-pass-7777'])
+    expect(streamed).not.toContain(leaked);
+});
+
+test('Redactor.register ignores empty, whitespace-only, and ultra-short (< 3 char) strings while preserving 3+ char explicit secrets', () => {
+  const redactor = new Redactor();
+  for (const ignored of ['', '   ', '\t\n', '1', '0', 'on', 'no', '  a  ', ' xy ']) redactor.register(ignored);
+  redactor.register('abc');
+  redactor.register('valid-secret-99');
+
+  const input = 'Flag 1 is on (no xy) with abc and valid-secret-99.';
+  expect(redactor.text(input)).toBe('Flag 1 is on (no xy) with [REDACTED] and [REDACTED].');
+
+  const stream = redactor.stream();
+  const streamed =
+    ['Flag 1 is on (no xy) ', 'with ab', 'c and valid-sec', 'ret-99.'].map(chunk => stream.push(chunk)).join('') +
+    stream.finish();
+  expect(streamed).toBe('Flag 1 is on (no xy) with [REDACTED] and [REDACTED].');
+});
+
+test('registerConfigSecrets avoids false-positive key words and extracts schemes, URL passwords, and token prefixes', () => {
+  const registered: string[] = [];
+  registerConfigSecrets(
+    {
+      MONKEY: 'banana-value',
+      KEYBOARD: 'qwerty-value',
+      COMPAT_MODE: 'legacy-mode',
+      CONCERT_HALL: 'main-stage',
+      AUTHOR_NAME: 'alice-smith',
+      AUTH_ENABLED: 'true',
+      SECRET_ENV: 'production',
+      EMPTY: '   ',
+      SHORT_TOKEN: 'abc',
+      apiKey: 'camel-case-secret-1',
+      githubPAT: 'pat-camel-secret-2',
+      'X-Custom-Auth': 'apikey custom-api-cred-3',
+      'X-Short-Auth': 'Bearer xyz',
+      'X-Encoded-Hook': 'https://svc:p%40ss%3Asecret@example.com/hook',
+      'X-Malformed-Hook': 'https://svc:raw%ZZsecret@example.com/hook',
+      CUSTOM_JWT: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.sig123',
+      CUSTOM_GOOGLE: 'AIzaSyD1234567890abcdef',
+    },
+    secret => registered.push(secret),
+  );
+
+  for (const benign of [
+    'banana-value',
+    'qwerty-value',
+    'legacy-mode',
+    'main-stage',
+    'alice-smith',
+    'true',
+    'production',
+    'abc',
+    'xyz',
+  ])
+    expect(registered).not.toContain(benign);
+
+  expect(registered).toContain('camel-case-secret-1');
+  expect(registered).toContain('pat-camel-secret-2');
+  expect(registered).toContain('apikey custom-api-cred-3');
+  expect(registered).toContain('custom-api-cred-3');
+  expect(registered).toContain('Bearer xyz');
+  expect(registered).toContain('p%40ss%3Asecret');
+  expect(registered).toContain('p@ss:secret');
+  expect(registered).toContain('raw%ZZsecret');
+  expect(registered).toContain('eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.sig123');
+  expect(registered).toContain('AIzaSyD1234567890abcdef');
+});

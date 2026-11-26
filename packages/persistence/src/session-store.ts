@@ -624,11 +624,13 @@ export class SqliteConversations implements ConversationStore {
         if (source.recovery?.compaction) {
           const compaction = source.recovery.compaction;
           const copied = this.recover(next).messages;
-          if (compaction.throughRevision <= copied.length) {
-            const prefixHash = createHash('sha256')
-              .update(JSON.stringify(copied.slice(0, compaction.throughRevision)))
-              .digest('hex');
-            if (prefixHash === compaction.sourceHash) this.saveContextSnapshot(next, compaction);
+          if (compaction.throughRevision >= 0 && compaction.throughRevision <= copied.length) {
+            const prefix = copied.slice(0, compaction.throughRevision);
+            const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+            const durableHash = hash(prefix.map(({attachments: _attachments, ...durable}) => durable));
+            const legacyHash = hash(prefix);
+            if (compaction.sourceHash === durableHash || compaction.sourceHash === legacyHash)
+              this.saveContextSnapshot(next, {...compaction, sourceHash: durableHash});
           }
         }
         return this.get(next)!;

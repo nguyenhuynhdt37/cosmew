@@ -187,6 +187,7 @@ function openSized(
     interrupted: () => interrupted,
     stdout,
     stdin,
+    mouse,
     rows: () => frameLines(stdout.lastFrame()),
     lines,
     fullFrame: () => frameLines(stdout.lastFrame()).join('\n'),
@@ -1366,6 +1367,55 @@ test('a standalone edit title expands and collapses its diff in place', async ()
     clickLine(view, 'Update(a.ts)');
     await settle();
     expect(view.fullFrame()).not.toContain('added-59');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('detailed transcript Ctrl+Q toggles text selection banner above DetailedFooter without overflowing', async () => {
+  const view = await openReady(100, 30, true, 5);
+  try {
+    view.stdin.write('\x0f');
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+    expect(view.fullFrame()).not.toContain('Text selection enabled');
+
+    view.stdin.write('\x11'); // Ctrl+Q
+    await waitFor(view.fullFrame, 'Text selection enabled: drag to select');
+    const enabledRows = view.rows();
+    expect(enabledRows).toHaveLength(30);
+    const bannerRow = enabledRows.findIndex(line => line.includes('Text selection enabled: drag to select'));
+    expect(bannerRow).toBeGreaterThanOrEqual(0);
+    expect(isRule(enabledRows[bannerRow + 1])).toBe(true);
+    expect(enabledRows[bannerRow + 2]).toContain('Showing detailed transcript');
+
+    view.stdin.write('\x11'); // Ctrl+Q again
+    await waitForFrame({lastFrame: view.fullFrame}, frame => !frame.includes('Text selection enabled'), 4000);
+    expect(view.fullFrame()).toContain('Showing detailed transcript');
+    expect(view.fullFrame()).toContain('Mouse scrolling resumed.');
+    expect(view.rows()).toHaveLength(30);
+  } finally {
+    view.unmount();
+  }
+});
+
+test('useTerminalSelectionCopied shows copy confirmation on composer footer and DetailedFooter', async () => {
+  const view = await openReady(120, 30);
+  try {
+    expect(typeof view.mouse.notifyCopied).toBe('function');
+    view.mouse.notifyCopied?.('single line');
+    await waitFor(view.fullFrame, 'Copied to clipboard');
+
+    view.mouse.notifyCopied?.('first\nsecond\nthird');
+    await waitFor(view.fullFrame, 'Copied 3 lines to clipboard');
+
+    view.stdin.write('\x0f'); // Ctrl+O
+    await waitFor(view.fullFrame, 'Showing detailed transcript');
+
+    view.mouse.notifyCopied?.('one line');
+    await waitFor(view.fullFrame, 'copied to clipboard');
+
+    view.mouse.notifyCopied?.('alpha\nbeta');
+    await waitFor(view.fullFrame, 'copied 2 lines');
   } finally {
     view.unmount();
   }

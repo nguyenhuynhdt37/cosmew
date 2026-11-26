@@ -858,3 +858,224 @@ test('known failed-summary cost exhausts the budget even when earlier round pric
   expect(receipt.usage.costUSD).toBeNull();
   expect(receipt.stopReason).toBe('budget_cost');
 });
+
+const SMALL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+async function setupMediaCompactionStore(prefix: string) {
+  const {openPrivateDatabase, SqliteConversations} = await import('@cosmew/persistence');
+  const home = mkdtempSync(join(tmpdir(), prefix));
+  const db = openPrivateDatabase(home);
+  cleanup.push(() => {
+    db.close();
+    rmSync(home, {recursive: true, force: true});
+  });
+  return {home, db, store: new SqliteConversations(db)};
+}
+
+test('evicting tool_attachments past MAX_SESSION_ATTACHMENT_BYTES preserves compaction snapshot across reload, turn and fork', async () => {
+  const {store} = await setupMediaCompactionStore('hannes-attach-evict-');
+  const selection = {accountId: crypto.randomUUID(), modelId: 'fixture'};
+  // 18 MiB decoded per call (< 20 MiB single-attachment cap); 4 calls = 72 MiB > 64 MiB session cap.
+  const largePng = 'A'.repeat(24 * 1024 * 1024);
+  let evictIndex = 0;
+  const attachmentsByPath: Record<string, string> = {
+    'small.png': SMALL_PNG,
+    'large.png': largePng,
+  };
+  const tools: ToolPort = {
+    descriptors: () => [{name: 'read', description: 'read', inputSchema: {type: 'object'}, capability: 'fs.read'}],
+    invoke: async call => {
+      const path = String((call.input as {path?: string}).path ?? 'small.png');
+      return {
+        callId: call.id,
+        name: call.name,
+        status: 'ok',
+        content: `read ${path}`,
+        attachments: [{mime: 'image/png', data: attachmentsByPath[path] ?? SMALL_PNG, name: path}],
+      };
+    },
+  };
+  const model: ModelPort = {
+    async *stream(request) {
+      if (isSummary(request)) {
+        yield* answer('SUMMARY-WITH-MEDIA', SUMMARY_USAGE);
+        return;
+      }
+      const last = request.messages.at(-1);
+      if (last?.role === 'tool') {
+        yield* answer('acknowledged tool attachment');
+        return;
+      }
+      if (last?.role === 'user' && last.content === 'read small image') {
+        yield {type: 'toolCallComplete', call: {id: 'old-img-call', name: 'read', input: {path: 'small.png'}}};
+        yield {type: 'usage', usage: usage(10, 5)};
+        yield {type: 'completed', finishReason: 'tool_calls', usage: usage(10, 5)};
+        return;
+      }
+      if (last?.role === 'user' && last.content.startsWith('evict-')) {
+        yield {
+          type: 'toolCallComplete',
+          call: {id: `evict-call-${evictIndex++}`, name: 'read', input: {path: 'large.png'}},
+        };
+        yield {type: 'usage', usage: usage(10, 5)};
+        yield {type: 'completed', finishReason: 'tool_calls', usage: usage(10, 5)};
+        return;
+      }
+      yield* answer('plain reply');
+    },
+    generate: async () => {
+      throw new FutrynError('UNSUPPORTED');
+    },
+  };
+  const sendTurn = async (target: Conversation, text: string) => {
+    const events: ModelEvent[] = [];
+    for await (const e of target.send(text)) events.push(e);
+    return events;
+  };
+  const conv = new Conversation(selection, model, store, undefined, tools, undefined, undefined, {
+    contextLimit: () => 1_000_000,
+    sleep: async () => {},
+  });
+  await sendTurn(conv, 'read small image');
+  await sendTurn(conv, 'turn before compaction');
+
+  const outcome = await conv.compact();
+  expect(outcome).toMatchObject({compacted: true, strategy: 'model'});
+  const snapshot = store.recover(conv.id).compaction!;
+  expect(snapshot).toBeDefined();
+  const oldToolIndex = store.recover(conv.id).messages.findIndex(m => m.toolCallId === 'old-img-call');
+  expect(oldToolIndex).toBeGreaterThanOrEqual(0);
+  expect(oldToolIndex).toBeLessThan(snapshot.throughRevision);
+  expect(store.recover(conv.id).messages[oldToolIndex]?.attachments).toHaveLength(1);
+
+  for (let i = 0; i < 4; i++) await sendTurn(conv, `evict-${i}`);
+  expect(store.recover(conv.id).messages[oldToolIndex]?.attachments).toBeUndefined();
+
+  const recovered = store.recover(conv.id);
+  const reopened = new Conversation(
+    selection,
+    model,
+    store,
+    {id: conv.id, messages: recovered.messages},
+    tools,
+    undefined,
+    undefined,
+    {contextLimit: () => 1_000_000, sleep: async () => {}},
+  );
+  expect(reopened.previewContext(undefined, 0).messages).toBeGreaterThan(0);
+  const afterEvict = await sendTurn(reopened, 'follow-up after eviction');
+  expect(afterEvict.at(-1)).toMatchObject({type: 'completed'});
+
+  const forked = store.fork(conv.id, selection);
+  expect(store.recover(forked.id).compaction).toEqual(snapshot);
+  const forkedConv = new Conversation(selection, model, store, {id: forked.id, messages: forked.messages}, tools);
+  expect(forkedConv.previewContext(undefined, 0).messages).toBeGreaterThan(0);
+});
+
+test('ephemeral user image attachments before compaction do not break recovery after reload', async () => {
+  const {compactHistory, useContextSnapshot} = await import('../../packages/core/src/context/compaction');
+  const {modelSnapshot} = await import('../../packages/core/src/context/model-compaction');
+  const {store} = await setupMediaCompactionStore('hannes-user-attach-');
+  const selection = {accountId: crypto.randomUUID(), modelId: 'fixture'};
+  const model: ModelPort = {
+    async *stream() {
+      yield* answer('ok');
+    },
+    generate: async () => {
+      throw new FutrynError('UNSUPPORTED');
+    },
+  };
+  const conv = new Conversation(selection, model, store, undefined, undefined, undefined, undefined, {
+    contextLimit: () => 100_000,
+    sleep: async () => {},
+  });
+  for await (const _ of conv.send('describe screenshot', undefined, undefined, undefined, undefined, undefined, [
+    {mime: 'image/png', data: SMALL_PNG, name: 'screen.png'},
+  ])) {
+    /* consume */
+  }
+  for await (const _ of conv.send('turn 2')) {
+    /* consume */
+  }
+  for await (const _ of conv.send('turn 3')) {
+    /* consume */
+  }
+
+  const recovered = store.recover(conv.id);
+  expect(recovered.messages[0]?.attachments).toBeUndefined();
+  const inMemoryWithUserAttachment: Message[] = recovered.messages.map((m, idx) =>
+    idx === 0 ? {...m, attachments: [{mime: 'image/png', data: SMALL_PNG, name: 'screen.png'}]} : m,
+  );
+
+  const excerptSnapshot = await compactHistory(inMemoryWithUserAttachment, undefined, 100_000);
+  expect(excerptSnapshot).toBeDefined();
+  expect(useContextSnapshot(recovered.messages, excerptSnapshot).length).toBeGreaterThan(0);
+
+  const durableModelSnapshot = modelSnapshot(inMemoryWithUserAttachment, 'Handoff with user image', ['turn 3']);
+  store.saveContextSnapshot(conv.id, durableModelSnapshot);
+  const reloaded = store.recover(conv.id);
+  const restarted = new Conversation(selection, model, store, {id: conv.id, messages: reloaded.messages});
+  expect(restarted.previewContext(undefined, 0).messages).toBeGreaterThan(0);
+  const events: ModelEvent[] = [];
+  for await (const e of restarted.send('continue after reload')) events.push(e);
+  expect(events.at(-1)).toMatchObject({type: 'completed'});
+});
+
+test('legacy snapshots with attachment-inclusive hashes remain valid and tampering still throws STORAGE', async () => {
+  const {contextHash, snapshotSourceHash} = await import('../../packages/core/src/context/builder');
+  const {useContextSnapshot} = await import('../../packages/core/src/context/compaction');
+  const {modelSnapshot} = await import('../../packages/core/src/context/model-compaction');
+  const {store} = await setupMediaCompactionStore('hannes-legacy-tamper-');
+  const selection = {accountId: crypto.randomUUID(), modelId: 'fixture'};
+  const id = store.create(selection);
+  store.append(id, {role: 'user', content: 'inspect chart'}, 'committed');
+  store.append(
+    id,
+    {role: 'assistant', content: '', toolCalls: [{id: 'legacy-call', name: 'read', input: {path: 'chart.png'}}]},
+    'committed',
+  );
+  store.append(id, {role: 'tool', content: 'chart summary', toolCallId: 'legacy-call', toolName: 'read'}, 'committed');
+  store.append(id, {role: 'assistant', content: 'looks good'}, 'committed');
+  store.append(id, {role: 'user', content: 'next question'}, 'committed');
+  store.saveAttachments(id, 'legacy-call', [{mime: 'image/png', data: SMALL_PNG, name: 'chart.png'}]);
+
+  const recovered = store.recover(id);
+  const throughRevision = 4;
+  const prefix = recovered.messages.slice(0, throughRevision);
+  expect(prefix[2]?.attachments).toHaveLength(1);
+
+  const legacySnapshot = {
+    version: 1 as const,
+    throughRevision,
+    sourceHash: contextHash(prefix),
+    createdAt: new Date().toISOString(),
+    strategy: 'model' as const,
+    summary: 'legacy handoff',
+    retainedUserRequests: ['inspect chart'],
+  };
+  store.saveContextSnapshot(id, legacySnapshot);
+
+  expect(useContextSnapshot(recovered.messages, legacySnapshot).length).toBeGreaterThan(0);
+  const forked = store.fork(id, selection);
+  const expectedDurableHash = snapshotSourceHash(prefix);
+  const forkedCompaction = store.recover(forked.id).compaction;
+  expect(forkedCompaction).toBeDefined();
+  expect(forkedCompaction!.sourceHash).toBe(expectedDurableHash);
+
+  const durableSnapshot = modelSnapshot(prefix, 'durable handoff', ['inspect chart']);
+  const tamperedContent = recovered.messages.map((m, i) => (i === 0 ? {...m, content: 'tampered'} : m));
+  const tamperedToolId = recovered.messages.map((m, i) => (i === 2 ? {...m, toolCallId: 'tampered-id'} : m));
+  const expectStorageError = (fn: () => unknown) => {
+    try {
+      fn();
+      expect.unreachable('expected FutrynError(STORAGE)');
+    } catch (error) {
+      expect(error).toBeInstanceOf(FutrynError);
+      expect((error as FutrynError).code).toBe('STORAGE');
+    }
+  };
+  expectStorageError(() => useContextSnapshot(tamperedContent, durableSnapshot));
+  expectStorageError(() => useContextSnapshot(tamperedToolId, durableSnapshot));
+  expectStorageError(() => useContextSnapshot(tamperedContent, legacySnapshot));
+  expectStorageError(() => useContextSnapshot(tamperedToolId, legacySnapshot));
+});

@@ -183,6 +183,35 @@ export function stripProviderReplay(request: ModelRequest): ModelRequest {
   };
 }
 
+const estimateAttachmentTokens = (attachment: {mime: string; data: unknown}): number => {
+  if (typeof attachment.data !== 'string') return 0;
+  const decodedBytes = Math.floor((attachment.data.length * 3) / 4);
+  return attachment.mime === 'application/pdf' ? Math.max(1600, Math.ceil(decodedBytes / 30)) : 1600;
+};
+
+/**
+ * Conservative request input token estimate (~3 UTF-8 bytes per token). Media attachments are
+ * priced per media budget rather than base64 length so large images/PDFs do not trip cost caps.
+ */
+export function estimateRequestInputTokens(request: ModelRequest): number {
+  let mediaTokens = 0;
+  const sanitizedMessages = request.messages.map(message => {
+    if (!message.attachments?.length) return message;
+    for (const attachment of message.attachments) {
+      mediaTokens += estimateAttachmentTokens(attachment);
+    }
+    return {
+      ...message,
+      attachments: message.attachments.map(({mime, name}) => ({mime, name})),
+    };
+  });
+  const utf8Bytes =
+    Buffer.byteLength(JSON.stringify(sanitizedMessages) ?? '') +
+    Buffer.byteLength(JSON.stringify(request.tools ?? []) ?? '') +
+    Buffer.byteLength(request.instructions ?? '');
+  return Math.ceil(utf8Bytes / 3) + mediaTokens + request.messages.length * 4 + 256;
+}
+
 type ChatUsageConverter = NonNullable<Parameters<typeof createOpenAICompatible>[0]['convertUsage']>;
 /** Provider usage fields are user supplied JSON. Invalid/negative counters are unknown, never zero. */
 const tokenCount = (value: unknown): number | undefined =>
@@ -429,12 +458,7 @@ export class ProviderAdapter implements ModelPort {
       const prices = this.info?.pricing;
       if (!prices) throw new FutrynError('BUDGET');
       // Deliberately an estimate guard, not an exact tokenizer or provider billing ceiling.
-      const inputEstimate =
-        Buffer.byteLength(JSON.stringify(request.messages)) +
-        Buffer.byteLength(JSON.stringify(request.tools)) +
-        Buffer.byteLength(request.instructions ?? '') +
-        request.messages.length * 16 +
-        1024;
+      const inputEstimate = estimateRequestInputTokens(request);
       const outputEstimate =
         maxOutputTokens ?? this.info?.outputLimit ?? GENERATION_LIMITS.anthropicFallbackOutputTokens;
       if (

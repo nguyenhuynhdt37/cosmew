@@ -9,7 +9,7 @@ import {
   type Selection,
   type Usage,
 } from '@cosmew/contracts';
-import {contextHash, estimateContextTokens, toolOutputReferences, truncateToolResults} from './builder';
+import {estimateContextTokens, snapshotSourceHash, toolOutputReferences, truncateToolResults} from './builder';
 
 /**
  * Model-written compaction (ADR 0054), ported from Codex `core/src/compact.rs` at
@@ -202,7 +202,7 @@ export function modelSnapshot(source: readonly Message[], handoff: string, retai
   return {
     version: 1,
     throughRevision: source.length,
-    sourceHash: contextHash(source),
+    sourceHash: snapshotSourceHash(source),
     createdAt: new Date().toISOString(),
     strategy: 'model',
     summary: handoff,

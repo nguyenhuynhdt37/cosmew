@@ -5,6 +5,7 @@ import {
   DISABLE_TERMINAL_MOUSE,
   ENABLE_TERMINAL_MOUSE,
   MouseInputFilter,
+  type TerminalSelectionEvent,
   type TerminalWheel,
 } from './mouse-input';
 
@@ -154,6 +155,170 @@ test('native text selection releases mouse capture without ending raw input or l
   bridge.stdin.read();
   expect(events).toEqual([{direction: 1, column: 2, row: 3}]);
   bridge.dispose();
+  source.destroy();
+  output.destroy();
+});
+
+test('mouse enable/disable sequences keep legacy substrings while adding button-event tracking (?1002h)', () => {
+  expect(ENABLE_TERMINAL_MOUSE).toBe('\x1b[?1000h\x1b[?1006h\x1b[?1002h');
+  expect(DISABLE_TERMINAL_MOUSE).toBe('\x1b[?1002l\x1b[?1006l\x1b[?1000l');
+  expect(ENABLE_TERMINAL_MOUSE.includes('\x1b[?1000h\x1b[?1006h')).toBe(true);
+  expect(DISABLE_TERMINAL_MOUSE.includes('\x1b[?1006l\x1b[?1000l')).toBe(true);
+});
+
+test('SGR drag emits start, move, and end selection events across split chunks without triggering click or wheel', () => {
+  const seq = '\x1b[<0;3;4M\x1b[<32;8;4M\x1b[<32;12;6M\x1b[<0;12;6m';
+  for (let split = 1; split < seq.length; split++) {
+    const parser = new MouseInputFilter();
+    const wheels: TerminalWheel[] = [];
+    const clicks: unknown[] = [];
+    const selections: TerminalSelectionEvent[] = [];
+    const text =
+      parser.feed(
+        'a' + seq.slice(0, split),
+        e => wheels.push(e),
+        e => clicks.push(e),
+        e => selections.push(e),
+      ) +
+      parser.feed(
+        seq.slice(split) + 'b',
+        e => wheels.push(e),
+        e => clicks.push(e),
+        e => selections.push(e),
+      );
+    expect(text).toBe('ab');
+    expect(wheels).toEqual([]);
+    expect(clicks).toEqual([{kind: 'click', column: 3, row: 4}]);
+    expect(selections).toEqual([
+      {phase: 'start', column: 3, row: 4},
+      {phase: 'move', column: 8, row: 4},
+      {phase: 'move', column: 12, row: 6},
+      {phase: 'end', column: 12, row: 6},
+    ]);
+  }
+});
+
+test('SGR selection ignores modified presses, orphan releases and zero coordinates, while ending pressed drag even with modifiers on release', () => {
+  const parser = new MouseInputFilter();
+  const clicks: unknown[] = [];
+  const selections: TerminalSelectionEvent[] = [];
+  const onWheel = () => {};
+  const onClick = (e: unknown) => clicks.push(e);
+  const onSel = (e: TerminalSelectionEvent) => selections.push(e);
+
+  // Orphan release, modifier press/drag, right click, and zero coordinates must not start or end selection.
+  parser.feed(
+    '\x1b[<0;5;5m\x1b[<4;5;5M\x1b[<4;5;5m\x1b[<36;6;5M\x1b[<2;5;5M\x1b[<0;0;5M\x1b[<0;5;0M',
+    onWheel,
+    onClick,
+    onSel,
+  );
+  expect(clicks).toEqual([]);
+  expect(selections).toEqual([]);
+
+  // Plain left press starts selection; Shift held when releasing (button=4, (4&3)===0) still ends it cleanly.
+  parser.feed('\x1b[<0;4;2M\x1b[<4;9;2m\x1b[<0;9;2m', onWheel, onClick, onSel);
+  expect(clicks).toEqual([{kind: 'click', column: 4, row: 2}]);
+  expect(selections).toEqual([
+    {phase: 'start', column: 4, row: 2},
+    {phase: 'end', column: 9, row: 2},
+  ]);
+
+  // Reset clears leftPressed so a subsequent release does not emit end.
+  parser.feed('\x1b[<0;2;2M', onWheel, onClick, onSel);
+  parser.reset();
+  parser.feed('\x1b[<0;2;2m', onWheel, onClick, onSel);
+  expect(selections).toHaveLength(3);
+});
+
+test('legacy X10 drag emits start, move, and end selection events across split chunks', () => {
+  const x10 = (btn: number, col: number, row: number) => '\x1b[M' + String.fromCharCode(btn + 32, col + 32, row + 32);
+  const seq = x10(0, 2, 3) + x10(32, 7, 3) + x10(3, 7, 3) + x10(3, 7, 3);
+  for (let split = 1; split < seq.length; split++) {
+    const parser = new MouseInputFilter();
+    const wheels: TerminalWheel[] = [];
+    const clicks: unknown[] = [];
+    const selections: TerminalSelectionEvent[] = [];
+    parser.feed(
+      seq.slice(0, split),
+      e => wheels.push(e),
+      e => clicks.push(e),
+      e => selections.push(e),
+    );
+    parser.feed(
+      seq.slice(split),
+      e => wheels.push(e),
+      e => clicks.push(e),
+      e => selections.push(e),
+    );
+    expect(wheels).toEqual([]);
+    expect(clicks).toEqual([{kind: 'click', column: 2, row: 3}]);
+    expect(selections).toEqual([
+      {phase: 'start', column: 2, row: 3},
+      {phase: 'move', column: 7, row: 3},
+      {phase: 'end', column: 7, row: 3},
+    ]);
+  }
+});
+
+test('terminal mouse facade forwards selection, copied notifications, and resets selection state on capture disable/raw disable/dispose', () => {
+  const source = new Input();
+  const output = new PassThrough();
+  const bridge = createTerminalMouseInput(source, output);
+  const selections: TerminalSelectionEvent[] = [];
+  const copied: string[] = [];
+  const unsubSel = bridge.subscribeSelection!(event => selections.push(event));
+  const unsubCopy = bridge.subscribeCopied!(text => copied.push(text));
+
+  bridge.stdin.setEncoding('utf8');
+  bridge.stdin.setRawMode!(true);
+
+  source.write('\x1b[<0;2;3M\x1b[<32;5;3M');
+  bridge.stdin.read();
+  expect(selections).toEqual([
+    {phase: 'start', column: 2, row: 3},
+    {phase: 'move', column: 5, row: 3},
+  ]);
+
+  // Disabling capture clears active drag state so re-enabling + releasing does not emit an orphan end.
+  bridge.setCaptureEnabled!(false);
+  source.write('\x1b[<0;6;3M\x1b[<32;7;3M');
+  bridge.stdin.read();
+  expect(selections).toHaveLength(2);
+  bridge.setCaptureEnabled!(true);
+  source.write('\x1b[<0;7;3m');
+  bridge.stdin.read();
+  expect(selections).toHaveLength(2);
+
+  // setRawMode(false) also resets selection state cleanly.
+  source.write('\x1b[<0;1;1M');
+  bridge.stdin.read();
+  expect(selections).toHaveLength(3);
+  bridge.stdin.setRawMode!(false);
+  bridge.stdin.setRawMode!(true);
+  source.write('\x1b[<0;1;1m');
+  bridge.stdin.read();
+  expect(selections).toHaveLength(3);
+
+  // notifyCopied notifies listeners for non-empty strings until disposed.
+  bridge.notifyCopied!('');
+  bridge.notifyCopied!('selected text');
+  expect(copied).toEqual(['selected text']);
+
+  unsubSel();
+  unsubCopy();
+  source.write('\x1b[<0;2;2M\x1b[<0;2;2m');
+  bridge.stdin.read();
+  bridge.notifyCopied!('ignored after unsub');
+  expect(selections).toHaveLength(3);
+  expect(copied).toEqual(['selected text']);
+
+  const lateCopied: string[] = [];
+  bridge.subscribeCopied!(text => lateCopied.push(text));
+  bridge.dispose();
+  bridge.notifyCopied!('after dispose');
+  expect(lateCopied).toEqual([]);
+
   source.destroy();
   output.destroy();
 });

@@ -7,6 +7,8 @@ import {queryTerminalBackground} from '../theme/terminal-background';
 import {FoundationNotice, InkApp, type AppSlots} from './app';
 import {keybindingsLogPath, keybindingsPath, keymapStore, watchKeybindings} from './hooks';
 import {createTerminalMouseInput} from '../input/mouse-input';
+import {createScreenSelectionBridge} from '../input/screen-selection';
+import {copyToClipboard} from '../clipboard';
 import {TerminalMouseProvider} from './hooks/use-terminal-wheel';
 
 export interface InkRuntimeOptions extends FutrynTuiOptions {
@@ -73,10 +75,15 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
     logPath: keybindingsLogPath(),
   });
   const mouse = createTerminalMouseInput(stdin, stdout);
+  const selection = createScreenSelectionBridge({
+    stdout,
+    mouse,
+    copyText: text => copyToClipboard(text, {terminal: sequence => stdout.write(sequence)}),
+  });
   let instance: ReturnType<typeof render>;
   try {
     instance = render(<TerminalMouseProvider value={mouse}>{tree}</TerminalMouseProvider>, {
-      stdout,
+      stdout: selection.stdout,
       stdin: mouse.stdin,
       stderr: options.stderr,
       interactive: true,
@@ -88,6 +95,7 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
     });
   } catch (error) {
     stopKeybindings();
+    selection.dispose();
     mouse.dispose();
     throw error;
   }
@@ -100,6 +108,7 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
     await instance.waitUntilExit();
   } finally {
     stopKeybindings();
+    selection.dispose();
     mouse.dispose();
     try {
       await shutdown();
