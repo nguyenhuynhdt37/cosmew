@@ -292,3 +292,35 @@ test('same-workspace session ports retain normal reads and mutations; everywhere
     await h.cleanup();
   }
 });
+
+test('list() orders sessions by most recent message activity and rename() redacts/cleans titles', async () => {
+  const h = await harness();
+  try {
+    const older = h.first.id;
+    const newer = h.clientA.createSession().id;
+    h.app.conversations.append(newer, {role: 'user', content: 'newer session first msg'}, 'committed');
+    expect(h.clientA.listSessions().map(s => s.id)).toEqual([newer, older]);
+
+    // Appending new activity to the older session moves it back to the top of /resume.
+    h.app.conversations.append(older, {role: 'user', content: 'resumed follow up'}, 'committed');
+    expect(h.clientA.listSessions().map(s => s.id)).toEqual([older, newer]);
+
+    h.app.redactor.register('secret-token-value');
+    expect(h.app.conversations.rename(older, '  secret-token-value\tline\nbreak\x07title  ')).toBe(true);
+    expect(h.clientA.listSessions()[0]?.title).toBe('[REDACTED] line break title');
+    expect(h.app.conversations.get(older)?.title).toBe('[REDACTED] line break title');
+
+    // Whitespace/control-only titles clear to NULL and fall back to the first user prompt.
+    expect(h.app.conversations.rename(older, '   \n\t\x07  ')).toBe(true);
+    expect(h.app.db.query('SELECT title FROM conversations WHERE id=?').get(older)).toEqual({title: null});
+    expect(h.clientA.listSessions()[0]?.title).toBe('same title');
+    expect(h.app.conversations.get(older)?.title).toBe('same title');
+
+    // Legacy empty-string titles stored in DB also fall back instead of returning "".
+    h.app.db.query("UPDATE conversations SET title='   ' WHERE id=?").run(older);
+    expect(h.clientA.listSessions()[0]?.title).toBe('same title');
+    expect(h.app.conversations.get(older)?.title).toBe('same title');
+  } finally {
+    await h.cleanup();
+  }
+});

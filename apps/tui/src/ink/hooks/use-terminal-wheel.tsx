@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import {createContext, useContext, useEffect, useRef} from 'react';
+import {createContext, useContext, useEffect, useRef, useState} from 'react';
 import type {DOMElement} from 'ink';
 import {useInputEnabled} from './input-scope';
 import type {TerminalMouseEvent, TerminalMouseInput, TerminalWheel} from '../../input/mouse-input';
@@ -90,4 +90,40 @@ export function useTerminalSelectionCopied(handler: (text: string) => void, isAc
       }),
     [source],
   );
+}
+
+/** True only while a terminal mouse drag has moved away from its press anchor. */
+export function useTerminalSelectionDragging(): boolean {
+  const source = useContext(MouseContext);
+  const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!source) {
+      setDragging(false);
+      return;
+    }
+    let anchor: {column: number; row: number} | null = null;
+    const reset = () => {
+      anchor = null;
+      setDragging(false);
+    };
+    const unsubSelection = source.subscribeSelection?.(event => {
+      if (event.phase === 'start') {
+        anchor = {column: event.column, row: event.row};
+        setDragging(false);
+      } else if (event.phase === 'move') {
+        if (anchor && (event.column !== anchor.column || event.row !== anchor.row)) {
+          setDragging(true);
+        }
+      } else {
+        reset();
+      }
+    });
+    const unsubReset = source.subscribeSelectionReset?.(reset);
+    return () => {
+      unsubSelection?.();
+      unsubReset?.();
+      reset();
+    };
+  }, [source]);
+  return dragging;
 }

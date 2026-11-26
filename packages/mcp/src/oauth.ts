@@ -497,8 +497,17 @@ class BoundProvider implements OAuthClientProvider {
   }
   async clientInformation() {
     this.check();
-    const {client, discovery} = this.observe(await this.service.read(this.endpoint));
+    const {client: storedClient, discovery} = this.observe(await this.service.read(this.endpoint));
     const login = this.login();
+    let client = storedClient;
+    if (client && login?.redirect) {
+      const redirectUris =
+        'redirect_uris' in client && Array.isArray(client.redirect_uris) ? client.redirect_uris.map(String) : undefined;
+      const canRegister = Boolean(discovery?.authorizationServerMetadata?.registration_endpoint);
+      if (redirectUris ? !redirectUris.includes(login.redirect) : canRegister) {
+        client = undefined;
+      }
+    }
     if (discovery) {
       const issue = clientIssue(discovery);
       if (issue && (!client || issue === 'unsupported-flow')) throw this.service.reportIssue(this.endpoint, issue);
@@ -506,7 +515,7 @@ class BoundProvider implements OAuthClientProvider {
     if (!client && !login) throw new UnauthorizedError('MCP_AUTH_REQUIRED');
     if (login) {
       login.stage = client ? 'authorization-failed' : 'registration-failed';
-      if (!client && discovery) login.tokenAuthMethod = registrationAuthMethod(discovery) ?? 'none';
+      if (!client) login.tokenAuthMethod = discovery ? (registrationAuthMethod(discovery) ?? 'none') : 'none';
     }
     return client;
   }

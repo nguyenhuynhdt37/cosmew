@@ -1,5 +1,6 @@
 import {
   attributeUsage,
+  combineUsage,
   AGENT_WAIT_DEFAULT_MS,
   AGENT_WAIT_MAX_MS,
   AGENT_WAIT_MIN_MS,
@@ -36,6 +37,7 @@ import {
   type Usage,
 } from '@cosmew/contracts';
 import {
+  deductChildLimits,
   exceedsAgentDepth,
   inheritChildLimits,
   parentCapsExceeded,
@@ -485,7 +487,12 @@ export class SubagentManager implements SubagentExecutionPort {
         };
     }
 
-    const inherited = inheritChildLimits(parent.limits, this.reservedForChildren(parent.sessionId), cfg);
+    const inherited = inheritChildLimits(
+      parent.limits,
+      this.reservedForChildren(parent.sessionId),
+      cfg,
+      profile.defaultBudget,
+    );
     if (!inherited.ok) {
       return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message, target: description};
     }
@@ -873,6 +880,7 @@ export class SubagentManager implements SubagentExecutionPort {
     onUsage: (usage: Usage) => void,
   ): Promise<string> {
     const {agentId, callId, profile, description} = runContext;
+    const priorUsage = task.usage;
     let latestUsage: Usage | null = null;
     let finalText = '';
     let responseStart = 0;
@@ -910,7 +918,7 @@ export class SubagentManager implements SubagentExecutionPort {
         description,
         ...(task.currentTool ? {currentTool: task.currentTool} : {}),
         toolCount: task.toolCount,
-        usage: latestUsage,
+        usage: task.usage ?? latestUsage,
         steps: cloneSteps(task.steps),
         ...(task.background ? {background: true} : {}),
         ...extra,
@@ -939,7 +947,7 @@ export class SubagentManager implements SubagentExecutionPort {
           }
         } else if (event.type === 'usage') {
           latestUsage = event.usage;
-          task.usage = event.usage;
+          task.usage = priorUsage ? combineUsage(priorUsage, event.usage) : event.usage;
           onUsage(event.usage);
           progress();
         } else if (event.type === 'toolCallComplete') {
@@ -970,7 +978,7 @@ export class SubagentManager implements SubagentExecutionPort {
         } else if (event.type === 'completed') {
           flushText();
           latestUsage = event.usage;
-          task.usage = event.usage;
+          task.usage = priorUsage ? combineUsage(priorUsage, event.usage) : event.usage;
           onUsage(event.usage);
         }
       }
@@ -1007,6 +1015,8 @@ export class SubagentManager implements SubagentExecutionPort {
       try {
         for (;;) {
           const turnStarted = Date.now();
+          const priorUsage = task.usage;
+          const priorTurnCount = this.deps.store.get?.(task.agentId)?.turns?.length ?? 0;
           let status: 'completed' | 'failed' | 'cancelled' = 'completed';
           let errorCode: string | undefined;
           let latestUsage: Usage | null = null;
@@ -1028,17 +1038,48 @@ export class SubagentManager implements SubagentExecutionPort {
                   error instanceof FutrynError ? error.message : 'The subagent encountered an unexpected error.',
                 );
           }
-          const continues = status === 'completed' && task.inbox.length > 0 && !this.scheduler.closed;
+          const currentTurns = this.deps.store.get?.(task.agentId)?.turns;
+          const storedUsage =
+            currentTurns && currentTurns.length > priorTurnCount ? currentTurns.at(-1)?.usage : undefined;
+          const finalUsage = storedUsage ?? latestUsage;
+          const turnElapsedMs = Math.max(0, Date.now() - turnStarted);
+
+          const wantsContinue = status === 'completed' && task.inbox.length > 0 && !this.scheduler.closed;
+          let nextLimits = context.limits;
+          let continues = false;
+          if (wantsContinue) {
+            const deducted = deductChildLimits(context.limits, finalUsage, turnElapsedMs);
+            if (!deducted.ok) {
+              status = 'failed';
+              errorCode = 'BUDGET';
+              summary = [summary, this.deps.redact(deducted.message)].filter(Boolean).join('\n\n');
+              task.inbox.splice(0);
+            } else if (parentCapsExceeded(this.deps.getParentState().limits)) {
+              status = 'failed';
+              errorCode = 'BUDGET';
+              summary = [summary, 'Subagent follow-up stopped: the parent turn budget is exhausted.']
+                .filter(Boolean)
+                .join('\n\n');
+              task.inbox.splice(0);
+            } else {
+              continues = true;
+              nextLimits = deducted.limits;
+            }
+          }
+
           if (!continues && task.isolation === 'worktree') {
             const note = this.finishWorktree(task.agentId);
             if (note) summary = [note, summary].filter(Boolean).join('\n\n');
           }
-          const storedUsage = this.deps.store.get?.(task.agentId)?.turns?.at(-1)?.usage;
-          const finalUsage = storedUsage ?? latestUsage;
           if (finalUsage) {
-            task.usage = finalUsage;
+            task.usage = priorUsage ? combineUsage(priorUsage, finalUsage) : finalUsage;
+            if (continues) task.reservation = nextLimits;
             this.foldChildUsage(task, finalUsage, !continues);
-          } else if (!continues) task.reservation = undefined;
+          } else if (continues) {
+            task.reservation = nextLimits;
+          } else {
+            task.reservation = undefined;
+          }
           task.status = status;
           task.finishedAt = Date.now();
           task.currentTool = undefined;
@@ -1062,8 +1103,8 @@ export class SubagentManager implements SubagentExecutionPort {
             description: task.description,
             status,
             toolCount: task.toolCount,
-            usage: finalUsage ?? null,
-            durationMs: Math.max(0, Date.now() - turnStarted),
+            usage: task.usage ?? finalUsage ?? null,
+            durationMs: turnElapsedMs,
             ...(errorCode ? {errorCode} : {}),
             summary: summary.slice(0, 4000),
             steps: cloneSteps(task.steps),
@@ -1076,7 +1117,14 @@ export class SubagentManager implements SubagentExecutionPort {
             task.status = 'running';
             task.abortController = new AbortController();
             this.deps.store.updateSubagentSession?.(task.agentId, {status: 'running', finishedAt: null});
-            context = {...context, prompt: next, initialMessages: [], resume: true, forkContext: false};
+            context = {
+              ...context,
+              prompt: next,
+              initialMessages: [],
+              resume: true,
+              forkContext: false,
+              limits: nextLimits,
+            };
             this.notifyListeners(task);
             continue;
           }
@@ -1188,8 +1236,19 @@ export class SubagentManager implements SubagentExecutionPort {
     );
     if (!found)
       return {status: 'error', code: 'INVALID_INPUT', content: 'The model of this subagent is no longer available.'};
-    const inherited = inheritChildLimits(parent.limits, this.reservedForChildren(owned.parentId), cfg);
+    const inherited = inheritChildLimits(
+      parent.limits,
+      this.reservedForChildren(owned.parentId),
+      cfg,
+      profile.defaultBudget,
+    );
     if (!inherited.ok) return {status: 'error', code: 'AGENT_BUDGET_EXHAUSTED', content: inherited.message};
+    const candidateEffort = task?.reasoningEffort ?? profile.reasoningEffort ?? cfg.defaultReasoningEffort;
+    const supportedEfforts = found.model.reasoningEfforts ?? [];
+    const reasoningEffort =
+      candidateEffort && (supportedEfforts.length === 0 || supportedEfforts.includes(candidateEffort))
+        ? candidateEffort
+        : found.model.defaultReasoningEffort;
     const slot = this.scheduler.tryReserveSlot();
     if (!slot.ok)
       return {
@@ -1223,6 +1282,7 @@ export class SubagentManager implements SubagentExecutionPort {
         agentType: record.agentType,
         description: record.description,
         modelId: record.selection.modelId,
+        ...(reasoningEffort ? {reasoningEffort} : {}),
         forkContext: false,
         background: true,
         status: 'running',
@@ -1237,6 +1297,7 @@ export class SubagentManager implements SubagentExecutionPort {
         ...(record.isolation ? {isolation: record.isolation} : {}),
       };
       task2.status = 'running';
+      task2.reasoningEffort = reasoningEffort;
       task2.reservation = inherited.limits;
       task2.background = true;
       task2.parentTurnId = parent.turnId ?? null;
@@ -1257,6 +1318,7 @@ export class SubagentManager implements SubagentExecutionPort {
         prompt: text,
         selection: record.selection,
         modelInfo: found.model,
+        ...(reasoningEffort ? {reasoningEffort} : {}),
         forkContext: false,
         initialMessages: [],
         attribution: {agentId: id, agentType: record.agentType, description: record.description},
@@ -1272,6 +1334,7 @@ export class SubagentManager implements SubagentExecutionPort {
         agentType: record.agentType,
         description: record.description,
         modelId: record.selection.modelId,
+        ...(reasoningEffort ? {reasoningEffort} : {}),
         background: true,
       });
       handedOff = true;
@@ -1467,7 +1530,10 @@ export class SubagentManager implements SubagentExecutionPort {
     if (lastAssistantText) {
       steps.push({kind: 'text', text: lastAssistantText.slice(0, 4000)});
     }
-    const usage = session?.turns?.at(-1)?.usage ?? null;
+    let usage: Usage | null = null;
+    for (const turn of session?.turns ?? []) {
+      if (turn.usage) usage = combineUsage(usage, turn.usage);
+    }
     const live = this.scheduler.getTask(agentId);
     return {
       id: meta.id,

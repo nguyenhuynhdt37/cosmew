@@ -34,6 +34,7 @@ function fixture(
     rejectRegistration?: boolean;
     tokenAuthMethod?: string;
     revoke?: number;
+    strictRedirectUri?: boolean;
   } = {},
 ) {
   let challenge = '';
@@ -42,6 +43,11 @@ function fixture(
   let tokenCalls = 0;
   let refreshCalls = 0;
   let revocations = 0;
+  let registrations = 0;
+  let refreshRevoked = false;
+  const registeredClients = new Map<string, string[]>();
+  const refreshClients = new Map<string, string>();
+  const authorizations: {clientId: string | null; redirectUri: string | null}[] = [];
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -77,18 +83,29 @@ function fixture(
         const body = (await request.json()) as {redirect_uris: string[]; token_endpoint_auth_method: string};
         if (options.tokenAuthMethod && body.token_endpoint_auth_method !== options.tokenAuthMethod)
           return Response.json({error: 'invalid_client_metadata'}, {status: 400});
+        registrations++;
+        const clientId = options.strictRedirectUri ? `fixture-client-${registrations}` : 'fixture-client';
+        registeredClients.set(clientId, body.redirect_uris.map(String));
         return Response.json(
           {
             ...body,
-            client_id: 'fixture-client',
+            client_id: clientId,
             ...(options.tokenAuthMethod === 'client_secret_basic' ? {client_secret: 'fixture-client-secret'} : {}),
           },
           {status: 201},
         );
       }
       if (url.pathname === '/authorize') {
+        const clientId = url.searchParams.get('client_id');
+        const redirectUri = url.searchParams.get('redirect_uri');
+        authorizations.push({clientId, redirectUri});
+        if (
+          options.strictRedirectUri &&
+          (!clientId || !redirectUri || !registeredClients.get(clientId)?.includes(redirectUri))
+        )
+          return Response.json({error: 'invalid_redirect_uri'}, {status: 400});
         challenge = url.searchParams.get('code_challenge')!;
-        redirect = url.searchParams.get('redirect_uri')!;
+        redirect = redirectUri!;
         const callback = new URL(redirect);
         callback.searchParams.set('state', url.searchParams.get('state')!);
         callback.searchParams.set('code', 'fixture-code');
@@ -98,6 +115,7 @@ function fixture(
       if (url.pathname === '/token') {
         tokenCalls++;
         const body = new URLSearchParams(await request.text());
+        const clientId = body.get('client_id');
         if (
           options.tokenAuthMethod === 'client_secret_basic' &&
           request.headers.get('authorization') !== `Basic ${btoa('fixture-client:fixture-client-secret')}`
@@ -106,13 +124,23 @@ function fixture(
         if (body.get('resource') !== `${origin}/mcp`) return Response.json({error: 'invalid_target'}, {status: 400});
         if (body.get('grant_type') === 'refresh_token') {
           refreshCalls++;
-          if (body.get('refresh_token') !== 'fixture-refresh-secret')
+          const refreshToken = body.get('refresh_token');
+          if (
+            refreshToken !== 'fixture-refresh-secret' ||
+            refreshRevoked ||
+            (options.strictRedirectUri && (!clientId || refreshClients.get(refreshToken) !== clientId))
+          )
             return Response.json({error: 'invalid_grant'}, {status: 400});
         } else if (
           body.get('redirect_uri') !== redirect ||
-          createHash('sha256').update(body.get('code_verifier')!).digest('base64url') !== challenge
+          createHash('sha256').update(body.get('code_verifier')!).digest('base64url') !== challenge ||
+          (options.strictRedirectUri && (!clientId || !registeredClients.get(clientId)?.includes(redirect)))
         )
           return Response.json({error: 'invalid_grant'}, {status: 400});
+        if (options.strictRedirectUri && clientId) {
+          refreshRevoked = false;
+          refreshClients.set('fixture-refresh-secret', clientId);
+        }
         return Response.json({
           access_token:
             body.get('grant_type') === 'refresh_token' ? 'fixture-access-refreshed' : 'fixture-access-secret',
@@ -155,6 +183,13 @@ function fixture(
   return {
     endpoint: `${origin}/mcp`,
     origin,
+    authorizations,
+    expireRefreshTokens() {
+      refreshRevoked = true;
+    },
+    get registrations() {
+      return registrations;
+    },
     get tokenCalls() {
       return tokenCalls;
     },
@@ -782,4 +817,38 @@ test('aborting a pending DNS lookup settles without invoking the OAuth wire fact
   abort.abort();
   await expect(pending).rejects.toThrow('MCP_OAUTH_NETWORK_DENIED');
   expect(wireCalls).toBe(0);
+});
+
+test('re-login after dynamic registration registers a new client for the new ephemeral callback port', async () => {
+  const remote = fixture({strictRedirectUri: true});
+  const state = setup(async url => {
+    const response = await fetch(url, {redirect: 'manual'});
+    expect(response.status).toBe(302);
+    await fetch(response.headers.get('location')!);
+  });
+  await state.service.login(remote.endpoint);
+  expect(remote.registrations).toBe(1);
+  expect(await state.service.status(remote.endpoint)).toMatchObject({status: 'authorized'});
+
+  remote.expireRefreshTokens();
+  await state.service.login(remote.endpoint);
+
+  expect(remote.registrations).toBe(2);
+  expect(remote.authorizations).toHaveLength(2);
+  expect(remote.authorizations[0]!.redirectUri).not.toBe(remote.authorizations[1]!.redirectUri);
+  expect(remote.authorizations[0]!.clientId).not.toBe(remote.authorizations[1]!.clientId);
+  expect(await state.service.status(remote.endpoint)).toMatchObject({status: 'authorized'});
+
+  const client = new McpClient({
+    endpoint: new URL(remote.endpoint),
+    authProvider: state.service.getProvider(remote.endpoint),
+    redact: () => '[redacted]',
+  });
+  try {
+    expect(await client.listTools()).toEqual([]);
+  } finally {
+    await client.close();
+  }
+  expect(remote.registrations).toBe(2);
+  expect(remote.refreshCalls).toBe(2);
 });

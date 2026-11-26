@@ -76,6 +76,25 @@ interface Login {
 const b64url = (bytes: ArrayBuffer | Uint8Array) => Buffer.from(bytes as ArrayBuffer).toString('base64url');
 const random = (n = 32) => b64url(crypto.getRandomValues(new Uint8Array(n)));
 
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new FutrynError('CANCELLED'));
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new FutrynError('CANCELLED'));
+    signal.addEventListener('abort', onAbort, {once: true});
+    promise.then(
+      value => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export async function openExternalURL(url: string): Promise<void> {
   const executable =
     process.platform === 'darwin' ? '/usr/bin/open' : process.platform === 'win32' ? 'rundll32.exe' : 'xdg-open';
@@ -255,6 +274,7 @@ export class ChatGPTOAuth {
         },
         signal,
       );
+      if (!tokens.refresh_token) throw new FutrynError('PROTOCOL');
       failure = 'ChatGPT did not grant token sharing. Sign in again and allow token sharing, or use an OpenAI API key.';
       if (!tokens.scope?.split(' ').includes(TOKEN_SHARING_SCOPE)) throw new FutrynError('FORBIDDEN');
       failure = 'ChatGPT returned a missing or invalid ID token. Return to Cosmew and try signing in again.';
@@ -262,7 +282,7 @@ export class ChatGPTOAuth {
       await this.verifyIDToken(tokens.id_token, clientID, login.nonce, signal);
       login.respond?.('ChatGPT identity verified. Return to Cosmew to finish checking API access.', 200);
       login.respond = undefined;
-      return JSON.stringify(this.record(tokens, clientID));
+      return JSON.stringify(this.record({...tokens, refresh_token: tokens.refresh_token}, clientID));
     } catch (error) {
       // OpenAI's documented invalid_grant recovery: never resend the code. Reauthorize once with
       // the issued client, fresh state/nonce/PKCE and the same host identity, within this login.
@@ -303,9 +323,13 @@ export class ChatGPTOAuth {
     }
   }
 
-  private record(tokens: {access_token: string; refresh_token: string; expires_in?: number}, clientID: string) {
+  private record(
+    tokens: {access_token: string; refresh_token: string; expires_in?: number},
+    clientID: string,
+    registerRefresh = true,
+  ) {
     this.redactor.register(tokens.access_token);
-    this.redactor.register(tokens.refresh_token);
+    if (registerRefresh) this.redactor.register(tokens.refresh_token);
     return {
       v: 1,
       access: tokens.access_token,
@@ -371,11 +395,15 @@ export class ChatGPTOAuth {
     } catch {
       throw new FutrynError('PROTOCOL');
     }
-    if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string')
+    if (
+      typeof data?.access_token !== 'string' ||
+      !data.access_token ||
+      (data.refresh_token !== undefined && (typeof data.refresh_token !== 'string' || !data.refresh_token))
+    )
       throw new FutrynError('PROTOCOL');
     return data as {
       access_token: string;
-      refresh_token: string;
+      refresh_token?: string;
       id_token?: string;
       expires_in?: number;
       scope?: string;
@@ -450,8 +478,10 @@ export class ChatGPTOAuth {
 
   /** A valid access token for the account, refreshed (single flight) shortly before it expires. */
   async accessToken(account: Account, vault: CredentialVault, signal?: AbortSignal): Promise<string> {
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
     if (account.credential.kind !== 'keyring') throw new FutrynError('AUTH');
     const raw = await vault.get(account.credential);
+    if (signal?.aborted) throw new FutrynError('CANCELLED');
     if (!raw) throw new FutrynError('AUTH');
     let record: TokenRecord;
     try {
@@ -467,15 +497,19 @@ export class ChatGPTOAuth {
       flight = (async () => {
         const tokens = await this.tokenRequest(
           {grant_type: 'refresh_token', client_id: record.clientID, refresh_token: record.refresh, resource: RESOURCE},
-          signal,
+          undefined,
         );
-        const next = this.record(tokens, record.clientID);
+        const merged = {...tokens, refresh_token: tokens.refresh_token ?? record.refresh};
+        const next = this.record(merged, record.clientID, Boolean(tokens.refresh_token));
         // Refresh tokens may rotate: the new record replaces the old one before anything is used.
         await vault.set(key, JSON.stringify(next));
         return next;
-      })().finally(() => this.refreshing.delete(key));
+      })().finally(() => {
+        if (this.refreshing.get(key) === flight) this.refreshing.delete(key);
+      });
       this.refreshing.set(key, flight);
+      void flight.catch(() => {});
     }
-    return (await flight).access;
+    return (await raceAbort(flight, signal)).access;
   }
 }

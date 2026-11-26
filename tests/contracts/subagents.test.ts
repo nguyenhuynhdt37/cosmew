@@ -397,3 +397,18 @@ test('read-only explorers and planners can retrieve their own bounded evidence w
     expect(tools).not.toContain('exec_command');
   }
 });
+
+test('explore and plan profiles carry bounded default budgets and concise search instructions', () => {
+  expect(BUILTIN_AGENT_PROFILES.explore.defaultBudget).toEqual({maxSteps: 12, maxToolCalls: 24});
+  expect(BUILTIN_AGENT_PROFILES.plan.defaultBudget).toEqual({maxSteps: 14, maxToolCalls: 28});
+  expect(BUILTIN_AGENT_PROFILES.worker.defaultBudget).toBeUndefined();
+  expect(BUILTIN_AGENT_PROFILES.general.defaultBudget).toBeUndefined();
+
+  expect(BUILTIN_AGENT_PROFILES.explore.developerInstructions).toMatch(/grep.*glob.*lsp/i);
+  expect(BUILTIN_AGENT_PROFILES.explore.developerInstructions).toMatch(/same turn|parallel/i);
+  expect(BUILTIN_AGENT_PROFILES.explore.developerInstructions).toMatch(/sufficient evidence/i);
+
+  expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/grep.*glob.*lsp/i);
+  expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/same turn|batch/i);
+  expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/sufficient evidence/i);
+});

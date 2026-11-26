@@ -34,9 +34,16 @@ export interface AgentProfile {
   forbiddenTools: readonly string[];
   model?: string;
   reasoningEffort?: string;
+  /** Default per-turn step/tool-call ceilings for bounded built-in roles like explore and plan. */
+  defaultBudget?: {maxSteps?: number; maxToolCalls?: number};
   /** S5b: set for custom agents. Their text is untrusted data and never becomes host instructions. */
   custom?: {source: 'project' | 'user'; shortPath: string; guidance: string};
 }
+
+export const ROLE_DEFAULT_BUDGETS: Partial<Record<BuiltinSubagentType, {maxSteps: number; maxToolCalls: number}>> = {
+  explore: {maxSteps: 12, maxToolCalls: 24},
+  plan: {maxSteps: 14, maxToolCalls: 28},
+};
 
 const EXPLORE_TOOLS = [
   'read',
@@ -73,7 +80,9 @@ export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
       'You are an explore subagent specialized in fast, authoritative codebase navigation and analysis.',
       'Rules:',
       '- Your role is strictly read-only: search, read, inspect symbols, and answer the assigned question.',
-      '- Issue independent read/grep/glob/lsp calls in parallel whenever possible.',
+      '- Use targeted grep, glob, and lsp lookups to locate relevant files and symbols first, and read only the needed line ranges instead of exhaustively reading every related file.',
+      '- Batch independent read/grep/glob/lsp calls into the same turn (in parallel) whenever possible to minimize round trips.',
+      '- Stop exploring and synthesize your final answer as soon as you have gathered sufficient evidence to answer the question.',
       '- Shell commands (exec_command) run in a read-only sandbox; never attempt to create, edit, delete, move, or copy files, including temporary files.',
       '- Cite concrete workspace-relative file paths and line numbers in your final summary.',
     ].join('\n'),
@@ -81,6 +90,7 @@ export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
     maxSandboxMode: 'read-only',
     allowEscalation: false,
     allowNetworkInSandbox: false,
+    defaultBudget: ROLE_DEFAULT_BUDGETS.explore,
     allowedTools: EXPLORE_TOOLS,
     forbiddenTools: [
       'edit',
@@ -140,13 +150,16 @@ export const BUILTIN_PROFILES: Record<BuiltinSubagentType, AgentProfile> = {
     developerInstructions: [
       'You are a read-only planning subagent (Plan mode).',
       'Rules:',
-      '- Inspect only the files and symbols needed to design an accurate plan. Never modify files or execute shell commands.',
+      '- Use targeted grep, glob, and lsp lookups to inspect only the files, line ranges, and symbols needed to design an accurate plan instead of reading every related file exhaustively.',
+      '- Batch independent read/grep/glob/lsp calls into the same turn whenever possible, and stop inspecting to synthesize the plan once you have sufficient evidence.',
+      '- Never modify files or execute shell commands.',
       '- Return a structured, actionable plan containing: objective, ordered implementation steps, affected files/modules, edge cases or risks, and verification commands/tests.',
     ].join('\n'),
     readOnly: true,
     maxSandboxMode: 'read-only',
     allowEscalation: false,
     allowNetworkInSandbox: false,
+    defaultBudget: ROLE_DEFAULT_BUDGETS.plan,
     allowedTools: PLAN_TOOLS,
     forbiddenTools: [
       'edit',

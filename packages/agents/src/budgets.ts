@@ -200,6 +200,85 @@ export function parentCapsExceeded(parent: SubagentParentLimits | undefined): bo
   );
 }
 
+interface SpentBudgetAmounts {
+  tokens: number;
+  outputTokens: number;
+  budgetCostUSD: number;
+  capCostUSD: number;
+  elapsedMs: number;
+}
+
+function applyBudgetDeductions(
+  limits: {budget: TurnBudget; maxOutputTokens?: number; maxEstimatedCostUSD?: number},
+  spent: SpentBudgetAmounts,
+  exhaustedMessage: (what: string) => string,
+): {ok: true; limits: SubagentChildLimits} | {ok: false; what: string; message: string} {
+  const budget: TurnBudget = {...limits.budget};
+  let maxOutputTokens = limits.maxOutputTokens;
+  let maxEstimatedCostUSD = limits.maxEstimatedCostUSD;
+  const exhausted = (what: string) => ({ok: false as const, what, message: exhaustedMessage(what)});
+
+  if (budget.maxTokens !== undefined) {
+    const left = budget.maxTokens - spent.tokens;
+    if (left <= 0) return exhausted('token budget');
+    budget.maxTokens = left;
+  }
+  if (budget.maxCostUSD !== undefined) {
+    const left = budget.maxCostUSD - spent.budgetCostUSD;
+    if (left <= 0) return exhausted('cost budget');
+    budget.maxCostUSD = left;
+  }
+  if (budget.maxDurationMs !== undefined) {
+    const left = budget.maxDurationMs - spent.elapsedMs;
+    if (left <= 0) return exhausted('time budget');
+    budget.maxDurationMs = left;
+  }
+  if (maxOutputTokens !== undefined) {
+    const left = maxOutputTokens - spent.outputTokens;
+    if (left <= 0) return exhausted('output token cap');
+    maxOutputTokens = left;
+  }
+  if (maxEstimatedCostUSD !== undefined) {
+    const left = maxEstimatedCostUSD - spent.capCostUSD;
+    if (left <= 0) return exhausted('estimated cost cap');
+    maxEstimatedCostUSD = left;
+  }
+  if (budget.maxTokens !== undefined && maxOutputTokens !== undefined) {
+    maxOutputTokens = Math.min(maxOutputTokens, budget.maxTokens);
+  }
+  return {
+    ok: true,
+    limits: {
+      ...(maxOutputTokens !== undefined ? {maxOutputTokens: Math.max(1, Math.floor(maxOutputTokens))} : {}),
+      ...(maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD} : {}),
+      budget,
+    },
+  };
+}
+
+/**
+ * Deduct usage and elapsed wall time from a child's granted limits before running an inbox follow-up
+ * turn in the background loop. Returns failure once any active dimension is exhausted.
+ */
+export function deductChildLimits(
+  limits: SubagentChildLimits,
+  usage: Usage | null | undefined,
+  elapsedMs: number,
+): {ok: true; limits: SubagentChildLimits} | {ok: false; what: string; message: string} {
+  const cost = knownCostUSD(usage);
+  return applyBudgetDeductions(
+    limits,
+    {
+      tokens: tokensOf(usage),
+      outputTokens: usage?.outputTokens ?? 0,
+      budgetCostUSD: cost,
+      capCostUSD: cost,
+      elapsedMs: Math.max(0, elapsedMs),
+    },
+    what => `Subagent follow-up stopped: the child's ${what} is exhausted.`,
+  );
+}
+
 /**
  * What a child may spend (S5c security fix). It inherits the parent turn's caps minus what the parent and
  * the budget reserved for children still running (their granted limits; released when they finish) used: `maxOutputTokens` and
@@ -211,58 +290,40 @@ export function inheritChildLimits(
   parent: SubagentParentLimits | undefined,
   reserved: ChildReservation,
   config: HostAgentsConfig,
+  roleDefaults?: {maxSteps?: number; maxToolCalls?: number},
 ): {ok: true; limits: SubagentChildLimits} | {ok: false; message: string} {
-  const budget: TurnBudget = {...(parent?.budget ?? {})};
-  let maxOutputTokens = parent?.maxOutputTokens;
-  let maxEstimatedCostUSD = parent?.maxEstimatedCostUSD;
+  let limits: SubagentChildLimits = {budget: {...(parent?.budget ?? {})}};
   if (parent) {
-    const spentTokens = tokensOf(parent.usage) + reserved.tokens;
-    const spentOutput = (parent.usage?.outputTokens ?? 0) + reserved.outputTokens;
-    const spentBudgetCost = knownCostUSD(parent.usage) + reserved.budgetCostUSD;
-    const spentCapCost = knownCostUSD(parent.usage) + reserved.capCostUSD;
-    const exhausted = (what: string) => ({
-      ok: false as const,
-      message: `The parent turn's ${what} is already used up (including subagents), so no new subagent was started. Finish the work yourself or ask the user to raise the limit.`,
-    });
-    if (budget.maxTokens !== undefined) {
-      const left = budget.maxTokens - spentTokens;
-      if (left <= 0) return exhausted('token budget');
-      budget.maxTokens = left;
-    }
-    if (budget.maxCostUSD !== undefined) {
-      const left = budget.maxCostUSD - spentBudgetCost;
-      if (left <= 0) return exhausted('cost budget');
-      budget.maxCostUSD = left;
-    }
-    if (budget.maxDurationMs !== undefined) {
-      const left = budget.maxDurationMs - parent.elapsedMs;
-      if (left <= 0) return exhausted('time budget');
-      budget.maxDurationMs = left;
-    }
-    if (maxOutputTokens !== undefined) {
-      const left = maxOutputTokens - spentOutput;
-      if (left <= 0) return exhausted('output token cap');
-      maxOutputTokens = left;
-    }
-    if (maxEstimatedCostUSD !== undefined) {
-      const left = maxEstimatedCostUSD - spentCapCost;
-      if (left <= 0) return exhausted('estimated cost cap');
-      maxEstimatedCostUSD = left;
-    }
-    if (budget.maxTokens !== undefined && maxOutputTokens !== undefined)
-      maxOutputTokens = Math.min(maxOutputTokens, budget.maxTokens);
+    const deducted = applyBudgetDeductions(
+      parent,
+      {
+        tokens: tokensOf(parent.usage) + reserved.tokens,
+        outputTokens: (parent.usage?.outputTokens ?? 0) + reserved.outputTokens,
+        budgetCostUSD: knownCostUSD(parent.usage) + reserved.budgetCostUSD,
+        capCostUSD: knownCostUSD(parent.usage) + reserved.capCostUSD,
+        elapsedMs: parent.elapsedMs,
+      },
+      what =>
+        `The parent turn's ${what} is already used up (including subagents), so no new subagent was started. Finish the work yourself or ask the user to raise the limit.`,
+    );
+    if (!deducted.ok) return {ok: false, message: deducted.message};
+    limits = deducted.limits;
   }
+  const budget: TurnBudget = {...limits.budget};
   if (config.maxChildTokens !== undefined)
     budget.maxTokens = Math.min(budget.maxTokens ?? Infinity, config.maxChildTokens);
   if (config.maxChildDurationMs !== undefined)
     budget.maxDurationMs = Math.min(budget.maxDurationMs ?? Infinity, config.maxChildDurationMs);
   if (config.maxChildCostUSD !== undefined)
     budget.maxCostUSD = Math.min(budget.maxCostUSD ?? Infinity, config.maxChildCostUSD);
+  if (positive(roleDefaults?.maxSteps))
+    budget.maxSteps = Math.min(budget.maxSteps ?? Infinity, Math.floor(roleDefaults.maxSteps));
+  if (positive(roleDefaults?.maxToolCalls))
+    budget.maxToolCalls = Math.min(budget.maxToolCalls ?? Infinity, Math.floor(roleDefaults.maxToolCalls));
   return {
     ok: true,
     limits: {
-      ...(maxOutputTokens !== undefined ? {maxOutputTokens: Math.max(1, Math.floor(maxOutputTokens))} : {}),
-      ...(maxEstimatedCostUSD !== undefined ? {maxEstimatedCostUSD} : {}),
+      ...limits,
       budget,
     },
   };

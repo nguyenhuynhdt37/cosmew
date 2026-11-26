@@ -35,13 +35,18 @@ export class MouseInputFilter {
   get awaitingReport(): boolean {
     return this.paste || this.pending.startsWith('\x1b[<') || this.pending.startsWith('\x1b[M');
   }
+  get isSelecting(): boolean {
+    return this.leftPressed;
+  }
   flush(): string {
     const text = this.pending;
     this.pending = '';
     return text;
   }
-  resetSelection(): void {
+  resetSelection(): boolean {
+    const wasSelecting = this.leftPressed;
     this.leftPressed = false;
+    return wasSelecting;
   }
   reset(): void {
     this.pending = '';
@@ -180,6 +185,7 @@ export interface TerminalMouseInput {
   subscribe(listener: (event: TerminalWheel) => void): () => void;
   subscribeMouse?(listener: (event: TerminalMouseEvent) => void): () => void;
   subscribeSelection?(listener: (event: TerminalSelectionEvent) => void): () => void;
+  subscribeSelectionReset?(listener: () => void): () => void;
   subscribeCopied?(listener: (text: string) => void): () => void;
   notifyCopied?(text: string): void;
   /** Release mouse reporting for native terminal text selection, without leaving raw input. */
@@ -196,7 +202,11 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
   const listeners = new Set<(event: TerminalWheel) => void>();
   const mouseListeners = new Set<(event: TerminalMouseEvent) => void>();
   const selectionListeners = new Set<(event: TerminalSelectionEvent) => void>();
+  const selectionResetListeners = new Set<() => void>();
   const copiedListeners = new Set<(text: string) => void>();
+  const notifySelectionReset = () => {
+    for (const listener of selectionResetListeners) listener();
+  };
   let active = false;
   let disposed = false;
   let captureEnabled = true;
@@ -260,11 +270,15 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
       if (property === 'setRawMode' && source.setRawMode)
         return (mode: boolean) => {
           source.setRawMode!(mode);
+          const wasSelecting = !mode && !disposed && filter.isSelecting;
           if (!disposed) {
             active = mode;
             syncReporting();
           }
-          if (!mode) clear();
+          if (!mode) {
+            clear();
+            if (wasSelecting) notifySelectionReset();
+          }
           return stdin;
         };
       const value = Reflect.get(target, property, target);
@@ -291,6 +305,12 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
         selectionListeners.delete(listener);
       };
     },
+    subscribeSelectionReset(listener) {
+      selectionResetListeners.add(listener);
+      return () => {
+        selectionResetListeners.delete(listener);
+      };
+    },
     subscribeCopied(listener) {
       copiedListeners.add(listener);
       return () => {
@@ -304,17 +324,22 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
     setCaptureEnabled(enabled) {
       if (disposed || captureEnabled === enabled) return;
       captureEnabled = enabled;
-      filter.resetSelection();
+      const wasSelecting = filter.resetSelection();
+      if (!enabled && wasSelecting) notifySelectionReset();
       syncReporting();
     },
     dispose() {
+      if (disposed) return;
+      const wasSelecting = filter.isSelecting;
       disposed = true;
       syncReporting();
       active = false;
       clear();
+      if (wasSelecting) notifySelectionReset();
       listeners.clear();
       mouseListeners.clear();
       selectionListeners.clear();
+      selectionResetListeners.clear();
       copiedListeners.clear();
     },
   };

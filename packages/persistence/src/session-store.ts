@@ -848,7 +848,8 @@ export class SqliteConversations implements ConversationStore {
       const rows = this.db
         .query(
           `SELECT id, selection, revision, rowid, title FROM conversations WHERE id NOT IN (SELECT id FROM subagent_sessions)
-          ${workspace === undefined ? '' : 'AND workspace=?'} ORDER BY rowid DESC LIMIT 200`,
+          ${workspace === undefined ? '' : 'AND workspace=?'}
+          ORDER BY COALESCE((SELECT MAX(m.rowid) FROM messages m WHERE m.conversation = conversations.id), 0) DESC, rowid DESC LIMIT 200`,
         )
         .all(...(workspace === undefined ? [] : [workspace])) as {
         id: string;
@@ -869,8 +870,7 @@ export class SqliteConversations implements ConversationStore {
         const firstUser = msgs.find(m => m.role === 'user')?.content ?? '';
         const lastMsg = msgs.at(-1);
         const title =
-          row.title ??
-          (firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`);
+          row.title?.trim() || firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) || `Session ${row.id.slice(0, 8)}`;
         const preview = lastMsg ? lastMsg.content.replace(/\s+/g, ' ').trim().slice(0, 80) : 'No messages yet';
         return {
           id: row.id,
@@ -919,7 +919,15 @@ export class SqliteConversations implements ConversationStore {
     }
   }
   rename(id: string, title: string): boolean {
-    return this.db.query('UPDATE conversations SET title=? WHERE id=?').run(title, id).changes === 1;
+    try {
+      const cleaned = this.redact(title)
+        .replace(/[\x00-\x1f\x7f]+/g, ' ')
+        .trim()
+        .slice(0, 200);
+      return this.db.query('UPDATE conversations SET title=? WHERE id=?').run(cleaned || null, id).changes === 1;
+    } catch {
+      throw new FutrynError('STORAGE');
+    }
   }
   get(id: string): SessionRecord | undefined {
     try {
@@ -948,8 +956,7 @@ export class SqliteConversations implements ConversationStore {
       return {
         id: row.id,
         title:
-          row.title ??
-          (firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) : `Session ${row.id.slice(0, 8)}`),
+          row.title?.trim() || firstUser.replace(/\s+/g, ' ').trim().slice(0, 60) || `Session ${row.id.slice(0, 8)}`,
         selection,
         revision: row.revision,
         messageCount: messages.filter(m => m.state === 'committed').length,

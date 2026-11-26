@@ -130,6 +130,24 @@ export async function execCli(args: string[]): Promise<number> {
   }
 }
 
+/**
+ * Normalize JSON-serializable values (invoking `toJSON()` and stripping non-JSON fields)
+ * before redacting every key and leaf string so escaped quotes or backslashes cannot corrupt JSON.
+ */
+export function redactJsonValue(value: unknown, redact: (text: string) => string): unknown {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) return undefined;
+  const walk = (node: unknown): unknown => {
+    if (typeof node === 'string') return redact(node);
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(Object.entries(node).map(([key, entry]) => [redact(key), walk(entry)]));
+    }
+    return node;
+  };
+  return walk(JSON.parse(serialized));
+}
+
 /** Runs the SDK agent loop; filesystem/process/network tools remain owned by ToolDispatcher. */
 export async function runExec(
   app: Application,
@@ -138,15 +156,16 @@ export async function runExec(
   interactive = false,
 ): Promise<number> {
   let seq = 0;
+  const redact = (text: string) => app.redactor.text(text);
   const emit = (event: WithoutEnvelope<HeadlessEvent>) => {
     if (options.json)
       process.stdout.write(
-        app.redactor.text(JSON.stringify({...event, contractVersion: CONTRACT_VERSION, seq: ++seq})) + '\n',
+        JSON.stringify(redactJsonValue({...event, contractVersion: CONTRACT_VERSION, seq: ++seq}, redact)) + '\n',
       );
   };
   const failed = (error: FutrynError) => {
     emit({type: 'turn.failed', error: {code: error.code, message: error.message}});
-    if (!options.json) process.stderr.write(JSON.stringify(error) + '\n');
+    if (!options.json) process.stderr.write(JSON.stringify(redactJsonValue(error, redact)) + '\n');
   };
   if (!options.workspace) {
     failed(new FutrynError('POLICY'));

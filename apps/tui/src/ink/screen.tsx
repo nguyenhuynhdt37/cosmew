@@ -11,6 +11,7 @@ import {
 } from 'react';
 import {Box, Text, measureElement, type DOMElement} from 'ink';
 import {useTerminalSize} from './hooks/use-terminal-size';
+import {useTerminalSelectionDragging} from './hooks/use-terminal-wheel';
 import {useUiTheme} from './ui/ui-theme';
 
 /** Terminal rows of the output stream; the fullscreen layout is used only when it is a positive number. */
@@ -143,6 +144,7 @@ export function WindowedRows({count, children}: {count: number; children(start: 
  */
 export function ScrollViewport({scroll, children}: {scroll: Scrollback; children: ReactNode}) {
   const ui = useUiTheme();
+  const selectionDragging = useTerminalSelectionDragging();
   const {topRow, viewRows, content} = scroll;
   const coordinates = useMemo(() => ({topRow, viewRows, content}), [topRow, viewRows, content]);
   return (
@@ -162,7 +164,7 @@ export function ScrollViewport({scroll, children}: {scroll: Scrollback; children
         </Box>
         <Box flexGrow={1} flexShrink={1} />
       </Box>
-      {scroll.atBottom ? null : (
+      {scroll.atBottom || selectionDragging ? null : (
         <Box position="absolute" bottom={0} left={0} width="100%" justifyContent="center">
           <Text inverse color={ui.color('dim')}>
             {' Jump to bottom · fn+↓ to scroll '}

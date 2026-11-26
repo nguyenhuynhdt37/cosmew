@@ -2,9 +2,9 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerSchema} from '@cosmew/contracts';
+import {providerSchema, ProviderBillingError} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
-import {runExec} from '../../apps/cli/src/exec';
+import {redactJsonValue, runExec} from '../../apps/cli/src/exec';
 import {memoryVault, scriptedView, type ScriptedView} from '../fixtures';
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -13,7 +13,7 @@ afterEach(async () => {
 });
 
 /** Provider wire fixture through the existing fetch port; no socket or OS execution claim. */
-async function setup(allow?: string[]) {
+async function setup(allow?: string[], assistantText = 'FINAL private-output-marker') {
   const root = mkdtempSync(join(tmpdir(), 'fyn-headless-run-'));
   let failure = false;
   let tool = 'read';
@@ -58,7 +58,7 @@ async function setup(allow?: string[]) {
             index: 0,
             delta: calls
               ? {role: 'assistant', content: 'intermediate', tool_calls: calls}
-              : {role: 'assistant', content: 'FINAL private-output-marker'},
+              : {role: 'assistant', content: assistantText},
             finish_reason: null,
           },
         ],
@@ -238,4 +238,50 @@ test('provider errors and cancellation return exit 1 with safe terminal JSONL', 
       .filter(e => e.type === 'turn.failed')
       .map(e => e.error.code),
   ).toEqual(['AUTH', 'CANCELLED']);
+});
+
+test('exec --json and redactJsonValue redact quotes, backslashes, and Bearer tokens without breaking JSONL', async () => {
+  const quoteSecret = 'sec"ret\\';
+  const trailingSlashSecret = 'trail-slash\\';
+  const x = await setup(undefined, `Model Bearer tok"extra and ${quoteSecret} and ${trailingSlashSecret}`);
+  x.app.redactor.register(quoteSecret);
+  x.app.redactor.register(trailingSlashSecret);
+  writeFileSync(join(x.root, 'in.txt'), `Tool Bearer tok"extra and ${quoteSecret} and ${trailingSlashSecret}`);
+  const lines: string[] = [];
+  const output = spyOn(process.stdout, 'write').mockImplementation(value => {
+    lines.push(String(value));
+    return true;
+  });
+  try {
+    expect(await runExec(x.app, {prompt: 'read', workspace: x.root, json: true})).toBe(0);
+  } finally {
+    output.mockRestore();
+  }
+  const raw = lines.join('');
+  expect(raw).not.toContain(quoteSecret);
+  expect(raw).not.toContain(trailingSlashSecret);
+  expect(raw).not.toContain('tok"extra');
+  const events = raw
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line));
+  expect(events.length).toBeGreaterThan(0);
+  const toolEvent = events.find(e => e.type === 'toolResult');
+  expect(toolEvent?.result?.content).toContain('Bearer [REDACTED]"extra');
+  expect(toolEvent?.result?.content).toContain('[REDACTED]');
+
+  const redactedObj = redactJsonValue(
+    {
+      [`key-${quoteSecret}`]: ['Bearer tok"extra', {nested: trailingSlashSecret}],
+      billing: new ProviderBillingError(`Bearer tok"extra ${quoteSecret}`),
+    },
+    text => x.app.redactor.text(text),
+  );
+  const serialized = JSON.stringify(redactedObj);
+  expect(serialized).not.toContain(quoteSecret);
+  expect(serialized).not.toContain(trailingSlashSecret);
+  expect(serialized).not.toContain('tok"extra');
+  const parsed = JSON.parse(serialized) as Record<string, unknown>;
+  expect(parsed['key-[REDACTED]']).toEqual(['Bearer [REDACTED]"extra', {nested: '[REDACTED]'}]);
+  expect((parsed.billing as {message: string}).message).toContain('Bearer [REDACTED]"extra [REDACTED]');
 });

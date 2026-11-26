@@ -2,9 +2,18 @@ import {afterEach, expect, test} from 'bun:test';
 import {mkdtempSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import type {HostAgentsConfig, ModelInfo, SubagentParentLimits, SubagentWorktreePort} from '@cosmew/contracts';
+import type {
+  HostAgentsConfig,
+  ModelEvent,
+  ModelInfo,
+  SubagentParentLimits,
+  SubagentWorktreePort,
+  Usage,
+} from '@cosmew/contracts';
 import {
+  BUILTIN_AGENT_PROFILES,
   SubagentManager,
+  deductChildLimits,
   inheritChildLimits,
   reserveForChildren,
   NO_RESERVATION,
@@ -119,7 +128,11 @@ function manager(options: {
   handoff?: () => string;
   redact?: (text: string) => string;
   models?: Record<string, string>;
+  modelEfforts?: Record<string, string[]>;
   run?: (context: ChildRunContext, signal: AbortSignal) => Promise<string>;
+  runEvents?: (context: ChildRunContext, signal: AbortSignal) => AsyncIterable<ModelEvent>;
+  onParentUsage?: (usage: Usage) => void;
+  deliverToParent?: (parentId: string, text: string) => 'steered' | 'queued';
 }) {
   const dir = mkdtempSync(join(tmpdir(), 'fyn-s5c-'));
   const db = openPrivateDatabase(dir);
@@ -142,13 +155,19 @@ function manager(options: {
       limits: options.limits?.(),
     }),
     lookupModel: ref => {
-      const id = options.models?.[ref] ?? ref;
-      return id === 'parent-model' || options.models?.[ref]
-        ? {
-            selection: {...selection, modelId: id},
-            model: {id, capabilities: {tools: 'supported'}} as unknown as ModelInfo,
-          }
-        : undefined;
+      const bare = ref.includes(':') ? ref.split(':').slice(1).join(':') : ref;
+      const id =
+        options.models?.[ref] ?? options.models?.[bare] ?? (bare === 'parent-model' ? 'parent-model' : undefined);
+      if (!id) return undefined;
+      const reasoningEfforts = options.modelEfforts?.[id];
+      return {
+        selection: {...selection, modelId: id},
+        model: {
+          id,
+          capabilities: {tools: 'supported'},
+          ...(reasoningEfforts ? {reasoningEfforts} : {}),
+        } as unknown as ModelInfo,
+      };
     },
     availableModelIds: () => ['parent-model'],
     store,
@@ -156,10 +175,15 @@ function manager(options: {
     worktreeHandoff: options.handoff,
     runChildTurn: async function* (context, signal) {
       contexts.push(context);
+      if (options.runEvents) {
+        yield* options.runEvents(context, signal);
+        return;
+      }
       yield {type: 'started', requestId: crypto.randomUUID()} as never;
       yield {type: 'textDelta', text: await (options.run?.(context, signal) ?? Promise.resolve('done'))} as never;
     },
-    addParentUsage: () => undefined,
+    addParentUsage: u => options.onParentUsage?.(u),
+    deliverToParent: options.deliverToParent,
     redact: options.redact ?? (text => text),
     waitMinMs: 5,
   });
@@ -401,4 +425,307 @@ test('an unchanged machine handoff remains byte-exact in foreground and backgrou
       for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
     expect(background ? delivered[0]! : result.content).toContain(json);
   }
+});
+
+test('explore and plan subagents cap maxSteps and maxToolCalls via Math.min(parent, roleDefault)', async () => {
+  const uncapped = manager({});
+  await spawn(uncapped, {agent_type: 'explore'});
+  expect(uncapped.contexts[0]!.limits.budget).toMatchObject({maxSteps: 12, maxToolCalls: 24});
+
+  await spawn(uncapped, {agent_type: 'plan'});
+  expect(uncapped.contexts[1]!.limits.budget).toMatchObject({maxSteps: 14, maxToolCalls: 28});
+
+  await spawn(uncapped, {agent_type: 'worker'});
+  expect(uncapped.contexts[2]!.limits.budget.maxSteps).toBeUndefined();
+  expect(uncapped.contexts[2]!.limits.budget.maxToolCalls).toBeUndefined();
+
+  // Parent caps tighter than role defaults stay enforced; looser parent caps get clamped down.
+  let parentBudget: SubagentParentLimits = {
+    budget: {maxSteps: 5, maxToolCalls: 40},
+    usage: null,
+    elapsedMs: 0,
+  };
+  const capped = manager({limits: () => parentBudget});
+  await spawn(capped, {agent_type: 'explore'});
+  expect(capped.contexts[0]!.limits.budget).toMatchObject({maxSteps: 5, maxToolCalls: 24});
+
+  parentBudget = {budget: {maxSteps: 30, maxToolCalls: 10}, usage: null, elapsedMs: 0};
+  await spawn(capped, {agent_type: 'plan'});
+  expect(capped.contexts[1]!.limits.budget).toMatchObject({maxSteps: 14, maxToolCalls: 10});
+
+  // Direct inheritChildLimits preserves 3-arg compatibility while clamping when roleDefaults is passed.
+  const direct = inheritChildLimits(
+    {budget: {maxSteps: 50, maxToolCalls: 100}, usage: null, elapsedMs: 0},
+    NO_RESERVATION,
+    baseConfig(),
+    BUILTIN_AGENT_PROFILES.explore.defaultBudget,
+  );
+  expect(direct.ok && direct.limits.budget).toEqual({maxSteps: 12, maxToolCalls: 24});
+});
+
+test('background inbox loop accumulates usage across turns and inspectSubagent sums all stored turns', async () => {
+  let releaseTurn1!: () => void;
+  const gateTurn1 = new Promise<void>(resolve => (releaseTurn1 = resolve));
+  const delivered: string[] = [];
+  let turnIndex = 0;
+
+  const m = manager({
+    deliverToParent: (_p, text) => {
+      delivered.push(text);
+      return 'queued';
+    },
+    runEvents: async function* (context) {
+      turnIndex++;
+      yield {type: 'started', requestId: crypto.randomUUID()};
+      if (turnIndex === 1) {
+        await gateTurn1;
+        const u1 = usage(100, 50, 0.1);
+        yield {type: 'usage', usage: u1};
+        yield {type: 'textDelta', text: 'part 1'};
+        yield {type: 'completed', finishReason: 'stop', usage: u1};
+      } else {
+        const u2 = usage(40, 20, 0.05);
+        yield {type: 'usage', usage: u2};
+        yield {type: 'textDelta', text: `part 2: ${context.prompt}`};
+        yield {type: 'completed', finishReason: 'stop', usage: u2};
+      }
+    },
+  });
+
+  const started = await spawn(m, {background: true, prompt: 'turn 1'});
+  const id = JSON.parse(started.content).id as string;
+
+  // Queue a follow-up in task.inbox while turn 1 is still running.
+  const msgOutcome = await m.subagents.message({id, message: 'turn 2'});
+  expect(JSON.parse(msgOutcome.content).delivery).toBe('queued');
+
+  releaseTurn1();
+  for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(delivered).toHaveLength(1);
+  expect(m.contexts).toHaveLength(2);
+
+  // Live task usage must reflect the sum across turn 1 + turn 2, never overwritten by turn 2 alone.
+  const task = m.subagents.scheduler.getTask(id)!;
+  expect(task.usage?.inputTokens).toBe(140);
+  expect(task.usage?.outputTokens).toBe(70);
+  expect(task.usage?.costUSD).toBeCloseTo(0.15);
+
+  const inspectedLive = m.subagents.inspectSubagent(id)!;
+  expect(inspectedLive.usage?.inputTokens).toBe(140);
+  expect(inspectedLive.usage?.outputTokens).toBe(70);
+
+  // Also verify inspectSubagent sums all persisted turns when no live task is in memory.
+  const r1 = {
+    requestId: crypto.randomUUID(),
+    accountId: m.selection.accountId,
+    modelId: m.selection.modelId,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    outcome: 'completed' as const,
+    usage: usage(100, 50, 0.1),
+    context: null,
+  };
+  const rev1 = m.store.beginExecution(id, {role: 'user', content: 'turn 1'}, r1);
+  m.store.complete(id, rev1, {role: 'assistant', content: 'part 1'}, r1);
+  const r2 = {
+    requestId: crypto.randomUUID(),
+    accountId: m.selection.accountId,
+    modelId: m.selection.modelId,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    outcome: 'completed' as const,
+    usage: usage(40, 20, 0.05),
+    context: null,
+  };
+  const rev2 = m.store.beginExecution(id, {role: 'user', content: 'turn 2'}, r2);
+  m.store.complete(id, rev2, {role: 'assistant', content: 'part 2'}, r2);
+  m.subagents.scheduler.removeTask(id);
+
+  const inspectedStored = m.subagents.inspectSubagent(id)!;
+  expect(inspectedStored.usage?.inputTokens).toBe(140);
+  expect(inspectedStored.usage?.outputTokens).toBe(70);
+  expect(inspectedStored.usage?.costUSD).toBeCloseTo(0.15);
+});
+
+test('background inbox loop deducts spent budget before continuing and halts with BUDGET when exhausted', async () => {
+  // Case 1: partial budget spent in turn 1 -> turn 2 inherits strictly reduced remaining limits.
+  {
+    let releaseTurn1!: () => void;
+    const gateTurn1 = new Promise<void>(resolve => (releaseTurn1 = resolve));
+    const delivered: string[] = [];
+    let turnIndex = 0;
+
+    const m = manager({
+      limits: () => ({
+        maxOutputTokens: 400,
+        maxEstimatedCostUSD: 1.0,
+        budget: {maxTokens: 1000, maxCostUSD: 1.0, maxDurationMs: 20_000},
+        usage: null,
+        elapsedMs: 0,
+      }),
+      deliverToParent: (_p, text) => {
+        delivered.push(text);
+        return 'queued';
+      },
+      runEvents: async function* () {
+        turnIndex++;
+        yield {type: 'started', requestId: crypto.randomUUID()};
+        if (turnIndex === 1) {
+          await gateTurn1;
+          const u1 = usage(250, 150, 0.25); // 400 total tokens, 150 output, $0.25
+          yield {type: 'textDelta', text: 'first'};
+          yield {type: 'completed', finishReason: 'stop', usage: u1};
+        } else {
+          const u2 = usage(100, 50, 0.1);
+          yield {type: 'textDelta', text: 'second'};
+          yield {type: 'completed', finishReason: 'stop', usage: u2};
+        }
+      },
+    });
+
+    const started = await spawn(m, {background: true, prompt: 'one'});
+    const id = JSON.parse(started.content).id as string;
+    await m.subagents.message({id, message: 'two'});
+    releaseTurn1();
+    for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+
+    expect(m.contexts).toHaveLength(2);
+    expect(m.contexts[1]!.limits.budget.maxTokens).toBe(600);
+    expect(m.contexts[1]!.limits.maxOutputTokens).toBe(250);
+    expect(m.contexts[1]!.limits.budget.maxCostUSD).toBeCloseTo(0.75);
+    expect(m.contexts[1]!.limits.maxEstimatedCostUSD).toBeCloseTo(0.75);
+    expect(m.contexts[1]!.limits.budget.maxDurationMs).toBeLessThanOrEqual(20_000);
+  }
+
+  // Case 2: budget exhausted after turn 1 -> inbox follow-up must NOT run, child finishes with errorCode BUDGET.
+  for (const scenario of [
+    {
+      name: 'maxTokens',
+      parentLimits: {budget: {maxTokens: 500}, usage: null, elapsedMs: 0} as SubagentParentLimits,
+      spent: usage(350, 150),
+    },
+    {
+      name: 'maxCostUSD',
+      parentLimits: {budget: {maxCostUSD: 0.2}, usage: null, elapsedMs: 0} as SubagentParentLimits,
+      spent: usage(100, 50, 0.25),
+    },
+    {
+      name: 'maxEstimatedCostUSD',
+      parentLimits: {maxEstimatedCostUSD: 0.2, budget: {}, usage: null, elapsedMs: 0} as SubagentParentLimits,
+      spent: usage(100, 50, 0.2),
+    },
+    {
+      name: 'maxOutputTokens',
+      parentLimits: {maxOutputTokens: 100, budget: {}, usage: null, elapsedMs: 0} as SubagentParentLimits,
+      spent: usage(50, 100),
+    },
+  ]) {
+    let releaseTurn1!: () => void;
+    const gateTurn1 = new Promise<void>(resolve => (releaseTurn1 = resolve));
+    const delivered: string[] = [];
+
+    const m = manager({
+      limits: () => scenario.parentLimits,
+      deliverToParent: (_p, text) => {
+        delivered.push(text);
+        return 'queued';
+      },
+      runEvents: async function* () {
+        yield {type: 'started', requestId: crypto.randomUUID()};
+        await gateTurn1;
+        yield {type: 'textDelta', text: `done-${scenario.name}`};
+        yield {type: 'completed', finishReason: 'stop', usage: scenario.spent};
+      },
+    });
+
+    const started = await spawn(m, {background: true, prompt: 'one'});
+    const id = JSON.parse(started.content).id as string;
+    await m.subagents.message({id, message: 'should-not-run'});
+    releaseTurn1();
+    for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+
+    expect(m.contexts).toHaveLength(1);
+    expect(delivered[0]).toContain('error="BUDGET"');
+    const view = m.subagents.inspectSubagent(id)!;
+    expect(view.status).toBe('failed');
+    expect(view.errorCode).toBe('BUDGET');
+  }
+});
+
+test('agent_message preserves reasoningEffort when waking an idle subagent', async () => {
+  const m = manager({
+    config: {
+      defaultReasoningEffort: 'medium',
+      roles: {explore: {reasoningEffort: 'low'}},
+    },
+    modelEfforts: {'parent-model': ['low', 'medium', 'high']},
+  });
+
+  // 1. Explore role with role-level reasoningEffort: 'low'.
+  const expStarted = await spawn(m, {agent_type: 'explore', background: true, prompt: 'scan'});
+  const expId = JSON.parse(expStarted.content).id as string;
+  await m.subagents.scheduler.getTask(expId)!.done;
+  expect(m.contexts[0]!.reasoningEffort).toBe('low');
+
+  const expResumed = await m.subagents.message({id: expId, message: 'follow up'});
+  expect(JSON.parse(expResumed.content).delivery).toBe('resumed');
+  await m.subagents.scheduler.getTask(expId)!.done;
+  expect(m.contexts[1]!.reasoningEffort).toBe('low');
+
+  // 2. Worker role without role override inherits cfg.defaultReasoningEffort: 'medium'.
+  const wrkStarted = await spawn(m, {agent_type: 'worker', description: 'edit', background: true, prompt: 'work'});
+  const wrkId = JSON.parse(wrkStarted.content).id as string;
+  await m.subagents.scheduler.getTask(wrkId)!.done;
+  expect(m.contexts[2]!.reasoningEffort).toBe('medium');
+
+  const wrkResumed = await m.subagents.message({id: wrkId, message: 'continue'});
+  expect(JSON.parse(wrkResumed.content).delivery).toBe('resumed');
+  await m.subagents.scheduler.getTask(wrkId)!.done;
+  expect(m.contexts[3]!.reasoningEffort).toBe('medium');
+
+  // 3. Even when the in-memory task is gone (restart / evicted), resume still restores profile/config reasoningEffort.
+  m.subagents.scheduler.removeTask(expId);
+  const expAfterRestart = await m.subagents.message({id: expId, message: 'after restart'});
+  expect(JSON.parse(expAfterRestart.content).delivery).toBe('resumed');
+  await m.subagents.scheduler.getTask(expId)!.done;
+  expect(m.contexts[4]!.reasoningEffort).toBe('low');
+
+  // 4. Explicit per-call reasoning_effort on spawn is preserved while the task remains in memory.
+  const explicitStarted = await spawn(m, {
+    agent_type: 'explore',
+    reasoning_effort: 'high',
+    background: true,
+    prompt: 'deep scan',
+  });
+  const explicitId = JSON.parse(explicitStarted.content).id as string;
+  await m.subagents.scheduler.getTask(explicitId)!.done;
+  expect(m.contexts[5]!.reasoningEffort).toBe('high');
+
+  const explicitResumed = await m.subagents.message({id: explicitId, message: 'keep high'});
+  expect(JSON.parse(explicitResumed.content).delivery).toBe('resumed');
+  await m.subagents.scheduler.getTask(explicitId)!.done;
+  expect(m.contexts[6]!.reasoningEffort).toBe('high');
+});
+
+test('deductChildLimits rejects exhausted duration and updates remaining child caps across dimensions', () => {
+  const initial = {
+    maxOutputTokens: 300,
+    maxEstimatedCostUSD: 1.0,
+    budget: {maxTokens: 1000, maxCostUSD: 1.0, maxDurationMs: 5000, maxSteps: 12, maxToolCalls: 24},
+  };
+  const partial = deductChildLimits(initial, usage(200, 100, 0.25), 1500);
+  expect(partial.ok).toBe(true);
+  if (partial.ok) {
+    expect(partial.limits.maxOutputTokens).toBe(200);
+    expect(partial.limits.maxEstimatedCostUSD).toBeCloseTo(0.75);
+    expect(partial.limits.budget).toMatchObject({
+      maxTokens: 700,
+      maxDurationMs: 3500,
+      maxSteps: 12,
+      maxToolCalls: 24,
+    });
+    expect(partial.limits.budget.maxCostUSD).toBeCloseTo(0.75);
+  }
+  const timeOut = deductChildLimits(initial, usage(10, 10, 0.01), 5000);
+  expect(timeOut).toMatchObject({ok: false, what: 'time budget'});
 });

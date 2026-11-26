@@ -4,6 +4,7 @@ import {join, resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {
   BYPASS_PERMISSIONS_WARNING,
+  CONTRACT_VERSION,
   FutrynError,
   isCodingModel,
   type Account,
@@ -15,12 +16,13 @@ import {parseSlashCommand, SLASH_COMMANDS} from '@cosmew/sdk';
 import {loadHostConfig, providerPresets, reservedProviderIds} from '@cosmew/models';
 import {fetchModelsDev, terminalText} from '@cosmew/security';
 import {reportRows, ThemeEngine, runInteractiveTui, type ThemePickerTab} from '@cosmew/tui';
+import {version as COSMEW_VERSION} from '../package.json';
 import {loginOAuth} from './subscriptions/login';
 import {chooseGatewayModel, loginWizard} from './auth-wizard';
 import {writeMcpNotices} from './bootstrap/mcp';
 import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Application} from './bootstrap/startup';
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
-import {execCli} from './exec';
+import {execCli, redactJsonValue} from './exec';
 import {mcpCli, MCP_HELP} from './mcp-cli';
 
 // Suppress third-party raw warning output; diagnostics are normalized by Cosmew.
@@ -62,7 +64,7 @@ ${MCP_HELP.trimEnd()}
     [--dangerously-skip-permissions] [--allowedTools <rules>] [--disallowedTools <rules>]
     [--output-last-message|-o <file>] [--account <id>] [--model <id>]
 
-Options: --json, --help, --project.
+Options: --json, --help (-h), --version (-v), --continue (-c), --account <id>, --model <id>, --project.
 API keys are entered hidden, from secret-manager stdin, or referenced by environment
 variable NAME. Never pass a key as an argument. Default storage: ~/.cosmew (0700). An existing ~/.futryn or ~/.hannes is renamed there once; it is not merged.
 COSMEW_HOME overrides storage.
@@ -117,7 +119,6 @@ const stringOptions = [
 const listOptions = ['header', 'env-header', 'query', 'auth-arg'];
 const booleanOptions = [
   'json',
-  'help',
   'key-stdin',
   'offline',
   'all',
@@ -153,8 +154,12 @@ function numberOption(options: Options, key: string, fallback: number): number {
 }
 
 function output(app: Application, value: unknown, json = false) {
-  const render = typeof value === 'string' && !json ? value : JSON.stringify(value, null, json ? 0 : 2);
-  process.stdout.write(terminalText(app.redactor.text(render)) + '\n');
+  const redact = (text: string) => app.redactor.text(text);
+  const render =
+    typeof value === 'string' && !json
+      ? redact(value)
+      : (JSON.stringify(redactJsonValue(value, redact), null, json ? 0 : 2) ?? 'null');
+  process.stdout.write(terminalText(render) + '\n');
 }
 
 const MCP_NOTE = 'Project MCP files are not started.';
@@ -189,8 +194,24 @@ async function connectUserMcp(app: Application, signal?: AbortSignal, required =
  * Interactive TUI opens immediately while user MCP servers connect in the background.
  * Avoids blocking the alternate screen on slow remote servers and avoids writing raw stderr over Ink.
  */
-async function runTuiWithBackgroundMcp(app: Application, signal: AbortSignal, initialCommand?: string): Promise<void> {
+async function runTuiWithBackgroundMcp(
+  app: Application,
+  signal: AbortSignal,
+  options: {
+    initialCommand?: string;
+    account?: string;
+    model?: string;
+    continueLatest?: boolean;
+  } = {},
+): Promise<void> {
   const client = app.createFutrynClient(resolve('.'));
+  if (options.account) client.useAccount(options.account);
+  if (options.model) client.selectModel(options.model);
+  let initialCommand = options.initialCommand;
+  if (!initialCommand && options.continueLatest) {
+    const latest = client.listSessions()[0];
+    if (latest) initialCommand = `/resume ${latest.id}`;
+  }
   const mcpAbort = new AbortController();
   const abortMcp = () => mcpAbort.abort();
   signal.addEventListener('abort', abortMcp, {once: true});
@@ -794,6 +815,10 @@ async function main() {
           ...booleanOptions.map(name => [name, {type: 'boolean' as const}]),
         ]),
         ...PERMISSION_CLI_OPTIONS,
+        help: {type: 'boolean', short: 'h'},
+        version: {type: 'boolean', short: 'v'},
+        V: {type: 'boolean', short: 'V'},
+        continue: {type: 'boolean', short: 'c'},
         resume: {type: 'string'},
       },
     });
@@ -806,6 +831,14 @@ async function main() {
     : parsed.positionals;
   if (options.help || group === 'help') {
     process.stdout.write(HELP);
+    return;
+  }
+  if (options.version || options.V || group === 'version') {
+    process.stdout.write(
+      options.json
+        ? JSON.stringify({name: 'cosmew', version: COSMEW_VERSION, contractVersion: CONTRACT_VERSION}) + '\n'
+        : `cosmew ${COSMEW_VERSION}\n`,
+    );
     return;
   }
   const launchPermissions = resolvePermissionFlags(options);
@@ -930,13 +963,14 @@ async function main() {
     } else if (
       (['login', 'connect', 'model', 'config', 'permissions', 'resume', 'clear', 'switch'].includes(group ?? '') &&
         !(group === 'model' && action === 'doctor')) ||
-      (!group && process.stdin.isTTY && process.stdout.isTTY)
+      (!group && (options.continue === true || (process.stdin.isTTY && process.stdout.isTTY)))
     ) {
-      await runTuiWithBackgroundMcp(
-        app,
-        controller.signal,
-        group ? `/${group}${action ? ' ' + action : ''}` : undefined,
-      );
+      await runTuiWithBackgroundMcp(app, controller.signal, {
+        initialCommand: group ? `/${group}${action ? ' ' + action : ''}` : undefined,
+        account: str(options, 'account'),
+        model: str(options, 'model'),
+        continueLatest: options.continue === true && !str(options, 'resume'),
+      });
     } else if (group === 'exit') {
       return;
     } else if (group === 'providers') {
@@ -1124,7 +1158,12 @@ async function main() {
     } else if (group === 'themes' || group === 'theme') {
       await handleThemesCli(app, action, argument, options);
     } else if (group === 'tui' || options.tui) {
-      await runTuiWithBackgroundMcp(app, controller.signal, action ? `/${action}` : undefined);
+      await runTuiWithBackgroundMcp(app, controller.signal, {
+        initialCommand: action ? `/${action}` : undefined,
+        account: str(options, 'account'),
+        model: str(options, 'model'),
+        continueLatest: options.continue === true && !str(options, 'resume'),
+      });
     } else if (!group || group === 'chat' || group === 'run') {
       await chat(app, options, controller.signal, group === 'run');
     } else {

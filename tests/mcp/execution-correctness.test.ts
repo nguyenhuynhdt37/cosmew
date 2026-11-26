@@ -427,3 +427,289 @@ test('2020-12 schema positions retain costly keyword restrictions and unknown di
     }
   }
 });
+
+test('Zod and FastMCP schemas with local $ref, format, uniqueItems and ReDoS-safe pattern are exposed and enforced', async () => {
+  const draft07ZodSchema = {
+    $schema: 'http://json-schema.org/draft-07/schema#',
+    type: 'object',
+    definitions: {
+      Tag: {
+        type: 'string',
+        pattern: '^[a-z0-9_-]{1,32}$',
+      },
+      Filter: {
+        type: 'object',
+        properties: {
+          id: {type: 'string', format: 'uuid'},
+          kind: {type: 'string', pattern: '^(foo|bar|baz)$'},
+          createdAfter: {type: 'string', format: 'date-time'},
+          date: {type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$'},
+          homepage: {type: 'string', pattern: '^https?://[^\\s/$.?#].[^\\s]*$'},
+          active: {type: 'boolean'},
+          tags: {type: 'array', items: {$ref: '#/definitions/Tag'}, uniqueItems: true},
+        },
+        required: ['id', 'tags'],
+        additionalProperties: false,
+      },
+    },
+    properties: {
+      filter: {$ref: '#/definitions/Filter', description: 'Primary query filter'},
+      secondary: {$ref: '#/definitions/Tag', title: 'Secondary tag', default: 'main'},
+      callbackUrl: {type: 'string', format: 'uri'},
+    },
+    required: ['filter'],
+    additionalProperties: false,
+  };
+
+  const draft2020FastMcpSchema = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    $defs: {
+      'Scope/Rule~v1': {
+        type: 'string',
+        pattern: '^[a-z0-9_-]{1,32}$',
+      },
+      Filter: {
+        type: 'object',
+        properties: {
+          ownerEmail: {type: 'string', format: 'email'},
+          endpoint: {type: 'string', format: 'uri'},
+          requestId: {type: 'string', format: 'uuid'},
+          since: {type: 'string', format: 'date-time'},
+          scopes: {
+            type: 'array',
+            items: {$ref: '#/$defs/Scope~1Rule~0v1'},
+            uniqueItems: true,
+          },
+          enabled: {type: 'boolean'},
+        },
+        required: ['scopes', 'enabled'],
+        additionalProperties: false,
+      },
+    },
+    properties: {
+      filter: {$ref: '#/$defs/Filter', description: 'FastMCP filter model'},
+      labels: {type: 'array', items: {type: 'string', pattern: '^[a-z0-9_-]{1,32}$'}, uniqueItems: true},
+    },
+    required: ['filter'],
+    additionalProperties: false,
+  };
+
+  {
+    const f = fixture(draft07ZodSchema);
+    try {
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(true);
+      for (const badInput of [
+        {filter: {id: '123', tags: ['BAD PATTERN!']}},
+        {filter: {id: '123', tags: ['dup', 'dup']}},
+        {filter: {id: '123', tags: ['ok'], active: 'not-bool'}},
+        {filter: {id: '123', tags: ['ok'], kind: 'qux'}},
+        {filter: {id: '123', tags: ['ok']}, secondary: 'bad space'},
+      ]) {
+        const res = await f.dispatcher.invoke({id: crypto.randomUUID(), name: 'mcp__fixture__run', input: badInput});
+        expect(res.code).toBe('INVALID_INPUT');
+      }
+      expect(f.asked).toBe(0);
+      expect(f.calls).toBe(0);
+
+      const ok = await f.dispatcher.invoke({
+        id: 'zod-valid',
+        name: 'mcp__fixture__run',
+        input: {
+          filter: {
+            id: '550e8400-e29b-41d4-a716-446655440000',
+            kind: 'bar',
+            createdAfter: '2026-01-01T00:00:00Z',
+            date: '2026-01-01',
+            homepage: 'https://example.com/docs',
+            active: true,
+            tags: ['alpha-1', 'beta_2'],
+          },
+          secondary: 'release-1',
+          callbackUrl: 'https://example.com/hook',
+        },
+      });
+      expect(ok.status).toBe('ok');
+      expect(f.asked).toBe(1);
+      expect(f.calls).toBe(1);
+    } finally {
+      f.close();
+    }
+  }
+
+  {
+    const f = fixture(draft2020FastMcpSchema);
+    try {
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(true);
+      for (const badInput of [
+        {filter: {scopes: ['INVALID!'], enabled: true}},
+        {filter: {scopes: ['read', 'read'], enabled: true}},
+        {filter: {scopes: ['read'], enabled: 'true'}},
+        {filter: {scopes: ['read'], enabled: true}, labels: ['bad label']},
+      ]) {
+        const res = await f.dispatcher.invoke({id: crypto.randomUUID(), name: 'mcp__fixture__run', input: badInput});
+        expect(res.code).toBe('INVALID_INPUT');
+      }
+      expect(f.asked).toBe(0);
+      expect(f.calls).toBe(0);
+
+      const ok = await f.dispatcher.invoke({
+        id: 'fastmcp-valid',
+        name: 'mcp__fixture__run',
+        input: {
+          filter: {
+            ownerEmail: 'dev@example.com',
+            endpoint: 'https://api.example.com/v1',
+            requestId: '550e8400-e29b-41d4-a716-446655440000',
+            since: '2026-01-01T00:00:00Z',
+            scopes: ['read_1', 'write-2'],
+            enabled: false,
+          },
+          labels: ['prod', 'mcp_v1'],
+        },
+      });
+      expect(ok.status).toBe('ok');
+      expect(f.asked).toBe(1);
+      expect(f.calls).toBe(1);
+    } finally {
+      f.close();
+    }
+  }
+
+  // Depth-8 local $ref chain, sibling reuse, 2020-12 sibling validation keywords, and $ref as argument name
+  const depth8Defs: Record<string, unknown> = {D8: {type: 'string', minLength: 1}};
+  for (let i = 7; i >= 1; i--) depth8Defs[`D${i}`] = {$ref: `#/$defs/D${i + 1}`};
+  {
+    const f = fixture({
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      $defs: depth8Defs,
+      properties: {
+        a: {$ref: '#/$defs/D1', maxLength: 8, description: 'Bounded via 2020-12 sibling keyword'},
+        b: {$ref: '#/$defs/D8'},
+        $ref: {type: 'string', pattern: '^(?:[a-z]+)$'},
+        unicode: {type: 'string', pattern: '^\\p{L}+$'},
+      },
+      required: ['a', 'b'],
+      additionalProperties: false,
+    });
+    try {
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(true);
+      expect(
+        (await f.dispatcher.invoke({id: 'too-long', name: 'mcp__fixture__run', input: {a: '123456789', b: 'ok'}})).code,
+      ).toBe('INVALID_INPUT');
+      expect(
+        (
+          await f.dispatcher.invoke({
+            id: 'bad-unicode',
+            name: 'mcp__fixture__run',
+            input: {a: 'ok', b: 'ok', unicode: '123'},
+          })
+        ).code,
+      ).toBe('INVALID_INPUT');
+      expect(f.calls).toBe(0);
+      expect(
+        (
+          await f.dispatcher.invoke({
+            id: 'depth8-ok',
+            name: 'mcp__fixture__run',
+            input: {a: 'ok', b: 'yes', $ref: 'safe', unicode: 'XinChao'},
+          })
+        ).status,
+      ).toBe('ok');
+      expect(f.calls).toBe(1);
+    } finally {
+      f.close();
+    }
+  }
+});
+
+test('External, cyclic, deep, or bomb $ref and ReDoS or invalid schema features are safely refused', async () => {
+  const expansionBombDefs: Record<string, unknown> = {
+    L8: {type: 'object', properties: {leaf: {type: 'string'}}},
+  };
+  for (let i = 7; i >= 0; i--) {
+    expansionBombDefs[`L${i}`] = {
+      type: 'object',
+      properties: {a: {$ref: `#/$defs/L${i + 1}`}, b: {$ref: `#/$defs/L${i + 1}`}},
+    };
+  }
+
+  const deepChainDefs: Record<string, unknown> = {
+    D9: {type: 'string'},
+  };
+  for (let i = 8; i >= 1; i--) {
+    deepChainDefs[`D${i}`] = {$ref: `#/$defs/D${i + 1}`};
+  }
+
+  const rejectedSchemas: Record<string, unknown>[] = [
+    // External & invalid local $ref
+    {type: 'object', properties: {x: {$ref: 'https://example.com/s.json'}}},
+    {type: 'object', properties: {x: {$ref: 'file:///etc/passwd'}}},
+    {type: 'object', properties: {x: {$ref: '#'}}},
+    {type: 'object', properties: {a: {type: 'string'}, b: {$ref: '#/properties/a'}}},
+    {type: 'object', properties: {x: {$ref: '#/$defs/Missing'}}},
+    {type: 'object', properties: {x: {$ref: '#/$defs/toString'}}},
+    // Cyclic $ref (direct & indirect, including unused hidden cycle in $defs)
+    {
+      type: 'object',
+      $defs: {A: {$ref: '#/$defs/B'}, B: {$ref: '#/$defs/A'}},
+      properties: {x: {$ref: '#/$defs/A'}},
+    },
+    {
+      type: 'object',
+      $defs: {A: {$ref: '#/$defs/A'}},
+      properties: {ok: {type: 'string'}},
+    },
+    // $ref nesting depth > 8
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      $defs: deepChainDefs,
+      properties: {x: {$ref: '#/$defs/D1'}},
+    },
+    // Expansion bomb (> 512 nodes / > 16384 bytes after inline while input < 8192 bytes)
+    {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      $defs: expansionBombDefs,
+      properties: {root: {$ref: '#/$defs/L0'}},
+    },
+    // ReDoS patterns & backreferences & lookarounds
+    {type: 'object', properties: {s: {type: 'string', pattern: '^(a+)+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '(foo|fo)+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '([a-z]*)*$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^((a+)b)+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^((a|b))+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^(a?)*$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^(?:[a-z]+)+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^([a-z]+)\\1$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^(?=a+b)[a-z]+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^(?<=a)[a-z]+$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: ''}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: 'a'.repeat(257)}}},
+    // Invalid format / uniqueItems & forbidden keywords (including inside unused $defs)
+    {type: 'object', properties: {s: {type: 'string', format: 'f'.repeat(65)}}},
+    {type: 'object', properties: {s: {type: 'string', format: 123}}},
+    {type: 'object', properties: {a: {type: 'array', uniqueItems: 'true'}}},
+    {type: 'object', $defs: {Evil: {type: 'object', patternProperties: {'^a': {type: 'string'}}}}},
+    {type: 'object', properties: {a: {type: 'array', contains: {type: 'string'}}}},
+    {type: 'object', properties: {a: {$dynamicRef: '#node'}}},
+    {type: 'object', properties: {a: {$recursiveRef: '#'}}},
+    {type: 'object', $async: true},
+  ];
+
+  for (const schema of rejectedSchemas) {
+    const f = fixture(schema, undefined, true);
+    try {
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__run')).toBe(false);
+      expect(f.dispatcher.descriptors().some(d => d.name === 'mcp__fixture__valid')).toBe(true);
+      const res = await f.dispatcher.invoke({id: crypto.randomUUID(), name: 'mcp__fixture__run', input: {}});
+      expect(res.code).toBe('INVALID_INPUT');
+      expect(f.asked).toBe(0);
+      expect(f.calls).toBe(0);
+    } finally {
+      f.close();
+    }
+  }
+});
