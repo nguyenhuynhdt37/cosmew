@@ -4,7 +4,7 @@ import {homedir} from 'node:os';
 import type {SkillDiagnostic, SkillMetadata, SkillsReport, SkillVisibility} from '@cosmew/contracts';
 import {WorkspaceDenied, WorkspaceRoot, type ResolvedPath} from './paths';
 import {ignoredDirectory, VENDORED_DIRECTORIES} from './files';
-import {parseSkillDocument, SKILL_FILE_BYTES, SKILL_NAME} from './skill-parser';
+import {parseCommandDocument, parseSkillDocument, SKILL_FILE_BYTES, SKILL_NAME} from './skill-parser';
 
 const systemRoot = resolve(import.meta.dir, '../skills');
 interface Entry {
@@ -12,6 +12,8 @@ interface Entry {
   file: ResolvedPath;
   root: WorkspaceRoot;
   logical: string;
+  fileName: string;
+  fallbackName?: string;
 }
 
 /** Snapshot discovery. Only exact discovered SKILL.md files can subsequently be resolved/read. */
@@ -42,7 +44,7 @@ export class SkillCatalog {
     this.errors.length = 0;
     this.warnings.length = 0;
     const {options} = this;
-    const homePath = resolve(options.home ?? homedir());
+    const homePath = resolve(options.home ?? (process.env.HOME || homedir()));
     let home = homePath;
     try {
       home = realpathSync(homePath);
@@ -99,9 +101,23 @@ export class SkillCatalog {
               file = root.resolve('SKILL.md');
             const text = this.readFile(root, file);
             const {body: _body, ...parsed} = parseSkillDocument(text);
-            const metadata: SkillMetadata = {...parsed, path, directory, shortPath, source: scan.source};
+            const metadata: SkillMetadata = {
+              ...parsed,
+              path,
+              directory,
+              shortPath,
+              source: scan.source,
+              kind: 'skill',
+            };
             if (this.entries.has(parsed.name)) this.warnings.push({path: shortPath, code: 'DUPLICATE_NAME'});
-            else this.entries.set(parsed.name, {metadata, file: {...file, relative: shortPath}, root, logical: path});
+            else
+              this.entries.set(parsed.name, {
+                metadata,
+                file: {...file, relative: shortPath},
+                root,
+                logical: path,
+                fileName: 'SKILL.md',
+              });
             return;
           }
           for (const item of readdirSync(directory, {withFileTypes: true}).sort((a, b) =>
@@ -127,6 +143,88 @@ export class SkillCatalog {
         (scan.source !== 'project' || !ignoredDirectory(repository, relative(repo, scan.path)))
       )
         walk(scan.path, 0);
+    }
+
+    // Custom prompt commands: `.cosmew/commands/**/*.md`, `.agents/commands/**/*.md`, `.claude/commands/**/*.md` (ADR 0124).
+    const commandRoots: {path: string; source: 'project' | 'user'}[] = [];
+    for (let scope = options.workspace.root; ; scope = dirname(scope)) {
+      if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
+        for (const dir of ['.cosmew', '.agents', '.claude'])
+          commandRoots.push({path: join(scope, dir, 'commands'), source: 'project'});
+      if (scope === repo) break;
+    }
+    for (const dir of ['.cosmew', '.agents', '.claude'])
+      commandRoots.push({path: join(home, dir, 'commands'), source: 'user'});
+
+    for (const scan of commandRoots) {
+      const walkCommands = (directory: string, depth: number, prefixParts: string[]) => {
+        if (++visited > 10000 || depth > 4) {
+          this.warnings.push({path: directory, code: 'DISCOVERY_LIMIT'});
+          return;
+        }
+        try {
+          if (!lstatSync(directory).isDirectory() || realpathSync(directory) !== directory) return;
+          for (const item of readdirSync(directory, {withFileTypes: true}).sort((a, b) =>
+            a.name.localeCompare(b.name),
+          )) {
+            if (item.name.startsWith('.') || VENDORED_DIRECTORIES.includes(item.name.toLowerCase())) continue;
+            const child = join(directory, item.name);
+            if (scan.source === 'project' && ignoredDirectory(repository, relative(repo, child))) continue;
+            if (item.isDirectory()) {
+              walkCommands(child, depth + 1, [...prefixParts, item.name]);
+              continue;
+            }
+            if (!item.isFile() || !item.name.toLowerCase().endsWith('.md')) continue;
+            if (!lstatSync(child).isFile() || realpathSync(child) !== child) {
+              this.errors.push({path: child, code: 'UNSAFE_SKILL_PATH'});
+              continue;
+            }
+            const shortPath = scan.source === 'project' ? relative(repo, child) : `~/${relative(home, child)}`;
+            if (
+              options.canRead &&
+              !options.canRead(scan.source === 'project' ? relative(options.workspace.root, child) : shortPath, child)
+            ) {
+              this.errors.push({path: shortPath, code: 'DENIED'});
+              continue;
+            }
+            const baseStem = item.name.slice(0, -3);
+            const fallbackName = [...prefixParts, baseStem].join(':');
+            if (fallbackName.length > 64 || !SKILL_NAME.test(fallbackName)) {
+              this.errors.push({path: shortPath, code: 'INVALID_OR_UNREADABLE_SKILL'});
+              continue;
+            }
+            const root = new WorkspaceRoot(directory);
+            const file = root.resolve(item.name);
+            const text = this.readFile(root, file);
+            const {body: _body, ...parsed} = parseCommandDocument(text, fallbackName);
+            const metadata: SkillMetadata = {
+              ...parsed,
+              path: child,
+              directory,
+              shortPath,
+              source: scan.source,
+              kind: 'command',
+            };
+            if (this.entries.has(parsed.name)) this.warnings.push({path: shortPath, code: 'DUPLICATE_NAME'});
+            else
+              this.entries.set(parsed.name, {
+                metadata,
+                file: {...file, relative: shortPath},
+                root,
+                logical: child,
+                fileName: item.name,
+                fallbackName,
+              });
+          }
+        } catch {
+          this.errors.push({path: directory, code: 'INVALID_OR_UNREADABLE_SKILL'});
+        }
+      };
+      if (
+        existsSync(scan.path) &&
+        (scan.source !== 'project' || !ignoredDirectory(repository, relative(repo, scan.path)))
+      )
+        walkCommands(scan.path, 0, []);
     }
   }
   private readFile(root: WorkspaceRoot, file: ResolvedPath): string {
@@ -157,7 +255,7 @@ export class SkillCatalog {
     return Object.hasOwn(overrides, metadata.name) ? overrides[metadata.name]! : 'on';
   }
   resolve(name: string): ResolvedPath {
-    if (!SKILL_NAME.test(name)) throw new WorkspaceDenied('invalid-path');
+    if (name.length > 64 || !SKILL_NAME.test(name)) throw new WorkspaceDenied('invalid-path');
     const entry = this.entries.get(name);
     if (!entry) throw new WorkspaceDenied('not-found');
     if (
@@ -166,19 +264,20 @@ export class SkillCatalog {
       realpathSync(entry.metadata.directory) !== entry.root.root
     )
       throw new WorkspaceDenied('outside-workspace');
-    const file = entry.root.resolve('SKILL.md');
+    const file = entry.root.resolve(entry.fileName);
     if (file.absolute !== entry.file.absolute) throw new WorkspaceDenied('outside-workspace');
     return {...file, relative: entry.metadata.shortPath};
   }
   isStateSkillFile(absolute: string, state?: string): boolean {
     return (
       !!state &&
-      absolute.startsWith(join(state, 'skills') + '/') &&
+      (absolute.startsWith(join(state, 'skills') + '/') || absolute.startsWith(join(state, 'commands') + '/')) &&
       [...this.entries.values()].some(
         e =>
           e.file.absolute === absolute &&
           e.metadata.source === 'user' &&
-          e.metadata.shortPath.startsWith('~/.cosmew/skills/'),
+          (e.metadata.shortPath.startsWith('~/.cosmew/skills/') ||
+            e.metadata.shortPath.startsWith('~/.cosmew/commands/')),
       )
     );
   }
@@ -186,7 +285,11 @@ export class SkillCatalog {
     const file = this.resolve(name),
       entry = this.entries.get(name)!;
     const content = this.readFile(entry.root, file);
-    if (parseSkillDocument(content).name !== name) throw new WorkspaceDenied('invalid-path');
+    const parsed =
+      entry.metadata.kind === 'command'
+        ? parseCommandDocument(content, entry.fallbackName ?? name)
+        : parseSkillDocument(content);
+    if (parsed.name !== name) throw new WorkspaceDenied('invalid-path');
     return {content, directory: entry.root.root};
   }
   /** Only directories of discovered user skills, never the entire home skills root. */
@@ -245,7 +348,7 @@ export function skillInvocations(
   const commands: string[] = [];
   let args = prompt.trim();
   while (commands.length < 6) {
-    const match = /^\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})(?=\s|$)/.exec(args);
+    const match = /^\/([a-zA-Z0-9][a-zA-Z0-9_:-]{0,63})(?=\s|$)/.exec(args);
     if (!match) break;
     const name = match[1]!;
     if (!names.has(name) || reserved.includes(`/${name.toLowerCase()}`)) break;

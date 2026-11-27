@@ -12,6 +12,10 @@ export interface ProjectInstructionSource {
   bytes: number;
   fileBytes: number;
   truncated: boolean;
+  /** Origin kind of this instruction file (Contract 1.69, ADR 0124). */
+  kind?: 'instruction' | 'import' | 'rule';
+  /** Optional path globs for path-scoped rule files (`.cosmew/rules/*.md`). */
+  paths?: string[];
 }
 export interface ProjectContextDiagnostic {
   code: string;

@@ -125,7 +125,7 @@ export class AgentDefinitionCatalog {
     /** Names that are reserved by built-in types; a definition using one keeps the built-in and warns. */
     reserved?: (name: string) => boolean;
   }) {
-    const homePath = resolve(options.home ?? homedir());
+    const homePath = resolve(options.home ?? (process.env.HOME || homedir()));
     let home = homePath;
     try {
       home = realpathSync(homePath);

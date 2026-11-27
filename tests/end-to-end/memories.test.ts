@@ -232,7 +232,7 @@ test('cosmew exec uses the same memory context and contract 1.68', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.68"');
+  expect(stdout).toContain('"contractVersion":"1.69"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {
@@ -261,7 +261,7 @@ test('model memory read tracks usage; final citation renders compactly after tra
   expect(frame).not.toContain('<oai-mem-citation>');
 });
 
-test('user max_unused_days marks stale memories with a deletion suggestion; auto extraction stays unsupported', async () => {
+test('user max_unused_days marks stale memories with a deletion suggestion and enables auto_extract cleanly', async () => {
   const h = await setup('[memories]\nmax_unused_days = 7\nauto_extract = true\n');
   h.put();
   h.client.setToolsEnabled(true);
@@ -288,5 +288,5 @@ test('user max_unused_days marks stale memories with a deletion suggestion; auto
       .hostConfigDiagnostics()
       .map(d => d.message)
       .join('\n'),
-  ).toContain('auto_extract is not implemented');
+  ).not.toContain('auto_extract is not implemented');
 });

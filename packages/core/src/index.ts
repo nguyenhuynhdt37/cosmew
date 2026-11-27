@@ -19,3 +19,11 @@ export {
 } from './context/model-compaction';
 
 export {summarizeCheckpointSpan} from './context/rewind-summary';
+export {
+  AUTO_MEMORY_PROMPT,
+  extractAutoMemories,
+  looksLikeSensitiveMemory,
+  parseExtractedMemories,
+  type AutoMemoryExtractionOptions,
+  type AutoMemoryExtractionResult,
+} from './context/memory-extraction';

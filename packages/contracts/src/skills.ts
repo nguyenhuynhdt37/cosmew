@@ -12,6 +12,8 @@ export interface SkillMetadata {
   disableModelInvocation: boolean;
   visibility?: SkillVisibility;
   argumentHint?: string;
+  /** Distinguishes `SKILL.md` skills from `.cosmew/.claude/commands/*.md` prompt commands (ADR 0124). */
+  kind?: 'skill' | 'command';
 }
 export interface SkillDiagnostic {
   path?: string;

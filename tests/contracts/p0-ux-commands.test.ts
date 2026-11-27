@@ -159,8 +159,103 @@ test('/btw answers a side question with no tools and without mutating session hi
   expect(client.activeSession()!.messages.length).toBe(beforeCount);
   const btwReq = fixture.requests[requestsBefore]!;
   expect(btwReq.body.tools).toBeUndefined();
+  expect(btwReq.body.stream).toBe(true);
   expect(JSON.stringify(btwReq.body.messages)).toContain('Remember the codename is ORION.');
   expect(JSON.stringify(btwReq.body.messages)).toContain('What was the codename?');
+});
+
+test('/btw works on SSE-only gateways after tool calls and includes tool output without empty assistant chains', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'cosmew-btw-sse-state-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'cosmew-btw-sse-ws-'));
+  const seenBodies: Record<string, unknown>[] = [];
+  const sseOnlyFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const req = new Request(input, init);
+    if (req.method === 'GET') return Response.json({data: [{id: 'sse-model', supports_tools: true}]});
+    const body = (await req.json()) as Record<string, unknown>;
+    seenBodies.push(body);
+    // Simulate a strict SSE-only gateway (like 9Router) that ALWAYS responds with text/event-stream.
+    const sse = [
+      `data: ${JSON.stringify({id: 'c1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {content: 'Use bun run typecheck'}, finish_reason: null}]})}`,
+      `data: ${JSON.stringify({id: 'c1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {}, finish_reason: 'stop'}], usage: {prompt_tokens: 20, completion_tokens: 8, total_tokens: 28}})}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n');
+    return new Response(sse, {status: 200, headers: {'content-type': 'text/event-stream'}});
+  }) as typeof fetch;
+
+  const app = startup(stateDir, {
+    vault: memoryVault(),
+    offline: true,
+    fetch: sseOnlyFetch,
+    skillsHome: stateDir,
+    memoriesHome: stateDir,
+  });
+  cleanups.push(() => {
+    app.db.close();
+    rmSync(stateDir, {recursive: true, force: true});
+    rmSync(workspace, {recursive: true, force: true});
+  });
+  app.registry.add({
+    id: 'sse-gw',
+    name: 'SSE Gateway',
+    baseURL: 'https://sse-gw.example/v1',
+    protocol: 'chat',
+    auth: 'none',
+    catalog: 'openai',
+    metadataVersion: 1,
+  });
+  const account = await app.accounts.add('sse-gw', 'sse', {kind: 'none'});
+  const client = app.createFutrynClient(workspace);
+  client.useAccount(account.id);
+  await client.discoverModels();
+  client.selectModel('sse-model');
+  client.setToolsEnabled(true);
+
+  await Array.fromAsync(client.sendMessage('Read package.json'));
+  const sessionId = client.activeSession()!.id;
+  // Append realistic tool-call & tool-result messages (empty assistant tool-call turns + package.json output).
+  app.conversations.append(
+    sessionId,
+    {role: 'assistant', content: '', toolCalls: [{id: 't1', name: 'read', input: {path: 'package.json'}}]},
+    'committed',
+  );
+  app.conversations.append(
+    sessionId,
+    {role: 'tool', toolCallId: 't1', toolName: 'read', content: '{"scripts":{"typecheck":"tsc --noEmit"}}'},
+    'committed',
+  );
+  app.conversations.append(
+    sessionId,
+    {role: 'assistant', content: '', toolCalls: [{id: 't2', name: 'memory', input: {action: 'write'}}]},
+    'committed',
+  );
+  app.conversations.append(
+    sessionId,
+    {role: 'tool', toolCallId: 't2', toolName: 'memory', content: 'Memory edit denied by policy.'},
+    'committed',
+  );
+  app.conversations.append(sessionId, {role: 'assistant', content: 'Bun version is 1.4.4.'}, 'committed');
+  client.resumeSession(sessionId);
+
+  const notices: string[] = [];
+  const host: CommandHost = {
+    client,
+    busy: () => false,
+    open: () => {},
+    notice: text => notices.push(text),
+    reset: () => {},
+    submit: () => true,
+    exit: () => {},
+  };
+  await routeCommand(host, '/btw lệnh chạy typecheck trong dự án này là gì?');
+  expect(notices.at(-1)).toBe('Use bun run typecheck');
+  const btwBody = seenBodies.at(-1)!;
+  expect(btwBody.stream).toBe(true);
+  const btwMessages = btwBody.messages as Array<{role: string; content: string}>;
+  // Context is compacted into a single user reference message containing the read tool result, with no empty assistant placeholders.
+  expect(btwMessages.filter(m => m.role === 'assistant')).toHaveLength(0);
+  expect(JSON.stringify(btwMessages)).toContain('tsc --noEmit');
+  expect(JSON.stringify(btwMessages)).not.toContain('(empty)');
 });
 
 test('/export supports structured Markdown and sanitized JSON without providerReplay, and /clear <name> renames previous session', async () => {

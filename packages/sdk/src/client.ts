@@ -141,7 +141,8 @@ export type ReactiveAgentEventKind =
   | 'task.started'
   | 'task.updated'
   | 'task.finished'
-  | 'hook.ran';
+  | 'hook.ran'
+  | 'memory.extracted';
 
 export interface ReactiveAgentEvent {
   seq: number;
@@ -289,6 +290,11 @@ export interface FutrynBackendPorts {
     input: {selection: Selection; messages: readonly Message[]; question: string},
     signal?: AbortSignal,
   ): Promise<{text: string; usage?: Usage}>;
+  /** Optional post-turn hook for gated host background work such as auto-memory extraction (ADR 0124). */
+  afterTurnCompleted?(
+    input: {sessionId: string; selection: Selection; messages: readonly Message[]},
+    signal?: AbortSignal,
+  ): Promise<string[] | void>;
   memories?(): MemoryInfo[];
   memoryDirectory?(): string | null;
   openMemoryDirectory?(): Promise<void>;
@@ -544,6 +550,7 @@ export class FutrynClient {
   private promptsAvailable = true;
   /** Optional per-turn work budget (ADR 0030); undefined means no limit. Session-only. */
   private turnBudgetValue: TurnBudget | undefined;
+  private extraInstructionsValue: string | undefined;
   private lastUsage: Usage | null = null;
   /** Status is read on every UI frame; explicit usage reports remain fresh reads. */
   private statusUsage: ReturnType<FutrynClient['usage']> | null = null;
@@ -752,7 +759,7 @@ export class FutrynClient {
   }
 
   skillForCommand(input: string) {
-    const name = /^\/([a-zA-Z0-9][a-zA-Z0-9_-]{0,63})(?:\s|$)/.exec(input.trim())?.[1];
+    const name = /^\/([a-zA-Z0-9][a-zA-Z0-9_:-]{0,63})(?:\s|$)/.exec(input.trim())?.[1];
     return name ? this.skills().skills.find(skill => skill.name === name) : undefined;
   }
   isSkillCommand(input: string): boolean {
@@ -797,6 +804,18 @@ export class FutrynClient {
   /** The user's work budget for each turn, or undefined when no limit is set. */
   turnBudget(): TurnBudget | undefined {
     return this.turnBudgetValue ? {...this.turnBudgetValue} : undefined;
+  }
+  additionalInstructions(): string | undefined {
+    return this.extraInstructionsValue;
+  }
+  setAdditionalInstructions(text: string | undefined): void {
+    if (text === undefined || !text.trim()) {
+      this.extraInstructionsValue = undefined;
+      return;
+    }
+    const trimmed = text.trim();
+    if (Buffer.byteLength(trimmed, 'utf8') > 16384 || trimmed.includes('\0')) throw new FutrynError('INVALID_INPUT');
+    this.extraInstructionsValue = trimmed;
   }
   setTurnBudget(budget: TurnBudget | null): TurnBudget | undefined {
     if (budget === null) this.turnBudgetValue = undefined;
@@ -2655,6 +2674,20 @@ export class FutrynClient {
             const stored = this.ports.getSession(session.id);
             if (stored) session.messages = committedSessionMessages(stored);
             else session.messages.push({role: 'user', content: trimmed}, {role: 'assistant', content: assistantText});
+            if (this.currentMode === 'chat' && !turnSignal.aborted && this.ports.afterTurnCompleted) {
+              try {
+                const savedMemories = await this.ports.afterTurnCompleted(
+                  {sessionId: session.id, selection: session.selection, messages: session.messages},
+                  turnSignal,
+                );
+                if (Array.isArray(savedMemories) && savedMemories.length) {
+                  const labels = savedMemories.map(name => this.ports.sanitizeText(name)).join(', ');
+                  this.notify('memory.extracted', `Auto-saved ${savedMemories.length} memory entry: ${labels}`);
+                }
+              } catch {
+                /* Auto-memory extraction is best-effort and never fails the completed turn. */
+              }
+            }
             this.emitReactiveEvent('done', event.finishReason);
             break;
           }
@@ -2662,8 +2695,12 @@ export class FutrynClient {
         yield event;
       }
     } catch (err) {
-      const stored = this.ports.getSession(session.id);
-      if (stored?.recovery) session.messages = stored.recovery.messages;
+      try {
+        const stored = this.ports.getSession(session.id);
+        if (stored?.recovery) session.messages = stored.recovery.messages;
+      } catch {
+        /* Preserve the original turn error if session storage is unavailable during teardown. */
+      }
       this.emitReactiveEvent('error', err instanceof FutrynError ? err.code : 'ERROR');
       throw err;
     } finally {

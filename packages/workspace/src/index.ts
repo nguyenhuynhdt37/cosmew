@@ -7,11 +7,24 @@ export {
   type WriteTarget,
 } from './paths';
 export {ignoredDirectory, listWorkspaceFiles, VENDORED_DIRECTORIES, type FileListing} from './files';
-export {ProjectContextLoader, nestedLabel} from './project-context';
+export {
+  ProjectContextLoader,
+  nestedLabel,
+  ruleLabel,
+  parseRuleFrontmatter,
+  matchRuleGlob,
+  extractAtImports,
+} from './project-context';
 export {SecureFiles, WriteBoundaryError, writePath, contentHash, type FileSnapshot} from './secure-files';
 export {scanExecutionMasks, type ExecutionMasks, type MaskDecision} from './execution-masks';
 export {SkillCatalog, renderSkillCatalog, skillInvocations} from './skills';
-export {parseSkillDocument, SKILL_NAME, SKILL_FILE_BYTES} from './skill-parser';
+export {
+  parseSkillDocument,
+  parseCommandDocument,
+  expandCommandArguments,
+  SKILL_NAME,
+  SKILL_FILE_BYTES,
+} from './skill-parser';
 export {
   AgentDefinitionCatalog,
   parseAgentDocument,

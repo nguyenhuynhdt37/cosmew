@@ -10,3 +10,4 @@ export * from './custom-probe';
 export * from './aws-sigv4';
 export * from './aws-auth';
 export * from './google-auth';
+export * from './schema-validator';

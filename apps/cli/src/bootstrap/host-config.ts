@@ -29,6 +29,7 @@ import {
   type HostProviderEntry,
   type TokenCommand,
 } from '@cosmew/models';
+import type {CustomLspServerConfig} from '@cosmew/code-intel';
 
 /**
  * The user-level host config (ADR 0046): `<state directory>/config.toml`. It is read from the state
@@ -48,7 +49,10 @@ export interface LoadedHostConfig {
   /** False when the file exists but could not be used as a whole (unsafe, unreadable, not TOML). */
   usable: boolean;
   memoriesEnabled: boolean;
+  memoriesAutoExtract: boolean;
   memoryMaxUnusedDays: number;
+  /** User-declared custom LSP servers (`[lsp.<id>]`, ADR 0124). Never read from repositories. */
+  lspServers: CustomLspServerConfig[];
 }
 
 export class HostConfigStore {
@@ -85,7 +89,9 @@ export class HostConfigStore {
       path: this.path,
       providers: [],
       memoriesEnabled: true,
+      memoriesAutoExtract: false,
       memoryMaxUnusedDays: DEFAULT_MEMORY_MAX_UNUSED_DAYS,
+      lspServers: [] as CustomLspServerConfig[],
       permissions: {diagnostics: []} as HostPermissionConfig,
       agents: {
         enabled: true,
@@ -107,30 +113,34 @@ export class HostConfigStore {
     const memories = (parsed as {memories?: {enabled?: unknown; max_unused_days?: unknown; auto_extract?: unknown}})
       .memories;
     const memoriesEnabled = memories?.enabled !== false;
+    const memoriesAutoExtract = memories?.auto_extract === true;
+    const invalidAutoExtract = memories?.auto_extract !== undefined && typeof memories.auto_extract !== 'boolean';
     const configuredDays = memories?.max_unused_days;
     const validDays = typeof configuredDays === 'number' && Number.isSafeInteger(configuredDays);
     const memoryMaxUnusedDays = validDays ? Math.min(365, Math.max(0, configuredDays)) : DEFAULT_MEMORY_MAX_UNUSED_DAYS;
     const config = loadHostConfig(parsed, this.reserved);
     const permissions = loadHostPermissions(parsed);
     const agents = loadHostAgents(parsed);
+    const lsp = loadHostLspServers(parsed);
     const {diagnostics: agentDiagnostics, ...agentsConfig} = agents;
     return {
       path: this.path,
       providers: config.providers,
       memoriesEnabled,
+      memoriesAutoExtract,
       memoryMaxUnusedDays,
+      lspServers: lsp.servers,
       permissions,
       agents: agentsConfig,
       diagnostics: [
         ...config.diagnostics,
         ...permissions.diagnostics,
         ...agentDiagnostics,
+        ...lsp.diagnostics,
         ...(configuredDays !== undefined && !validDays
           ? [{message: 'memories.max_unused_days must be an integer; using the default.'}]
           : []),
-        ...(memories?.auto_extract === true
-          ? [{message: 'Memories auto_extract is not implemented; no background extraction runs.'}]
-          : []),
+        ...(invalidAutoExtract ? [{message: 'memories.auto_extract must be a boolean; defaulting to false.'}] : []),
       ],
       usable: true,
     };
@@ -257,4 +267,94 @@ export class TokenCommandRunner {
       signal?.removeEventListener('abort', abort);
     }
   }
+}
+
+const LSP_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/;
+const LSP_EXT = /^\.[a-z0-9][a-z0-9._-]{0,15}$/i;
+
+/** Parse user-level `[lsp.<id>]` tables from `~/.cosmew/config.toml` (ADR 0124). Never reads repo config. */
+export function loadHostLspServers(parsed: unknown): {
+  servers: CustomLspServerConfig[];
+  diagnostics: HostConfigDiagnostic[];
+} {
+  const servers: CustomLspServerConfig[] = [];
+  const diagnostics: HostConfigDiagnostic[] = [];
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {servers, diagnostics};
+  const lspSection = (parsed as {lsp?: unknown}).lsp;
+  if (lspSection === undefined) return {servers, diagnostics};
+  if (!lspSection || typeof lspSection !== 'object' || Array.isArray(lspSection)) {
+    diagnostics.push({message: '[lsp] must be a table of language server definitions.'});
+    return {servers, diagnostics};
+  }
+  for (const [id, raw] of Object.entries(lspSection as Record<string, unknown>)) {
+    if (!LSP_ID.test(id)) {
+      diagnostics.push({message: `[lsp.${id}]: invalid server id (use lowercase letters, digits, - or _).`});
+      continue;
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      diagnostics.push({message: `[lsp.${id}]: must be a table.`});
+      continue;
+    }
+    const table = raw as Record<string, unknown>;
+    const command = typeof table.command === 'string' ? table.command.trim() : '';
+    if (!command || command.length > 512 || /[\x00-\x1f\x7f]/.test(command)) {
+      diagnostics.push({message: `[lsp.${id}]: command must be a non-empty executable name or absolute path.`});
+      continue;
+    }
+    if (!Array.isArray(table.extensions) || table.extensions.length === 0 || table.extensions.length > 20) {
+      diagnostics.push({
+        message: `[lsp.${id}]: extensions must be a non-empty list of file extensions (e.g. [".zig"]).`,
+      });
+      continue;
+    }
+    const extensions: string[] = [];
+    let extOk = true;
+    for (const item of table.extensions) {
+      if (typeof item !== 'string' || !LSP_EXT.test(item)) {
+        extOk = false;
+        break;
+      }
+      extensions.push(item.toLowerCase());
+    }
+    if (!extOk) {
+      diagnostics.push({message: `[lsp.${id}]: each extension must start with "." (e.g. ".zig").`});
+      continue;
+    }
+    const rawArgs = table.args ?? [];
+    if (
+      !Array.isArray(rawArgs) ||
+      rawArgs.length > 32 ||
+      !rawArgs.every(a => typeof a === 'string' && !/[\x00-\x1f\x7f]/.test(a))
+    ) {
+      diagnostics.push({message: `[lsp.${id}]: args must be a list of strings without control characters.`});
+      continue;
+    }
+    const rawRoots = table.roots ?? [];
+    if (
+      !Array.isArray(rawRoots) ||
+      rawRoots.length > 20 ||
+      !rawRoots.every(
+        r => typeof r === 'string' && r.length > 0 && r.length <= 128 && !/[/\\]|\.\.|[\x00-\x1f\x7f]/.test(r),
+      )
+    ) {
+      diagnostics.push({message: `[lsp.${id}]: roots must be a list of project marker filenames.`});
+      continue;
+    }
+    const languageId =
+      typeof table.language_id === 'string' && /^[a-z0-9][a-z0-9._+-]{0,31}$/i.test(table.language_id)
+        ? table.language_id
+        : undefined;
+    if (table.language_id !== undefined && !languageId) {
+      diagnostics.push({message: `[lsp.${id}]: invalid language_id; defaulting to "${id}".`});
+    }
+    servers.push({
+      id,
+      extensions: [...new Set(extensions)],
+      roots: [...new Set(rawRoots as string[])],
+      command,
+      args: [...(rawArgs as string[])],
+      ...(languageId ? {languageId} : {}),
+    });
+  }
+  return {servers, diagnostics};
 }

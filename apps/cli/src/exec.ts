@@ -1,4 +1,4 @@
-import {closeSync, constants, openSync, realpathSync, statSync, writeFileSync} from 'node:fs';
+import {closeSync, constants, openSync, readFileSync, realpathSync, statSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {parseArgs} from 'node:util';
 import {
@@ -8,6 +8,7 @@ import {
   ProviderBillingError,
   type HeadlessEvent,
 } from '@cosmew/contracts';
+import {compileOutputJsonSchema, extractStructuredJson, type CompiledOutputSchema} from '@cosmew/models';
 import {
   PERMISSION_CLI_OPTIONS,
   resolvePermissionFlags,
@@ -28,13 +29,34 @@ export interface ExecOptions {
   json: boolean;
   account?: string;
   model?: string;
+  /** Optional fallback model ID used once if the primary model fails with RATE_LIMIT/TRANSPORT before any tool executes. */
+  fallbackModel?: string;
   outputLastMessage?: string;
+  /** Raw JSON Schema string (or `@path/to/schema.json` resolved by CLI) enforced on the final answer (ADR 0124). */
+  jsonSchema?: string;
+  /** Maximum model/tool steps (`TurnBudget.maxSteps`). */
+  maxTurns?: number;
+  /** Maximum estimated/reported spend in USD (`TurnBudget.maxCostUSD` & pre-flight cap). */
+  maxBudgetUsd?: number;
+  /** Additional task-specific system guidance for CI/CD runs (stays below host/security rules). */
+  systemPrompt?: string;
+  /** Appended task-specific system guidance for CI/CD runs (stays below host/security rules). */
+  appendSystemPrompt?: string;
+  /** Additional working directories granted for this headless session. */
+  addDirs?: string[];
+  /** Resume a specific workspace session ID before sending the prompt. */
+  resume?: string;
+  /** Resume the most recent workspace session before sending the prompt. */
+  continueLatest?: boolean;
 }
 
 const HELP = `cosmew exec <prompt|-> [--cd|-C <dir>] [--json]
   [--permission-mode default|acceptEdits|plan|bypassPermissions] [--dangerously-skip-permissions]
   [--allowedTools <rules>] [--disallowedTools <rules>]
-  [--output-last-message|-o <file>] [--account <id-or-alias>] [--model <id>]
+  [--output-last-message|-o <file>] [--account <id-or-alias>] [--model <id>] [--fallback-model <id>]
+  [--json-schema <json-or-@file>] [--max-turns <1..200>] [--max-budget-usd <usd>]
+  [--system-prompt <text>] [--append-system-prompt <text>]
+  [--add-dir <dir>]... [--resume <session-id> | --continue]
 Explicit --cd grants folder consent. Like \`claude -p\`, there is no one to ask without a TTY: anything that would
 prompt is denied (file edits in default mode, commands outside the sandbox, new network domains). --allowedTools /
 --disallowedTools take comma or space separated rules such as "Bash(npm test:*) Edit". --dangerously-skip-permissions
@@ -43,6 +65,21 @@ prompt is denied (file edits in default mode, commands outside the sandbox, new 
 anything are ignored here unless approved earlier in the TUI.
 Exit: 0 complete, 1 turn failure/cancelled, 2 no tool-capable selection/consent, 3 provider billing, 64 invalid arguments.
 `;
+
+function loadJsonSchemaArg(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new FutrynError('INVALID_INPUT');
+  if (!trimmed.startsWith('@')) return trimmed;
+  const filePath = resolve(trimmed.slice(1));
+  const fd = openSync(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const content = readFileSync(fd, 'utf8');
+    if (Buffer.byteLength(content, 'utf8') > 256 * 1024) throw new FutrynError('INVALID_INPUT');
+    return content;
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /** Own lifecycle so invalid exec arguments never open state or enter an interactive command. */
 export async function execCli(args: string[]): Promise<number> {
@@ -59,6 +96,15 @@ export async function execCli(args: string[]): Promise<number> {
         'output-last-message': {type: 'string', short: 'o'},
         account: {type: 'string'},
         model: {type: 'string'},
+        'fallback-model': {type: 'string'},
+        'json-schema': {type: 'string'},
+        'max-turns': {type: 'string'},
+        'max-budget-usd': {type: 'string'},
+        'system-prompt': {type: 'string'},
+        'append-system-prompt': {type: 'string'},
+        'add-dir': {type: 'string', multiple: true},
+        resume: {type: 'string'},
+        continue: {type: 'boolean'},
         help: {type: 'boolean', short: 'h'},
       },
     });
@@ -67,11 +113,37 @@ export async function execCli(args: string[]): Promise<number> {
       return 0;
     }
     if (positionals.length !== 1 || !positionals[0]?.trim()) throw new FutrynError('INVALID_INPUT');
+    if (values.resume && values.continue) throw new FutrynError('INVALID_INPUT');
     const permissionFlags = resolvePermissionFlags(values);
     const workspace = values.cd === undefined ? undefined : realpathSync(resolve(values.cd));
     if (workspace && !statSync(workspace).isDirectory()) throw new FutrynError('INVALID_INPUT');
-    for (const value of [values.cd, values.account, values.model, values['output-last-message']])
+    for (const value of [
+      values.cd,
+      values.account,
+      values.model,
+      values['fallback-model'],
+      values['output-last-message'],
+      values['system-prompt'],
+      values['append-system-prompt'],
+      values.resume,
+    ])
       if (value !== undefined && !value.trim()) throw new FutrynError('INVALID_INPUT');
+    const addDirs = values['add-dir']?.map(dir => dir.trim());
+    if (addDirs?.some(dir => !dir)) throw new FutrynError('INVALID_INPUT');
+    let maxTurns: number | undefined;
+    if (values['max-turns'] !== undefined) {
+      if (!/^\d+$/.test(values['max-turns'].trim())) throw new FutrynError('INVALID_INPUT');
+      maxTurns = Number(values['max-turns'].trim());
+      if (!Number.isSafeInteger(maxTurns) || maxTurns < 1 || maxTurns > 200) throw new FutrynError('INVALID_INPUT');
+    }
+    let maxBudgetUsd: number | undefined;
+    if (values['max-budget-usd'] !== undefined) {
+      maxBudgetUsd = Number(values['max-budget-usd'].trim());
+      if (!Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0 || maxBudgetUsd > 1000)
+        throw new FutrynError('INVALID_INPUT');
+    }
+    const jsonSchema = values['json-schema'] !== undefined ? loadJsonSchemaArg(values['json-schema']) : undefined;
+    if (jsonSchema !== undefined) compileOutputJsonSchema(jsonSchema);
     options = {
       prompt: positionals[0]!,
       workspace,
@@ -79,7 +151,16 @@ export async function execCli(args: string[]): Promise<number> {
       json: values.json ?? false,
       account: values.account,
       model: values.model,
+      fallbackModel: values['fallback-model'],
       outputLastMessage: values['output-last-message'],
+      jsonSchema,
+      maxTurns,
+      maxBudgetUsd,
+      systemPrompt: values['system-prompt'],
+      appendSystemPrompt: values['append-system-prompt'],
+      addDirs,
+      resume: values.resume,
+      continueLatest: values.continue ?? false,
     };
   } catch {
     process.stderr.write(HELP);
@@ -167,17 +248,71 @@ export async function runExec(
     emit({type: 'turn.failed', error: {code: error.code, message: error.message}});
     if (!options.json) process.stderr.write(JSON.stringify(redactJsonValue(error, redact)) + '\n');
   };
+  let compiledSchema: CompiledOutputSchema | undefined;
+  if (options.jsonSchema !== undefined) {
+    try {
+      compiledSchema = compileOutputJsonSchema(options.jsonSchema);
+    } catch {
+      failed(new FutrynError('INVALID_INPUT'));
+      return 64;
+    }
+  }
   if (!options.workspace) {
     failed(new FutrynError('POLICY'));
     return 2;
   }
   const client = app.createFutrynClient(options.workspace);
   try {
+    if (options.resume) {
+      client.resumeSession(options.resume);
+    } else if (options.continueLatest) {
+      const latest = client.listSessions()[0];
+      if (latest) client.resumeSession(latest.id);
+    }
+  } catch {
+    failed(new FutrynError('NOT_FOUND'));
+    return 2;
+  }
+  try {
     if (options.account) client.useAccount(options.account);
     if (options.model) client.selectModel(options.model);
   } catch {
     failed(new FutrynError('AUTH'));
     return 2;
+  }
+  if (options.addDirs?.length) {
+    try {
+      for (const dir of options.addDirs) client.addAdditionalDirectory(dir, {persist: false});
+    } catch (error) {
+      failed(error instanceof FutrynError ? error : new FutrynError('INVALID_INPUT'));
+      return error instanceof FutrynError && error.code === 'POLICY' ? 2 : 64;
+    }
+  }
+  if (options.maxTurns !== undefined || options.maxBudgetUsd !== undefined) {
+    try {
+      client.setTurnBudget({
+        ...(options.maxTurns !== undefined ? {maxSteps: options.maxTurns} : {}),
+        ...(options.maxBudgetUsd !== undefined ? {maxCostUSD: options.maxBudgetUsd} : {}),
+      });
+    } catch {
+      failed(new FutrynError('INVALID_INPUT'));
+      return 64;
+    }
+  }
+  const extraInstructionParts = [
+    options.systemPrompt?.trim(),
+    options.appendSystemPrompt?.trim(),
+    compiledSchema
+      ? `Output format requirement: your final answer MUST be a single raw JSON value (no prose, no markdown fences) strictly conforming to this JSON Schema:\n${JSON.stringify(compiledSchema.schema)}`
+      : undefined,
+  ].filter((part): part is string => !!part);
+  if (extraInstructionParts.length) {
+    try {
+      client.setAdditionalInstructions(extraInstructionParts.join('\n\n'));
+    } catch {
+      failed(new FutrynError('INVALID_INPUT'));
+      return 64;
+    }
   }
   const status = client.status();
   if (!status.activeAccount || status.activeAccount.status === 'logged-out' || !status.selection) {
@@ -270,16 +405,48 @@ export async function runExec(
     });
   });
   let finalText = '';
+  let fallbackUsed = false;
   try {
     const runTurn = async (message: string) => {
-      for await (const event of client.sendMessage(message, {signal})) {
-        if (event.type === 'started' || event.type === 'responseDiscarded') finalText = '';
-        if (event.type === 'textDelta') finalText += event.text;
-        if (event.type === 'context.compacted' && !options.json)
+      let sawToolActivity = false;
+      const execute = async () => {
+        for await (const event of client.sendMessage(message, {
+          signal,
+          ...(options.maxBudgetUsd !== undefined ? {maxEstimatedCostUSD: options.maxBudgetUsd} : {}),
+        })) {
+          if (event.type === 'started' || event.type === 'responseDiscarded') finalText = '';
+          if (event.type === 'toolCallComplete' || event.type === 'toolResult') sawToolActivity = true;
+          if (event.type === 'textDelta') finalText += event.text;
+          if (event.type === 'context.compacted' && !options.json)
+            process.stderr.write(
+              `[context compacted (${event.strategy}): ~${event.tokensBefore} -> ~${event.tokensAfter} tokens]\n`,
+            );
+          emit(event);
+        }
+      };
+      try {
+        await execute();
+      } catch (error) {
+        const retryableForFallback =
+          error instanceof FutrynError && (error.code === 'RATE_LIMIT' || error.code === 'TRANSPORT');
+        if (
+          options.fallbackModel &&
+          !fallbackUsed &&
+          !sawToolActivity &&
+          !signal?.aborted &&
+          retryableForFallback &&
+          options.fallbackModel !== client.status().selection?.modelId
+        ) {
+          fallbackUsed = true;
           process.stderr.write(
-            `[context compacted (${event.strategy}): ~${event.tokensBefore} -> ~${event.tokensAfter} tokens]\n`,
+            `Notice: primary model failed (${error.code}); retrying once with fallback model ${app.redactor.text(options.fallbackModel)}.\n`,
           );
-        emit(event);
+          client.selectModel(options.fallbackModel);
+          finalText = '';
+          await execute();
+          return;
+        }
+        throw error;
       }
     };
     await runTurn(options.prompt);
@@ -321,6 +488,28 @@ export async function runExec(
       signal?.removeEventListener('abort', abortWake);
     }
     if (signal?.aborted) throw new FutrynError('CANCELLED');
+    if (compiledSchema) {
+      const checkOutput = () => {
+        const extracted = extractStructuredJson(finalText);
+        if (!extracted.ok) return {ok: false as const, reason: extracted.reason};
+        const valid = compiledSchema.validate(extracted.value);
+        if (!valid.ok) return {ok: false as const, reason: valid.summary};
+        return {ok: true as const, canonicalText: extracted.canonicalText};
+      };
+      let checked = checkOutput();
+      if (!checked.ok && !signal?.aborted) {
+        await runTurn(
+          `Your previous answer did not satisfy the required JSON Schema (${checked.reason}). Return ONLY a valid raw JSON value matching the schema, with no prose or markdown fences.`,
+        );
+        checked = checkOutput();
+      }
+      if (!checked.ok) {
+        const err = new FutrynError('PROTOCOL');
+        err.message = `Structured output failed JSON Schema validation: ${checked.reason}`;
+        throw err;
+      }
+      finalText = checked.canonicalText;
+    }
     const text = app.redactor.text(finalText);
     if (options.outputLastMessage) {
       // User-chosen path relative to the caller's cwd (as `codex exec -o`). A repository-planted
