@@ -4,11 +4,25 @@ export {
   MAX_MCP_RESPONSE_BYTES,
   MAX_MCP_OUTPUT_BYTES,
   MAX_MCP_RESOURCES,
+  MAX_MCP_PROMPTS,
   type McpClientOptions,
   type McpTextResult,
+  type McpResourceReadResult,
+  type McpPromptGetResult,
+  type RemotePrompt,
+  type RemotePromptArgument,
   type RemoteResource,
   type RemoteResourceTemplate,
 } from './client';
+export {
+  MAX_MCP_ATTACHMENT_BYTES,
+  MAX_MCP_ATTACHMENTS,
+  sniffMcpMedia,
+  validMcpMedia,
+  validateMcpMediaAttachment,
+  type McpMediaMime,
+  type McpMediaValidation,
+} from './media';
 export {parseMcpConfig, qualifiedMcpName, type McpConfigParse, type McpServerSpec} from './config';
 export {
   McpHub,
@@ -16,6 +30,8 @@ export {
   type McpServerStatus,
   type McpSnapshot,
   type McpToolRecord,
+  type McpToolCallResult,
+  type McpPromptRecord,
   type McpResourceItem,
   type McpResourceTemplateItem,
 } from './servers';

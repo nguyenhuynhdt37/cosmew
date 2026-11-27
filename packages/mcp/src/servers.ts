@@ -1,20 +1,33 @@
 import type {OAuthClientProvider} from '@modelcontextprotocol/sdk/client/auth.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {getDefaultEnvironment, StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
-import {FutrynError} from '@cosmew/contracts';
+import {
+  PromptListChangedNotificationSchema,
+  ResourceListChangedNotificationSchema,
+  ToolListChangedNotificationSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import {FutrynError, type Attachment} from '@cosmew/contracts';
 import {
   McpClient,
   MCP_TIMEOUT_MS,
   clip,
   MAX_MCP_OUTPUT_BYTES,
+  type McpPromptGetResult,
+  type McpResourceReadResult,
   type McpTextResult,
+  type RemotePrompt,
+  type RemotePromptArgument,
+  discoverPrompts,
   discoverTools,
   discoverResources,
   discoverResourceTemplates,
+  getRemotePrompt,
   readRemoteResource,
   normalizeResult,
 } from './client';
 import {qualifiedMcpName, type McpServerSpec} from './config';
+
+export type McpToolCallResult = string | {text: string; isError?: boolean; attachments?: Attachment[]};
 
 /** What `cosmew mcp` and `/mcp` may show. No command, arguments, environment, URL or headers. */
 export interface McpServerStatus {
@@ -22,7 +35,17 @@ export interface McpServerStatus {
   transport: 'stdio' | 'http';
   state: 'stopped' | 'connecting' | 'reconnecting' | 'connected' | 'needs-auth' | 'failed' | 'disabled';
   tools: number;
+  prompts?: number;
   error?: string;
+}
+
+export interface McpPromptRecord {
+  qualifiedName: string;
+  server: string;
+  name: string;
+  description?: string;
+  arguments: RemotePromptArgument[];
+  identity?: string;
 }
 
 export interface McpToolRecord {
@@ -68,38 +91,51 @@ export interface McpHubOptions {
   authProvider?(spec: Extract<McpServerSpec, {transport: 'http'}>): OAuthClientProvider | undefined;
   onDisconnect?(): void;
   onStatusChange?(): void;
+  /** Called when a server's tool catalog changes dynamically via `notifications/tools/list_changed`. */
+  onToolsChanged?(): void;
   warnings?: string[];
+}
+
+interface InternalConnectOptions extends McpHubOptions {
+  onToolsListChanged?(): void;
+  onPromptsListChanged?(): void;
+  onResourcesListChanged?(): void;
 }
 
 interface LiveServer {
   status: McpServerStatus;
   tools: McpToolRecord[];
-  call(
-    tool: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<string | {text: string; isError: true}>;
+  prompts: McpPromptRecord[];
+  call(tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolCallResult>;
   listResources(signal?: AbortSignal): Promise<readonly McpResourceItem[]>;
   listResourceTemplates(signal?: AbortSignal): Promise<readonly McpResourceTemplateItem[]>;
-  readResource(uri: string, signal?: AbortSignal): Promise<string>;
+  readResource(uri: string, signal?: AbortSignal): Promise<string | McpResourceReadResult>;
+  getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpPromptGetResult>;
+  refreshTools(signal?: AbortSignal): Promise<McpToolRecord[]>;
+  refreshPrompts(signal?: AbortSignal): Promise<McpPromptRecord[]>;
   close(): Promise<void>;
 }
 
 /**
  * User-configured MCP servers (ADR 0068). Stdio processes are spawned only from specs the
- * composition root parsed out of the user file. Results are redacted text. The hub does not
- * decide permissions: ToolDispatcher does, before `call`.
+ * composition root parsed out of the user file. Results are redacted text (and validated media).
+ * The hub does not decide permissions: ToolDispatcher does, before `call`.
  */
 interface ServerEntry {
   identity: string;
   spec: McpServerSpec;
   enabled: boolean;
   generation: number;
+  toolsEpoch: number;
   status: McpServerStatus;
   lifetime?: AbortController;
   live?: LiveServer;
   pending?: Promise<void>;
   stopping?: Promise<void>;
+  refreshingTools?: boolean;
+  pendingToolsRefresh?: boolean;
+  refreshingPrompts?: boolean;
+  pendingPromptsRefresh?: boolean;
   warnings: string[];
 }
 
@@ -121,6 +157,7 @@ export class McpHub {
       spec: structuredClone(spec),
       enabled,
       generation: 0,
+      toolsEpoch: 0,
       warnings: [],
       status: {name: spec.name, transport: spec.transport, state: enabled ? 'stopped' : 'disabled', tools: 0},
     };
@@ -143,10 +180,40 @@ export class McpHub {
         ? (entry.live?.tools ?? []).map(tool => ({
             ...tool,
             inputSchema: structuredClone(tool.inputSchema),
-            identity: `${this.identity}:${entry.identity}:${entry.generation}`,
+            identity: `${this.identity}:${entry.identity}:${entry.generation}:${entry.toolsEpoch}`,
           }))
         : [],
     );
+  }
+
+  prompts(): McpPromptRecord[] {
+    return [...this.entries.values()].flatMap(entry =>
+      entry.status.state === 'connected'
+        ? (entry.live?.prompts ?? []).map(prompt => ({
+            ...prompt,
+            arguments: prompt.arguments.map(arg => ({...arg})),
+            identity: `${this.identity}:${entry.identity}:${entry.generation}:${entry.toolsEpoch}`,
+          }))
+        : [],
+    );
+  }
+
+  async getPrompt(
+    qualifiedName: string,
+    args: Record<string, string>,
+    signal?: AbortSignal,
+  ): Promise<{record: McpPromptRecord; result: McpPromptGetResult}> {
+    this.check(signal);
+    for (const entry of this.entries.values()) {
+      const match =
+        entry.status.state === 'connected' &&
+        entry.live?.prompts.find(prompt => prompt.qualifiedName === qualifiedName);
+      if (match && entry.live) {
+        const result = await entry.live.getPrompt(match.name, args, signal);
+        return {record: {...match, arguments: match.arguments.map(a => ({...a}))}, result};
+      }
+    }
+    throw new FutrynError('NOT_FOUND');
   }
 
   async connect(signal?: AbortSignal): Promise<McpSnapshot> {
@@ -205,7 +272,7 @@ export class McpHub {
       .filter(entry => entry.status.state === 'connected' && Boolean(entry.live))
       .map(entry => ({
         name: entry.spec.name,
-        identity: `${this.identity}:${entry.identity}:${entry.generation}`,
+        identity: `${this.identity}:${entry.identity}:${entry.generation}:${entry.toolsEpoch}`,
       }));
   }
 
@@ -223,18 +290,14 @@ export class McpHub {
     return entry.live.listResourceTemplates(signal);
   }
 
-  async readResource(server: string, uri: string, signal?: AbortSignal): Promise<string> {
+  async readResource(server: string, uri: string, signal?: AbortSignal): Promise<string | McpResourceReadResult> {
     this.check(signal);
     const entry = this.entries.get(server);
     if (!entry || entry.status.state !== 'connected' || !entry.live) throw new FutrynError('NOT_FOUND');
     return entry.live.readResource(uri, signal);
   }
 
-  async call(
-    qualifiedName: string,
-    args: Record<string, unknown>,
-    signal?: AbortSignal,
-  ): Promise<string | {text: string; isError: true}> {
+  async call(qualifiedName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpToolCallResult> {
     this.check(signal);
     for (const entry of this.entries.values()) {
       const match = entry.status.state === 'connected' && entry.live?.tools.find(tool => tool.name === qualifiedName);
@@ -285,16 +348,21 @@ export class McpHub {
     const startup = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]);
     const current = () =>
       !this.closed && entry.enabled && entry.generation === generation && this.entries.get(entry.spec.name) === entry;
-    const options: McpHubOptions = {
+    const options: InternalConnectOptions = {
       ...this.options,
       warnings: entry.warnings,
       onDisconnect: () => {
         if (current()) {
           entry.live = undefined;
-          entry.status = {...entry.status, state: 'failed', tools: 0, error: 'connection closed'};
+          entry.status = {...entry.status, state: 'failed', tools: 0, prompts: 0, error: 'connection closed'};
           lifetime.abort();
           this.options.onStatusChange?.();
         }
+      },
+      onToolsListChanged: () => this.scheduleToolsRefresh(entry, generation),
+      onPromptsListChanged: () => this.schedulePromptsRefresh(entry, generation),
+      onResourcesListChanged: () => {
+        if (current()) this.options.onStatusChange?.();
       },
     };
     const priorStopping = entry.stopping;
@@ -340,11 +408,73 @@ export class McpHub {
     entry.pending = pending;
     return pending;
   }
+
+  private scheduleToolsRefresh(entry: ServerEntry, generation: number): void {
+    const isCurrent = () =>
+      !this.closed && entry.enabled && entry.generation === generation && this.entries.get(entry.spec.name) === entry;
+    if (!isCurrent() || !entry.live) return;
+    if (entry.refreshingTools) {
+      entry.pendingToolsRefresh = true;
+      return;
+    }
+    entry.refreshingTools = true;
+    void (async () => {
+      try {
+        do {
+          entry.pendingToolsRefresh = false;
+          if (!isCurrent() || !entry.live) break;
+          const previousSignature = JSON.stringify(entry.live.tools);
+          const nextTools = await entry.live.refreshTools(entry.lifetime?.signal);
+          if (!isCurrent() || !entry.live) break;
+          entry.live.tools = nextTools;
+          entry.status = {...entry.status, tools: nextTools.length};
+          if (JSON.stringify(nextTools) !== previousSignature) {
+            // Bump toolsEpoch so any in-flight approval bound to the previous tool catalog is invalidated (TOCTOU guard).
+            entry.toolsEpoch++;
+            this.options.onToolsChanged?.();
+          }
+          this.options.onStatusChange?.();
+        } while (entry.pendingToolsRefresh && isCurrent());
+      } catch {
+        /* Dynamic refresh failures keep the existing connected session intact until reconnect. */
+      } finally {
+        entry.refreshingTools = false;
+      }
+    })();
+  }
+
+  private schedulePromptsRefresh(entry: ServerEntry, generation: number): void {
+    const isCurrent = () =>
+      !this.closed && entry.enabled && entry.generation === generation && this.entries.get(entry.spec.name) === entry;
+    if (!isCurrent() || !entry.live) return;
+    if (entry.refreshingPrompts) {
+      entry.pendingPromptsRefresh = true;
+      return;
+    }
+    entry.refreshingPrompts = true;
+    void (async () => {
+      try {
+        do {
+          entry.pendingPromptsRefresh = false;
+          if (!isCurrent() || !entry.live) break;
+          const nextPrompts = await entry.live.refreshPrompts(entry.lifetime?.signal);
+          if (!isCurrent() || !entry.live) break;
+          entry.live.prompts = nextPrompts;
+          entry.status = {...entry.status, prompts: nextPrompts.length};
+          this.options.onStatusChange?.();
+        } while (entry.pendingPromptsRefresh && isCurrent());
+      } catch {
+        /* Ignore transient prompt refresh errors. */
+      } finally {
+        entry.refreshingPrompts = false;
+      }
+    })();
+  }
 }
 
 async function connectHttp(
   spec: Extract<McpServerSpec, {transport: 'http'}>,
-  options: McpHubOptions,
+  options: InternalConnectOptions,
   signal?: AbortSignal,
   ownedSignal?: AbortSignal,
 ): Promise<LiveServer> {
@@ -356,22 +486,43 @@ async function connectHttp(
     fetch: options.fetch,
     authProvider: options.authProvider?.(spec),
     onDisconnect: options.onDisconnect,
+    onToolsListChanged: options.onToolsListChanged,
+    onPromptsListChanged: options.onPromptsListChanged,
+    onResourcesListChanged: options.onResourcesListChanged,
   });
   try {
     const onAbort = () => void client.close();
     ownedSignal?.addEventListener('abort', onAbort, {once: true});
     const listed = await client.listTools(signal);
+    const listedPrompts = await client.listPrompts(signal).catch(() => [] as RemotePrompt[]);
     options.warnings?.push(...client.warnings);
     const tools = expose(spec.name, listed, options.redact, options.warnings);
+    const prompts = exposePrompts(spec.name, listedPrompts, options.redact);
     return {
-      status: {name: spec.name, transport: 'http', state: 'connected', tools: tools.length},
+      status: {
+        name: spec.name,
+        transport: 'http',
+        state: 'connected',
+        tools: tools.length,
+        ...(prompts.length ? {prompts: prompts.length} : {}),
+      },
       tools,
+      prompts,
       call: async (tool, args, callSignal) => textOf(await client.call(tool, args, callSignal)),
       listResources: async callSignal =>
         (await client.listResources(callSignal)).map(item => ({server: spec.name, ...item})),
       listResourceTemplates: async callSignal =>
         (await client.listResourceTemplates(callSignal)).map(item => ({server: spec.name, ...item})),
       readResource: (uri, callSignal) => client.readResource(uri, callSignal),
+      getPrompt: (name, args, callSignal) => client.getPrompt(name, args, callSignal),
+      refreshTools: async callSignal =>
+        expose(spec.name, await client.listTools(callSignal), options.redact, options.warnings),
+      refreshPrompts: async callSignal =>
+        exposePrompts(
+          spec.name,
+          await client.listPrompts(callSignal).catch(() => [] as RemotePrompt[]),
+          options.redact,
+        ),
       close: () => client.close(),
     };
   } catch (error) {
@@ -382,7 +533,7 @@ async function connectHttp(
 
 async function connectStdio(
   spec: Extract<McpServerSpec, {transport: 'stdio'}>,
-  options: McpHubOptions,
+  options: InternalConnectOptions,
   signal?: AbortSignal,
   ownedSignal?: AbortSignal,
 ): Promise<LiveServer> {
@@ -407,21 +558,34 @@ async function connectStdio(
   // Drain stderr so a noisy server cannot fill the pipe. The bytes are not returned: they can echo env.
   if (errStream && 'on' in errStream) errStream.on('data', () => undefined);
   const client = new Client({name: 'cosmew', version: '0.1.0'}, {capabilities: {}});
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    options.onToolsListChanged?.();
+  });
+  client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+    options.onPromptsListChanged?.();
+  });
+  client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+    options.onResourcesListChanged?.();
+  });
   const connectDeadline = AbortSignal.timeout(timeout);
   try {
+    const connectSignal = AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), connectDeadline]);
     await client.connect(transport, {
       timeout,
-      signal: AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), connectDeadline]),
+      signal: connectSignal,
     });
     if (lifetime.signal.aborted) throw new FutrynError('CANCELLED');
-    const listed = await discoverTools(
+    const listed = await discoverTools(client, timeout, connectSignal, options.warnings ?? []);
+    const listedPrompts = await discoverPrompts(
       client,
       timeout,
-      AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), connectDeadline]),
+      connectSignal,
+      options.redact,
       options.warnings ?? [],
-    );
+    ).catch(() => [] as RemotePrompt[]);
     client.onclose = () => options.onDisconnect?.();
     const tools = expose(spec.name, listed, options.redact, options.warnings);
+    const prompts = exposePrompts(spec.name, listedPrompts, options.redact);
     const stdioRun = async <T>(callSignal: AbortSignal | undefined, fn: (combined: AbortSignal) => Promise<T>) => {
       if (callSignal?.aborted || lifetime.signal.aborted) throw new FutrynError('CANCELLED');
       const deadline = AbortSignal.timeout(timeout);
@@ -437,8 +601,15 @@ async function connectStdio(
       }
     };
     return {
-      status: {name: spec.name, transport: 'stdio', state: 'connected', tools: tools.length},
+      status: {
+        name: spec.name,
+        transport: 'stdio',
+        state: 'connected',
+        tools: tools.length,
+        ...(prompts.length ? {prompts: prompts.length} : {}),
+      },
       tools,
+      prompts,
       call: (tool, args, callSignal) =>
         callRemote(
           client,
@@ -463,6 +634,27 @@ async function connectStdio(
         ),
       readResource: (uri, callSignal) =>
         stdioRun(callSignal, combined => readRemoteResource(client, uri, timeout, combined, options.redact)),
+      getPrompt: (name, args, callSignal) =>
+        stdioRun(callSignal, combined => getRemotePrompt(client, name, args, timeout, combined, options.redact)),
+      refreshTools: callSignal =>
+        stdioRun(callSignal, async combined =>
+          expose(
+            spec.name,
+            await discoverTools(client, timeout, combined, options.warnings ?? []),
+            options.redact,
+            options.warnings,
+          ),
+        ),
+      refreshPrompts: callSignal =>
+        stdioRun(callSignal, async combined =>
+          exposePrompts(
+            spec.name,
+            await discoverPrompts(client, timeout, combined, options.redact, options.warnings ?? []).catch(
+              () => [] as RemotePrompt[],
+            ),
+            options.redact,
+          ),
+        ),
       close: async () => {
         lifetime.abort();
         ownedSignal?.removeEventListener('abort', onAbort);
@@ -487,7 +679,7 @@ async function callRemote(
   redact: (text: string) => string,
   timeout: number,
   signal: AbortSignal,
-): Promise<string | {text: string; isError: true}> {
+): Promise<McpToolCallResult> {
   try {
     const result = await client.callTool({name, arguments: args}, undefined, {timeout, signal});
     return textOf(normalizeResult(result, redact));
@@ -497,6 +689,28 @@ async function callRemote(
     if (error instanceof Error && /timed out/i.test(error.message)) throw new FutrynError('TIMEOUT');
     throw new FutrynError('TRANSPORT');
   }
+}
+
+function exposePrompts(
+  server: string,
+  prompts: readonly RemotePrompt[],
+  redact: (text: string) => string,
+): McpPromptRecord[] {
+  const records: McpPromptRecord[] = [];
+  const seen = new Set<string>();
+  for (const prompt of prompts) {
+    const qualifiedName = qualifiedMcpName(server, prompt.name);
+    if (!qualifiedName || seen.has(qualifiedName)) continue;
+    seen.add(qualifiedName);
+    records.push({
+      qualifiedName,
+      server,
+      name: prompt.name,
+      ...(prompt.description ? {description: clip(redact(prompt.description), 500)} : {}),
+      arguments: prompt.arguments.map(arg => ({...arg})),
+    });
+  }
+  return records;
 }
 
 function expose(
@@ -542,8 +756,13 @@ function schemaOf(schema: Record<string, unknown> | undefined): Record<string, u
   }
 }
 
-function textOf(result: McpTextResult): string | {text: string; isError: true} {
+function textOf(result: McpTextResult): McpToolCallResult {
   const structured = result.structuredContent ? '\n' + JSON.stringify(result.structuredContent) : '';
   const safe = clip(result.text + structured, MAX_MCP_OUTPUT_BYTES);
-  return result.isError ? {text: safe, isError: true} : safe;
+  if (!result.isError && !result.attachments?.length) return safe;
+  return {
+    text: safe,
+    ...(result.isError ? {isError: true} : {}),
+    ...(result.attachments?.length ? {attachments: result.attachments} : {}),
+  };
 }

@@ -12,6 +12,8 @@ export const MCP_HELP = `  mcp [list] [--managed] [--json]
   mcp add NAME --command EXE [--args '["arg"]']
   mcp add NAME -- EXE [ARG...]
   mcp install NAME --package PACKAGE --version EXACT [--integrity SHA512] [--lockfile FILE] [--bin NAME]
+  mcp update NAME --version EXACT [--integrity SHA512] [--lockfile FILE] [--bin NAME]
+  mcp rollback NAME
   mcp login|logout|enable|disable|reconnect|doctor|remove NAME
   mcp credentials NAME [--bearer-stdin | --clear]
     GitHub MCP login prompts for a personal access token.
@@ -129,13 +131,27 @@ export function parseMcpCli(argv: string[]) {
       ...(values.bin ? {bin: values.bin} : {}),
       ...(values.lockfile ? {lockfile: readMcpLockfile(values.lockfile)} : {}),
     };
+  } else if (command === 'update') {
+    permit('version', 'integrity', 'lockfile', 'bin');
+    if (!name || positionals.length !== 2 || !values.version) invalid();
+    action = {
+      type: 'update',
+      name,
+      version: values.version,
+      ...(values.integrity ? {integrity: values.integrity} : {}),
+      ...(values.bin ? {bin: values.bin} : {}),
+      ...(values.lockfile ? {lockfile: readMcpLockfile(values.lockfile)} : {}),
+    };
   } else if (command === 'credentials') {
     permit('bearer-stdin', 'clear');
     if (!name || positionals.length !== 2 || (values.clear && values['bearer-stdin'])) invalid();
     // Secret acquisition happens only after all arguments have passed validation.
-  } else if (['login', 'logout', 'enable', 'disable', 'reconnect', 'doctor', 'remove'].includes(command)) {
+  } else if (['login', 'logout', 'enable', 'disable', 'reconnect', 'doctor', 'remove', 'rollback'].includes(command)) {
     if (!name || positionals.length !== 2) invalid();
-    action = {type: command as 'login' | 'logout' | 'enable' | 'disable' | 'reconnect' | 'doctor' | 'remove', name};
+    action = {
+      type: command as 'login' | 'logout' | 'enable' | 'disable' | 'reconnect' | 'doctor' | 'remove' | 'rollback',
+      name,
+    };
   } else invalid();
   if (Object.keys(values).some(key => !allowed.has(key))) invalid();
   return {command, name, values, action};

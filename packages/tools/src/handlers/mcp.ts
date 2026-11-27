@@ -291,6 +291,7 @@ function mcpHandler(
             signal?.throwIfAborted();
             const result = await options.mcp!.call(spec.name, args, signal);
             const content = typeof result === 'string' ? result : result.text;
+            const attachments = typeof result === 'string' ? undefined : result.attachments;
             signal?.throwIfAborted();
             return typeof result !== 'string' && result.isError
               ? {
@@ -299,7 +300,12 @@ function mcpHandler(
                   content: content || 'MCP tool reported an application error.',
                   target: spec.name,
                 }
-              : {status: 'ok' as const, content, target: spec.name};
+              : {
+                  status: 'ok' as const,
+                  content,
+                  target: spec.name,
+                  ...(attachments?.length ? {attachments} : {}),
+                };
           } catch (error) {
             if (signal?.aborted) throw new FutrynError('CANCELLED');
             const code = error instanceof FutrynError ? error.code : 'TRANSPORT';

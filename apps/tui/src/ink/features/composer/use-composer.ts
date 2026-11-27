@@ -220,19 +220,28 @@ export function useComposer(options: ComposerOptions) {
       return undefined;
     }
   }, [client, needsSkills]);
+  const needsMcpPrompts = completionActive && context?.prefix === '/' && client.toolsEnabled();
+  const completionMcpPrompts = useMemo(() => {
+    if (!needsMcpPrompts) return [];
+    try {
+      return client.mcpPrompts?.() ?? [];
+    } catch {
+      return [];
+    }
+  }, [client, needsMcpPrompts]);
   const completionData = useMemo(() => {
     if (!context || !completionActive) return {items: [] as Completion[], error: ''};
     try {
       const files = context.prefix === '@' && options.workspaceAccess ? client.listWorkspaceFiles(context.query) : [];
       return {
-        items: getCompletions(context, completionSkills, files),
+        items: getCompletions(context, completionSkills, files, completionMcpPrompts),
         error:
           context.prefix === '@' && !options.workspaceAccess ? 'Approve this folder to suggest workspace files.' : '',
       };
     } catch {
       return {items: [] as Completion[], error: 'Workspace suggestions unavailable from this SDK backend.'};
     }
-  }, [client, context, completionActive, completionSkills, options.workspaceAccess]);
+  }, [client, context, completionActive, completionSkills, completionMcpPrompts, options.workspaceAccess]);
   const items = completionData.items;
   const selected =
     menu.selected === null

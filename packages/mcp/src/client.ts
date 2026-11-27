@@ -2,25 +2,35 @@ import {pinnedMcpOAuthFetch, validateMcpOAuthFetchTarget, type McpOAuthLookup} f
 import {UnauthorizedError} from '@modelcontextprotocol/sdk/client/auth.js';
 import type {OAuthClientProvider} from '@modelcontextprotocol/sdk/client/auth.js';
 import {
+  GetPromptResultSchema,
+  PromptListChangedNotificationSchema,
+  PromptSchema,
   ReadResourceResultSchema,
+  ResourceListChangedNotificationSchema,
   ResourceSchema,
   ResourceTemplateSchema,
   ResultSchema,
+  ToolListChangedNotificationSchema,
   ToolSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport, StreamableHTTPError} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import {FutrynError} from '@cosmew/contracts';
+import {FutrynError, type Attachment} from '@cosmew/contracts';
+import {MAX_MCP_ATTACHMENTS, validateMcpMediaAttachment} from './media';
 
 export const MCP_TIMEOUT_MS = 30_000;
 export const MAX_MCP_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const MAX_MCP_OUTPUT_BYTES = 64 * 1024;
 export const MAX_MCP_RESOURCES = 128;
+export const MAX_MCP_PROMPTS = 64;
 
 export interface McpClientOptions {
   endpoint: URL;
   authProvider?: OAuthClientProvider;
   onDisconnect?(): void;
+  onToolsListChanged?(): void;
+  onPromptsListChanged?(): void;
+  onResourcesListChanged?(): void;
   headers?: Record<string, string>;
   redact(text: string): string;
   fetch?: typeof fetch;
@@ -29,11 +39,35 @@ export interface McpClientOptions {
   oauthLookup?: McpOAuthLookup;
 }
 
-/** Text-only bounded result. Remote tool results are data and never executable instructions. */
+/** Bounded result (text + validated vision/PDF attachments). Remote tool results are data, never instructions. */
 export interface McpTextResult {
   text: string;
   isError?: boolean;
   structuredContent?: unknown;
+  attachments?: Attachment[];
+}
+
+export interface McpResourceReadResult {
+  text: string;
+  attachments?: Attachment[];
+}
+
+export interface RemotePromptArgument {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface RemotePrompt {
+  name: string;
+  description?: string;
+  arguments: RemotePromptArgument[];
+}
+
+export interface McpPromptGetResult {
+  description?: string;
+  text: string;
+  attachments?: Attachment[];
 }
 
 interface ClientSession {
@@ -69,6 +103,15 @@ export class McpClient {
       const attempt = new AbortController();
       this.attempt = attempt;
       const client = new Client({name: 'cosmew', version: '0.1.0'}, {capabilities: {}});
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+        this.options.onToolsListChanged?.();
+      });
+      client.setNotificationHandler(PromptListChangedNotificationSchema, () => {
+        this.options.onPromptsListChanged?.();
+      });
+      client.setNotificationHandler(ResourceListChangedNotificationSchema, () => {
+        this.options.onResourcesListChanged?.();
+      });
       this.pendingClient = client;
       const session: ClientSession = {client};
       const fetchImpl = this.options.fetch ?? fetch;
@@ -238,9 +281,21 @@ export class McpClient {
     );
   }
 
-  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+  async readResource(uri: string, signal?: AbortSignal): Promise<string | McpResourceReadResult> {
     return this.run(signal, (client, combined) =>
       readRemoteResource(client, uri, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.options.redact),
+    );
+  }
+
+  async listPrompts(signal?: AbortSignal): Promise<RemotePrompt[]> {
+    return this.run(signal, (client, combined) =>
+      discoverPrompts(client, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.options.redact, this.warnings),
+    );
+  }
+
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<McpPromptGetResult> {
+    return this.run(signal, (client, combined) =>
+      getRemotePrompt(client, name, args, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.options.redact),
     );
   }
 
@@ -416,14 +471,14 @@ export async function discoverResourceTemplates(
   return templates;
 }
 
-/** Read one MCP server resource strictly via MCP JSON-RPC. Binary blobs are omitted, text is redacted and clipped. */
+/** Read one MCP server resource strictly via MCP JSON-RPC. Valid images/PDFs become attachments; other binary blobs are omitted. */
 export async function readRemoteResource(
   client: Client,
   uri: string,
   timeout: number,
   signal: AbortSignal,
   redact: (text: string) => string,
-): Promise<string> {
+): Promise<string | McpResourceReadResult> {
   if (!uri.trim() || uri.length > 2048 || /[\x00-\x1f\x7f]/.test(uri)) throw new FutrynError('INVALID_INPUT');
   let raw: Record<string, unknown>;
   try {
@@ -439,6 +494,7 @@ export async function readRemoteResource(
   const parsed = ReadResourceResultSchema.safeParse(raw);
   if (!parsed.success) throw new FutrynError('PROTOCOL');
   const sections: string[] = [];
+  const attachments: Attachment[] = [];
   for (const item of parsed.data.contents) {
     const headerParts = [`URI: ${redact(item.uri)}`];
     if (item.mimeType) headerParts.push(`MIME: ${redact(item.mimeType)}`);
@@ -447,11 +503,178 @@ export async function readRemoteResource(
       sections.push(`${header}\n${safeText(item.text, redact)}`);
     } else if ('blob' in item && typeof item.blob === 'string') {
       const mime = item.mimeType ? redact(item.mimeType) : 'application/octet-stream';
+      if (attachments.length < MAX_MCP_ATTACHMENTS) {
+        const validated = validateMcpMediaAttachment({
+          data: item.blob,
+          mimeType: item.mimeType,
+          name: item.uri,
+          redact,
+        });
+        if (validated.ok) {
+          attachments.push(validated.attachment);
+          sections.push(`${header}\n${validated.summary}`);
+          continue;
+        }
+        if (validated.reason === 'secret') {
+          sections.push(`${header}\n[MCP binary resource content (${mime}) omitted: contained a registered secret.]`);
+          continue;
+        }
+        if (validated.reason === 'oversize') {
+          sections.push(`${header}\n[MCP binary resource content (${mime}) omitted: exceeds size limit.]`);
+          continue;
+        }
+      }
       sections.push(`${header}\n[MCP binary resource content (${mime}) is unsupported; content was omitted.]`);
     }
   }
-  if (!sections.length) return '[MCP resource returned no content.]';
-  return clip(sections.join('\n\n---\n\n'), MAX_MCP_OUTPUT_BYTES);
+  const text = sections.length
+    ? clip(sections.join('\n\n---\n\n'), MAX_MCP_OUTPUT_BYTES)
+    : '[MCP resource returned no content.]';
+  return attachments.length ? {text, attachments} : text;
+}
+
+/** Bound prompt discovery visibly; servers without prompt capability return an empty list. */
+export async function discoverPrompts(
+  client: Client,
+  timeout: number,
+  signal: AbortSignal,
+  redact: (text: string) => string,
+  warnings: string[],
+): Promise<RemotePrompt[]> {
+  const capabilities = client.getServerCapabilities();
+  if (capabilities && !capabilities.prompts) return [];
+  const prompts: RemotePrompt[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 4; page++) {
+    let listed: Record<string, unknown>;
+    try {
+      listed = await client.request({method: 'prompts/list', params: cursor ? {cursor} : undefined}, ResultSchema, {
+        timeout,
+        signal,
+      });
+    } catch (error) {
+      if (isMcpMethodNotFound(error)) return [];
+      throw error;
+    }
+    if (!Array.isArray(listed.prompts)) throw new FutrynError('PROTOCOL');
+    for (const raw of listed.prompts) {
+      const parsed = PromptSchema.safeParse(raw);
+      if (!parsed.success) {
+        if (!warnings.includes('A prompt was skipped: invalid prompt metadata.'))
+          warnings.push('A prompt was skipped: invalid prompt metadata.');
+        continue;
+      }
+      if (prompts.length >= MAX_MCP_PROMPTS) {
+        warnings.push(`MCP prompt discovery truncated at ${MAX_MCP_PROMPTS} prompts.`);
+        return prompts;
+      }
+      const item = parsed.data;
+      const args: RemotePromptArgument[] = (item.arguments ?? []).slice(0, 16).map(arg => ({
+        name: clip(redact(arg.name), 64),
+        ...(arg.description !== undefined ? {description: clip(redact(arg.description), 300)} : {}),
+        ...(arg.required === true ? {required: true} : {}),
+      }));
+      prompts.push({
+        name: item.name,
+        ...(item.description !== undefined ? {description: clip(redact(item.description), 500)} : {}),
+        arguments: args,
+      });
+    }
+    const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
+    if (!next) return prompts;
+    if (prompts.length >= MAX_MCP_PROMPTS || page === 3 || cursors.has(next)) {
+      warnings.push(`MCP prompt discovery truncated (${MAX_MCP_PROMPTS} prompts, 4 pages or repeated cursor).`);
+      return prompts;
+    }
+    cursors.add(next);
+    cursor = next;
+  }
+  return prompts;
+}
+
+/** Expand one MCP server prompt via `prompts/get`. Content is redacted, bounded, and treated as untrusted data. */
+export async function getRemotePrompt(
+  client: Client,
+  name: string,
+  args: Record<string, string>,
+  timeout: number,
+  signal: AbortSignal,
+  redact: (text: string) => string,
+): Promise<McpPromptGetResult> {
+  if (!name.trim() || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) throw new FutrynError('INVALID_INPUT');
+  let raw: Record<string, unknown>;
+  try {
+    raw = await client.request(
+      {method: 'prompts/get', params: {name, ...(Object.keys(args).length ? {arguments: args} : {})}},
+      ResultSchema,
+      {timeout, signal},
+    );
+  } catch (error) {
+    const code = error && typeof error === 'object' ? (error as {code?: unknown}).code : undefined;
+    if (isMcpMethodNotFound(error) || code === -32002) throw new FutrynError('NOT_FOUND');
+    if (code === -32602) throw new FutrynError('INVALID_INPUT');
+    throw error;
+  }
+  const parsed = GetPromptResultSchema.safeParse(raw);
+  if (!parsed.success) throw new FutrynError('PROTOCOL');
+  const parts: string[] = [];
+  const attachments: Attachment[] = [];
+  for (const message of parsed.data.messages) {
+    const content = message.content;
+    const rolePrefix = parsed.data.messages.length > 1 ? `[${message.role}] ` : '';
+    if (content.type === 'text') {
+      parts.push(`${rolePrefix}${safeText(content.text, redact)}`);
+    } else if (content.type === 'image') {
+      if (attachments.length < MAX_MCP_ATTACHMENTS) {
+        const validated = validateMcpMediaAttachment({
+          data: content.data,
+          mimeType: content.mimeType,
+          name: `${name}-image`,
+          redact,
+        });
+        if (validated.ok) {
+          attachments.push(validated.attachment);
+          parts.push(`${rolePrefix}${validated.summary}`);
+          continue;
+        }
+        if (validated.reason === 'secret') {
+          parts.push(`${rolePrefix}[MCP prompt image omitted: contained a registered secret.]`);
+          continue;
+        }
+      }
+      parts.push(`${rolePrefix}[MCP prompt image content is unsupported or invalid; omitted.]`);
+    } else if (content.type === 'resource') {
+      const resource = content.resource;
+      if ('text' in resource && typeof resource.text === 'string') {
+        parts.push(`${rolePrefix}Resource ${redact(resource.uri)}:\n${safeText(resource.text, redact)}`);
+      } else if ('blob' in resource && typeof resource.blob === 'string' && attachments.length < MAX_MCP_ATTACHMENTS) {
+        const validated = validateMcpMediaAttachment({
+          data: resource.blob,
+          mimeType: resource.mimeType,
+          name: resource.uri,
+          redact,
+        });
+        if (validated.ok) {
+          attachments.push(validated.attachment);
+          parts.push(`${rolePrefix}Resource ${redact(resource.uri)}: ${validated.summary}`);
+          continue;
+        }
+        parts.push(`${rolePrefix}[MCP prompt binary resource omitted.]`);
+      } else {
+        parts.push(`${rolePrefix}[MCP prompt binary resource omitted.]`);
+      }
+    } else {
+      parts.push(`${rolePrefix}[MCP prompt nontext content omitted.]`);
+    }
+  }
+  const text = clip(parts.join('\n\n').trim() || '[MCP prompt returned no content.]', MAX_MCP_OUTPUT_BYTES);
+  const description = parsed.data.description ? clip(redact(parsed.data.description), 500) : undefined;
+  return {
+    ...(description ? {description} : {}),
+    text,
+    ...(attachments.length ? {attachments} : {}),
+  };
 }
 
 /** Bound discovery visibly; metadata is untrusted and never grants execution authority. */
@@ -532,11 +755,82 @@ function safeText(value: string, redact: (text: string) => string): string {
 
 export function normalizeResult(result: Record<string, unknown>, redact: (text: string) => string): McpTextResult {
   const blocks = Array.isArray(result.content) ? result.content : [];
-  const text = blocks
-    .flatMap(block => (block?.type === 'text' && typeof block.text === 'string' ? [safeText(block.text, redact)] : []))
-    .join('\n');
-  const unsupported = blocks.some(block => block?.type !== 'text');
-  const onlyUnsupported = unsupported && !text && result.structuredContent === undefined;
+  const textParts: string[] = [];
+  const attachments: Attachment[] = [];
+  let unsupported = false;
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') {
+      unsupported = true;
+      continue;
+    }
+    const item = block as Record<string, unknown>;
+    if (item.type === 'text' && typeof item.text === 'string') {
+      textParts.push(safeText(item.text, redact));
+      continue;
+    }
+    if (item.type === 'image') {
+      if (attachments.length < MAX_MCP_ATTACHMENTS) {
+        const validated = validateMcpMediaAttachment({
+          data: item.data,
+          mimeType: item.mimeType,
+          name: 'mcp-image',
+          redact,
+        });
+        if (validated.ok) {
+          attachments.push(validated.attachment);
+          textParts.push(validated.summary);
+          continue;
+        }
+        if (validated.reason === 'secret') {
+          textParts.push('[MCP image omitted: contained a registered secret.]');
+          continue;
+        }
+        if (validated.reason === 'oversize') {
+          textParts.push('[MCP image omitted: exceeds size limit.]');
+          continue;
+        }
+      }
+      unsupported = true;
+      continue;
+    }
+    if (item.type === 'resource' && item.resource && typeof item.resource === 'object') {
+      const res = item.resource as Record<string, unknown>;
+      const uri = typeof res.uri === 'string' ? redact(res.uri) : 'mcp-resource';
+      if (typeof res.text === 'string') {
+        textParts.push(`URI: ${uri}\n${safeText(res.text, redact)}`);
+        continue;
+      }
+      if (typeof res.blob === 'string') {
+        if (attachments.length < MAX_MCP_ATTACHMENTS) {
+          const validated = validateMcpMediaAttachment({
+            data: res.blob,
+            mimeType: res.mimeType,
+            name: uri,
+            redact,
+          });
+          if (validated.ok) {
+            attachments.push(validated.attachment);
+            textParts.push(`URI: ${uri}\n${validated.summary}`);
+            continue;
+          }
+          if (validated.reason === 'secret') {
+            textParts.push(`URI: ${uri}\n[MCP embedded resource omitted: contained a registered secret.]`);
+            continue;
+          }
+          if (validated.reason === 'oversize') {
+            textParts.push(`URI: ${uri}\n[MCP embedded resource omitted: exceeds size limit.]`);
+            continue;
+          }
+        }
+        unsupported = true;
+        continue;
+      }
+    }
+    unsupported = true;
+  }
+  const text = textParts.join('\n');
+  const onlyUnsupported =
+    unsupported && !textParts.length && !attachments.length && result.structuredContent === undefined;
   return {
     text: clip(
       text + (unsupported ? '\n[MCP nontext content is unsupported; content was omitted.]' : ''),
@@ -546,5 +840,6 @@ export function normalizeResult(result: Record<string, unknown>, redact: (text: 
     ...(result.structuredContent !== undefined
       ? {structuredContent: redactJson(result.structuredContent, redact)}
       : {}),
+    ...(attachments.length ? {attachments} : {}),
   };
 }

@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {lstatSync, readFileSync, readdirSync, writeFileSync} from 'node:fs';
+import {lstatSync, readFileSync, readdirSync, realpathSync, writeFileSync} from 'node:fs';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {FileMcpInstallStore} from '@cosmew/persistence';
 import {MCP_EXACT_VERSION, MCP_NPM_NAME, readBoundedMcpJson} from '@cosmew/mcp';
@@ -17,6 +17,8 @@ export interface ManagedMcpInstallation {
   installationId: string;
   packageName: string;
   version: string;
+  integrity: string;
+  bin: string;
   spec: {transport: 'stdio'; command: string; args: string[]; env: Record<string, string>};
 }
 export type ManagedMcpInstallRunner = (request: {
@@ -284,6 +286,8 @@ export function createManagedMcpInstaller(options: ManagedMcpInstallerOptions) {
           installationId: record.installationId,
           packageName: input.packageName,
           version: input.version,
+          integrity: record.integrity,
+          bin: rel,
           spec: {transport: 'stdio', command: options.nodeCommand ?? 'node', args: [executable], env: {}},
         };
       } catch (error) {
@@ -291,6 +295,46 @@ export function createManagedMcpInstaller(options: ManagedMcpInstallerOptions) {
         signal?.throwIfAborted();
         throw error;
       }
+    },
+    resolveExecutable(
+      installationId: string,
+      expectedPackage: string,
+      expectedVersion: string,
+      expectedIntegrity?: string,
+    ): ManagedMcpInstallation {
+      const record = store.read(installationId);
+      if (
+        record.state !== 'ready' ||
+        record.packageName !== expectedPackage ||
+        record.version !== expectedVersion ||
+        (expectedIntegrity && record.integrity !== expectedIntegrity) ||
+        !record.bin
+      )
+        throw new Error('Stored MCP installation provenance mismatch or incomplete installation.');
+      const packageDirectory = join(store.path(installationId), 'node_modules', record.packageName);
+      const executable = resolve(packageDirectory, record.bin);
+      const rel = relative(packageDirectory, executable);
+      if (!rel || rel.startsWith(`..${sep}`) || rel === '..' || !/\.(?:js|mjs|cjs)$/.test(executable))
+        throw new Error('Stored MCP installation executable is missing or unsafe.');
+      try {
+        const stat = lstatSync(executable);
+        if (stat.isSymbolicLink() || !stat.isFile())
+          throw new Error('Stored MCP installation executable is missing or unsafe.');
+        const realRoot = realpathSync(packageDirectory);
+        const realExec = realpathSync(executable);
+        if (realExec !== realRoot && !realExec.startsWith(realRoot + sep))
+          throw new Error('Stored MCP installation executable is missing or unsafe.');
+      } catch {
+        throw new Error('Stored MCP installation executable is missing or unsafe.');
+      }
+      return {
+        installationId: record.installationId,
+        packageName: record.packageName,
+        version: record.version,
+        integrity: record.integrity,
+        bin: record.bin,
+        spec: {transport: 'stdio', command: options.nodeCommand ?? 'node', args: [executable], env: {}},
+      };
     },
     remove(installationId: string): void {
       store.remove(installationId);

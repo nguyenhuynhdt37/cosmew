@@ -1759,6 +1759,25 @@ export function startup(
       mcpManagerSnapshot: () => mcpManager.snapshot(),
       manageMcp: (action, signal) => mcpManager.perform(action, signal),
       searchMcpStatus: () => webSearch.status(),
+      mcpPrompts: () =>
+        mcpHub.prompts().map(prompt => ({
+          qualifiedName: prompt.qualifiedName,
+          server: prompt.server,
+          name: prompt.name,
+          ...(prompt.description ? {description: prompt.description} : {}),
+          arguments: prompt.arguments.map(arg => ({...arg})),
+        })),
+      getMcpPrompt: async (qualifiedName, args, signal) => {
+        const {record, result} = await mcpHub.getPrompt(qualifiedName, args, signal);
+        return {
+          qualifiedName: record.qualifiedName,
+          server: record.server,
+          prompt: record.name,
+          ...(result.description ? {description: result.description} : {}),
+          text: result.text,
+          ...(result.attachments?.length ? {attachments: result.attachments} : {}),
+        };
+      },
       runShellCommand: async (command, signal, onOutput, context) => {
         if (!context) throw new FutrynError('INVALID_INPUT');
         assertSessionWorkspace(context.sessionId, canonicalWorkspace);

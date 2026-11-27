@@ -46,12 +46,54 @@ function usesGitHubPat(spec: McpServerSpec): boolean {
   );
 }
 
+interface PreviousInstallation {
+  installationId: string;
+  packageName: string;
+  version: string;
+  integrity: string;
+  bin?: string;
+  binName?: string;
+  updatedAt: string;
+}
+
 interface Metadata {
   source?: McpManagedServer['source'];
   catalogId?: string;
   installationId?: string;
   packageName?: string;
   version?: string;
+  integrity?: string;
+  bin?: string;
+  binName?: string;
+  previousInstallations?: PreviousInstallation[];
+}
+
+const MAX_PREVIOUS_INSTALLATIONS = 5;
+
+function parsePreviousInstallations(raw: unknown): PreviousInstallation[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PreviousInstallation[] = [];
+  for (const item of raw) {
+    const entry = object(item);
+    if (
+      typeof entry.installationId === 'string' &&
+      typeof entry.packageName === 'string' &&
+      typeof entry.version === 'string' &&
+      typeof entry.integrity === 'string' &&
+      typeof entry.updatedAt === 'string'
+    ) {
+      out.push({
+        installationId: entry.installationId,
+        packageName: entry.packageName,
+        version: entry.version,
+        integrity: entry.integrity,
+        ...(typeof entry.bin === 'string' ? {bin: entry.bin} : {}),
+        ...(typeof entry.binName === 'string' ? {binName: entry.binName} : {}),
+        updatedAt: entry.updatedAt,
+      });
+    }
+  }
+  return out.slice(0, MAX_PREVIOUS_INSTALLATIONS);
 }
 export interface McpManagerOptions {
   directory: string;
@@ -106,6 +148,7 @@ export class McpManager {
       redact: options.redact,
       fetch: options.fetch,
       onStatusChange: options.onStatusChange,
+      onToolsChanged: options.onChange,
       authProvider: spec => {
         if (usesGitHubPat(spec)) return undefined;
         const url = new URL(spec.url);
@@ -221,11 +264,15 @@ export class McpManager {
           } catch {
             ready = false;
           }
+          const previous = parsePreviousInstallations(meta.previousInstallations);
           installation = {
             state: ready ? 'ready' : 'missing',
             id: meta.installationId,
             packageName: meta.packageName,
             version: meta.version,
+            ...((installed?.integrity ?? meta.integrity) ? {integrity: installed?.integrity ?? meta.integrity} : {}),
+            ...(previous[0]?.version ? {previousVersion: previous[0].version} : {}),
+            ...(previous.length ? {rollbackCount: previous.length} : {}),
           };
         }
         const endpoint =
@@ -238,6 +285,7 @@ export class McpManager {
         const source = ['manual', 'registry', 'recommended', 'plugin'].includes(meta.source ?? '')
           ? meta.source!
           : 'manual';
+        const promptCount = this.hub.prompts().filter(prompt => prompt.server === spec.name).length;
         servers.push({
           name: spec.name,
           transport: spec.transport,
@@ -247,6 +295,7 @@ export class McpManager {
           auth,
           installation,
           toolCount: observed?.tools ?? 0,
+          ...(promptCount ? {promptCount} : {}),
           tools: tools
             .filter(tool => tool.server === spec.name)
             .map(tool => ({name: tool.name, description: this.options.redact(tool.description)})),
@@ -298,6 +347,21 @@ export class McpManager {
       else delete document.mcpServers[name];
     });
     this.options.onChange?.();
+  }
+  private removeUnreferencedInstallation(installationId: string) {
+    const current = this.read();
+    const stillReferenced = current.servers.some(other => {
+      const m = object(object(current.document.mcpServers[other.name]).cosmew);
+      if (m.installationId === installationId) return true;
+      return parsePreviousInstallations(m.previousInstallations).some(p => p.installationId === installationId);
+    });
+    if (!stillReferenced) {
+      try {
+        this.installer.remove(installationId);
+      } catch {
+        /* already removed or missing */
+      }
+    }
   }
   private clearInlineAuthorization(name: string) {
     this.change(name, entry => {
@@ -393,6 +457,9 @@ export class McpManager {
                 installationId: installed.installationId,
                 packageName: installed.packageName,
                 version: installed.version,
+                integrity: installed.integrity,
+                bin: installed.bin,
+                ...(action.bin ? {binName: action.bin} : {}),
               },
             };
           });
@@ -429,6 +496,118 @@ export class McpManager {
           if (action.type === 'enable' && spec.transport === 'http') this.loggedOut.delete(spec.url);
           this.change(name, entry => ({...entry!, enabled: action.type === 'enable'}));
           await this.connect(signal);
+        } else if (action.type === 'update') {
+          if (spec.transport !== 'stdio' || !meta.installationId || !meta.packageName)
+            throw new FutrynError('UNSUPPORTED');
+          const previousList = parsePreviousInstallations(meta.previousInstallations);
+          const currentRecord = this.installer.list().find(item => item.installationId === meta.installationId);
+          const selectedBinName = action.bin ?? meta.binName;
+          const installed = await this.installer.install(
+            {
+              id: name,
+              packageName: meta.packageName,
+              version: action.version,
+              integrity: action.integrity,
+              bin: selectedBinName,
+              lockfile:
+                action.lockfile === undefined
+                  ? undefined
+                  : typeof action.lockfile === 'string'
+                    ? action.lockfile
+                    : JSON.stringify(action.lockfile),
+            },
+            signal,
+          );
+          const nextPrevious: PreviousInstallation[] = [
+            ...(currentRecord
+              ? [
+                  {
+                    installationId: currentRecord.installationId,
+                    packageName: currentRecord.packageName,
+                    version: currentRecord.version,
+                    integrity: currentRecord.integrity,
+                    ...(currentRecord.bin ? {bin: currentRecord.bin} : {}),
+                    ...(meta.binName ? {binName: meta.binName} : {}),
+                    updatedAt: new Date().toISOString(),
+                  },
+                ]
+              : []),
+            ...previousList.filter(item => item.installationId !== currentRecord?.installationId),
+          ];
+          const keptPrevious = nextPrevious.slice(0, MAX_PREVIOUS_INSTALLATIONS);
+          const evicted = nextPrevious.slice(MAX_PREVIOUS_INSTALLATIONS);
+          try {
+            signal?.throwIfAborted();
+            ensureCurrent();
+            this.change(name, entry => {
+              if (!entry) throw new FutrynError('NOT_FOUND');
+              const {transport: _transport, ...config} = installed.spec;
+              return {
+                ...config,
+                env: object(entry.env),
+                enabled: entry.enabled !== false,
+                cosmew: {
+                  source: meta.source ?? 'manual',
+                  ...(meta.catalogId ? {catalogId: meta.catalogId} : {}),
+                  installationId: installed.installationId,
+                  packageName: installed.packageName,
+                  version: installed.version,
+                  integrity: installed.integrity,
+                  bin: installed.bin,
+                  ...(selectedBinName ? {binName: selectedBinName} : {}),
+                  previousInstallations: keptPrevious,
+                },
+              };
+            });
+          } catch (error) {
+            this.installer.remove(installed.installationId);
+            throw error;
+          }
+          await this.connect(signal);
+          for (const stale of evicted) {
+            this.removeUnreferencedInstallation(stale.installationId);
+          }
+          message = `Updated ${name} (${installed.packageName}) from ${meta.version ?? 'unknown'} to ${installed.version}.`;
+        } else if (action.type === 'rollback') {
+          if (spec.transport !== 'stdio' || !meta.installationId || !meta.packageName)
+            throw new FutrynError('UNSUPPORTED');
+          const previousList = parsePreviousInstallations(meta.previousInstallations);
+          const target = previousList[0];
+          if (!target) throw new FutrynError('NOT_FOUND');
+          const restored = this.installer.resolveExecutable(
+            target.installationId,
+            target.packageName,
+            target.version,
+            target.integrity,
+          );
+          const discardedId = meta.installationId;
+          signal?.throwIfAborted();
+          ensureCurrent();
+          this.change(name, entry => {
+            if (!entry) throw new FutrynError('NOT_FOUND');
+            const {transport: _transport, ...config} = restored.spec;
+            return {
+              ...config,
+              env: object(entry.env),
+              enabled: entry.enabled !== false,
+              cosmew: {
+                source: meta.source ?? 'manual',
+                ...(meta.catalogId ? {catalogId: meta.catalogId} : {}),
+                installationId: restored.installationId,
+                packageName: restored.packageName,
+                version: restored.version,
+                integrity: restored.integrity,
+                bin: restored.bin,
+                ...(target.binName ? {binName: target.binName} : {}),
+                ...(previousList.length > 1 ? {previousInstallations: previousList.slice(1)} : {}),
+              },
+            };
+          });
+          await this.connect(signal);
+          if (discardedId !== restored.installationId) {
+            this.removeUnreferencedInstallation(discardedId);
+          }
+          message = `Rolled back ${name} (${restored.packageName}) to ${restored.version}.`;
         } else if (action.type === 'remove') {
           await this.hub.setEnabled(name, false, signal);
           if (
@@ -439,15 +618,11 @@ export class McpManager {
           ensureCurrent();
           this.change(name, () => undefined);
           await this.connect(signal);
-          if (
-            meta.installationId &&
-            !this.read().servers.some(
-              other =>
-                object(object(this.read().document.mcpServers[other.name]).cosmew).installationId ===
-                meta.installationId,
-            )
-          )
-            this.installer.remove(meta.installationId);
+          const candidates = [
+            ...(meta.installationId ? [meta.installationId] : []),
+            ...parsePreviousInstallations(meta.previousInstallations).map(item => item.installationId),
+          ];
+          for (const id of new Set(candidates)) this.removeUnreferencedInstallation(id);
           message = 'Server removed. Remote service data was not deleted.';
         } else if (action.type === 'login' && action.bearer === undefined) {
           if (spec.transport !== 'http') throw new FutrynError('UNSUPPORTED');

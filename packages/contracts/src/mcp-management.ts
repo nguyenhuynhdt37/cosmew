@@ -29,6 +29,30 @@ export const MCP_OAUTH_ISSUES = {
 } as const;
 export type McpOAuthIssue = keyof typeof MCP_OAUTH_ISSUES;
 
+export interface McpPromptArgumentView {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface McpPromptView {
+  /** Qualified name without leading slash: `mcp__<server>__<prompt>`. */
+  qualifiedName: string;
+  server: string;
+  name: string;
+  description?: string;
+  arguments: readonly McpPromptArgumentView[];
+}
+
+export interface McpPromptResolution {
+  qualifiedName: string;
+  server: string;
+  prompt: string;
+  description?: string;
+  text: string;
+  attachments?: import('./tools').Attachment[];
+}
+
 export interface McpManagedServer {
   name: string;
   transport: 'stdio' | 'http';
@@ -46,8 +70,12 @@ export interface McpManagedServer {
     id?: string;
     packageName?: string;
     version?: string;
+    integrity?: string;
+    previousVersion?: string;
+    rollbackCount?: number;
   };
   toolCount: number;
+  promptCount?: number;
   tools: {name: string; description: string}[];
   endpoint?: string;
   diagnostic?: string;
@@ -84,7 +112,16 @@ export type McpManagementAction =
       lockfile?: unknown;
       bin?: string;
       catalogId?: string;
-    };
+    }
+  | {
+      type: 'update';
+      name: string;
+      version: string;
+      integrity?: string;
+      lockfile?: unknown;
+      bin?: string;
+    }
+  | {type: 'rollback'; name: string};
 export interface McpManagementResult {
   snapshot: McpManagerSnapshot;
   message?: string;

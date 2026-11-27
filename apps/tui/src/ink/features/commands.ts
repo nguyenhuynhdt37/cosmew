@@ -74,6 +74,30 @@ export async function routeCommand(host: CommandHost, raw: string): Promise<bool
   const typed = raw.trim().split(/\s+/)[0]!.toLowerCase();
   const parsed = parseSlashCommand(raw);
   if (parsed.error) {
+    if (client.isMcpPromptCommand?.(raw)) {
+      if (host.busy()) {
+        host.notice('Cancel the active response with Esc before running an MCP prompt.');
+        return;
+      }
+      try {
+        await host.beforeWork?.();
+        const resolved = await client.resolveMcpPrompt(raw, host.signal);
+        if (resolved.attachments?.length) client.stagePromptAttachments(resolved.attachments);
+        const submitted = await host.submit(resolved.text, raw.trim());
+        if (!submitted) client.clearPromptAttachments();
+        return submitted;
+      } catch (error) {
+        client.clearPromptAttachments();
+        host.notice(
+          host.signal?.aborted
+            ? 'Command cancelled.'
+            : error instanceof FutrynError && error.message
+              ? error.message
+              : `MCP prompt failed [${error instanceof FutrynError ? error.code : 'ERROR'}].`,
+        );
+        return;
+      }
+    }
     if (client.isSkillCommand(raw)) return host.submit(raw);
     const skill = client.skillForCommand?.(raw);
     host.notice(skill?.visibility === 'off' ? `Skill /${skill.name} is disabled in /skills.` : parsed.error);

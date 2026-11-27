@@ -2,7 +2,7 @@
 import {useTerminalSize} from '../../hooks/use-terminal-size';
 import {useState} from 'react';
 import {Box} from 'ink';
-import {SLASH_COMMANDS, normalizeSlashCommandName, type FutrynClient} from '@cosmew/sdk';
+import {SLASH_COMMANDS, normalizeSlashCommandName, type FutrynClient, type McpPromptView} from '@cosmew/sdk';
 import {Pointer, TextLine, safeText} from '../../ui';
 import {graphemes, textWidth, wrapWords} from '../../../input/text';
 import {useUiTheme} from '../../ui/ui-theme';
@@ -12,7 +12,7 @@ export interface Completion {
   label: string;
   description: string;
   replacement: string;
-  kind: 'command' | 'skill' | 'file' | 'emoji';
+  kind: 'command' | 'skill' | 'mcp-prompt' | 'file' | 'emoji';
   /** Fuzzy matches remain selectable but need an explicit Tab or arrow key. */
   autoSelect?: boolean;
 }
@@ -50,6 +50,7 @@ export function getCompletions(
   context: CompletionContext | null,
   skills: ReturnType<FutrynClient['skills']>['skills'] = [],
   files: readonly string[] = [],
+  mcpPrompts: readonly McpPromptView[] = [],
 ): Completion[] {
   if (!context) return [];
   const q = context.query.toLowerCase();
@@ -98,7 +99,23 @@ export function getCompletions(
           },
         ];
       });
-  return [...commands, ...skillItems.map(item => ({names: [item.label], item}))]
+  const mcpPromptItems = context.previousSkills
+    ? []
+    : mcpPrompts.map(prompt => {
+        const label = `/${prompt.qualifiedName}`;
+        const argHint = prompt.arguments.map(a => (a.required ? `<${a.name}>` : `[${a.name}]`)).join(' ');
+        const desc = [prompt.description || `MCP prompt (${prompt.server})`, argHint].filter(Boolean).join(' · ');
+        return {
+          names: [label, `/${prompt.name}`],
+          item: {
+            label,
+            description: desc,
+            replacement: prompt.arguments.length ? `${label} ` : label,
+            kind: 'mcp-prompt' as const,
+          },
+        };
+      });
+  return [...commands, ...mcpPromptItems, ...skillItems.map(item => ({names: [item.label], item}))]
     .map(({names, item}) => ({
       item,
       rank: Math.min(
@@ -219,7 +236,9 @@ export function Autocomplete({items, selected = 0, visibleRows = 5, width}: Auto
             <Pointer selected={active} />
             <TextLine
               width={nameWidth}
-              color={active ? tint : ui.color(item.kind === 'skill' ? 'thinking' : 'command')}
+              color={
+                active ? tint : ui.color(item.kind === 'skill' || item.kind === 'mcp-prompt' ? 'thinking' : 'command')
+              }
               wrap="truncate-end"
             >
               {safeText(item.label)}

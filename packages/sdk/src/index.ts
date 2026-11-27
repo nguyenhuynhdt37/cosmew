@@ -32,4 +32,7 @@ export type {
   McpManagerSnapshot,
   McpManagementAction,
   McpManagementResult,
+  McpPromptArgumentView,
+  McpPromptView,
+  McpPromptResolution,
 } from '@cosmew/contracts';

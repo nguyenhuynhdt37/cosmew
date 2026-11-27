@@ -1,4 +1,5 @@
 import type {
+  Attachment,
   ToolResult,
   ToolOutputArchive,
   OutputArchiveScope,
@@ -149,7 +150,7 @@ export interface ToolDispatcherOptions {
       name: string,
       args: Record<string, unknown>,
       signal?: AbortSignal,
-    ): Promise<string | {text: string; isError?: boolean}>;
+    ): Promise<string | {text: string; isError?: boolean; attachments?: Attachment[]}>;
     servers?(): readonly {name: string; identity: string}[];
     listResources?(
       server: string,
@@ -176,7 +177,11 @@ export interface ToolDispatcherOptions {
         mimeType?: string;
       }[]
     >;
-    readResource?(server: string, uri: string, signal?: AbortSignal): Promise<string>;
+    readResource?(
+      server: string,
+      uri: string,
+      signal?: AbortSignal,
+    ): Promise<string | {text: string; attachments?: Attachment[]}>;
   };
   /**
    * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it
