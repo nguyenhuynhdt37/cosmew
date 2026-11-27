@@ -122,8 +122,7 @@ const addCounter = (a: number | null | undefined, b: number | null | undefined) 
   a == null || b == null ? null : a + b;
 const addOptionalCounter = (a: number | null | undefined, b: number | null | undefined): number | null | undefined => {
   if (a === undefined && b === undefined) return undefined;
-  if (a === null || b === null) return null;
-  return (a ?? 0) + (b ?? 0);
+  return a == null || b == null ? null : a + b;
 };
 const optionalCounterEntry = <K extends string>(key: K, a: number | null | undefined, b: number | null | undefined) => {
   const sum = addOptionalCounter(a, b);

@@ -340,3 +340,35 @@ test('terminal mouse facade forwards selection, copied notifications, and resets
   source.destroy();
   output.destroy();
 });
+
+test('a press without release does not block subsequent wheel events, and non-mouse keyboard input resets stale drag state', () => {
+  const parser = new MouseInputFilter();
+  const wheels: TerminalWheel[] = [];
+  const selections: TerminalSelectionEvent[] = [];
+  let resets = 0;
+
+  // Click press without release (e.g. lost focus or click-only SGR sequence) must not trap wheel events.
+  parser.feed(
+    '\x1b[<0;100;6M\x1b[<65;100;15M',
+    e => wheels.push(e),
+    undefined,
+    e => selections.push(e),
+    () => resets++,
+  );
+  expect(wheels).toEqual([{direction: 1, column: 100, row: 15}]);
+  expect(resets).toBe(1);
+
+  // Active drag still suppresses wheel, and a keyboard key cancels stale drag and emits selection reset.
+  wheels.length = 0;
+  resets = 0;
+  const out = parser.feed(
+    '\x1b[<0;4;2M\x1b[<32;10;2M\x1b[<65;10;2M\r\x1b[<64;10;2M',
+    e => wheels.push(e),
+    undefined,
+    e => selections.push(e),
+    () => resets++,
+  );
+  expect(out).toBe('\r');
+  expect(resets).toBe(1);
+  expect(wheels).toEqual([{direction: -1, column: 10, row: 2}]);
+});

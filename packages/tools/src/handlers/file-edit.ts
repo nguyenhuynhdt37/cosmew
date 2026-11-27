@@ -80,10 +80,13 @@ export function replaceText(
 ): string {
   let {old_string: from, new_string: to} = input;
   if (from === to) throw new PatchError('EDIT_NO_CHANGE', 'old_string and new_string are identical; nothing to edit.');
+  const crlfFile = before.includes('\r\n') && !/(?<!\r)\n/.test(before);
   // Read output shows LF; match a CRLF file by translating both sides, so the file keeps its line endings.
   if (!before.includes(from) && before.includes('\r\n') && from.includes('\n') && !from.includes('\r')) {
     from = from.replace(/\n/g, '\r\n');
     to = to.replace(/\r?\n/g, '\r\n');
+  } else if (crlfFile && to.includes('\n') && !to.includes('\r')) {
+    to = to.replace(/\n/g, '\r\n');
   }
   const count = occurrences(before, from);
   if (count === 0)

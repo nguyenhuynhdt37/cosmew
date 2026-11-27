@@ -2,7 +2,7 @@ import {afterEach, expect, spyOn, test} from 'bun:test';
 import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {providerSchema, ProviderBillingError} from '@cosmew/contracts';
+import {CONTRACT_VERSION, providerSchema, ProviderBillingError} from '@cosmew/contracts';
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {redactJsonValue, runExec} from '../../apps/cli/src/exec';
 import {memoryVault, scriptedView, type ScriptedView} from '../fixtures';
@@ -162,7 +162,7 @@ test('headless runner uses real dispatcher, JSONL order and final response outpu
     .split('\n')
     .map(line => JSON.parse(line));
   expect(events.map(e => e.seq)).toEqual(events.map((_, i) => i + 1));
-  expect(events.every(e => e.contractVersion === '1.63')).toBe(true);
+  expect(events.every(e => e.contractVersion === CONTRACT_VERSION)).toBe(true);
   expect(events.some(e => e.type === 'toolResult' && e.result.content.includes('real file'))).toBe(true);
   expect(events.at(-1).type).toBe('turn.completed');
   expect(readFileSync(join(x.root, 'last.txt'), 'utf8')).toBe('FINAL [REDACTED]\n');

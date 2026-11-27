@@ -272,20 +272,34 @@ export function splitRuleList(values: readonly string[]): {rules: string[]; inva
   return {rules, invalid};
 }
 
+function matchWildcard(pattern: string, text: string): boolean {
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let backtrack = 0;
+  while (t < text.length) {
+    if (p < pattern.length && pattern[p] === '*') {
+      star = p++;
+      backtrack = t;
+    } else if (p < pattern.length && pattern[p] === text[t]) {
+      p++;
+      t++;
+    } else if (star !== -1) {
+      p = star + 1;
+      t = ++backtrack;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === '*') p++;
+  return p === pattern.length;
+}
+
 /** Does a command match one `sandbox.excludedCommands` entry (`git`, `docker:*`, `npm run *`)? */
 export function matchesExcludedCommand(pattern: string, command: string): boolean {
   const text = command.trim();
   const head = pattern.endsWith(':*') ? pattern.slice(0, -2) : pattern;
-  if (head.includes('*')) {
-    return new RegExp(
-      '^' +
-        head
-          .split('*')
-          .map(part => part.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-          .join('.*') +
-        '$',
-    ).test(text);
-  }
+  if (head.includes('*')) return matchWildcard(head, text);
   return text === head || text.startsWith(head + ' ');
 }
 

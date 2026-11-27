@@ -5,6 +5,7 @@ import {
   assembleHandoff,
   modelSnapshot,
   modelSnapshotMessages,
+  retainedUserBudget,
   retainRecentUserMessages,
   summarizeWithModel,
 } from '../context/model-compaction';
@@ -57,7 +58,11 @@ export async function compactConversation(
       },
     });
     const handoff = assembleHandoff(summary.text, visible, store.loadPlan?.(host.id));
-    const snapshot = modelSnapshot(normalized, handoff, retainRecentUserMessages(normalized));
+    const snapshot = modelSnapshot(
+      normalized,
+      handoff,
+      retainRecentUserMessages(normalized, retainedUserBudget(window)),
+    );
     const tokensAfter = estimateContextTokens(modelSnapshotMessages(snapshot));
     if (tokensAfter >= tokensBefore) return unchanged('not_needed', usage);
     store.saveContextSnapshot?.(host.id, snapshot);

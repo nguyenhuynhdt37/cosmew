@@ -113,7 +113,10 @@ export function parseFetchUrl(input: string): URL {
   }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new FutrynError('POLICY');
   url.hash = '';
-  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  const host = url.hostname
+    .replace(/^\[|\]$/g, '')
+    .toLowerCase()
+    .replace(/\.+$/, '');
   if (
     host === 'localhost' ||
     host.endsWith('.localhost') ||
@@ -164,8 +167,21 @@ export function requestPinned(
       reject(new FutrynError('CANCELLED'));
       return;
     }
+    let settled = false;
     let receivedHeaders = false;
     let connectTimer: ReturnType<typeof setTimeout> | undefined;
+    const finishResolve = (value: WebResponse) => {
+      if (settled) return;
+      settled = true;
+      if (connectTimer) clearTimeout(connectTimer);
+      resolve(value);
+    };
+    const finishReject = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      if (connectTimer) clearTimeout(connectTimer);
+      reject(error);
+    };
     const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(
       url,
       {
@@ -193,14 +209,15 @@ export function requestPinned(
         const status = response.statusCode ?? 0;
         // Redirect bodies do not matter and could be endless. Do not read them.
         if ([301, 302, 303, 307, 308].includes(status)) {
-          resolve({status, headers: response.headers, body: new Uint8Array()});
+          finishResolve({status, headers: response.headers, body: new Uint8Array()});
           response.destroy();
           return;
         }
         const length = Number(response.headers['content-length']);
-        const encoding = response.headers['content-encoding'];
+        const rawEncoding = response.headers['content-encoding'];
+        const encoding = (Array.isArray(rawEncoding) ? rawEncoding.join(',') : rawEncoding)?.trim().toLowerCase();
         if ((Number.isFinite(length) && length > MAX_WEB_BODY_BYTES) || (encoding && encoding !== 'identity')) {
-          reject(new FutrynError('PROTOCOL'));
+          finishReject(new FutrynError('PROTOCOL'));
           response.destroy();
           return;
         }
@@ -209,20 +226,22 @@ export function requestPinned(
         response.on('data', (chunk: Buffer) => {
           total += chunk.length;
           if (total > MAX_WEB_BODY_BYTES) {
-            reject(new FutrynError('PROTOCOL'));
+            finishReject(new FutrynError('PROTOCOL'));
             response.destroy();
             return;
           }
           chunks.push(chunk);
         });
-        response.on('end', () => resolve({status, headers: response.headers, body: Buffer.concat(chunks)}));
-        response.on('error', () => reject(new FutrynError('TRANSPORT')));
-        response.on('aborted', () => reject(new FutrynError('TRANSPORT')));
+        response.on('end', () => finishResolve({status, headers: response.headers, body: Buffer.concat(chunks)}));
+        response.on('error', () => finishReject(new FutrynError('TRANSPORT')));
+        response.on('aborted', () => finishReject(new FutrynError('TRANSPORT')));
+        response.on('close', () => {
+          if (!settled && !response.complete) finishReject(new FutrynError('TRANSPORT'));
+        });
       },
     );
     request.on('error', (error: NodeJS.ErrnoException) => {
-      if (connectTimer) clearTimeout(connectTimer);
-      reject(
+      finishReject(
         signal.aborted
           ? new FutrynError('CANCELLED')
           : !receivedHeaders && CONNECTION_ERRORS.has(error.code ?? '')

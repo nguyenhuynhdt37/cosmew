@@ -13,15 +13,25 @@ export function useTerminalWheel(handler: (event: TerminalWheel) => void, isActi
   latest.current = {handler, isActive};
   useEffect(() => {
     if (!source) return;
-    let selecting = false;
+    let anchor: {column: number; row: number} | null = null;
+    let dragging = false;
+    const reset = () => {
+      anchor = null;
+      dragging = false;
+    };
     const unsubSelection = source.subscribeSelection?.(event => {
-      selecting = event.phase !== 'end';
+      if (event.phase === 'start') {
+        anchor = {column: event.column, row: event.row};
+        dragging = false;
+      } else if (event.phase === 'move') {
+        if (anchor && (event.column !== anchor.column || event.row !== anchor.row)) dragging = true;
+      } else {
+        reset();
+      }
     });
-    const unsubReset = source.subscribeSelectionReset?.(() => {
-      selecting = false;
-    });
+    const unsubReset = source.subscribeSelectionReset?.(reset);
     const unsubWheel = source.subscribe(event => {
-      if (latest.current.isActive && !selecting) latest.current.handler(event);
+      if (latest.current.isActive && !dragging) latest.current.handler(event);
     });
     return () => {
       unsubWheel();

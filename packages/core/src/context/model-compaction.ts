@@ -51,6 +51,30 @@ export interface SummaryResult {
   usage: Usage | null;
 }
 
+const TRUNCATED_USER_SUFFIX = '\n[user message truncated by compaction]';
+
+/** Scale retained user-message budget to the usable context window so small models can still compact. */
+export function retainedUserBudget(window: number): number {
+  return Math.min(COMPACT_USER_MESSAGE_MAX_TOKENS, Math.max(256, Math.floor(window * 0.25)));
+}
+
+function sliceUtf8Prefix(text: string, maxBytes: number): string {
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.byteLength <= maxBytes) return text;
+  let end = Math.max(0, maxBytes);
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function stripAttachmentsForCompaction(messages: readonly Message[]): Message[] {
+  return messages.map(message => {
+    if (!message.attachments?.length) return message;
+    const {attachments: _attachments, ...rest} = message;
+    const note = `[${message.attachments.length} attachment(s) omitted for compaction]`;
+    return {...rest, content: rest.content ? `${rest.content}\n${note}` : note};
+  });
+}
+
 /** Ask the current model for a handoff summary of `visible`. Throws on any failure; the caller falls back. */
 export async function summarizeWithModel(input: {
   model: ModelPort;
@@ -74,15 +98,20 @@ export async function summarizeWithModel(input: {
   ]
     .filter(Boolean)
     .join('\n');
-  const original: Message[] = [...visible, {role: 'user', content: prompt}];
-  let messages: Message[] | undefined = estimateContextTokens(original) <= window * 0.95 ? original : undefined;
-  for (const limit of SUMMARIZER_TOOL_LIMITS) {
-    if (messages) break;
-    const candidate = [...truncateToolResults(visible, limit), {role: 'user', content: prompt} as Message];
-    if (estimateContextTokens(candidate) <= window * 0.95) {
-      messages = candidate;
-      break;
+  const fits = (candidate: Message[]) => estimateContextTokens(candidate) <= window * 0.95;
+  const selectFitting = (source: readonly Message[]): Message[] | undefined => {
+    const full: Message[] = [...source, {role: 'user', content: prompt}];
+    if (fits(full)) return full;
+    for (const limit of SUMMARIZER_TOOL_LIMITS) {
+      const candidate = [...truncateToolResults(source, limit), {role: 'user', content: prompt} as Message];
+      if (fits(candidate)) return candidate;
     }
+    return undefined;
+  };
+  let messages = selectFitting(visible);
+  if (!messages && visible.some(message => message.attachments?.length)) {
+    // Media tokens can dominate history even after text truncation; drop binary attachments as a fallback.
+    messages = selectFitting(stripAttachmentsForCompaction(visible));
   }
   // Even with tightly truncated tool output the history does not fit: no safe model call exists.
   if (!messages) throw new FutrynError('CONTEXT_LIMIT');
@@ -189,8 +218,10 @@ export function retainRecentUserMessages(
       kept.push(message.content);
       remaining -= tokens;
     } else {
-      // About 3 bytes per estimated token; keep the beginning of the oversized message.
-      kept.push(message.content.slice(0, Math.max(1, remaining * 2)) + '\n[user message truncated by compaction]');
+      // Estimate ~3 UTF-8 bytes per token and cut on a valid UTF-8 code-point boundary.
+      const suffixBytes = Buffer.byteLength(TRUNCATED_USER_SUFFIX, 'utf8');
+      const maxBytes = Math.max(1, remaining * 3 - suffixBytes - 4);
+      kept.push(sliceUtf8Prefix(message.content, maxBytes) + TRUNCATED_USER_SUFFIX);
       remaining = 0;
     }
   }

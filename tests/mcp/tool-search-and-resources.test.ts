@@ -318,4 +318,83 @@ describe('MCP resources & templates (mcp_resource)', () => {
     expect(await hub.listResources('nores')).toEqual([]);
     expect(await hub.listResourceTemplates('nores')).toEqual([]);
   });
+
+  test('mcp_resource and MCP tools revalidate server identity and permission mode after pending approval (TOCTOU guard)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-res-toctou-'));
+    cleanups.push(() => rmSync(root, {recursive: true, force: true}));
+    let identity = 'srv-v1';
+    let permissionMode: 'default' | 'plan' = 'default';
+    let readCount = 0;
+    let callCount = 0;
+    let mutateDuringApproval: () => void = () => {};
+    const dispatcher = new ToolDispatcher({
+      workspace: new WorkspaceRoot(root),
+      grants: new SessionGrants(),
+      sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, readOnly: false, permissionMode}),
+      approve: async () => {
+        mutateDuringApproval();
+        return 'once';
+      },
+      redact: t => t,
+      mcp: {
+        tools: () => [
+          {
+            name: 'mcp__docs__ping',
+            description: 'Ping docs server',
+            inputSchema: {type: 'object', properties: {}, additionalProperties: false},
+            identity,
+          },
+        ],
+        call: async () => {
+          callCount++;
+          return 'pong';
+        },
+        servers: () => [{name: 'docs', identity}],
+        listResources: async () => [],
+        listResourceTemplates: async () => [],
+        readResource: async () => {
+          readCount++;
+          return 'resource-body';
+        },
+      },
+    });
+
+    // Server reconnects with a new identity while mcp_resource approval is pending -> denied, never executed.
+    mutateDuringApproval = () => {
+      identity = 'srv-v2';
+    };
+    const changed = await dispatcher.invoke({
+      id: 'res-toctou-identity',
+      name: 'mcp_resource',
+      input: {action: 'read', server: 'docs', uri: 'docs://readme'},
+    });
+    expect(changed.status).toBe('denied');
+    expect(readCount).toBe(0);
+
+    // Switching to plan mode while MCP tool approval is pending -> denied with MODE_RESTRICTED, never executed.
+    mutateDuringApproval = () => {
+      permissionMode = 'plan';
+    };
+    const toolPlanDenied = await dispatcher.invoke({
+      id: 'tool-toctou-plan',
+      name: 'mcp__docs__ping',
+      input: {},
+    });
+    expect(toolPlanDenied.status).toBe('denied');
+    expect(toolPlanDenied.code).toBe('MODE_RESTRICTED');
+    expect(callCount).toBe(0);
+
+    // Switching to plan mode while mcp_resource approval is pending -> blocked before execution.
+    permissionMode = 'default';
+    mutateDuringApproval = () => {
+      permissionMode = 'plan';
+    };
+    const resPlanBlocked = await dispatcher.invoke({
+      id: 'res-toctou-plan',
+      name: 'mcp_resource',
+      input: {action: 'read', server: 'docs', uri: 'docs://readme'},
+    });
+    expect(resPlanBlocked.status).not.toBe('ok');
+    expect(readCount).toBe(0);
+  });
 });

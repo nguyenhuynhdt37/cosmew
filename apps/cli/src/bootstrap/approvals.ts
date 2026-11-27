@@ -224,7 +224,15 @@ export function toolPermissionRequest(request: ApprovalRequest, subagent?: Subag
 export function grantLabel(grant: {capability: string; target: string}, workspace: WorkspaceRoot): string {
   if (grant.capability === 'process.execute') return commandGrantLabel(grant.target, workspace);
   if (grant.capability === 'fs.write') return 'Exact patch ' + grant.target.slice(6, 18);
-  return workspace.relativeOf(grant.target);
+  if (grant.capability === 'mcp.call') {
+    const colon = grant.target.indexOf(':');
+    return `MCP ${colon > 0 ? grant.target.slice(0, colon) : grant.target}`;
+  }
+  if (grant.capability === 'network.connect' || grant.capability === 'network.search') {
+    return grant.target;
+  }
+  const rel = workspace.relativeOf(grant.target);
+  return rel.startsWith('..') ? grant.target : rel;
 }
 
 /** `$ cmd` (plus `in dir` when not the root) for a session command grant. */

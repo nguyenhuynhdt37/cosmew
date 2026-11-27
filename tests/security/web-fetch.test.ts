@@ -432,3 +432,50 @@ test('DNS64/NAT64 64:ff9b::/96 answers embedding public IPv4 are skipped when pu
   });
   expect(blockedAttempts).toBe(0);
 });
+
+test('parseFetchUrl rejects trailing-dot local/internal FQDNs and requestPinned handles case-insensitive identity and premature socket close', async () => {
+  for (const url of [
+    'http://localhost./',
+    'http://sub.localhost./path',
+    'http://printer.local./',
+    'http://metadata.google.internal./computeMetadata/v1/',
+    'http://127.0.0.1./',
+  ]) {
+    expect(() => parseFetchUrl(url)).toThrow();
+  }
+
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch() {
+      return new Response('ok-identity', {headers: {'content-encoding': 'Identity', 'content-type': 'text/plain'}});
+    },
+  });
+  cleanup.push(() => server.stop(true));
+  const ok = await requestPinned(
+    new URL(`http://fixture.invalid:${server.port}/`),
+    {address: '127.0.0.1', family: 4},
+    new AbortController().signal,
+  );
+  expect(ok.status).toBe(200);
+  expect(Buffer.from(ok.body).toString()).toBe('ok-identity');
+
+  // Raw TCP server that sends headers with Content-Length: 100 then abruptly closes after 4 bytes.
+  const {createServer} = await import('node:net');
+  const rawServer = createServer(socket => {
+    socket.once('data', () => {
+      socket.write('HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 100\r\n\r\npart');
+      socket.destroy();
+    });
+  });
+  await new Promise<void>(resolve => rawServer.listen(0, '127.0.0.1', resolve));
+  const port = (rawServer.address() as {port: number}).port;
+  cleanup.push(() => new Promise<void>(resolve => rawServer.close(() => resolve())));
+  await expect(
+    requestPinned(
+      new URL(`http://fixture.invalid:${port}/`),
+      {address: '127.0.0.1', family: 4},
+      AbortSignal.timeout(2000),
+    ),
+  ).rejects.toMatchObject({code: 'TRANSPORT'});
+});

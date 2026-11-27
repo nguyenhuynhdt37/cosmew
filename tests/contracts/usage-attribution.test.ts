@@ -153,20 +153,40 @@ test('combineUsage preserves optional counters across undefined, numeric and exp
     },
     identity,
   );
+  const withOptionalSecond = attributeUsage(
+    {
+      inputTokens: 30,
+      outputTokens: 25,
+      costUSD: 0.03,
+      cacheReadTokens: 40,
+      reasoningTokens: 5,
+    },
+    identity,
+  );
 
-  // Merging undefined optional counters with reported numbers keeps the reported numbers (never turns into null).
+  // When every request reports the optional counter, totals add cleanly.
+  const bothReported = combineUsage(withOptional, withOptionalSecond);
+  expect(bothReported.cacheReadTokens).toBe(120);
+  expect(bothReported.reasoningTokens).toBe(15);
+  expect(bothReported.breakdown?.[0]?.cacheReadTokens).toBe(120);
+  expect(bothReported.breakdown?.[0]?.reasoningTokens).toBe(15);
+  expect('cacheWriteTokens' in bothReported).toBe(false);
+  expect('premiumRequests' in bothReported).toBe(false);
+  expect(usageSchema.safeParse(bothReported).success).toBe(true);
+
+  // When one request omits an optional counter and another reports it, the aggregate remains unknown (null).
   const mergedForward = combineUsage(withoutOptional, withOptional);
-  expect(mergedForward.cacheReadTokens).toBe(80);
-  expect(mergedForward.reasoningTokens).toBe(10);
-  expect(mergedForward.breakdown?.[0]?.cacheReadTokens).toBe(80);
-  expect(mergedForward.breakdown?.[0]?.reasoningTokens).toBe(10);
+  expect(mergedForward.cacheReadTokens).toBeNull();
+  expect(mergedForward.reasoningTokens).toBeNull();
+  expect(mergedForward.breakdown?.[0]?.cacheReadTokens).toBeNull();
+  expect(mergedForward.breakdown?.[0]?.reasoningTokens).toBeNull();
   expect('cacheWriteTokens' in mergedForward).toBe(false);
   expect('premiumRequests' in mergedForward).toBe(false);
   expect(usageSchema.safeParse(mergedForward).success).toBe(true);
 
   const mergedReverse = combineUsage(withOptional, withoutOptional);
-  expect(mergedReverse.cacheReadTokens).toBe(80);
-  expect(mergedReverse.reasoningTokens).toBe(10);
+  expect(mergedReverse.cacheReadTokens).toBeNull();
+  expect(mergedReverse.reasoningTokens).toBeNull();
 
   // Merging two usages whose optional counters are both undefined never invents null keys.
   const bothUndefined = combineUsage(
@@ -182,19 +202,25 @@ test('combineUsage preserves optional counters across undefined, numeric and exp
 
   // When either side explicitly reports null, null is preserved.
   const explicitNullLeft = combineUsage(
-    attributeUsage({inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null}, identity),
+    attributeUsage(
+      {inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null, reasoningTokens: 7},
+      identity,
+    ),
     withOptional,
   );
   expect(explicitNullLeft.cacheReadTokens).toBeNull();
-  expect(explicitNullLeft.reasoningTokens).toBe(10);
+  expect(explicitNullLeft.reasoningTokens).toBe(17);
   expect(explicitNullLeft.breakdown?.[0]?.cacheReadTokens).toBeNull();
   expect(usageSchema.safeParse(explicitNullLeft).success).toBe(true);
 
   const explicitNullRight = combineUsage(
     withOptional,
-    attributeUsage({inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null}, identity),
+    attributeUsage(
+      {inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null, reasoningTokens: 7},
+      identity,
+    ),
   );
   expect(explicitNullRight.cacheReadTokens).toBeNull();
-  expect(explicitNullRight.reasoningTokens).toBe(10);
+  expect(explicitNullRight.reasoningTokens).toBe(17);
   expect(usageSchema.safeParse(explicitNullRight).success).toBe(true);
 });

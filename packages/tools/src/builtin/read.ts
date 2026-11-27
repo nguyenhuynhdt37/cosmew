@@ -195,12 +195,25 @@ function listDirectory(
   const offset = input.offset ?? 1;
   const limit = input.limit ?? LIMITS.readLines;
   const selected = entries.slice(offset - 1, offset - 1 + limit).map(e => e.name + (e.directory ? '/' : ''));
-  const header = selected.length
-    ? `Directory ${file.relative}: entries ${offset}-${offset + selected.length - 1} of ${entries.length}`
+  // Page on whole entry lines so a byte cut never truncates an entry name or skips it on continuation.
+  const page: string[] = [];
+  const worstHeaderBytes = Buffer.byteLength(
+    `Directory ${file.relative}: entries ${offset}-${offset + Math.max(0, selected.length - 1)} of ${entries.length}`,
+    'utf8',
+  );
+  let bytes = worstHeaderBytes;
+  for (const entry of selected) {
+    const cost = Buffer.byteLength(entry, 'utf8') + 1;
+    if (page.length > 0 && bytes + cost > LIMITS.readOutputBytes) break;
+    page.push(entry);
+    bytes += cost;
+  }
+  const header = page.length
+    ? `Directory ${file.relative}: entries ${offset}-${offset + page.length - 1} of ${entries.length}`
     : `Directory ${file.relative}: ${entries.length} entries`;
-  const clipped = clipBytes([header, ...selected].join('\n'), LIMITS.readOutputBytes);
-  const shown = clipped.text.split('\n').length - 1;
-  const more = clipped.clipped || offset - 1 + selected.length < entries.length;
+  const clipped = clipBytes([header, ...page].join('\n'), LIMITS.readOutputBytes);
+  const shown = page.length;
+  const more = clipped.clipped || offset - 1 + shown < entries.length;
   return {
     ok: true,
     content: clipped.text + (more ? `\n\n[continue with offset ${offset + shown}]` : ''),

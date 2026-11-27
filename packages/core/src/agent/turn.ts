@@ -28,6 +28,7 @@ import {
   assembleHandoff,
   modelSnapshot,
   modelSnapshotMessages,
+  retainedUserBudget,
   retainRecentUserMessages,
   summarizeWithModel,
 } from '../context/model-compaction';
@@ -354,8 +355,10 @@ export class TurnRun {
   private async *deliverSteering(): AsyncGenerator<ModelEvent> {
     const {state, store, id} = this.host;
     while (this.turn.pending.length) {
-      const item = this.turn.pending.shift()!;
+      const item = this.turn.pending[0]!;
       const skillBodies = (await this.host.options.skills?.loadPrompt(item.message.content, this.signal)) ?? [];
+      this.signal.throwIfAborted();
+      this.turn.pending.shift();
       this.projectMessages.push(...skillBodies.map(content => messageSchema.parse({role: 'user', content})));
       this.steps.push(item.message);
       if (state.task) {
@@ -561,7 +564,7 @@ export class TurnRun {
     const before = estimateTokens(input);
 
     if (inTurn) {
-      const retained = retainRecentUserMessages(input);
+      const retained = retainRecentUserMessages(input, retainedUserBudget(this.window));
       let messages = modelSnapshotMessages({summary: handoff, retainedUserRequests: retained});
       // Keep the newest completed evidence round verbatim when it leaves ample headroom. Retain
       // the whole assistant/result group or nothing; never create orphaned tool messages.
@@ -581,7 +584,11 @@ export class TurnRun {
       this.base = {messages, consumed: this.steps.length};
       return {visible};
     }
-    const snapshot = modelSnapshot(normalized, handoff, retainRecentUserMessages(normalized));
+    const snapshot = modelSnapshot(
+      normalized,
+      handoff,
+      retainRecentUserMessages(normalized, retainedUserBudget(this.window)),
+    );
     if (estimateTokens(modelSnapshotMessages(snapshot)) >= before) throw new FutrynError('CONTEXT_LIMIT');
     state.snapshot = snapshot;
     store.saveContextSnapshot?.(host.id, snapshot);

@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {dirname, join} from 'node:path';
@@ -164,15 +165,22 @@ export class FilePermissionSettings implements PermissionSettingsPort {
     return this.options.store.read().trustedProjectSettings?.[path] ?? [];
   }
 
-  private isTrusted(loaded: Loaded): boolean {
+  private isPersistentlyTrusted(loaded: Loaded): boolean {
     if (loaded.scope === 'user') return true;
     // A missing, empty or purely tightening file has nothing to approve; it is trusted by construction.
     return (
       !loaded.exists ||
       describeLoosening(loaded.file).length === 0 ||
-      this.trustedHashes(loaded.path).includes(loaded.hash) ||
-      this.sessionTrusted.has(`${loaded.path}\0${loaded.hash}`)
+      this.trustedHashes(loaded.path).includes(loaded.hash)
     );
+  }
+
+  private isSessionTrusted(loaded: Loaded): boolean {
+    return loaded.scope !== 'user' && this.sessionTrusted.has(`${loaded.path}\0${loaded.hash}`);
+  }
+
+  private isTrusted(loaded: Loaded): boolean {
+    return this.isPersistentlyTrusted(loaded) || this.isSessionTrusted(loaded);
   }
 
   snapshot(): PermissionSettingsSnapshot {
@@ -262,17 +270,21 @@ export class FilePermissionSettings implements PermissionSettingsPort {
         throw new FutrynError('INVALID_INPUT');
       }
     }
-    const wasTrusted = this.isTrusted(before);
+    const wasPersistentlyTrusted = this.isPersistentlyTrusted(before);
+    const wasSessionTrusted = !wasPersistentlyTrusted && this.isSessionTrusted(before);
     change(raw);
     const text = JSON.stringify(raw, null, 2) + '\n';
     mkdirSync(dirname(path), {recursive: true, mode: 0o700});
-    const temporary = `${path}.${process.pid}.tmp`;
+    const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
     writeFileSync(temporary, text, {mode: 0o600});
     renameSync(temporary, path);
     this.cache.delete(path);
-    // The user just authored this change, so the result is theirs - unless the file already held
-    // content nobody approved: then the new hash stays untrusted and the user is asked about all of it.
-    if (scope !== 'user' && wasTrusted) this.trust(path, settingsHash(text), true);
+    // Preserve the existing trust scope: never silently promote session-only trust into persistent trust,
+    // and never auto-trust a file that previously held unapproved loosening entries.
+    if (scope !== 'user') {
+      if (wasPersistentlyTrusted) this.trust(path, settingsHash(text), true);
+      else if (wasSessionTrusted) this.trust(path, settingsHash(text), false);
+    }
   }
 
   addRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void {

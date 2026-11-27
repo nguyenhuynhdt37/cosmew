@@ -28,6 +28,7 @@ export class MouseInputFilter {
   private string = false;
   private stringEscape = false;
   private leftPressed = false;
+  private dragging = false;
 
   get hasPending(): boolean {
     return this.pending.length > 0;
@@ -36,7 +37,7 @@ export class MouseInputFilter {
     return this.paste || this.pending.startsWith('\x1b[<') || this.pending.startsWith('\x1b[M');
   }
   get isSelecting(): boolean {
-    return this.leftPressed;
+    return this.leftPressed || this.dragging;
   }
   flush(): string {
     const text = this.pending;
@@ -44,23 +45,31 @@ export class MouseInputFilter {
     return text;
   }
   resetSelection(): boolean {
-    const wasSelecting = this.leftPressed;
+    const wasSelecting = this.leftPressed || this.dragging;
     this.leftPressed = false;
+    this.dragging = false;
     return wasSelecting;
   }
   reset(): void {
     this.pending = '';
-    this.paste = this.string = this.stringEscape = this.leftPressed = false;
+    this.paste = this.string = this.stringEscape = this.leftPressed = this.dragging = false;
   }
   feed(
     chunk: string,
     onWheel: (event: TerminalWheel) => void,
     onClick?: (event: TerminalClick) => void,
     onSelection?: (event: TerminalSelectionEvent) => void,
+    onSelectionReset?: () => void,
   ): string {
     const text = this.pending + chunk;
     this.pending = '';
     let output = '';
+    const cancelStaleSelection = () => {
+      if (!this.leftPressed && !this.dragging) return;
+      this.leftPressed = false;
+      this.dragging = false;
+      onSelectionReset?.();
+    };
     for (let at = 0; at < text.length;) {
       const char = text[at]!;
       if (this.paste) {
@@ -83,6 +92,7 @@ export class MouseInputFilter {
         continue;
       }
       if (char !== '\x1b') {
+        cancelStaleSelection();
         output += char;
         at++;
         continue;
@@ -100,6 +110,7 @@ export class MouseInputFilter {
         continue;
       }
       if (next !== '[') {
+        cancelStaleSelection();
         output += char;
         at++;
         continue;
@@ -117,10 +128,11 @@ export class MouseInputFilter {
           if (button === 3) {
             if (this.leftPressed) {
               this.leftPressed = false;
+              this.dragging = false;
               onSelection?.({phase: 'end', column, row});
             }
           } else {
-            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection);
+            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection, onSelectionReset);
           }
         }
         at += 6;
@@ -140,13 +152,15 @@ export class MouseInputFilter {
           row = Number(mouse[3]);
         if (column > 0 && row > 0) {
           if (mouse[4] === 'M') {
-            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection);
+            this.handlePressOrMotion(button, column, row, onWheel, onClick, onSelection, onSelectionReset);
           } else if ((button & 3) === 0 && this.leftPressed) {
             this.leftPressed = false;
+            this.dragging = false;
             onSelection?.({phase: 'end', column, row});
           }
         }
       } else {
+        cancelStaleSelection();
         output += sequence;
         if (sequence === '\x1b[200~') this.paste = true;
       }
@@ -161,15 +175,28 @@ export class MouseInputFilter {
     onWheel: (event: TerminalWheel) => void,
     onClick?: (event: TerminalClick) => void,
     onSelection?: (event: TerminalSelectionEvent) => void,
+    onSelectionReset?: () => void,
   ): void {
-    if (!this.leftPressed) this.wheel(button, column, row, onWheel);
+    const wheelCode = button & ~28;
+    if (wheelCode === 64 || wheelCode === 65) {
+      if (!this.dragging) {
+        if (this.leftPressed) {
+          this.leftPressed = false;
+          onSelectionReset?.();
+        }
+        this.wheel(button, column, row, onWheel);
+      }
+      return;
+    }
     // Only plain left-button presses activate controls; never motion or selection modifiers.
     if (button === 0) {
       onClick?.({kind: 'click', column, row});
       this.leftPressed = true;
+      this.dragging = false;
       onSelection?.({phase: 'start', column, row});
     } else if (button === 32) {
       this.leftPressed = true;
+      this.dragging = true;
       onSelection?.({phase: 'move', column, row});
     }
   }
@@ -250,6 +277,10 @@ export function createTerminalMouseInput(source: MouseStdin, stdout: NodeJS.Writ
         event => {
           if (!captureEnabled || disposed) return;
           for (const listener of selectionListeners) listener(event);
+        },
+        () => {
+          if (disposed) return;
+          notifySelectionReset();
         },
       );
       if (filter.hasPending && !filter.awaitingReport) {

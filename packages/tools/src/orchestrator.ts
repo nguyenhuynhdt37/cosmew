@@ -227,7 +227,9 @@ export class ToolOrchestrator {
               ? this.revalidateCommand(prepared, authorization.viaSession, audit)
               : prepared.kind === 'output' && authorization.sourceRead
                 ? this.revalidateOutputSource(prepared, authorization, audit)
-                : null;
+                : prepared.kind === 'mcp'
+                  ? this.revalidateMcp(call.name, prepared, authorization.viaSession, audit)
+                  : null;
       if (revalidation) return finish(revalidation);
       if (prepared.kind === 'output' && !prepared.valid())
         return finish({
@@ -774,6 +776,57 @@ export class ToolOrchestrator {
       'The user denied this MCP tool.',
       signal,
     );
+  }
+
+  private revalidateMcp(
+    tool: string,
+    prepared: Extract<PreparedTool, {kind: 'mcp'}>,
+    viaSession: boolean,
+    audit: Audit,
+  ): ToolOutput | null {
+    const config = sandboxConfig(this.options);
+    if (this.options.analysisOnly?.() || config.permissionMode === 'plan' || config.readOnly) {
+      audit({target: prepared.target, phase: 'decided', decision: 'deny', reason: 'mcp-read-only'});
+      return {
+        status: 'denied',
+        code: 'MODE_RESTRICTED',
+        content: 'MCP tools are refused in plan mode and for a read-only agent. Nothing was called.',
+        target: prepared.target,
+      };
+    }
+    const grant = prepared.identity ? `${prepared.target}:${prepared.identity}` : prepared.target;
+    if (viaSession && !this.options.grants.has('mcp.call', grant)) {
+      audit({target: prepared.target, phase: 'decided', decision: 'deny', reason: 'revalidation'});
+      return {
+        status: 'denied',
+        code: 'DENIED',
+        content: 'MCP approval was revoked before execution. Nothing was called.',
+        target: prepared.target,
+      };
+    }
+    if (prepared.identity && this.options.mcp) {
+      const mcpWithServers = this.options.mcp as typeof this.options.mcp & {
+        servers?: () => readonly {name: string; identity: string}[];
+      };
+      const valid =
+        tool === 'mcp_resource'
+          ? mcpWithServers.servers
+            ? mcpWithServers.servers().some(server => server.identity === prepared.identity)
+            : true
+          : this.options.mcp
+              .tools()
+              .some(spec => spec.name === tool && (!spec.identity || spec.identity === prepared.identity));
+      if (!valid) {
+        audit({target: prepared.target, phase: 'decided', decision: 'deny', reason: 'mcp-identity-changed'});
+        return {
+          status: 'denied',
+          code: 'DENIED',
+          content: 'The MCP server connection changed before execution. Nothing was called.',
+          target: prepared.target,
+        };
+      }
+    }
+    return null;
   }
 
   private agentMessageRestriction(): ToolOutput | null {

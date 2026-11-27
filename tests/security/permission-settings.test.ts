@@ -24,6 +24,8 @@ import {
 import {startup} from '../../apps/cli/src/bootstrap/startup';
 import {parsePermissionFlags} from '../../apps/cli/src/bootstrap/commands';
 import {FilePermissionSettings} from '../../apps/cli/src/bootstrap/permission-settings';
+import {grantLabel} from '../../apps/cli/src/bootstrap/approvals';
+import {WorkspaceRoot} from '@cosmew/workspace';
 import {memoryVault} from '../fixtures';
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -679,5 +681,52 @@ describe('the client: trust prompts and the network gate', () => {
     expect(await pending).toBe(false);
     client.approvePendingSettings(path, false);
     expect(await client.authorizeNetwork('exfil.test', 443)).toBe(true);
+  });
+
+  test('session-only trust is never promoted to persistent trust when mutating local settings', () => {
+    const p = project();
+    const localPath = p.write('local', {
+      permissions: {allow: ['Bash(curl:*)'], defaultMode: 'acceptEdits'},
+    });
+    const settings = new FilePermissionSettings({workspace: p.root, stateDirectory: p.home, store: p.store});
+    const pending = settings.snapshot().pendingTrust;
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.path).toBe(localPath);
+
+    // Trust only for the current session (persist = false).
+    settings.trust(localPath, pending[0]!.hash, false);
+    expect(settings.snapshot().pendingTrust).toEqual([]);
+    expect(p.store.read().trustedProjectSettings?.[localPath]).toBeUndefined();
+
+    // Mutating local settings keeps session trust active now, but never persists trust across restarts.
+    settings.addRule('local', 'deny', 'Bash(rm:*)');
+    expect(settings.snapshot().pendingTrust).toEqual([]);
+    expect(p.store.read().trustedProjectSettings?.[localPath]).toBeUndefined();
+
+    // A fresh settings instance (simulating restart) must ask for trust again.
+    const restarted = new FilePermissionSettings({workspace: p.root, stateDirectory: p.home, store: p.store});
+    const afterRestart = restarted.snapshot();
+    expect(afterRestart.pendingTrust).toHaveLength(1);
+    expect(afterRestart.rules.allow).toEqual([]);
+    expect(afterRestart.rules.deny).toEqual(['Bash(rm:*)']);
+  });
+
+  test('matchesExcludedCommand handles repeated wildcards linearly and grantLabel formats MCP/network/external targets cleanly', () => {
+    const hostilePattern = 'a' + '*a'.repeat(40) + '*b';
+    const hostileInput = 'a'.repeat(120) + 'c';
+    const started = performance.now();
+    expect(matchesExcludedCommand(hostilePattern, hostileInput)).toBe(false);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(matchesExcludedCommand('npm * run *', 'npm --prefix app run build')).toBe(true);
+
+    const p = project();
+    const ws = new WorkspaceRoot(p.root);
+    expect(grantLabel({capability: 'mcp.call', target: 'mcp__github__search:deadbeef1234'}, ws)).toBe(
+      'MCP mcp__github__search',
+    );
+    expect(grantLabel({capability: 'network.connect', target: 'https://example.com'}, ws)).toBe('https://example.com');
+    expect(grantLabel({capability: 'network.search', target: 'https://api.exa.ai'}, ws)).toBe('https://api.exa.ai');
+    expect(grantLabel({capability: 'fs.read', target: join(p.root, 'src/app.ts')}, ws)).toBe('src/app.ts');
+    expect(grantLabel({capability: 'fs.read', target: '/etc/hosts'}, ws)).toBe('/etc/hosts');
   });
 });

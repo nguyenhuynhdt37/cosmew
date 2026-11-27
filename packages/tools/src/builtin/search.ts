@@ -135,7 +135,12 @@ export function formatGrep(
   const limit = input.head_limit ?? LIMITS.results;
   const page = entries.slice(offset, offset + limit);
   const clipped = clipBytes(page.join('\n'), LIMITS.readOutputBytes);
-  const shown = clipped.clipped ? clipped.text.split('\n').length - 1 : page.length;
+  const lastNewline = clipped.clipped ? clipped.text.lastIndexOf('\n') : -1;
+  const shown = clipped.clipped
+    ? lastNewline >= 0
+      ? clipped.text.slice(0, lastNewline).split('\n').length
+      : 1
+    : page.length;
   const more = offset + shown < entries.length;
   const all = [
     ...(more
@@ -150,7 +155,9 @@ export function formatGrep(
     : !page.length
       ? `[offset ${offset} is past the ${entries.length} entries]`
       : clipped.clipped
-        ? clipped.text.slice(0, clipped.text.lastIndexOf('\n'))
+        ? lastNewline >= 0
+          ? clipped.text.slice(0, lastNewline)
+          : clipped.text
         : clipped.text;
   return {
     status: 'ok',
