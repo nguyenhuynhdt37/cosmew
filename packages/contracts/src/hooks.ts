@@ -17,7 +17,8 @@ export interface HookMatcherEntry {
 export type HooksConfig = Partial<Record<HookEventName, HookMatcherEntry[]>>;
 
 export interface ConfiguredHook {
-  scope: 'user' | 'project' | 'local';
+  scope: 'user' | 'project' | 'local' | 'plugin';
+  pluginId?: string;
   event: HookEventName;
   matcher?: string;
   command: string;
@@ -25,7 +26,8 @@ export interface ConfiguredHook {
 }
 
 export interface HookSummaryView {
-  scope: 'user' | 'project' | 'local';
+  scope: 'user' | 'project' | 'local' | 'plugin';
+  pluginId?: string;
   event: HookEventName;
   matcher?: string;
   command: string;

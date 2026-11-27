@@ -54,7 +54,7 @@ const SAMPLE_DESCRIPTORS: ToolDescriptor[] = [
 ];
 
 test('contract version is bumped to 1.68 and Codex defaults are preserved', () => {
-  expect(CONTRACT_VERSION).toBe('1.69');
+  expect(CONTRACT_VERSION).toBe('1.70');
   expect(DEFAULT_AGENT_MAX_THREADS).toBe(6);
   expect(DEFAULT_AGENT_MAX_DEPTH).toBe(1);
   expect(

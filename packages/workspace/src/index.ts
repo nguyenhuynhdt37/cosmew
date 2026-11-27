@@ -42,3 +42,13 @@ export {
 export {computeWorkspaceGitDiff, refreshWorkspaceGitDiff, type GitDiffOptions} from './git-diff';
 
 export {captureWorkspaceDiffSnapshot, type WorkspaceDiffSnapshot} from './diff-baseline';
+export {
+  computePluginDirectoryHash,
+  copyPluginDirectorySafe,
+  parsePluginDirectory,
+  MAX_INSTALLED_PLUGINS,
+  MAX_PLUGIN_FILES,
+  MAX_PLUGIN_FILE_BYTES,
+  MAX_PLUGIN_TOTAL_BYTES,
+  type ParsedPluginPackage,
+} from './plugins';

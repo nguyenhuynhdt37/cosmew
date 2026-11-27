@@ -105,6 +105,8 @@ export interface McpManagerOptions {
   installRunner?: ManagedMcpInstallerOptions['runner'];
   onChange?(): void;
   onStatusChange?(): void;
+  /** Additional MCP server specs from enabled, SHA-256 trusted user plugins (ADR 0125). User mcp.json always wins on clash. */
+  extraSpecs?: () => readonly McpServerSpec[];
 }
 /** One user-managed lifecycle for manual/catalog servers; never exposed as a model tool. */
 export class McpManager {
@@ -135,7 +137,7 @@ export class McpManager {
       problems: string[] = [];
     try {
       const parsed = parseMcpConfig(JSON.stringify(this.store.read().document));
-      specs = parsed.servers;
+      specs = this.mergeExtraSpecs(parsed.servers);
       problems = parsed.problems;
     } catch {
       problems = ['MCP user configuration could not be read.'];
@@ -162,11 +164,24 @@ export class McpManager {
     for (const spec of specs)
       registerConfigSecrets(spec.transport === 'http' ? spec.headers : spec.env, this.options.registerSecret);
   }
+  private mergeExtraSpecs(userSpecs: McpServerSpec[]): McpServerSpec[] {
+    const extras = this.options.extraSpecs?.() ?? [];
+    if (!extras.length) return userSpecs;
+    const existing = new Set(userSpecs.map(s => s.name));
+    const merged = [...userSpecs];
+    for (const extra of extras) {
+      if (existing.has(extra.name)) continue;
+      existing.add(extra.name);
+      merged.push({...extra});
+    }
+    return merged;
+  }
   private read() {
     const saved = this.store.read();
     const parsed = parseMcpConfig(JSON.stringify(saved.document));
-    this.register(parsed.servers);
-    return {...saved, ...parsed};
+    const merged = this.mergeExtraSpecs(parsed.servers);
+    this.register(merged);
+    return {...saved, ...parsed, servers: merged};
   }
   private async specs(): Promise<McpServerSpec[]> {
     const specs = this.read().servers;

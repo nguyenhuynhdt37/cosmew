@@ -27,12 +27,18 @@ export class SkillCatalog {
     home?: string;
     overrides?: () => Readonly<Record<string, SkillVisibility>>;
     canRead?: (relative: string, absolute: string) => boolean;
+    /** Extra skill roots from enabled user plugins (ADR 0125). */
+    extraSkillRoots?: () => readonly {path: string; pluginId: string}[];
+    /** Extra prompt-command roots from enabled user plugins (ADR 0125). */
+    extraCommandRoots?: () => readonly {path: string; pluginId: string}[];
   };
   constructor(options: {
     workspace: WorkspaceRoot;
     home?: string;
     overrides?: () => Readonly<Record<string, SkillVisibility>>;
     canRead?: (relative: string, absolute: string) => boolean;
+    extraSkillRoots?: () => readonly {path: string; pluginId: string}[];
+    extraCommandRoots?: () => readonly {path: string; pluginId: string}[];
   }) {
     this.options = options;
     this.overrides = options.overrides;
@@ -60,7 +66,7 @@ export class SkillCatalog {
       if (dirname(cursor) === cursor) break;
     }
     const repository = new WorkspaceRoot(repo);
-    const roots: {path: string; source: SkillMetadata['source']}[] = [];
+    const roots: {path: string; source: SkillMetadata['source']; pluginId?: string}[] = [];
     for (let scope = options.workspace.root; ; scope = dirname(scope)) {
       if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
         for (const dir of ['.cosmew', '.agents', '.claude'])
@@ -68,6 +74,9 @@ export class SkillCatalog {
       if (scope === repo) break;
     }
     for (const dir of ['.cosmew', '.agents', '.claude']) roots.push({path: join(home, dir, 'skills'), source: 'user'});
+    for (const extra of options.extraSkillRoots?.() ?? []) {
+      roots.push({path: extra.path, source: 'user', pluginId: extra.pluginId});
+    }
     roots.push({path: systemRoot, source: 'system'});
     let visited = 0;
     for (const scan of roots) {
@@ -84,8 +93,9 @@ export class SkillCatalog {
               this.errors.push({path, code: 'UNSAFE_SKILL_PATH'});
               return;
             }
-            const shortPath =
-              scan.source === 'project'
+            const shortPath = scan.pluginId
+              ? `plugin:${scan.pluginId}/${relative(scan.path, path) || 'SKILL.md'}`
+              : scan.source === 'project'
                 ? relative(repo, path)
                 : scan.source === 'user'
                   ? `~/${relative(home, path)}`
@@ -108,6 +118,7 @@ export class SkillCatalog {
               shortPath,
               source: scan.source,
               kind: 'skill',
+              ...(scan.pluginId ? {pluginId: scan.pluginId} : {}),
             };
             if (this.entries.has(parsed.name)) this.warnings.push({path: shortPath, code: 'DUPLICATE_NAME'});
             else
@@ -146,7 +157,7 @@ export class SkillCatalog {
     }
 
     // Custom prompt commands: `.cosmew/commands/**/*.md`, `.agents/commands/**/*.md`, `.claude/commands/**/*.md` (ADR 0124).
-    const commandRoots: {path: string; source: 'project' | 'user'}[] = [];
+    const commandRoots: {path: string; source: 'project' | 'user'; pluginId?: string}[] = [];
     for (let scope = options.workspace.root; ; scope = dirname(scope)) {
       if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
         for (const dir of ['.cosmew', '.agents', '.claude'])
@@ -155,6 +166,9 @@ export class SkillCatalog {
     }
     for (const dir of ['.cosmew', '.agents', '.claude'])
       commandRoots.push({path: join(home, dir, 'commands'), source: 'user'});
+    for (const extra of options.extraCommandRoots?.() ?? []) {
+      commandRoots.push({path: extra.path, source: 'user', pluginId: extra.pluginId});
+    }
 
     for (const scan of commandRoots) {
       const walkCommands = (directory: string, depth: number, prefixParts: string[]) => {
@@ -179,7 +193,11 @@ export class SkillCatalog {
               this.errors.push({path: child, code: 'UNSAFE_SKILL_PATH'});
               continue;
             }
-            const shortPath = scan.source === 'project' ? relative(repo, child) : `~/${relative(home, child)}`;
+            const shortPath = scan.pluginId
+              ? `plugin:${scan.pluginId}/commands/${relative(scan.path, child)}`
+              : scan.source === 'project'
+                ? relative(repo, child)
+                : `~/${relative(home, child)}`;
             if (
               options.canRead &&
               !options.canRead(scan.source === 'project' ? relative(options.workspace.root, child) : shortPath, child)
@@ -204,6 +222,7 @@ export class SkillCatalog {
               shortPath,
               source: scan.source,
               kind: 'command',
+              ...(scan.pluginId ? {pluginId: scan.pluginId} : {}),
             };
             if (this.entries.has(parsed.name)) this.warnings.push({path: shortPath, code: 'DUPLICATE_NAME'});
             else
@@ -271,13 +290,16 @@ export class SkillCatalog {
   isStateSkillFile(absolute: string, state?: string): boolean {
     return (
       !!state &&
-      (absolute.startsWith(join(state, 'skills') + '/') || absolute.startsWith(join(state, 'commands') + '/')) &&
+      (absolute.startsWith(join(state, 'skills') + '/') ||
+        absolute.startsWith(join(state, 'commands') + '/') ||
+        absolute.startsWith(join(state, 'plugins') + '/')) &&
       [...this.entries.values()].some(
         e =>
           e.file.absolute === absolute &&
           e.metadata.source === 'user' &&
           (e.metadata.shortPath.startsWith('~/.cosmew/skills/') ||
-            e.metadata.shortPath.startsWith('~/.cosmew/commands/')),
+            e.metadata.shortPath.startsWith('~/.cosmew/commands/') ||
+            Boolean(e.metadata.pluginId)),
       )
     );
   }

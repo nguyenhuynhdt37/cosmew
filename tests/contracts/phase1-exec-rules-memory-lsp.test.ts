@@ -147,8 +147,8 @@ async function setupHeadlessApp(
 }
 
 describe('Phase 1 (Contract 1.69) — 1A: cosmew exec CI/CD upgrades', () => {
-  test('contract version is 1.69 and output JSON schema compiler rejects external $ref and oversized schemas', () => {
-    expect(CONTRACT_VERSION).toBe('1.69');
+  test('contract version is 1.70 and output JSON schema compiler rejects external $ref and oversized schemas', () => {
+    expect(CONTRACT_VERSION).toBe('1.70');
     const compiled = compileOutputJsonSchema(
       JSON.stringify({
         type: 'object',

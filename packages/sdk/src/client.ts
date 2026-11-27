@@ -14,6 +14,15 @@ import {
   permissionPromptResolutionSchema,
   permissionPromptRequestSchema,
   type HooksSnapshot,
+  type PluginSnapshot,
+  type PluginManagementAction,
+  type PluginManagementResult,
+  type ScheduledJobSpec,
+  type ScheduledJobView,
+  type ScheduledJobEvent,
+  type BatchRunRequest,
+  type BatchTaskItemView,
+  type BatchRunResult,
   type RetractQueuedOptions,
   type QueuedInputEntry,
   type PromptHistoryScope,
@@ -161,7 +170,7 @@ export interface BackendCapabilitiesReport {
   generalToolsExecution: 'implemented' | 'not-implemented';
   mcpIntegration: 'partial' | 'not-implemented';
   hooks: 'implemented' | 'not-implemented';
-  pluginHost: 'not-implemented';
+  pluginHost: 'implemented' | 'not-implemented';
   delegatedSubagents: 'implemented' | 'not-implemented';
 }
 
@@ -285,6 +294,21 @@ export interface FutrynBackendPorts {
   saveSkillOverrides?(changes: Readonly<Record<string, SkillVisibility>>): void;
   /** Inspect configured lifecycle hooks (ADR 0120). */
   hooks?(): HooksSnapshot;
+  /** User-scoped plugin host (ADR 0125). Absent means the plugin host is not wired. */
+  plugins?(): PluginSnapshot;
+  managePlugin?(action: PluginManagementAction, signal?: AbortSignal): Promise<PluginManagementResult>;
+  reloadPlugins?(signal?: AbortSignal): Promise<PluginSnapshot>;
+  /** In-session autonomous loop & scheduler (ADR 0125). */
+  scheduledJobs?(sessionId?: string): ScheduledJobView[];
+  startScheduledJob?(sessionId: string, spec: ScheduledJobSpec): ScheduledJobView;
+  stopScheduledJob?(idOrAll: string, sessionId?: string, reason?: string): ScheduledJobView[];
+  observeScheduledJobs?(listener: (event: ScheduledJobEvent) => void): () => void;
+  notifyScheduledIdle?(sessionId: string): void;
+  /** Parallel multi-subagent fan-out (`/batch`, ADR 0125). */
+  runBatch?(
+    request: BatchRunRequest,
+    options?: {signal?: AbortSignal; onProgress?: (items: readonly BatchTaskItemView[]) => void},
+  ): Promise<BatchRunResult>;
   /** Ephemeral side question (`/btw`) using current context without tools or durable history mutation. */
   askSideQuestion?(
     input: {selection: Selection; messages: readonly Message[]; question: string},
@@ -494,6 +518,11 @@ export class FutrynClient {
   private imageGeneration = 0;
   private pendingImages: {view: ImageAttachmentView; attachment: Attachment}[] = [];
   private pendingPromptAttachments: Attachment[] = [];
+  private scheduledTurnExecutor?: (
+    job: ScheduledJobView,
+    iteration: number,
+    signal: AbortSignal,
+  ) => Promise<{text?: string; costUSD?: number}>;
 
   /** Stage validated MCP prompt media attachments for the immediately following sendMessage. */
   stagePromptAttachments(attachments: readonly Attachment[] | undefined): void {
@@ -886,6 +915,109 @@ export class FutrynClient {
     return report;
   }
 
+  /** Whether a model turn is currently streaming in this client. */
+  isSending(): boolean {
+    return this.sending;
+  }
+
+  /** Inspect installed user plugins and their SHA-256 trust state (ADR 0125). */
+  plugins(): PluginSnapshot {
+    if (!this.ports.plugins) {
+      return {supported: false, directory: '', plugins: [], untrustedCount: 0, diagnostics: []};
+    }
+    return structuredClone(this.ports.plugins());
+  }
+
+  /** Install, uninstall, enable, disable, trust, revoke or reload user plugins (ADR 0125). */
+  async managePlugin(action: PluginManagementAction, signal?: AbortSignal): Promise<PluginManagementResult> {
+    if (!this.ports.managePlugin) throw new FutrynError('UNSUPPORTED');
+    const result = structuredClone(await this.ports.managePlugin(action, signal));
+    this.notifyStateChange();
+    return result;
+  }
+
+  /** Rescan user plugins, re-verify SHA-256 hashes, and refresh skills/agents/hooks/MCP (ADR 0125). */
+  async reloadPlugins(signal?: AbortSignal): Promise<PluginSnapshot> {
+    if (!this.ports.reloadPlugins) throw new FutrynError('UNSUPPORTED');
+    const snapshot = structuredClone(await this.ports.reloadPlugins(signal));
+    this.notifyStateChange();
+    return snapshot;
+  }
+
+  /** List active and historical in-session scheduled/loop jobs (ADR 0125). */
+  scheduledJobs(sessionId = this.currentSession?.id): ScheduledJobView[] {
+    if (!this.ports.scheduledJobs) return [];
+    return structuredClone(this.ports.scheduledJobs(sessionId));
+  }
+
+  /** Start an in-session `/loop` or `/schedule` job bound to the active session (ADR 0125). */
+  startScheduledJob(spec: ScheduledJobSpec): ScheduledJobView {
+    if (!this.ports.startScheduledJob) throw new FutrynError('UNSUPPORTED');
+    if (!this.status().selection) throw new FutrynError('AUTH');
+    const session = this.currentSession ?? this.createSession();
+    const job = structuredClone(this.ports.startScheduledJob(session.id, spec));
+    this.notifyStateChange();
+    return job;
+  }
+
+  /** Stop one scheduled job by ID or `'all'` for the active session. */
+  stopScheduledJob(idOrAll = 'all', sessionId = this.currentSession?.id, reason?: string): ScheduledJobView[] {
+    if (!this.ports.stopScheduledJob) return [];
+    const stopped = structuredClone(this.ports.stopScheduledJob(idOrAll, sessionId, reason));
+    if (stopped.length) this.notifyStateChange();
+    return stopped;
+  }
+
+  /** Subscribe to scheduled job lifecycle events (ADR 0125). */
+  observeScheduledJobs(listener: (event: ScheduledJobEvent) => void): () => void {
+    if (!this.ports.observeScheduledJobs) return () => {};
+    return this.ports.observeScheduledJobs(event => listener(structuredClone(event)));
+  }
+
+  /** Optional UI hook so scheduled turns render live in interactive shells like TUI. */
+  setScheduledTurnExecutor(
+    executor?: (
+      job: ScheduledJobView,
+      iteration: number,
+      signal: AbortSignal,
+    ) => Promise<{text?: string; costUSD?: number}>,
+  ): void {
+    this.scheduledTurnExecutor = executor;
+  }
+
+  /** Execute one scheduled iteration via the registered UI executor or direct headless `sendMessage`. */
+  async executeScheduledTurn(
+    job: ScheduledJobView,
+    iteration: number,
+    signal: AbortSignal,
+  ): Promise<{text?: string; costUSD?: number}> {
+    if (this.scheduledTurnExecutor) {
+      return this.scheduledTurnExecutor(job, iteration, signal);
+    }
+    const costBefore = this.status().usage?.costUSD ?? 0;
+    let text = '';
+    for await (const event of this.sendMessage(job.prompt, {signal})) {
+      if (event.type === 'responseDiscarded') text = '';
+      else if (event.type === 'textDelta') text += event.text;
+    }
+    const costAfter = this.status().usage?.costUSD ?? costBefore;
+    return {text, costUSD: Math.max(0, costAfter - costBefore)};
+  }
+
+  /** Fan out parallel subagent tasks (`/batch`, ADR 0125) bounded by `SubagentScheduler`. */
+  async runBatch(
+    request: BatchRunRequest,
+    options?: {signal?: AbortSignal; onProgress?: (items: readonly BatchTaskItemView[]) => void},
+  ): Promise<BatchRunResult> {
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.runBatch) throw new FutrynError('UNSUPPORTED');
+    if (!this.status().selection) throw new FutrynError('AUTH');
+    if (!this.currentSession) this.createSession();
+    const result = structuredClone(await this.ports.runBatch(request, options));
+    this.notifyStateChange();
+    return result;
+  }
+
   /** Ask an ephemeral side question (`/btw`) without running tools or modifying durable session history. */
   async askSideQuestion(question: string, signal?: AbortSignal): Promise<{text: string; usage?: Usage}> {
     const trimmed = question.trim();
@@ -1263,7 +1395,7 @@ export class FutrynClient {
       generalToolsExecution: this.ports.availableTools ? 'implemented' : 'not-implemented',
       mcpIntegration: this.ports.mcpStatus ? 'partial' : 'not-implemented',
       hooks: this.ports.hooks ? 'implemented' : 'not-implemented',
-      pluginHost: 'not-implemented',
+      pluginHost: this.ports.plugins ? 'implemented' : 'not-implemented',
       delegatedSubagents: this.ports.subagents ? 'implemented' : 'not-implemented',
     };
   }
@@ -2345,6 +2477,9 @@ export class FutrynClient {
 
   createSession(projectScoped = false): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
+    if (this.currentSession) {
+      this.ports.stopScheduledJob?.('all', this.currentSession.id, 'Session changed');
+    }
     const session = this.ports.startSession(
       projectScoped ? this.ports.workspace : undefined,
       !this.currentSession ? (this.sessionSelection ?? undefined) : undefined,
@@ -2373,6 +2508,9 @@ export class FutrynClient {
 
   resumeSession(id: string): {id: string; selection: Selection; messages: Message[]} {
     if (this.sending) throw new FutrynError('POLICY');
+    if (this.currentSession && this.currentSession.id !== id) {
+      this.ports.stopScheduledJob?.('all', this.currentSession.id, 'Session switched');
+    }
     const mode = this.transientSessionModes.get(id) ?? this.ports.settings.read().sessionModes?.[id] ?? 'chat';
     const stored = this.ports.getSession(id);
     const session = this.ports.resumeSession(id);
@@ -2713,6 +2851,7 @@ export class FutrynClient {
       this.activeTurnId = undefined;
       this.streamingText = '';
       this.streamingSteps = [];
+      this.ports.notifyScheduledIdle?.(session.id);
     }
   }
 

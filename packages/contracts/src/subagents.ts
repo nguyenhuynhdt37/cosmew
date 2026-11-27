@@ -229,6 +229,8 @@ export interface AgentTypeView {
   reasoningEffort?: string;
   /** Short display path (`.cosmew/agents/x.md`, `~/.cosmew/agents/x.md`) of a custom definition. */
   path?: string;
+  /** Installed plugin id when provided by a user plugin (ADR 0125). */
+  pluginId?: string;
 }
 export interface AgentDefinitionDiagnostic {
   path?: string;
@@ -284,6 +286,8 @@ export interface CustomAgentDefinition {
   shortPath: string;
   /** Markdown body: the child's task guidance. Never host instructions. */
   body: string;
+  /** Installed plugin id when provided by a user plugin (ADR 0125). */
+  pluginId?: string;
 }
 export interface AgentDefinitionsReport {
   definitions: Omit<CustomAgentDefinition, 'body'>[];

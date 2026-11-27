@@ -24,6 +24,7 @@ import {PERMISSION_CLI_OPTIONS, resolvePermissionFlags, startup, type Applicatio
 import {ChatInput, ask, readSecretStdin, secretInput} from './input';
 import {execCli, redactJsonValue} from './exec';
 import {mcpCli, MCP_HELP} from './mcp-cli';
+import {pluginCli, PLUGIN_HELP} from './plugin-cli';
 
 // Suppress third-party raw warning output; diagnostics are normalized by Cosmew.
 (globalThis as typeof globalThis & {AI_SDK_LOG_WARNINGS: boolean}).AI_SDK_LOG_WARNINGS = false;
@@ -45,6 +46,7 @@ const HELP = `Cosmew (cosmew) provider, authentication & TUI CLI
   login "<base-url> | <api-key> | [model]" | login <base-url> [--key-stdin|--no-auth] [--model <id>]
   logout [--account <id-or-alias>] | status | doctor
 ${MCP_HELP.trimEnd()}
+${PLUGIN_HELP.trimEnd()}
   auth login --provider <id> [--alias <alias>] [--env KEY_VARIABLE | --key-stdin]
     [--method api-key|env|none|oauth-browser] [--model <manual-model-id>]
   auth list | methods | status [--account <id-or-alias>] | logout --account <id-or-alias>
@@ -842,6 +844,10 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
 async function main() {
   if (process.argv[2] === 'mcp') {
     await mcpCli(process.argv.slice(3));
+    return;
+  }
+  if (process.argv[2] === 'plugin') {
+    await pluginCli(process.argv.slice(3));
     return;
   }
   if (process.argv[2] === 'exec') {

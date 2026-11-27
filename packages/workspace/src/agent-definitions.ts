@@ -117,6 +117,14 @@ export class AgentDefinitionCatalog {
   private readonly entries = new Map<string, Entry>();
   private readonly errors: AgentDefinitionDiagnostic[] = [];
   private readonly warnings: AgentDefinitionDiagnostic[] = [];
+  private readonly options: {
+    workspace: WorkspaceRoot;
+    home?: string;
+    canRead?: (relative: string, absolute: string) => boolean;
+    reserved?: (name: string) => boolean;
+    /** Extra agent roots from enabled user plugins (ADR 0125). */
+    extraRoots?: () => readonly {path: string; pluginId: string}[];
+  };
   constructor(options: {
     workspace: WorkspaceRoot;
     home?: string;
@@ -124,7 +132,18 @@ export class AgentDefinitionCatalog {
     canRead?: (relative: string, absolute: string) => boolean;
     /** Names that are reserved by built-in types; a definition using one keeps the built-in and warns. */
     reserved?: (name: string) => boolean;
+    /** Extra agent roots from enabled user plugins (ADR 0125). */
+    extraRoots?: () => readonly {path: string; pluginId: string}[];
   }) {
+    this.options = options;
+    this.reload();
+  }
+  /** Rescan project, user, and enabled plugin agent roots in place. */
+  reload(): void {
+    this.entries.clear();
+    this.errors.length = 0;
+    this.warnings.length = 0;
+    const {options} = this;
     const homePath = resolve(options.home ?? (process.env.HOME || homedir()));
     let home = homePath;
     try {
@@ -141,7 +160,7 @@ export class AgentDefinitionCatalog {
       if (dirname(cursor) === cursor) break;
     }
     const repository = new WorkspaceRoot(repo);
-    const roots: {path: string; source: 'project' | 'user'}[] = [];
+    const roots: {path: string; source: 'project' | 'user'; pluginId?: string}[] = [];
     for (let scope = options.workspace.root; ; scope = dirname(scope)) {
       if (!ignoredDirectory(repository, relative(repo, scope) || '.'))
         for (const dir of ['.cosmew', '.claude', '.agents'])
@@ -149,6 +168,9 @@ export class AgentDefinitionCatalog {
       if (scope === repo) break;
     }
     for (const dir of ['.cosmew', '.claude']) roots.push({path: join(home, dir, 'agents'), source: 'user'});
+    for (const extra of options.extraRoots?.() ?? []) {
+      roots.push({path: extra.path, source: 'user', pluginId: extra.pluginId});
+    }
     let files = 0;
     for (const scan of roots) {
       try {
@@ -177,7 +199,12 @@ export class AgentDefinitionCatalog {
               continue;
             }
             const parsed = this.readDefinition(path);
-            const definition: CustomAgentDefinition = {...parsed, source: scan.source, shortPath};
+            const definition: CustomAgentDefinition = {
+              ...parsed,
+              source: scan.source,
+              shortPath,
+              ...(scan.pluginId ? {pluginId: scan.pluginId} : {}),
+            };
             if (options.reserved?.(parsed.name)) {
               this.warnings.push({path: shortPath, code: 'BUILTIN_NAME_CLASH'});
               continue;
@@ -194,7 +221,13 @@ export class AgentDefinitionCatalog {
       }
     }
   }
-  private short(scan: {source: 'project' | 'user'}, path: string, repo: string, home: string): string {
+  private short(
+    scan: {source: 'project' | 'user'; path: string; pluginId?: string},
+    path: string,
+    repo: string,
+    home: string,
+  ): string {
+    if (scan.pluginId) return `plugin:${scan.pluginId}/agents/${relative(scan.path, path) || '.'}`;
     return scan.source === 'project' ? relative(repo, path) : `~/${relative(home, path)}`;
   }
   private readDefinition(path: string): Omit<CustomAgentDefinition, 'source' | 'shortPath'> {

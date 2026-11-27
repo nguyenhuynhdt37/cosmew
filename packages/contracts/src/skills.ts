@@ -14,6 +14,8 @@ export interface SkillMetadata {
   argumentHint?: string;
   /** Distinguishes `SKILL.md` skills from `.cosmew/.claude/commands/*.md` prompt commands (ADR 0124). */
   kind?: 'skill' | 'command';
+  /** Installed plugin id when the skill or command originates from a user plugin (ADR 0125). */
+  pluginId?: string;
 }
 export interface SkillDiagnostic {
   path?: string;

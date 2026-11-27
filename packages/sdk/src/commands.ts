@@ -16,6 +16,7 @@ export type CommandOverlay =
   | 'connect'
   | 'mcp'
   | 'hooks'
+  | 'plugins'
   | 'rewind';
 export type CommandHandler =
   | 'overlay'
@@ -37,6 +38,12 @@ export type CommandHandler =
   | 'btw'
   | 'add-dir'
   | 'reload-skills'
+  | 'plugins'
+  | 'reload-plugins'
+  | 'loop'
+  | 'schedule'
+  | 'batch'
+  | 'setup-cloud'
   | 'skills'
   | 'memory'
   | 'exit'
@@ -101,7 +108,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/auto-mode-setup'),
   unavailableClaudeCommand('/autofix-pr', [], 'optional'),
   unavailableClaudeCommand('/background', ['/bg'], 'optional'),
-  unavailableClaudeCommand('/batch', [], 'required'),
   unavailableClaudeCommand('/branch', [], 'optional'),
   unavailableClaudeCommand('/bug', ['/share'], 'optional'),
   unavailableClaudeCommand('/cd', [], 'required'),
@@ -128,7 +134,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/install-github-app'),
   unavailableClaudeCommand('/install-slack-app'),
   unavailableClaudeCommand('/list-agents', ['/peers']),
-  unavailableClaudeCommand('/loop', ['/proactive'], 'optional'),
   unavailableClaudeCommand('/mobile', ['/ios', '/android']),
   unavailableClaudeCommand('/output-style', [], 'optional'),
   unavailableClaudeCommand('/passes'),
@@ -138,20 +143,16 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/radio'),
   unavailableClaudeCommand('/rate-limit-options'),
   unavailableClaudeCommand('/recap'),
-  unavailableClaudeCommand('/reload-plugins', [], 'optional'),
   unavailableClaudeCommand('/remote-control', ['/rc']),
   unavailableClaudeCommand('/remote-env'),
   unavailableClaudeCommand('/release-notes'),
   unavailableClaudeCommand('/restart', ['/update']),
   unavailableClaudeCommand('/run', [], 'optional'),
-  unavailableClaudeCommand('/schedule', ['/routines'], 'optional'),
   unavailableClaudeCommand('/scroll-speed'),
   unavailableClaudeCommand('/security-review'),
   unavailableClaudeCommand('/simplify', [], 'optional'),
   unavailableClaudeCommand('/skill-doctor'),
   unavailableClaudeCommand('/slides', [], 'optional'),
-  unavailableClaudeCommand('/setup-bedrock'),
-  unavailableClaudeCommand('/setup-vertex'),
   unavailableClaudeCommand('/statusline', [], 'optional'),
   unavailableClaudeCommand('/stickers'),
   unavailableClaudeCommand('/stop'),
@@ -342,14 +343,73 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/plugin',
-    handler: 'unavailable',
-    autocomplete: false,
-    help: false,
-    unavailable: 'Not implemented: plugin host.',
+    handler: 'plugins',
+    overlay: 'plugins',
     aliases: ['/plugins'],
+    arguments: 'optional',
+    duringRequest: true,
     title: 'Plugin Management',
-    description: 'Not implemented in PA1/TUI1; no plugin host is enabled',
+    description: 'Manage user plugins (skills, commands, agents, hooks, MCP) and SHA-256 trust approvals',
     category: 'Workspace & Security',
+  },
+  {
+    command: '/reload-plugins',
+    handler: 'reload-plugins',
+    aliases: [],
+    duringRequest: true,
+    title: 'Reload Plugins',
+    description: 'Rescan ~/.cosmew/plugins/, re-verify SHA-256 hashes, and refresh skills, agents, hooks and MCP',
+    category: 'Workspace & Security',
+  },
+  {
+    command: '/loop',
+    handler: 'loop',
+    requires: 'model',
+    aliases: ['/proactive'],
+    arguments: 'optional',
+    duringRequest: true,
+    argumentsDuringRequest: true,
+    title: 'Autonomous Loop',
+    description: 'Repeat a prompt on an interval with iteration/cost caps; /loop list · /loop stop [id|all]',
+    category: 'Sessions',
+  },
+  {
+    command: '/schedule',
+    handler: 'schedule',
+    requires: 'model',
+    aliases: ['/routines'],
+    arguments: 'optional',
+    duringRequest: true,
+    argumentsDuringRequest: true,
+    title: 'Schedule Prompt',
+    description: 'Run a prompt in-session every <dur> or once in <dur>; /schedule list · /schedule stop [id|all]',
+    category: 'Sessions',
+  },
+  {
+    command: '/batch',
+    handler: 'batch',
+    requires: 'model',
+    aliases: [],
+    arguments: 'required',
+    title: 'Parallel Batch',
+    description: 'Fan out parallel subagent tasks (sep by ;; or --targets "a,b") with optional --isolation worktree',
+    category: 'Sessions',
+  },
+  {
+    command: '/setup-bedrock',
+    handler: 'setup-cloud',
+    aliases: [],
+    title: 'Setup AWS Bedrock',
+    description: 'Connect an AWS Bedrock provider account (SigV4 or Bedrock Bearer token)',
+    category: 'Providers & Models',
+  },
+  {
+    command: '/setup-vertex',
+    handler: 'setup-cloud',
+    aliases: [],
+    title: 'Setup Google Vertex AI',
+    description: 'Connect a Google Vertex AI provider account (ADC or Service Account)',
+    category: 'Providers & Models',
   },
   {
     command: '/memory',

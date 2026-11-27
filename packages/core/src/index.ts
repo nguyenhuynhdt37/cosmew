@@ -27,3 +27,13 @@ export {
   type AutoMemoryExtractionOptions,
   type AutoMemoryExtractionResult,
 } from './context/memory-extraction';
+export {
+  SessionScheduler,
+  formatDurationMs,
+  parseDurationMs,
+  parseLoopCommand,
+  parseScheduleCommand,
+  type AutomationParseOptions,
+  type ParsedAutomationCommand,
+  type SessionSchedulerOptions,
+} from './automation/scheduler';

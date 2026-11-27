@@ -1,5 +1,13 @@
 import {themeSelection} from '../../theme/theme';
-import {FutrynError, PERMISSION_MODES, type PermissionMode} from '@cosmew/contracts';
+import {
+  FutrynError,
+  PERMISSION_MODES,
+  formatDurationMs,
+  parseBatchCommand,
+  parseLoopCommand,
+  parseScheduleCommand,
+  type PermissionMode,
+} from '@cosmew/contracts';
 import {parseSlashCommand, type FutrynClient} from '@cosmew/sdk';
 
 export interface CommandHost {
@@ -429,6 +437,136 @@ export async function routeCommand(host: CommandHost, raw: string): Promise<bool
       case 'skills':
         host.open('skills');
         break;
+      case 'plugins': {
+        if (!args) {
+          host.open('plugins');
+          break;
+        }
+        const [sub, ...rest] = args.split(/\s+/);
+        const verb = sub?.toLowerCase() ?? '';
+        const target = rest.join(' ').trim();
+        if (verb === 'list') {
+          const snap = client.plugins();
+          if (!snap.supported) {
+            host.notice('Not implemented: plugin host.');
+            break;
+          }
+          if (snap.plugins.length === 0) {
+            host.notice(`No plugins installed in ${snap.directory}. Use /plugin install <path>.`);
+          } else {
+            host.notice(
+              snap.plugins.map(p => `${p.id}@${p.version} [${p.enabled ? 'on' : 'off'}·${p.trustState}]`).join(' · '),
+            );
+          }
+          break;
+        }
+        if (verb === 'reload') {
+          const snap = await client.reloadPlugins(host.signal);
+          host.notice(
+            `Reloaded ${snap.plugins.length} plugin${snap.plugins.length === 1 ? '' : 's'}${snap.untrustedCount ? ` (${snap.untrustedCount} awaiting SHA-256 trust)` : ''}.`,
+          );
+          break;
+        }
+        if (!target || !['install', 'uninstall', 'remove', 'enable', 'disable', 'trust', 'revoke'].includes(verb)) {
+          host.notice(
+            'Usage: /plugin · /plugin list · /plugin install <path> · /plugin uninstall|enable|disable|trust|revoke <id> · /plugin reload',
+          );
+          break;
+        }
+        if (verb === 'trust') {
+          const snap = client.plugins();
+          const found = snap.plugins.find(p => p.id === target);
+          if (!found) {
+            host.notice(`Plugin "${target}" is not installed.`);
+            break;
+          }
+          const res = await client.managePlugin({type: 'trust', id: target, hash: found.contentHash}, host.signal);
+          host.notice(res.message);
+          break;
+        }
+        const action =
+          verb === 'install'
+            ? ({type: 'install', sourcePath: target} as const)
+            : verb === 'uninstall' || verb === 'remove'
+              ? ({type: 'uninstall', id: target} as const)
+              : verb === 'enable'
+                ? ({type: 'enable', id: target} as const)
+                : verb === 'disable'
+                  ? ({type: 'disable', id: target} as const)
+                  : ({type: 'revoke', id: target} as const);
+        const res = await client.managePlugin(action, host.signal);
+        host.notice(res.message);
+        break;
+      }
+      case 'reload-plugins': {
+        const snap = await client.reloadPlugins(host.signal);
+        host.notice(
+          `Reloaded ${snap.plugins.length} plugin${snap.plugins.length === 1 ? '' : 's'}${snap.untrustedCount ? ` (${snap.untrustedCount} awaiting SHA-256 trust)` : ''}.`,
+        );
+        break;
+      }
+      case 'loop':
+      case 'schedule': {
+        const parsedAuto = def.handler === 'loop' ? parseLoopCommand(args) : parseScheduleCommand(args);
+        if (parsedAuto.action === 'error') {
+          host.notice(parsedAuto.message);
+          break;
+        }
+        if (parsedAuto.action === 'list') {
+          const jobs = client.scheduledJobs();
+          const active = jobs.filter(j => j.status === 'active' || j.status === 'running');
+          if (active.length === 0) {
+            host.notice(
+              def.handler === 'loop'
+                ? 'No active /loop jobs. Usage: /loop [interval] [--max N] [--until "text"] <prompt>'
+                : 'No active /schedule jobs. Usage: /schedule every <interval> <prompt> · /schedule in <delay> <prompt>',
+            );
+          } else {
+            host.notice(
+              active
+                .map(
+                  j =>
+                    `${j.id} (${j.kind}, every ${formatDurationMs(j.intervalMs)}, ${j.completedIterations}/${j.maxIterations}, ${j.status}): ${j.prompt.slice(0, 48)}`,
+                )
+                .join(' | '),
+            );
+          }
+          break;
+        }
+        if (parsedAuto.action === 'stop') {
+          const stopped = client.stopScheduledJob(parsedAuto.target);
+          host.notice(
+            stopped.length
+              ? `Stopped ${stopped.length} scheduled job${stopped.length === 1 ? '' : 's'}: ${stopped.map(j => j.id).join(', ')}.`
+              : `No active scheduled job matching "${parsedAuto.target}".`,
+          );
+          break;
+        }
+        const job = client.startScheduledJob(parsedAuto.spec);
+        host.notice(
+          `Started ${job.id} (${job.oneShot ? `in ${formatDurationMs(job.intervalMs)}` : `every ${formatDurationMs(job.intervalMs)}, max ${job.maxIterations}`}). Stop with /${job.kind} stop ${job.id}.`,
+        );
+        break;
+      }
+      case 'batch': {
+        const parsedBatch = parseBatchCommand(args);
+        if (!parsedBatch.ok) {
+          host.notice(parsedBatch.message);
+          break;
+        }
+        await host.beforeWork?.();
+        host.notice(
+          `Running /batch with ${parsedBatch.request.items.length} task${parsedBatch.request.items.length === 1 ? '' : 's'}${parsedBatch.request.isolation ? ` (${parsedBatch.request.isolation})` : ''}…`,
+        );
+        const result = await client.runBatch(parsedBatch.request, {signal: host.signal});
+        host.notice(result.summary);
+        break;
+      }
+      case 'setup-cloud': {
+        const provider = def.command === '/setup-bedrock' ? 'bedrock' : 'vertex';
+        host.open('connect', provider);
+        break;
+      }
       case 'memory': {
         if (!args || args === 'list') host.open('memory');
         else if (args === 'open') {

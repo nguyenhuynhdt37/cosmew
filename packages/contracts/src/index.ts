@@ -24,3 +24,5 @@ export * from './hooks';
 export * from './checkpoints';
 
 export * from './mcp-management';
+export * from './plugins';
+export * from './automation';

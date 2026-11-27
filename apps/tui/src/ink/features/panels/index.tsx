@@ -171,6 +171,155 @@ export function HooksDialog(props: DialogProps) {
     </Panel>
   );
 }
+
+export function PluginsDialog(props: DialogProps) {
+  const client = useFutrynClient();
+  useDialogRefresh();
+  const {color} = useTheme();
+  const ui = useUiTheme();
+  const size = useDialogSize(props);
+  const task = useDialogTask();
+  const snapshot = client.plugins();
+  const plugins = snapshot.plugins;
+  const muted = color('foregroundMuted');
+  const warn = color('warning');
+  const ok = color('success');
+  const availableRows = useDialogRows();
+  const listRows = Math.max(1, Math.min(size.visibleRows, Math.floor(((availableRows ?? 24) - 12) / 2)));
+  const [cursor, setCursor] = useState(0);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const clampedCursor = Math.min(cursor, Math.max(0, plugins.length - 1));
+  const selected = plugins[clampedCursor];
+
+  const runAction = (action: Parameters<typeof client.managePlugin>[0]) => {
+    void task.run(async signal => {
+      try {
+        const res = await client.managePlugin(action, signal);
+        setFeedback(res.message);
+      } catch (error) {
+        setFeedback(error instanceof Error && error.message ? error.message : 'Plugin action failed.');
+      }
+    });
+  };
+
+  useKeymap({
+    previous: () => setCursor(n => Math.max(0, n - 1)),
+    next: () => setCursor(n => Math.max(0, Math.min(Math.max(0, plugins.length - 1), n + 1))),
+  });
+  useTextInput((input, key) => {
+    if (
+      task.busy ||
+      !snapshot.supported ||
+      key.eventType === 'release' ||
+      key.ctrl ||
+      key.meta ||
+      key.escape ||
+      key.return ||
+      key.tab ||
+      key.upArrow ||
+      key.downArrow ||
+      key.leftArrow ||
+      key.rightArrow
+    )
+      return;
+    const lower = input.toLowerCase();
+    if ((lower === 'e' || input === ' ') && selected) {
+      runAction({type: selected.enabled ? 'disable' : 'enable', id: selected.id});
+    } else if (lower === 't' && selected) {
+      if (selected.trustState === 'trusted') runAction({type: 'revoke', id: selected.id});
+      else if (selected.contentHash && (selected.trustState === 'untrusted' || selected.trustState === 'trust-changed'))
+        runAction({type: 'trust', id: selected.id, hash: selected.contentHash});
+    } else if (lower === 'x' && selected) {
+      runAction({type: 'uninstall', id: selected.id});
+    } else if (lower === 'r') {
+      runAction({type: 'reload'});
+    }
+  });
+  const listMouseRef = useMouseTarget(event => {
+    if ('direction' in event) {
+      setCursor(n => Math.max(0, Math.min(Math.max(0, plugins.length - 1), n + event.direction)));
+    }
+  }, plugins.length > 0);
+  const first = Math.max(0, clampedCursor - listRows + 1);
+
+  return (
+    <Panel width={size.width}>
+      <Text bold color={ui.color('rule')}>
+        Plugins
+      </Text>
+      <TextLine>
+        {snapshot.supported
+          ? `${plugins.length} installed${snapshot.untrustedCount ? ` · ${snapshot.untrustedCount} awaiting SHA-256 trust` : ''}`
+          : 'Not implemented'}
+      </TextLine>
+      {snapshot.supported && snapshot.directory ? (
+        <TextLine color={muted}>{safeText(snapshot.directory)}</TextLine>
+      ) : null}
+      {feedback ? <TextLine color={ok}>{safeText(feedback)}</TextLine> : null}
+      {snapshot.supported && plugins.length === 0 ? (
+        <TextLine color={muted}>
+          No plugins installed. Run /plugin install &lt;path&gt; or `cosmew plugin install &lt;path&gt;`.
+        </TextLine>
+      ) : null}
+      {plugins.length > 0 ? (
+        <Box ref={listMouseRef} flexDirection="column">
+          {plugins.slice(first, first + listRows).map((plugin, index) => {
+            const trustLabel =
+              plugin.trustState === 'no-exec'
+                ? 'text-only'
+                : plugin.trustState === 'trusted'
+                  ? 'trusted'
+                  : plugin.trustState === 'trust-changed'
+                    ? 'TRUST-CHANGED'
+                    : 'UNTRUSTED';
+            const label = `${plugin.id}@${plugin.version} [${plugin.enabled ? 'on' : 'off'} · ${trustLabel}]`;
+            const counts = [
+              plugin.counts.skills ? `${plugin.counts.skills} skills` : '',
+              plugin.counts.commands ? `${plugin.counts.commands} cmds` : '',
+              plugin.counts.agents ? `${plugin.counts.agents} agents` : '',
+              plugin.counts.hooks ? `${plugin.counts.hooks} hooks` : '',
+              plugin.counts.mcpServers ? `${plugin.counts.mcpServers} mcp` : '',
+            ]
+              .filter(Boolean)
+              .join(', ');
+            return (
+              <MouseRow key={plugin.id} flexDirection="column" onHighlight={() => setCursor(first + index)}>
+                <OptionList
+                  width={size.width - 4}
+                  cursor={clampedCursor === first + index ? 0 : -1}
+                  items={[{id: plugin.id, label: safeText(label), numbered: false}]}
+                />
+                <TextLine color={muted}>
+                  {`  ${safeText(counts || 'empty')} · sha256:${plugin.contentHash ? plugin.contentHash.slice(0, 12) : 'invalid'}`}
+                </TextLine>
+              </MouseRow>
+            );
+          })}
+        </Box>
+      ) : null}
+      {selected && selected.grants.length > 0 ? (
+        <Box flexDirection="column">
+          <TextLine color={selected.trustState === 'trusted' ? muted : warn}>
+            {selected.trustState === 'trusted'
+              ? 'Approved execution grants:'
+              : 'Pending execution grants (press t to trust):'}
+          </TextLine>
+          {selected.grants.slice(0, 4).map((grant, i) => (
+            <TextLine key={`${selected.id}:grant:${i}`} color={muted}>
+              {`  [${grant.kind}] ${safeText(grant.summary)}`}
+            </TextLine>
+          ))}
+        </Box>
+      ) : null}
+      {selected?.diagnostics.length ? <TextLine color={warn}>{safeText(selected.diagnostics[0]!)}</TextLine> : null}
+      <TextLine color={muted}>
+        {task.busy
+          ? 'Updating plugins…'
+          : '↑/↓ navigate · e/Space toggle · t trust/revoke · x uninstall · r reload · Esc close'}
+      </TextLine>
+    </Panel>
+  );
+}
 /** SDK owns restore policy, conflict checks, dispatcher writes and conversation forks. */
 export function RewindDialog({onCancel, ...props}: DialogProps & {onCancel?: () => void}) {
   const client = useFutrynClient();

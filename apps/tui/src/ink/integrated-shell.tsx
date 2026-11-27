@@ -75,6 +75,7 @@ import {createPasteState} from './features/paste';
 import {
   HooksDialog,
   McpDialog,
+  PluginsDialog,
   RESULT_PREFIX,
   RewindDialog,
   cancelledResult,
@@ -475,6 +476,9 @@ export function IntegratedShell({
       case 'hooks':
         show(route, <HooksDialog width={width} />);
         break;
+      case 'plugins':
+        show(route, <PluginsDialog width={width} />);
+        break;
       case 'diff':
         if (width < 110) commandNotice(DIFF_PANEL_RESIZE_MESSAGE);
         else if (diffOpen) {
@@ -499,6 +503,7 @@ export function IntegratedShell({
     },
   });
   const shutdown = async () => {
+    client.stopScheduledJob('all', undefined, 'TUI shutdown');
     turn.current?.abort();
     for (const abort of commands.current.keys()) abort.abort();
     for (const abort of overlay.tasks.keys()) abort.abort();
@@ -609,6 +614,52 @@ export function IntegratedShell({
     });
     return true;
   };
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  const activeScheduledRef = useRef(false);
+  useEffect(() => {
+    client.setScheduledTurnExecutor(async (job, iteration, signal) => {
+      if (signal.aborted) throw new FutrynError('CANCELLED');
+      const costBefore = client.status().usage?.costUSD ?? 0;
+      const label = `[${job.kind} ${job.id} #${iteration}/${job.maxIterations}] ${job.prompt.replace(/\s+/g, ' ').slice(0, 64)}`;
+      const onAbort = () => turn.current?.abort();
+      signal.addEventListener('abort', onAbort, {once: true});
+      activeScheduledRef.current = true;
+      try {
+        const started = await submitRef.current(job.prompt, label);
+        if (!started) {
+          const err = new FutrynError(signal.aborted ? 'CANCELLED' : 'POLICY');
+          err.message = 'Session busy or unavailable';
+          throw err;
+        }
+        await pending.current;
+        if (signal.aborted) throw new FutrynError('CANCELLED');
+        const messages = client.activeSession()?.messages ?? [];
+        let lastAssistant = '';
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i]?.role === 'assistant' && messages[i]?.content) {
+            lastAssistant = messages[i]!.content;
+            break;
+          }
+        }
+        const costAfter = client.status().usage?.costUSD ?? costBefore;
+        return {text: lastAssistant, costUSD: Math.max(0, costAfter - costBefore)};
+      } finally {
+        activeScheduledRef.current = false;
+        signal.removeEventListener('abort', onAbort);
+      }
+    });
+    const unsubscribe = client.observeScheduledJobs(event => {
+      if (!mounted.current) return;
+      if (event.type === 'scheduled.completed' || event.type === 'scheduled.failed') {
+        notices.addNotice(`${event.job.id}: ${event.message ?? event.job.stopReason ?? event.job.status}`);
+      }
+    });
+    return () => {
+      client.setScheduledTurnExecutor(undefined);
+      unsubscribe();
+    };
+  }, [client]);
   const sendQueuedNow = () => {
     if (!client.queuedInput().length) {
       notices.addNotice('Nothing queued to send.');
@@ -1086,6 +1137,7 @@ export function IntegratedShell({
   };
   const stopWork = () => {
     if (turn.current && !busy) {
+      if (activeScheduledRef.current) client.stopScheduledJob('all', undefined, 'Cancelled with Esc');
       turn.current.abort();
       return;
     }
@@ -1093,7 +1145,15 @@ export function IntegratedShell({
       for (const abort of commands.current.keys()) abort.abort();
       return;
     }
+    if (!turn.current && !shellCall.current) {
+      const stopped = client.stopScheduledJob('all', undefined, 'Cancelled with Esc');
+      if (stopped.length) {
+        notices.addNotice(`Stopped ${stopped.length} scheduled job${stopped.length === 1 ? '' : 's'}.`);
+        return;
+      }
+    }
     if (!composer.interrupt()) {
+      if (activeScheduledRef.current) client.stopScheduledJob('all', undefined, 'Cancelled with Esc');
       turn.current?.abort();
       for (const abort of commands.current.keys()) abort.abort();
     }

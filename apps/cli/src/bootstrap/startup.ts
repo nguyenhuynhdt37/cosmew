@@ -46,12 +46,14 @@ import {
 import {
   Conversation,
   SAFETY_LIMITS,
+  SessionScheduler,
   estimateInitialContext,
   extractAutoMemories,
   requestInstructions,
   summarizeCheckpointSpan,
 } from '@cosmew/core';
 import {
+  BatchRunner,
   SubagentManager,
   SubagentScheduler,
   isBuiltinAgentName,
@@ -70,6 +72,7 @@ import {
 } from '@cosmew/tools';
 import {WebSearchClient, type SearchKeys} from '@cosmew/mcp';
 import {McpManager} from './mcp-manager';
+import {PluginManager} from './plugin-manager';
 import {LspManager, buildServerSpecs} from '@cosmew/code-intel';
 import {
   ProjectContextLoader,
@@ -273,6 +276,14 @@ export function startup(
   // User mcp.json only. Connect is explicit (cosmew mcp, TUI, exec, chat), never status or doctor.
   const vault = services.vault ?? new SecureVault(redactor);
   const mcpClients = new Set<FutrynClient>();
+  const pluginReloadListeners = new Set<() => void>();
+  const pluginManager = new PluginManager({
+    directory,
+    redact: text => terminalText(redactor.text(text)),
+    onChange: () => {
+      for (const reload of pluginReloadListeners) reload();
+    },
+  });
   const mcpManager = new McpManager({
     directory,
     vault,
@@ -281,6 +292,7 @@ export function startup(
     fetch: services.fetch,
     openURL: services.openMcpURL ?? (url => openExternalURL(url)),
     installRunner: services.mcpInstallRunner,
+    extraSpecs: () => pluginManager.activeMcpSpecs(),
     onChange: () => {
       for (const client of mcpClients) client.invalidateMcpPermissions();
     },
@@ -932,10 +944,15 @@ export function startup(
         workspace: workspaceTree(),
         home: services.skillsHome ?? resolvedUserHome(),
         overrides: () => settings.read().projectSkillOverrides?.[canonicalWorkspace] ?? {},
+        extraSkillRoots: () => pluginManager.activeSkillRoots(),
+        extraCommandRoots: () => pluginManager.activeCommandRoots(),
         canRead: (relative, absolute) =>
           evaluateRead(relative, absolute, {
             stateDirectory:
-              relative.startsWith('~/.cosmew/skills/') && absolute.startsWith(join(stateDirectory, 'skills') + '/')
+              (relative.startsWith('~/.cosmew/skills/') && absolute.startsWith(join(stateDirectory, 'skills') + '/')) ||
+              (relative.startsWith('~/.cosmew/commands/') &&
+                absolute.startsWith(join(stateDirectory, 'commands') + '/')) ||
+              (relative.startsWith('plugin:') && absolute.startsWith(join(stateDirectory, 'plugins') + '/'))
                 ? undefined
                 : stateDirectory,
           }).effect === 'allow' &&
@@ -950,10 +967,12 @@ export function startup(
         workspace: workspaceTree(),
         home: services.skillsHome ?? resolvedUserHome(),
         reserved: isBuiltinAgentName,
+        extraRoots: () => pluginManager.activeAgentRoots(),
         canRead: (relative, absolute) =>
           evaluateRead(relative, absolute, {
             stateDirectory:
-              relative.startsWith('~/.cosmew/agents/') && absolute.startsWith(join(stateDirectory, 'agents') + '/')
+              (relative.startsWith('~/.cosmew/agents/') && absolute.startsWith(join(stateDirectory, 'agents') + '/')) ||
+              (relative.startsWith('plugin:') && absolute.startsWith(join(stateDirectory, 'plugins') + '/'))
                 ? undefined
                 : stateDirectory,
           }).effect === 'allow' &&
@@ -961,6 +980,10 @@ export function startup(
             permissionRuleDecision(client?.permissionRules(), {tool: 'Read', target: relative}) ?? '',
           ),
       }));
+    pluginReloadListeners.add(() => {
+      skillCatalog?.reload();
+      agentCatalog?.reload();
+    });
     const subagentNoticeListeners = new Set<(notice: SubagentNotice) => void>();
     const subagentEventListeners = new Set<(notice: {parentSessionId: string; event: SubagentEvent}) => void>();
 
@@ -1178,7 +1201,12 @@ export function startup(
         },
         store: conversations,
         addParentUsage: usage => {
-          options.getParentConversation()?.addSubagentUsage(usage);
+          const conv = options.getParentConversation();
+          if (conv) conv.addSubagentUsage(usage);
+          else {
+            const sid = options.getParentSessionId();
+            if (sid) conversations.addUsage(sid, usage);
+          }
         },
         customAgents: {
           report: () => {
@@ -1389,10 +1417,37 @@ export function startup(
     const hookExecutor = new HookExecutor({
       workspace: canonicalWorkspace,
       getSettings: () => permissionSettings.snapshot(),
-      getPermissionMode: () => client?.permissionMode() ?? 'default',
+      getPermissionMode: () =>
+        ['plan', 'review'].includes(client?.mode() ?? 'chat') ? 'plan' : (client?.permissionMode() ?? 'default'),
       redact: text => terminalText(redactor.text(text)),
       commands: () => (commandRuntimes.closed ? undefined : commands()),
       getSandboxConfig: sandboxConfigNow,
+      extraHooks: () => pluginManager.activeHooks(),
+      extraUntrustedHooksCount: () => pluginManager.untrustedHooksCount(),
+    });
+    const batchRunner = new BatchRunner({
+      subagents: rootSubagents,
+      maxThreads: () => subagentScheduler.maxThreads(),
+      isAnalysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
+      redact: text => terminalText(redactor.text(text)),
+    });
+    const sessionScheduler = new SessionScheduler({
+      isBusy: sessionId =>
+        Boolean(
+          client?.isSending() ||
+          client?.listPendingPermissions().length ||
+          client?.listPendingQuestions().length ||
+          activeConversations.get(sessionId)?.activeTurnId(),
+        ),
+      execute: async (job, iteration, signal) => {
+        if (!client) throw new FutrynError('UNSUPPORTED');
+        return client.executeScheduledTurn(job, iteration, signal);
+      },
+      getSessionCostUSD: () => client?.status().usage?.costUSD ?? 0,
+    });
+    subagentShutdowns.add(() => {
+      sessionScheduler.shutdown();
+      return Promise.resolve();
     });
     const activeHooks: HookPort = {
       snapshot: () => hookExecutor.snapshot(),
@@ -1786,6 +1841,38 @@ export function startup(
         return skillReport();
       },
       hooks: () => hookExecutor.snapshot(),
+      plugins: () => pluginManager.snapshot(),
+      managePlugin: async (action, signal) => {
+        const result = pluginManager.manage(action);
+        if (
+          action.type === 'trust' ||
+          action.type === 'revoke' ||
+          action.type === 'enable' ||
+          action.type === 'disable' ||
+          action.type === 'uninstall' ||
+          action.type === 'reload'
+        ) {
+          await mcpManager.connect(signal).catch(() => {
+            /* Individual MCP failures are captured in MCP status/diagnostics. */
+          });
+        }
+        return result;
+      },
+      reloadPlugins: async signal => {
+        const snapshot = pluginManager.reload();
+        skillCatalog?.reload();
+        agentCatalog?.reload();
+        await mcpManager.connect(signal).catch(() => {
+          /* Individual MCP failures are captured in MCP status/diagnostics. */
+        });
+        return snapshot;
+      },
+      scheduledJobs: sessionId => sessionScheduler.list(sessionId),
+      startScheduledJob: (sessionId, spec) => sessionScheduler.start(sessionId, spec),
+      stopScheduledJob: (idOrAll, sessionId, reason) => sessionScheduler.stop(idOrAll, sessionId, reason),
+      observeScheduledJobs: listener => sessionScheduler.observe(listener),
+      notifyScheduledIdle: sessionId => sessionScheduler.notifyIdle(sessionId),
+      runBatch: (request, options) => batchRunner.run(request, options),
       askSideQuestion: async ({selection, messages, question}, signal) => {
         const account = accounts.get(selection.accountId);
         if (account.status === 'logged-out') throw new FutrynError('AUTH');
@@ -2519,6 +2606,7 @@ export function startup(
     },
     /** Idempotent. Spawns user MCP servers. Callers other than status/doctor await this before a turn. */
     mcpManager,
+    pluginManager,
     connectMcp: (signal?: AbortSignal) => mcpManager.connect(signal),
     shutdownCommands: async () => {
       metadataAbort.abort();

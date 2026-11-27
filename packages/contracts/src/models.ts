@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {SKILL_VISIBILITIES} from './skills';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.69' as const;
+export const CONTRACT_VERSION = '1.70' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer

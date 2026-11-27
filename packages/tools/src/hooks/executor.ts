@@ -62,6 +62,10 @@ export interface HookExecutorOptions {
   getSandboxConfig?(): SandboxConfig;
   /** Test seam for host POSIX shell path; defaults to `/bin/sh`. */
   shell?: string;
+  /** Trusted plugin hooks merged alongside user/project settings hooks (ADR 0125). */
+  extraHooks?: () => readonly ConfiguredHook[];
+  /** Number of plugin hooks currently ignored because their plugin is untrusted or modified. */
+  extraUntrustedHooksCount?: () => number;
 }
 
 interface RawHookRun {
@@ -218,8 +222,10 @@ export class HookExecutor implements HookPort {
     const settings = this.options.getSettings();
     const mode = this.options.getPermissionMode();
     const enabled = mode !== 'plan';
-    const hooks = (settings.hooks ?? []).map(hook => ({
+    const combinedHooks = [...(settings.hooks ?? []), ...(this.options.extraHooks?.() ?? [])];
+    const hooks = combinedHooks.map(hook => ({
       scope: hook.scope,
+      ...(hook.pluginId ? {pluginId: hook.pluginId} : {}),
       event: hook.event,
       ...(hook.matcher ? {matcher: hook.matcher} : {}),
       command: this.options.redact(hook.command),
@@ -230,7 +236,7 @@ export class HookExecutor implements HookPort {
       enabled,
       ...(!enabled ? {disabledReason: 'Hooks are disabled in plan mode (read-only).'} : {}),
       hooks,
-      untrustedPendingCount: settings.untrustedHooksCount ?? 0,
+      untrustedPendingCount: (settings.untrustedHooksCount ?? 0) + (this.options.extraUntrustedHooksCount?.() ?? 0),
     };
   }
 
@@ -240,7 +246,8 @@ export class HookExecutor implements HookPort {
       return {action: 'continue', events: []};
     }
     const settings = this.options.getSettings();
-    const matched = (settings.hooks ?? []).filter(hook => {
+    const combinedHooks = [...(settings.hooks ?? []), ...(this.options.extraHooks?.() ?? [])];
+    const matched = combinedHooks.filter(hook => {
       if (hook.event !== input.event) return false;
       if (input.event === 'PreToolUse' || input.event === 'PostToolUse') {
         return matchesHookMatcher(hook.matcher, input.toolName);
