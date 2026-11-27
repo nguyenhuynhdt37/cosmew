@@ -1,4 +1,12 @@
-import {generateText, streamText, jsonSchema, type LanguageModel, type ModelMessage, type ToolSet} from 'ai';
+import {
+  generateText,
+  streamText,
+  jsonSchema,
+  type LanguageModel,
+  type ModelMessage,
+  type SystemModelMessage,
+  type ToolSet,
+} from 'ai';
 import {createOpenAI} from '@ai-sdk/openai';
 import {createAnthropic} from '@ai-sdk/anthropic';
 import {createGoogle} from '@ai-sdk/google';
@@ -170,7 +178,96 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
   flush();
   return out;
 }
-import {isEncryptedHistoryError, normalizeError, ProviderTransport, wait} from './http';
+import {isCacheControlRejectionError, isEncryptedHistoryError, normalizeError, ProviderTransport, wait} from './http';
+
+const ANTHROPIC_MAX_CACHE_BREAKPOINTS = 4;
+const ANTHROPIC_EPHEMERAL_CACHE = {type: 'ephemeral' as const};
+
+type MessageProviderOptions = ModelMessage['providerOptions'];
+
+function mergeAnthropicCacheControl(existing: MessageProviderOptions): NonNullable<MessageProviderOptions> {
+  const anthropic = existing?.anthropic;
+  return {
+    ...existing,
+    anthropic: {
+      ...(anthropic && typeof anthropic === 'object' ? anthropic : {}),
+      cacheControl: ANTHROPIC_EPHEMERAL_CACHE,
+    },
+  };
+}
+
+function isCacheableAnthropicMessage(message: ModelMessage): boolean {
+  if (message.role === 'system') return typeof message.content === 'string' && message.content.trim().length > 0;
+  if (message.role === 'user') {
+    if (typeof message.content === 'string') return message.content.trim().length > 0;
+    return message.content.some(
+      part => (part.type === 'text' && part.text.trim().length > 0) || part.type === 'file' || part.type === 'image',
+    );
+  }
+  if (message.role === 'tool') {
+    return Array.isArray(message.content) && message.content.some(part => part.type === 'tool-result');
+  }
+  if (message.role === 'assistant') {
+    if (typeof message.content === 'string') return message.content.trim().length > 0;
+    if (!Array.isArray(message.content) || message.content.length === 0) return false;
+    // Anthropic applies message-level cache_control to the final content part, which cannot be thinking/reasoning.
+    const last = message.content[message.content.length - 1]!;
+    if (last.type === 'reasoning' || last.type === 'reasoning-file') return false;
+    if (last.type === 'text') return last.text.trim().length > 0;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Applies up to 4 Anthropic ephemeral cache breakpoints (ADR 0120): last tool definition,
+ * system prompt message, and up to 2 recent cacheable conversation messages.
+ */
+export function applyAnthropicCacheControl(
+  instructions: string | undefined,
+  messages: ModelMessage[],
+  tools: ToolSet,
+  toolNames: readonly string[],
+): {messages: ModelMessage[]; tools: ToolSet; system?: SystemModelMessage} {
+  let used = 0;
+  const nextTools: ToolSet = {...tools};
+  const lastToolName = toolNames[toolNames.length - 1];
+  if (lastToolName && nextTools[lastToolName] && used < ANTHROPIC_MAX_CACHE_BREAKPOINTS) {
+    const lastTool = nextTools[lastToolName]!;
+    nextTools[lastToolName] = {
+      ...lastTool,
+      providerOptions: mergeAnthropicCacheControl(lastTool.providerOptions),
+    };
+    used++;
+  }
+  const hasSystem = typeof instructions === 'string' && instructions.trim().length > 0;
+  let system: SystemModelMessage | undefined;
+  if (hasSystem && used < ANTHROPIC_MAX_CACHE_BREAKPOINTS) {
+    system = {
+      role: 'system',
+      content: instructions,
+      providerOptions: {anthropic: {cacheControl: ANTHROPIC_EPHEMERAL_CACHE}},
+    };
+    used++;
+  }
+  const nextMessages: ModelMessage[] = [...messages];
+  const remaining = Math.min(2, ANTHROPIC_MAX_CACHE_BREAKPOINTS - used);
+  let taggedMessages = 0;
+  for (let index = nextMessages.length - 1; index >= 0 && taggedMessages < remaining; index--) {
+    const candidate = nextMessages[index]!;
+    if (candidate.role === 'system' || !isCacheableAnthropicMessage(candidate)) continue;
+    nextMessages[index] = {
+      ...candidate,
+      providerOptions: mergeAnthropicCacheControl(candidate.providerOptions),
+    };
+    taggedMessages++;
+  }
+  return {
+    messages: nextMessages,
+    tools: nextTools,
+    ...(system ? {system} : {}),
+  };
+}
 
 export function stripProviderReplay(request: ModelRequest): ModelRequest {
   return {
@@ -374,6 +471,8 @@ function idleDeadline(ms: number): {signal: AbortSignal; touch: () => void; stop
 }
 
 export class ProviderAdapter implements ModelPort {
+  /** Set on an Anthropic endpoint that rejects prompt-caching markers before any output. */
+  private promptCacheUnsupported = false;
   constructor(
     private readonly transport: ProviderTransport,
     private readonly modelId: string,
@@ -594,20 +693,29 @@ export class ProviderAdapter implements ModelPort {
         : p.protocol === 'responses'
           ? {openai: providerOptions}
           : {[p.id]: providerOptions});
+    const baseMessages = toModelMessages(request.messages, {
+      protocol: p.protocol,
+      replayBinding: this.replayBinding(),
+      vision: this.info?.capabilities.vision,
+      replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
+    });
+    const toolNames = request.tools.map(t => t.name);
+    const useAnthropicCache = p.protocol === 'anthropic' && !this.promptCacheUnsupported;
+    const cached = useAnthropicCache
+      ? applyAnthropicCacheControl(request.instructions, baseMessages, tools, toolNames)
+      : undefined;
+    const finalMessages = cached ? cached.messages : baseMessages;
+    const finalTools = cached ? cached.tools : tools;
+    const systemPrompt = cached ? cached.system : request.instructions || undefined;
     return {
       model,
-      ...(request.instructions ? {system: request.instructions} : {}),
-      messages: toModelMessages(request.messages, {
-        protocol: p.protocol,
-        replayBinding: this.replayBinding(),
-        vision: this.info?.capabilities.vision,
-        replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
-      }),
+      ...(systemPrompt ? {system: systemPrompt} : {}),
+      messages: finalMessages,
       ...(sdkMaxOutputTokens !== undefined ? {maxOutputTokens: sdkMaxOutputTokens} : {}),
       ...(providerOptionsByProtocol ? {providerOptions: providerOptionsByProtocol} : {}),
       maxRetries: 0,
       abortSignal,
-      tools: request.tools.length ? tools : undefined,
+      tools: request.tools.length ? finalTools : undefined,
       experimental_telemetry: {isEnabled: false, recordInputs: false, recordOutputs: false},
       controller,
       responseHeaders,
@@ -649,25 +757,38 @@ export class ProviderAdapter implements ModelPort {
   }
 
   async *stream(request: ModelRequest, signal?: AbortSignal): AsyncIterable<ModelEvent> {
-    const hasReplay = request.messages.some(m => m.providerReplay);
+    let current = request;
+    let strippedReplay = false;
     let started = false;
-    let observedOutput = false;
-    try {
-      for await (const event of this.doStream(request, signal)) {
-        if (event.type === 'started') started = true;
-        else observedOutput = true;
-        yield event;
-      }
-    } catch (e) {
-      // A streamed tool may already have executed in core. Retrying here after
-      // observable output would duplicate work without the loop's discard protocol.
-      if (hasReplay && !observedOutput && !signal?.aborted && isEncryptedHistoryError(e)) {
-        for await (const event of this.doStream(stripProviderReplay(request), signal, started)) {
+    for (;;) {
+      let observedOutput = false;
+      try {
+        for await (const event of this.doStream(current, signal, started)) {
+          if (event.type === 'started') started = true;
+          else observedOutput = true;
           yield event;
         }
         return;
+      } catch (e) {
+        // A streamed tool may already have executed in core. Retrying here after
+        // observable output would duplicate work without the loop's discard protocol.
+        if (!observedOutput && !signal?.aborted) {
+          if (!strippedReplay && current.messages.some(m => m.providerReplay) && isEncryptedHistoryError(e)) {
+            strippedReplay = true;
+            current = stripProviderReplay(current);
+            continue;
+          }
+          if (
+            this.transport.provider.protocol === 'anthropic' &&
+            !this.promptCacheUnsupported &&
+            isCacheControlRejectionError(e)
+          ) {
+            this.promptCacheUnsupported = true;
+            continue;
+          }
+        }
+        throw e;
       }
-      throw e;
     }
   }
 
@@ -738,17 +859,32 @@ export class ProviderAdapter implements ModelPort {
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {
-    const hasReplay = request.messages.some(m => m.providerReplay);
-    // OAuth Responses generation delegates to stream(), which owns its one retry.
+    // OAuth Responses generation delegates to stream(), which owns its recovery retries.
     const streamOwnsRecovery =
       this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses';
-    try {
-      return await this.doGenerate(request, signal);
-    } catch (e) {
-      if (hasReplay && !streamOwnsRecovery && !signal?.aborted && isEncryptedHistoryError(e)) {
-        return await this.doGenerate(stripProviderReplay(request), signal);
+    let current = request;
+    let strippedReplay = false;
+    for (;;) {
+      try {
+        return await this.doGenerate(current, signal);
+      } catch (e) {
+        if (!streamOwnsRecovery && !signal?.aborted) {
+          if (!strippedReplay && current.messages.some(m => m.providerReplay) && isEncryptedHistoryError(e)) {
+            strippedReplay = true;
+            current = stripProviderReplay(current);
+            continue;
+          }
+          if (
+            this.transport.provider.protocol === 'anthropic' &&
+            !this.promptCacheUnsupported &&
+            isCacheControlRejectionError(e)
+          ) {
+            this.promptCacheUnsupported = true;
+            continue;
+          }
+        }
+        throw e;
       }
-      throw e;
     }
   }
 

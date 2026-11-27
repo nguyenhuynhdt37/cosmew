@@ -2,6 +2,7 @@ import type {
   ActiveTaskCheckpoint,
   ContextSnapshot,
   ConversationStore,
+  HookPort,
   Message,
   ModelPort,
   ProjectContextPort,
@@ -64,6 +65,8 @@ export interface ConversationOptions {
   modelCompaction?: boolean;
   /** Explicit analysis modes cannot be converted into mutating artifact recovery. */
   analysisOnly?: () => boolean;
+  /** Trusted lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, ADR 0120). */
+  hooks?: HookPort;
   /** Injected wait used for retry backoff (tests). */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
@@ -127,6 +130,8 @@ export interface TurnHost {
   activate(turn: ActiveTurn): void;
   /** The turn is over; it no longer owns the conversation. */
   release(turn: ActiveTurn): void;
+  /** Returns true once per conversation so SessionStart hooks run only on the first turn. */
+  claimSessionStartHooks?(): boolean;
 }
 
 /** Per-request settings of one `send` call. */

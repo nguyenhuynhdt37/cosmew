@@ -15,6 +15,7 @@ export type CommandOverlay =
   | 'background-tasks'
   | 'connect'
   | 'mcp'
+  | 'hooks'
   | 'rewind';
 export type CommandHandler =
   | 'overlay'
@@ -32,6 +33,10 @@ export type CommandHandler =
   | 'accounts'
   | 'clear'
   | 'compact'
+  | 'autocompact'
+  | 'btw'
+  | 'add-dir'
+  | 'reload-skills'
   | 'skills'
   | 'memory'
   | 'exit'
@@ -90,17 +95,14 @@ function unavailableClaudeCommand(
 
 const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/advisor', [], 'optional'),
-  unavailableClaudeCommand('/add-dir', [], 'required'),
   unavailableClaudeCommand('/artifact-capabilities'),
   unavailableClaudeCommand('/artifact-diagramming'),
   unavailableClaudeCommand('/artifacts'),
   unavailableClaudeCommand('/auto-mode-setup'),
-  unavailableClaudeCommand('/autocompact', [], 'optional'),
   unavailableClaudeCommand('/autofix-pr', [], 'optional'),
   unavailableClaudeCommand('/background', ['/bg'], 'optional'),
   unavailableClaudeCommand('/batch', [], 'required'),
   unavailableClaudeCommand('/branch', [], 'optional'),
-  unavailableClaudeCommand('/btw', [], 'optional'),
   unavailableClaudeCommand('/bug', ['/share'], 'optional'),
   unavailableClaudeCommand('/cd', [], 'required'),
   unavailableClaudeCommand('/chrome'),
@@ -137,7 +139,6 @@ const CLAUDE_UNAVAILABLE_COMMANDS: readonly SlashCommandDef[] = [
   unavailableClaudeCommand('/rate-limit-options'),
   unavailableClaudeCommand('/recap'),
   unavailableClaudeCommand('/reload-plugins', [], 'optional'),
-  unavailableClaudeCommand('/reload-skills'),
   unavailableClaudeCommand('/remote-control', ['/rc']),
   unavailableClaudeCommand('/remote-env'),
   unavailableClaudeCommand('/release-notes'),
@@ -281,12 +282,54 @@ export const SLASH_COMMANDS: readonly SlashCommandDef[] = [
   },
   {
     command: '/hooks',
-    handler: 'unavailable',
+    handler: 'overlay',
+    overlay: 'hooks',
     aliases: [],
     title: 'Hooks',
-    description: 'Inspect hook support (execution is not implemented)',
+    description: 'Inspect configured lifecycle hooks, scopes, matchers and trust status',
     category: 'Workspace & Security',
     duringRequest: true,
+  },
+  {
+    command: '/add-dir',
+    handler: 'add-dir',
+    requires: 'workspace',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Add Working Directory',
+    description: 'List or add an additional working directory for this session (--save persists to local settings)',
+    category: 'Workspace & Security',
+  },
+  {
+    command: '/reload-skills',
+    handler: 'reload-skills',
+    requires: 'workspace',
+    aliases: [],
+    title: 'Reload Skills',
+    description: 'Rescan project, user and system skill directories without restarting',
+    category: 'Workspace & Security',
+    duringRequest: true,
+  },
+  {
+    command: '/autocompact',
+    handler: 'autocompact',
+    aliases: [],
+    arguments: 'optional',
+    title: 'Auto-Compact',
+    description: 'Toggle or set automatic context compaction (on|off|status)',
+    category: 'Sessions',
+    duringRequest: true,
+    argumentsDuringRequest: true,
+  },
+  {
+    command: '/btw',
+    handler: 'btw',
+    requires: 'model',
+    aliases: [],
+    arguments: 'required',
+    title: 'Side Question',
+    description: 'Ask a quick side question using current context without modifying session history or running tools',
+    category: 'Sessions',
   },
   {
     command: '/rewind',

@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
-import {lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync} from 'node:fs';
+import {lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {dirname, join} from 'node:path';
+import {dirname, isAbsolute, join, resolve, sep} from 'node:path';
 import {
   FutrynError,
   permissionRuleSchema,
@@ -19,6 +19,7 @@ import {
 } from '@cosmew/contracts';
 import type {SandboxConfig} from '@cosmew/tools';
 import {
+  countSettingsHooks,
   describeLoosening,
   emptySettingsFile,
   mergeSettings,
@@ -77,6 +78,8 @@ export class FilePermissionSettings implements PermissionSettingsPort {
   private readonly cache = new Map<string, {key: string; loaded: Loaded}>();
   /** Content approved for this session only (`session` answer); never persisted. */
   private readonly sessionTrusted = new Set<string>();
+  /** Directories explicitly added via `/add-dir` for this session. */
+  private readonly sessionAdditionalDirectories: string[] = [];
   /** Notes about the legacy-rule migration, shown once as diagnostics. */
   private migration: string[] = [];
 
@@ -201,15 +204,18 @@ export class FilePermissionSettings implements PermissionSettingsPort {
     }
     const merged = mergeSettings(layers, this.home);
     const pendingTrust: PendingSettingsTrust[] = [];
+    let untrustedHooksCount = 0;
     const files: PermissionSettingsFileInfo[] = loaded.map((item, index) => {
       const trusted = layers[index]!.trusted;
-      if (!trusted && item.scope !== 'user')
+      if (!trusted && item.scope !== 'user') {
+        untrustedHooksCount += countSettingsHooks(item.file);
         pendingTrust.push({
           scope: item.scope,
           path: item.path,
           hash: item.hash,
           grants: describeLoosening(item.file),
         });
+      }
       return {
         scope: item.scope,
         path: item.path,
@@ -225,11 +231,14 @@ export class FilePermissionSettings implements PermissionSettingsPort {
         diagnostics: item.diagnostics,
       };
     });
+    const additionalDirectories = [...new Set([...merged.additionalDirectories, ...this.sessionAdditionalDirectories])];
     return {
       rules: merged.rules,
       ...(merged.defaultMode ? {defaultMode: merged.defaultMode} : {}),
-      additionalDirectories: merged.additionalDirectories,
+      additionalDirectories,
       sandbox: merged.sandbox,
+      hooks: merged.hooks,
+      untrustedHooksCount,
       files,
       pendingTrust,
       diagnostics: [
@@ -337,6 +346,48 @@ export class FilePermissionSettings implements PermissionSettingsPort {
       if (!list.includes(name)) list.push(name);
       network.allowedDomains = list;
     });
+  }
+
+  addAdditionalDirectory(directory: string, options: {persist?: boolean} = {}): string {
+    const trimmed = directory.trim();
+    if (!trimmed || trimmed.length > 1000 || /[\u0000-\u001f]/.test(trimmed)) throw new FutrynError('INVALID_INPUT');
+    const expanded =
+      trimmed === '~' || trimmed.startsWith('~/')
+        ? resolve(this.home, trimmed.slice(2))
+        : isAbsolute(trimmed)
+          ? resolve(trimmed)
+          : resolve(this.options.workspace, trimmed);
+    let canonical: string;
+    try {
+      canonical = realpathSync.native(expanded);
+      if (!statSync(canonical).isDirectory()) throw new FutrynError('INVALID_INPUT');
+    } catch (error) {
+      if (error instanceof FutrynError) throw error;
+      throw new FutrynError('NOT_FOUND');
+    }
+    // Security invariant: never allow adding `.git` or Cosmew's own state directory as a working directory.
+    const segments = canonical.split(/[\\/]+/);
+    if (segments.includes('.git')) throw new FutrynError('POLICY');
+    let stateRoot = resolve(this.options.stateDirectory);
+    try {
+      stateRoot = realpathSync.native(stateRoot);
+    } catch {
+      /* state dir may not exist in synthetic tests */
+    }
+    if (canonical === stateRoot || canonical.startsWith(stateRoot + sep)) throw new FutrynError('POLICY');
+    if (options.persist) {
+      this.mutate('local', raw => {
+        const permissions = ensureObject(raw, 'permissions');
+        const list = ensureList(permissions, 'additionalDirectories');
+        if (!list.includes(canonical)) list.push(canonical);
+        if (list.length > 200) throw new FutrynError('POLICY');
+        permissions.additionalDirectories = list;
+      });
+    }
+    if (!this.sessionAdditionalDirectories.includes(canonical)) {
+      this.sessionAdditionalDirectories.push(canonical);
+    }
+    return canonical;
   }
 
   /**

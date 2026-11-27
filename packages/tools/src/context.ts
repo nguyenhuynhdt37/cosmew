@@ -12,6 +12,7 @@ import type {
   PermissionDecision,
   PermissionPromptRequest,
   SubagentExecutionPort,
+  HookPort,
 } from '@cosmew/contracts';
 import {evaluateRead, type SessionGrants} from '@cosmew/security';
 import type {LspManager} from '@cosmew/code-intel';
@@ -192,6 +193,8 @@ export interface ToolDispatcherOptions {
   };
   /** Nested subagent execution port (Wave 2 S5a), wired by the composition root. */
   subagents?: SubagentExecutionPort;
+  /** Trusted lifecycle hooks (`PreToolUse`, `PostToolUse`, ADR 0120). Never grants permissions. */
+  hooks?: HookPort;
 }
 
 /**

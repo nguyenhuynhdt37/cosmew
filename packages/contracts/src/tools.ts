@@ -192,6 +192,6 @@ export interface ToolPort {
     call: ToolCall,
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
-    onEvent?: (event: import('./subagents').SubagentEvent) => void,
+    onEvent?: (event: import('./subagents').SubagentEvent | import('./hooks').HookRanEvent) => void,
   ): Promise<ToolResult>;
 }

@@ -593,6 +593,10 @@ export interface PermissionSettingsSnapshot {
     allowUnsandboxedCommands: boolean;
     allowedDomains: string[];
   };
+  /** Trusted lifecycle hooks merged in execution order (user -> project -> local). */
+  hooks?: import('./hooks').ConfiguredHook[];
+  /** Count of hooks in untrusted repository settings files awaiting user trust approval. */
+  untrustedHooksCount?: number;
   files: PermissionSettingsFileInfo[];
   pendingTrust: PendingSettingsTrust[];
   diagnostics: string[];
@@ -609,6 +613,8 @@ export type SandboxSettingsPatch = Partial<
 export interface PermissionSettingsPort {
   /** Explicit user action; writes user settings only. */
   updateSandbox?(patch: SandboxSettingsPatch): void;
+  /** Explicit user `/add-dir` action; defaults to session-only unless `persist: true` saves to local settings. */
+  addAdditionalDirectory?(directory: string, options?: {persist?: boolean}): string;
   snapshot(): PermissionSettingsSnapshot;
   addRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;
   removeRule(scope: PermissionSettingsScope, effect: PermissionRuleEffect, rule: string): void;

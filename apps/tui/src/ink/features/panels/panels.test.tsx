@@ -75,6 +75,26 @@ test('/mcp says no servers are configured and /hooks stays Not implemented', asy
   expect(hooks.lastFrame()).toContain('Esc to close');
   expect(hooks.lastFrame()).not.toMatch(/✔|✘/);
 });
+
+test('/hooks displays configured hooks, plan-mode pause state, and untrusted repository warning', async () => {
+  const fixture = dialogFixture({
+    hooks: () => ({
+      supported: true,
+      enabled: false,
+      disabledReason: 'Hooks are disabled in plan mode (read-only).',
+      untrustedPendingCount: 2,
+      hooks: [{scope: 'user', event: 'PreToolUse', matcher: 'Bash', command: 'echo check', timeoutMs: 10000}],
+    }),
+  });
+  const view = renderInk(<HooksDialog />, {fixture});
+  await settle();
+  expect(view.lastFrame()).toContain('1 active hook · paused');
+  expect(view.lastFrame()).toContain('Hooks are disabled in plan mode');
+  expect(view.lastFrame()).toContain('2 repository hooks ignored until trusted');
+  expect(view.lastFrame()).toContain('[user] PreToolUse (Bash)');
+  expect(view.lastFrame()).toContain('echo check');
+  view.unmount();
+});
 test('/mcp keeps the first server selectable after an empty refresh', async () => {
   let servers: Array<{name: string; transport: 'stdio'; state: 'connected'; tools: number}> = [];
   const fixture = dialogFixture({

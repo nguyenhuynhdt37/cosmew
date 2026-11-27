@@ -99,16 +99,75 @@ export function HooksDialog(props: DialogProps) {
   const ui = useUiTheme();
   const size = useDialogSize(props);
   const snapshot = client.hooks();
+  const muted = color('foregroundMuted');
+  const warn = color('warning');
+  const hooks = snapshot.hooks;
+  const availableRows = useDialogRows();
+  const listRows = Math.max(1, Math.min(size.visibleRows, Math.floor(((availableRows ?? 24) - 10) / 2)));
+  const [cursor, setCursor] = useState(0);
+  useKeymap({
+    previous: () => setCursor(n => Math.max(0, n - 1)),
+    next: () => setCursor(n => Math.max(0, Math.min(Math.max(0, hooks.length - 1), n + 1))),
+  });
+  const listMouseRef = useMouseTarget(event => {
+    if ('direction' in event) {
+      setCursor(n => Math.max(0, Math.min(Math.max(0, hooks.length - 1), n + event.direction)));
+    }
+  }, hooks.length > 0);
+  const first = Math.max(0, cursor - listRows + 1);
   return (
     <Panel width={size.width}>
       <Text bold color={ui.color('rule')}>
         Hooks
       </Text>
-      <TextLine>This menu is read-only.</TextLine>
-      {snapshot.hooks.length === 0 ? <TextLine>No hooks configured.</TextLine> : null}
-      {!snapshot.supported ? <TextLine>Not implemented</TextLine> : null}
-      <TextLine color={color('foregroundMuted')}>Hook execution is not supported by this backend.</TextLine>
-      <TextLine color={color('foregroundMuted')}>Esc to close</TextLine>
+      <TextLine>
+        {snapshot.supported
+          ? `${hooks.length} active hook${hooks.length === 1 ? '' : 's'} · ${snapshot.enabled === false ? 'paused' : 'active'}`
+          : 'Not implemented'}
+      </TextLine>
+      {!snapshot.supported ? (
+        <>
+          <TextLine>No hooks configured.</TextLine>
+          <TextLine color={muted}>Hook execution is not supported by this backend.</TextLine>
+        </>
+      ) : null}
+      {snapshot.supported && snapshot.disabledReason ? (
+        <TextLine color={warn}>{safeText(snapshot.disabledReason)}</TextLine>
+      ) : null}
+      {snapshot.supported && (snapshot.untrustedPendingCount ?? 0) > 0 ? (
+        <TextLine color={warn}>
+          {`${snapshot.untrustedPendingCount} repository hook${snapshot.untrustedPendingCount === 1 ? '' : 's'} ignored until trusted in /permissions.`}
+        </TextLine>
+      ) : null}
+      {snapshot.supported && hooks.length === 0 ? (
+        <TextLine color={muted}>
+          No active hooks configured. Configure hooks in ~/.cosmew/settings.json or .cosmew/settings.json.
+        </TextLine>
+      ) : null}
+      {hooks.length > 0 ? (
+        <Box ref={listMouseRef} flexDirection="column">
+          {hooks.slice(first, first + listRows).map((hook, index) => {
+            const label = `[${hook.scope}] ${hook.event}${hook.matcher ? ` (${hook.matcher})` : ''} · ${Math.round(hook.timeoutMs / 1000)}s`;
+            return (
+              <MouseRow
+                key={`${hook.scope}:${hook.event}:${hook.matcher ?? '*'}:${first + index}`}
+                flexDirection="column"
+                onHighlight={() => setCursor(first + index)}
+              >
+                <OptionList
+                  width={size.width - 4}
+                  cursor={cursor === first + index ? 0 : -1}
+                  items={[{id: String(first + index), label: safeText(label), numbered: false}]}
+                />
+                <TextLine color={muted}>{`  ${safeText(hook.command)}`}</TextLine>
+              </MouseRow>
+            );
+          })}
+        </Box>
+      ) : null}
+      <TextLine color={muted}>
+        {hooks.length > 0 ? '↑/↓ to navigate · Esc to close' : 'Hooks never grant permissions · Esc to close'}
+      </TextLine>
     </Panel>
   );
 }

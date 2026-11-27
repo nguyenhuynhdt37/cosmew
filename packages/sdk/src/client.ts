@@ -155,10 +155,11 @@ export interface BackendCapabilitiesReport {
   themesAndWallpapers: 'implemented';
   workspaceDiff: 'implemented';
   permissionDialog: 'implemented';
-  generalToolsExecution: 'not-implemented';
+  generalToolsExecution: 'implemented' | 'not-implemented';
   mcpIntegration: 'partial' | 'not-implemented';
+  hooks: 'implemented' | 'not-implemented';
   pluginHost: 'not-implemented';
-  delegatedSubagents: 'not-implemented';
+  delegatedSubagents: 'implemented' | 'not-implemented';
 }
 
 export interface ConnectAccountInput {
@@ -277,7 +278,15 @@ export interface FutrynBackendPorts {
   ): Promise<RewindOutcome>;
   prepareImage?(input: ImageAttachmentInput): Promise<Attachment>;
   skills?(): SkillsReport;
+  reloadSkills?(): SkillsReport;
   saveSkillOverrides?(changes: Readonly<Record<string, SkillVisibility>>): void;
+  /** Inspect configured lifecycle hooks (ADR 0120). */
+  hooks?(): HooksSnapshot;
+  /** Ephemeral side question (`/btw`) answered without tools or session history mutation. */
+  askSideQuestion?(
+    input: {selection: Selection; messages: readonly Message[]; question: string},
+    signal?: AbortSignal,
+  ): Promise<{text: string; usage?: Usage}>;
   memories?(): MemoryInfo[];
   memoryDirectory?(): string | null;
   openMemoryDirectory?(): Promise<void>;
@@ -822,6 +831,112 @@ export class FutrynClient {
     return this.permissionSettings();
   }
 
+  /** Add an additional working directory via explicit user `/add-dir` action. */
+  addAdditionalDirectory(directory: string, options: {persist?: boolean} = {}): string {
+    if (!this.settingsPort.addAdditionalDirectory) throw new FutrynError('UNSUPPORTED');
+    const added = this.settingsPort.addAdditionalDirectory(directory, options);
+    this.notifyStateChange();
+    return this.ports.sanitizeText(added);
+  }
+
+  /** Rescan skill directories in place (`/reload-skills`). */
+  reloadSkills(): SkillsReport {
+    if (!this.ports.reloadSkills) throw new FutrynError('UNSUPPORTED');
+    const report = structuredClone(this.ports.reloadSkills());
+    this.notifyStateChange();
+    return report;
+  }
+
+  /** Ask an ephemeral side question (`/btw`) without running tools or modifying durable session history. */
+  async askSideQuestion(question: string, signal?: AbortSignal): Promise<{text: string; usage?: Usage}> {
+    const trimmed = question.trim();
+    if (!trimmed) throw new FutrynError('INVALID_INPUT');
+    if (this.sending) throw new FutrynError('POLICY');
+    if (!this.ports.askSideQuestion) throw new FutrynError('UNSUPPORTED');
+    const selection = this.status().selection;
+    if (!selection) throw new FutrynError('AUTH');
+    const messages = (this.currentSession?.messages ?? []).map(message => {
+      const {providerReplay: _replay, ...visible} = message;
+      return visible;
+    });
+    const result = await this.ports.askSideQuestion({selection, messages, question: trimmed}, signal);
+    return {
+      text: this.ports.sanitizeText(result.text),
+      ...(result.usage ? {usage: result.usage} : {}),
+    };
+  }
+
+  /** Structured export of the active conversation (`markdown` or `json`), sanitized and without private replay state. */
+  exportSession(format: 'markdown' | 'json'): string {
+    const session = this.currentSession;
+    const sanitize = (value: string) => this.ports.sanitizeText(value);
+    const messages = (session?.messages ?? []).map(message => ({
+      role: message.role,
+      content: sanitize(message.content),
+      ...(message.toolName ? {toolName: sanitize(message.toolName)} : {}),
+      ...(message.toolCallId ? {toolCallId: sanitize(message.toolCallId)} : {}),
+      ...(message.toolCalls?.length
+        ? {
+            toolCalls: message.toolCalls.map(call => ({
+              id: sanitize(call.id),
+              name: sanitize(call.name),
+              input: JSON.parse(sanitize(JSON.stringify(call.input))),
+            })),
+          }
+        : {}),
+    }));
+    const title = sanitize(session?.title ?? 'Cosmew Conversation');
+    const model = session?.selection.modelId ?? this.status().selection?.modelId ?? 'unknown';
+    const exportedAt = new Date().toISOString();
+    if (format === 'json') {
+      return (
+        JSON.stringify(
+          {
+            version: 1,
+            exportedAt,
+            sessionId: session?.id ?? null,
+            title,
+            model: sanitize(model),
+            messages,
+          },
+          null,
+          2,
+        ) + '\n'
+      );
+    }
+    const lines: string[] = [
+      `# ${title}`,
+      '',
+      `- **Session**: ${session?.id ?? 'unsaved'}`,
+      `- **Model**: ${sanitize(model)}`,
+      `- **Exported**: ${exportedAt}`,
+      '',
+    ];
+    for (const message of messages) {
+      if (message.role === 'user') {
+        lines.push('## User', '', message.content, '');
+      } else if (message.role === 'assistant') {
+        lines.push('## Assistant', '');
+        if (message.content) lines.push(message.content, '');
+        if (message.toolCalls?.length) {
+          for (const call of message.toolCalls) {
+            lines.push(
+              `### Tool Call: \`${call.name}\``,
+              '',
+              '```json',
+              JSON.stringify(call.input, null, 2),
+              '```',
+              '',
+            );
+          }
+        }
+      } else if (message.role === 'tool') {
+        lines.push(`### Tool Result: \`${message.toolName ?? 'tool'}\``, '', '```text', message.content, '```', '');
+      }
+    }
+    return lines.join('\n').trimEnd() + '\n';
+  }
+
   async sandboxDependencies(): Promise<SandboxDependenciesReport> {
     if (!this.ports.sandboxDependencies) throw new FutrynError('UNSUPPORTED');
     return structuredClone(await this.ports.sandboxDependencies());
@@ -979,7 +1094,19 @@ export class FutrynClient {
   }
 
   hooks(): HooksSnapshot {
-    return {supported: false, hooks: []};
+    const raw = this.ports.hooks?.();
+    if (!raw) return {supported: false, hooks: []};
+    return {
+      supported: raw.supported,
+      ...(raw.enabled !== undefined ? {enabled: raw.enabled} : {}),
+      ...(raw.disabledReason ? {disabledReason: this.ports.sanitizeText(raw.disabledReason)} : {}),
+      ...(raw.untrustedPendingCount !== undefined ? {untrustedPendingCount: raw.untrustedPendingCount} : {}),
+      hooks: raw.hooks.map(hook => ({
+        ...hook,
+        command: this.ports.sanitizeText(hook.command),
+        ...(hook.matcher ? {matcher: this.ports.sanitizeText(hook.matcher)} : {}),
+      })),
+    };
   }
 
   mcpServers(): McpServersSnapshot {
@@ -1034,10 +1161,11 @@ export class FutrynClient {
       themesAndWallpapers: 'implemented',
       workspaceDiff: 'implemented',
       permissionDialog: 'implemented',
-      generalToolsExecution: 'not-implemented',
+      generalToolsExecution: this.ports.availableTools ? 'implemented' : 'not-implemented',
       mcpIntegration: this.ports.mcpStatus ? 'partial' : 'not-implemented',
+      hooks: this.ports.hooks ? 'implemented' : 'not-implemented',
       pluginHost: 'not-implemented',
-      delegatedSubagents: 'not-implemented',
+      delegatedSubagents: this.ports.subagents ? 'implemented' : 'not-implemented',
     };
   }
 
@@ -3684,6 +3812,7 @@ function memoryPermissionSettings(): PermissionSettingsPort {
     excludedCommands: [] as string[],
     allowUnsandboxedCommands: true,
   };
+  const additionalDirectories: string[] = [];
   return {
     updateSandbox(patch) {
       for (const key of ['enabled', 'autoAllowBashIfSandboxed', 'allowUnsandboxedCommands'] as const)
@@ -3691,13 +3820,20 @@ function memoryPermissionSettings(): PermissionSettingsPort {
       if (patch.excludeCommand && !sandbox.excludedCommands.includes(patch.excludeCommand))
         sandbox.excludedCommands.push(patch.excludeCommand);
     },
+    addAdditionalDirectory(directory) {
+      const trimmed = directory.trim();
+      if (!trimmed || /[\u0000-\u001f]/.test(trimmed)) throw new FutrynError('INVALID_INPUT');
+      if (trimmed.split(/[\\/]+/).includes('.git')) throw new FutrynError('POLICY');
+      if (!additionalDirectories.includes(trimmed)) additionalDirectories.push(trimmed);
+      return trimmed;
+    },
     snapshot() {
       const union = (pick: (rules: PermissionRuleSet) => string[]) => [
         ...new Set(scopes.flatMap(scope => pick(files.get(scope)!.rules))),
       ];
       return {
         rules: {allow: union(r => r.allow), ask: union(r => r.ask), deny: union(r => r.deny)},
-        additionalDirectories: [],
+        additionalDirectories: [...additionalDirectories],
         sandbox: {
           ...sandbox,
           excludedCommands: [...sandbox.excludedCommands],

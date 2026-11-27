@@ -20,13 +20,28 @@ export class SkillCatalog {
   private readonly errors: SkillDiagnostic[] = [];
   private readonly warnings: SkillDiagnostic[] = [];
   private readonly overrides?: () => Readonly<Record<string, SkillVisibility>>;
+  private readonly options: {
+    workspace: WorkspaceRoot;
+    home?: string;
+    overrides?: () => Readonly<Record<string, SkillVisibility>>;
+    canRead?: (relative: string, absolute: string) => boolean;
+  };
   constructor(options: {
     workspace: WorkspaceRoot;
     home?: string;
     overrides?: () => Readonly<Record<string, SkillVisibility>>;
     canRead?: (relative: string, absolute: string) => boolean;
   }) {
+    this.options = options;
     this.overrides = options.overrides;
+    this.reload();
+  }
+  /** Rescan project, user, and system skill roots in place so live sessions pick up edits. */
+  reload(): void {
+    this.entries.clear();
+    this.errors.length = 0;
+    this.warnings.length = 0;
+    const {options} = this;
     const homePath = resolve(options.home ?? homedir());
     let home = homePath;
     try {

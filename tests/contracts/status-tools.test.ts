@@ -50,9 +50,14 @@ test('a model that cannot call tools gets no tool list and toolsEnabled false, e
   expect(client.availableTools()).toEqual([]);
 });
 
-test('P1 hooks truthfully report unsupported and MCP exposes management capability flags', async () => {
+test('hooks report active support with empty default list and MCP exposes management capability flags', async () => {
   const {client} = await direct('supported');
-  expect(client.hooks()).toEqual({supported: false, hooks: []});
+  expect(client.hooks()).toEqual({supported: true, enabled: true, hooks: [], untrustedPendingCount: 0});
+  expect(client.capabilities()).toMatchObject({
+    generalToolsExecution: 'implemented',
+    hooks: 'implemented',
+    delegatedSubagents: 'implemented',
+  });
   const report = client.mcpServers();
   expect(report.supported).toEqual({stdioManagement: true, oauthManagement: true});
   expect(report.servers.every(server => typeof server.toolCount === 'number')).toBe(true);

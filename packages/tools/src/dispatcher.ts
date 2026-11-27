@@ -1,4 +1,4 @@
-import type {CommandOutputChunk, SubagentEvent, ToolCall, ToolPort} from '@cosmew/contracts';
+import type {CommandOutputChunk, HookRanEvent, SubagentEvent, ToolCall, ToolPort} from '@cosmew/contracts';
 import type {ToolDispatcherOptions} from './context';
 import {createHandlers} from './handlers';
 import {InstructionReader} from './handlers/instructions';
@@ -47,7 +47,7 @@ export class ToolDispatcher implements ToolPort {
     call: ToolCall,
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
-    onEvent?: (event: SubagentEvent) => void,
+    onEvent?: (event: SubagentEvent | HookRanEvent) => void,
   ) {
     return this.orchestrator.invoke(call, signal, onOutput, onEvent);
   }

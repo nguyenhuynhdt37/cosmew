@@ -47,11 +47,19 @@ export function normalizeError(error: unknown, signal?: AbortSignal): FutrynErro
   if (wrapped) {
     if (isEncryptedHistoryError(wrapped) || isEncryptedHistoryError(error))
       (wrapped as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+    if (isCacheControlRejectionError(wrapped) || isCacheControlRejectionError(error))
+      (wrapped as unknown as {cacheControlRejected?: boolean}).cacheControlRejected = true;
     return wrapped;
   }
   if (isEncryptedHistoryError(error)) {
     const err = new FutrynError('INVALID_INPUT');
     (err as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+    if (error instanceof Error && error.message) err.message = error.message;
+    return err;
+  }
+  if (isCacheControlRejectionError(error)) {
+    const err = new FutrynError('INVALID_INPUT');
+    (err as unknown as {cacheControlRejected?: boolean}).cacheControlRejected = true;
     if (error instanceof Error && error.message) err.message = error.message;
     return err;
   }
@@ -128,6 +136,26 @@ export function isEncryptedHistoryError(error: unknown): boolean {
       ? String((error as Record<string, unknown>).responseBody)
       : '';
   return encryptedHistoryMarker.test(message) || encryptedHistoryMarker.test(body);
+}
+
+export const cacheControlRejectionMarker = /\b(?:cache_control|cache[ _-]?point|prompt[_ -]caching)\b/i;
+
+export function isCacheControlRejectionError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof error === 'object' && (error as {cacheControlRejected?: boolean}).cacheControlRejected) return true;
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof error === 'object' && 'message' in (error as Record<string, unknown>)
+          ? String((error as Record<string, unknown>).message)
+          : '';
+  const body =
+    typeof error === 'object' && error !== null && 'responseBody' in (error as Record<string, unknown>)
+      ? String((error as Record<string, unknown>).responseBody)
+      : '';
+  return cacheControlRejectionMarker.test(message) || cacheControlRejectionMarker.test(body);
 }
 
 function errorFields(value: unknown) {
@@ -288,6 +316,12 @@ export class ProviderTransport {
             const err = new FutrynError('INVALID_INPUT');
             err.message = message || 'This conversation contains encrypted history for the original account.';
             (err as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+            throw err;
+          }
+          if (cacheControlRejectionMarker.test(message) || markers.some(m => cacheControlRejectionMarker.test(m))) {
+            const err = new FutrynError('INVALID_INPUT');
+            err.message = message || 'Provider rejected cache_control prompt caching fields.';
+            (err as unknown as {cacheControlRejected?: boolean}).cacheControlRejected = true;
             throw err;
           }
         } else if (

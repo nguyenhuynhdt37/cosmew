@@ -3,6 +3,7 @@ import {
   FutrynError,
   toolResultSchema,
   type CommandOutputChunk,
+  type HookRanEvent,
   type PermissionDecision,
   type SubagentEvent,
   type ToolCall,
@@ -63,7 +64,7 @@ export class ToolOrchestrator {
     call: ToolCall,
     signal?: AbortSignal,
     onOutput?: (chunk: CommandOutputChunk) => void,
-    onEvent?: (event: SubagentEvent) => void,
+    onEvent?: (event: SubagentEvent | HookRanEvent) => void,
     userSkill = false,
   ): Promise<ToolResult> {
     signal?.throwIfAborted();
@@ -164,6 +165,29 @@ export class ToolOrchestrator {
         if ('kind' in prepared)
           return finish({status: 'error', code: 'INVALID_STATE', content: 'The tool did not resolve.'});
         return finish(prepared);
+      }
+      let preHookContext: string | undefined;
+      if (this.options.hooks && !userSkill) {
+        const preOutcome = await this.options.hooks.run(
+          {
+            event: 'PreToolUse',
+            sessionId: this.options.sessionId?.(),
+            cwd: this.options.workspace.root,
+            toolName: call.name,
+            toolInput: call.input,
+          },
+          signal,
+        );
+        for (const ev of preOutcome.events) onEvent?.(ev);
+        if (preOutcome.action === 'block') {
+          audit({target: null, phase: 'decided', decision: 'deny', reason: 'hook-blocked'});
+          return finish({
+            status: 'denied',
+            code: 'HOOK_BLOCKED',
+            content: preOutcome.reason || `Tool ${call.name} was blocked by a PreToolUse hook.`,
+          });
+        }
+        preHookContext = preOutcome.additionalContext;
       }
       if (prepared.kind === 'web-fetch') {
         prepared.authorize = async (url, fetchSignal) => {
@@ -320,8 +344,36 @@ export class ToolOrchestrator {
         onEvent,
         call.id,
       );
-      if (prepared.kind === 'patch' && before) return finish(await this.withDiagnostics(output, before, signal));
-      return finish(output);
+      const executedOutput =
+        prepared.kind === 'patch' && before ? await this.withDiagnostics(output, before, signal) : output;
+      let postHookContext: string | undefined;
+      if (this.options.hooks && !userSkill) {
+        const postOutcome = await this.options.hooks.run(
+          {
+            event: 'PostToolUse',
+            sessionId: this.options.sessionId?.(),
+            cwd: this.options.workspace.root,
+            toolName: call.name,
+            toolInput: call.input,
+            toolResult: {
+              status: executedOutput.status,
+              ...(executedOutput.code ? {code: executedOutput.code} : {}),
+              content: executedOutput.content,
+            },
+          },
+          signal,
+        );
+        for (const ev of postOutcome.events) onEvent?.(ev);
+        postHookContext = postOutcome.additionalContext;
+      }
+      const extraHookContext = [preHookContext, postHookContext].filter(Boolean).join('\n\n');
+      const finalOutput = extraHookContext
+        ? {
+            ...executedOutput,
+            content: `${executedOutput.content}\n\n[Hook context]\n${extraHookContext}`,
+          }
+        : executedOutput;
+      return finish(finalOutput);
     } catch (error) {
       if (signal?.aborted || (error instanceof FutrynError && error.code === 'CANCELLED')) {
         audit({target: null, phase: 'completed', outcome: 'error', code: 'CANCELLED'});

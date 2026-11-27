@@ -36,6 +36,7 @@ export class Conversation {
   private readonly state: ConversationState = {messages: [], pendingInput: []};
   private running = false;
   private active?: ActiveTurn;
+  private sessionStartHooksClaimed = false;
   private previewHistory?: {
     source: readonly Message[];
     length: number;
@@ -238,6 +239,11 @@ export class Conversation {
       },
       release: turn => {
         if (this.active === turn) this.active = undefined;
+      },
+      claimSessionStartHooks: () => {
+        if (this.sessionStartHooksClaimed) return false;
+        this.sessionStartHooksClaimed = true;
+        return true;
       },
     };
   }

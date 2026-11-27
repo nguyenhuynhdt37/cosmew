@@ -892,3 +892,108 @@ test('captureReplay drops oversized continuation state without failing valid res
     x.db.close();
   }
 });
+
+test('Anthropic adapter applies up to 4 ephemeral cache_control breakpoints (last tool, system, last 2 messages) and leaves other protocols untouched', async () => {
+  const anth = setup('anthropic');
+  const chat = setup('chat');
+  try {
+    const tools = [
+      {
+        name: 'read',
+        description: 'Read file',
+        inputSchema: {type: 'object', properties: {}, additionalProperties: false},
+      },
+      {
+        name: 'edit',
+        description: 'Edit file',
+        inputSchema: {type: 'object', properties: {}, additionalProperties: false},
+      },
+    ];
+    const messages: ModelRequest['messages'] = [
+      {role: 'user', content: 'turn 1'},
+      {role: 'assistant', content: 'reply 1'},
+      {role: 'user', content: 'turn 2'},
+      {role: 'assistant', content: 'reply 2'},
+      {role: 'user', content: 'turn 3'},
+    ];
+    const adapter = new ProviderAdapter(anth.transport, anth.request.modelId);
+    const events = await Array.fromAsync(
+      adapter.stream({...anth.request, instructions: 'You are Cosmew.', messages, tools}),
+    );
+    expect(events.at(-1)?.type).toBe('completed');
+    const body = anth.f.requests.at(-1)?.body;
+    // Last tool only carries cache_control (1 breakpoint).
+    expect(body.tools[0].cache_control).toBeUndefined();
+    expect(body.tools[1].cache_control).toEqual({type: 'ephemeral'});
+    // System prompt carries cache_control (1 breakpoint).
+    expect(Array.isArray(body.system)).toBe(true);
+    expect(body.system.at(-1).cache_control).toEqual({type: 'ephemeral'});
+    // At most 2 recent messages carry cache_control, keeping total breakpoints <= 4.
+    const messageBreakpoints = (body.messages as Array<{content: Array<{cache_control?: unknown}>}>).flatMap(m =>
+      Array.isArray(m.content) ? m.content.filter(part => part.cache_control) : [],
+    );
+    expect(messageBreakpoints.length).toBe(2);
+    for (const part of messageBreakpoints) expect(part.cache_control).toEqual({type: 'ephemeral'});
+    const totalBreakpoints =
+      (body.tools as Array<{cache_control?: unknown}>).filter(t => t.cache_control).length +
+      (body.system as Array<{cache_control?: unknown}>).filter(s => s.cache_control).length +
+      messageBreakpoints.length;
+    expect(totalBreakpoints).toBeLessThanOrEqual(4);
+
+    // Non-Anthropic protocols do not receive Anthropic cache_control fields.
+    const chatAdapter = new ProviderAdapter(chat.transport, chat.request.modelId);
+    await Array.fromAsync(chatAdapter.stream({...chat.request, instructions: 'You are Cosmew.', messages, tools}));
+    expect(JSON.stringify(chat.f.requests.at(-1)?.body)).not.toContain('cache_control');
+  } finally {
+    anth.db.close();
+    chat.db.close();
+  }
+});
+
+test('Anthropic adapter retries without cache_control when an Anthropic-compatible gateway rejects cache_control on 400', async () => {
+  const x = setup('anthropic');
+  try {
+    const bodies: Record<string, unknown>[] = [];
+    const customTransport = new ProviderTransport(
+      x.provider,
+      x.account,
+      x.vault,
+      new ConfiguredNetworkPolicy(),
+      (async (_url: string | URL | Request, init?: RequestInit) => {
+        const parsed = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        bodies.push(parsed);
+        if (JSON.stringify(parsed).includes('cache_control')) {
+          return Response.json(
+            {
+              type: 'error',
+              error: {type: 'invalid_request_error', message: 'cache_control is not supported by this gateway'},
+            },
+            {status: 400},
+          );
+        }
+        return Response.json({
+          id: 'msg_fallback',
+          type: 'message',
+          role: 'assistant',
+          model: x.request.modelId,
+          content: [{type: 'text', text: 'Fallback ok'}],
+          stop_reason: 'end_turn',
+          usage: {input_tokens: 5, output_tokens: 3},
+        });
+      }) as unknown as typeof fetch,
+    );
+    const adapter = new ProviderAdapter(customTransport, x.request.modelId);
+    const first = await adapter.generate({...x.request, instructions: 'Host instructions'});
+    expect(first.text).toBe('Fallback ok');
+    expect(bodies.length).toBe(2);
+    expect(JSON.stringify(bodies[0])).toContain('cache_control');
+    expect(JSON.stringify(bodies[1])).not.toContain('cache_control');
+    // Subsequent calls remember the endpoint rejected cache_control and avoid another 400 roundtrip.
+    const second = await adapter.generate({...x.request, instructions: 'Host instructions'});
+    expect(second.text).toBe('Fallback ok');
+    expect(bodies.length).toBe(3);
+    expect(JSON.stringify(bodies[2])).not.toContain('cache_control');
+  } finally {
+    x.db.close();
+  }
+});

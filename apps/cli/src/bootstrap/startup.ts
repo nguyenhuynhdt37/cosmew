@@ -16,6 +16,7 @@ import {
   isCodingModel,
   type Account,
   type CredentialVault,
+  type HookPort,
   type Message,
   type ModelInfo,
   type ModelPort,
@@ -58,6 +59,7 @@ import {
   type ChildRunContext,
 } from '@cosmew/agents';
 import {
+  HookExecutor,
   validateImageAttachment,
   SandboxProxy,
   ToolDispatcher,
@@ -216,6 +218,8 @@ interface ConversationWiring {
   budget?: () => TurnBudget | undefined;
   /** Plan/review modes cannot be turned into mutating artifact recovery. */
   analysisOnly?: () => boolean;
+  /** Trusted lifecycle hooks (`SessionStart`, `UserPromptSubmit`, `Stop`, ADR 0120). */
+  hooks?: HookPort;
   modeInstructions?: () => string;
 }
 
@@ -524,6 +528,7 @@ export function startup(
         // Codex; the generic shared-slot cap must therefore admit max_threads + 1 (ADR 0033/0058).
         parallelSlots: () => hostLoaded.agents.maxThreads + 1,
         analysisOnly: wiring.analysisOnly ?? (() => false),
+        hooks: wiring.hooks,
         autoCompact: () => appearanceStore.readPreferences().autoCompact,
         contextLimit: () => cachedModel(account, selection.modelId)?.contextLimit ?? null,
         outputLimit: () => cachedModel(account, selection.modelId)?.outputLimit ?? null,
@@ -1367,6 +1372,20 @@ export function startup(
       getParentAnalysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
     });
 
+    const hookExecutor = new HookExecutor({
+      workspace: canonicalWorkspace,
+      getSettings: () => permissionSettings.snapshot(),
+      getPermissionMode: () => client?.permissionMode() ?? 'default',
+      redact: text => terminalText(redactor.text(text)),
+      commands: () => (commandRuntimes.closed ? undefined : commands()),
+      getSandboxConfig: sandboxConfigNow,
+    });
+    const activeHooks: HookPort = {
+      snapshot: () => hookExecutor.snapshot(),
+      run: (input, signal) =>
+        toolsEnabled() ? hookExecutor.run(input, signal) : Promise.resolve({action: 'continue', events: []}),
+    };
+
     const tools = () =>
       (dispatcher ??= new ToolDispatcher({
         workspace: workspaceTree(),
@@ -1442,6 +1461,7 @@ export function startup(
           canAskUser: () => client?.userInputReady() === true,
         },
         subagents: rootSubagents,
+        hooks: activeHooks,
         redact: (text, incomplete) => (incomplete ? redactor.stream().push(text) : redactor.text(text)),
         audit: record => toolAudit.append(record),
         approve: (request, signal) =>
@@ -1624,6 +1644,7 @@ export function startup(
       },
       budget: () => client?.turnBudget(),
       analysisOnly: () => ['plan', 'review'].includes(client?.mode() ?? 'chat'),
+      hooks: activeHooks,
       modeInstructions: () =>
         client?.mode() === 'plan'
           ? 'Current session mode: PLAN. Inspect relevant files using read/search tools only. Preserve the user request. Return a structured actionable plan with objective, ordered steps, affected files, risks and verification. Do not execute commands or modify files. Implementation requires the user to switch to Chat mode explicitly.'
@@ -1689,6 +1710,35 @@ export function startup(
       memoryAction: async (action, name, entry) =>
         toolPort.invoke({id: crypto.randomUUID(), name: 'memory', input: {...entry, action, name}}),
       skills: () => (toolsEnabled() ? skillReport() : {skills: [], errors: [], warnings: []}),
+      reloadSkills: () => {
+        if (!toolsEnabled()) return {skills: [], errors: [], warnings: []};
+        skills().reload();
+        return skillReport();
+      },
+      hooks: () => hookExecutor.snapshot(),
+      askSideQuestion: async ({selection, messages, question}, signal) => {
+        const account = accounts.get(selection.accountId);
+        if (account.status === 'logged-out') throw new FutrynError('AUTH');
+        const info = cachedModel(account, selection.modelId);
+        if (!info) throw new FutrynError('NOT_FOUND');
+        const sideModel = redactModel(modelPort(account, selection, info), redactor);
+        const contextMessages: Message[] = messages
+          .filter(m => m.role === 'user' || m.role === 'assistant')
+          .slice(-40)
+          .map(m => ({role: m.role, content: m.content || '(empty)'}));
+        const result = await sideModel.generate(
+          {
+            requestId: crypto.randomUUID(),
+            modelId: selection.modelId,
+            instructions:
+              'Answer the user side question (/btw) concisely using the conversation context. Do not invoke or assume any tools, and do not claim file changes.',
+            messages: [...contextMessages, {role: 'user', content: question}],
+            tools: [],
+          },
+          signal,
+        );
+        return {text: terminalText(redactor.text(result.text)).trim() || '(no response)', usage: result.usage};
+      },
       saveSkillOverrides: changes =>
         settings.update(state => {
           const byWorkspace = (state.projectSkillOverrides ??= {});

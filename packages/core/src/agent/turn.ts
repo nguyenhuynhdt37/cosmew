@@ -151,6 +151,10 @@ export class TurnRun {
   private stagnant = 0;
   /** Artifact-verification continuations used (at most one). */
   private corrections = 0;
+  /** Stop-hook continuations used (at most two to prevent infinite loops). */
+  private stopHookContinuations = 0;
+  /** Non-undefined when a UserPromptSubmit hook blocked this turn before model sampling. */
+  private promptHookBlocked?: string;
   private progressNotice = '';
   /** Why tools were withdrawn for a final answer (a budget, the context window or a safety limit). */
   private stop?: TurnStopReason;
@@ -241,6 +245,12 @@ export class TurnRun {
 
   private async *loop(): AsyncGenerator<ModelEvent> {
     await this.begin();
+    if (this.promptHookBlocked !== undefined) {
+      yield* this.flushNotices();
+      const err = new FutrynError('POLICY');
+      err.message = this.promptHookBlocked;
+      throw err;
+    }
     // One iteration = one model request. `round` counts completed responses (user step budget);
     // `attempt` counts stream retries of the current one.
     for (let round = 0, attempt = 0, requests = 0; ; requests++) {
@@ -278,6 +288,29 @@ export class TurnRun {
 
       const next = this.nextStep(sample);
       if (next.kind === 'follow-up') continue;
+      if (this.host.options.hooks && !this.stop && this.stopHookContinuations < 2) {
+        const stopOutcome = await this.host.options.hooks.run(
+          {
+            event: 'Stop',
+            sessionId: this.host.id,
+            stopHookActive: this.stopHookContinuations > 0,
+          },
+          this.signal,
+        );
+        for (const ev of stopOutcome.events) yield ev;
+        if (stopOutcome.action === 'block') {
+          this.stopHookContinuations++;
+          this.steps.push({
+            role: 'assistant',
+            content: sample.text,
+            ...(sample.providerReplay ? {providerReplay: sample.providerReplay} : {}),
+          });
+          this.progressNotice =
+            'Stop hook requested continuation: ' +
+            (stopOutcome.reason || 'Complete the remaining verification requested by the hook.');
+          continue;
+        }
+      }
       yield* this.complete(sample, next);
       return;
     }
@@ -342,6 +375,42 @@ export class TurnRun {
       skillBodies.push(...((await host.options.skills?.loadPrompt(message.content, this.signal)) ?? []));
     this.signal.throwIfAborted();
     this.projectMessages.push(...skillBodies.map(content => messageSchema.parse({role: 'user', content})));
+
+    if (host.options.hooks) {
+      if (host.claimSessionStartHooks?.()) {
+        const startOutcome = await host.options.hooks.run({event: 'SessionStart', sessionId: host.id}, this.signal);
+        this.signal.throwIfAborted();
+        for (const ev of startOutcome.events) this.notices.push(ev);
+        if (startOutcome.additionalContext) {
+          this.projectMessages.push(
+            messageSchema.parse({
+              role: 'user',
+              content:
+                'SessionStart hook context (user/project hook output; lower priority than host and security rules):\n' +
+                startOutcome.additionalContext,
+            }),
+          );
+        }
+      }
+      const promptOutcome = await host.options.hooks.run(
+        {event: 'UserPromptSubmit', sessionId: host.id, prompt: this.user.content},
+        this.signal,
+      );
+      this.signal.throwIfAborted();
+      for (const ev of promptOutcome.events) this.notices.push(ev);
+      if (promptOutcome.action === 'block') {
+        this.promptHookBlocked = promptOutcome.reason || 'Prompt was blocked by a UserPromptSubmit hook.';
+      } else if (promptOutcome.additionalContext) {
+        this.projectMessages.push(
+          messageSchema.parse({
+            role: 'user',
+            content:
+              'UserPromptSubmit hook context (user/project hook output; lower priority than host and security rules):\n' +
+              promptOutcome.additionalContext,
+          }),
+        );
+      }
+    }
 
     // Codex sends no output cap and reserves nothing from the window. Only a cap the caller asked
     // for (`--max-output-tokens`) is sent, clamped to the model's limit, and reserved.

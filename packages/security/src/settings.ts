@@ -3,8 +3,14 @@ import {realpathSync} from 'node:fs';
 import {isAbsolute, posix, resolve} from 'node:path';
 import {
   DOMAIN_PATTERN,
+  HOOK_EVENTS,
   permissionModeSchema,
   permissionRuleSchema,
+  type ConfiguredHook,
+  type HookCommandDefinition,
+  type HookEventName,
+  type HookMatcherEntry,
+  type HooksConfig,
   type PermissionMode,
   type PermissionRuleSet,
 } from '@cosmew/contracts';
@@ -38,11 +44,13 @@ export interface SettingsFile {
     allowUnsandboxedCommands?: boolean;
     allowedDomains: string[];
   };
+  hooks: HooksConfig;
 }
 
 export const emptySettingsFile = (): SettingsFile => ({
   permissions: {allow: [], ask: [], deny: [], additionalDirectories: []},
   sandbox: {excludedCommands: [], allowedDomains: []},
+  hooks: {},
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -127,7 +135,94 @@ export function parseSettings(text: string): {
       }
     }
   }
+  const hooksRaw = raw.hooks;
+  if (hooksRaw !== undefined) {
+    if (!isRecord(hooksRaw)) diagnostics.push('hooks must be an object');
+    else {
+      let totalHooks = 0;
+      const MAX_HOOKS_PER_FILE = 50;
+      for (const [eventName, entriesValue] of Object.entries(hooksRaw)) {
+        if (!(HOOK_EVENTS as readonly string[]).includes(eventName)) {
+          diagnostics.push(`hooks.${eventName} is not a supported hook event`);
+          continue;
+        }
+        const event = eventName as HookEventName;
+        if (!Array.isArray(entriesValue)) {
+          diagnostics.push(`hooks.${event} must be an array`);
+          continue;
+        }
+        const parsedEntries: HookMatcherEntry[] = [];
+        for (const entryValue of entriesValue) {
+          if (!isRecord(entryValue)) {
+            diagnostics.push(`hooks.${event}: ignored non-object matcher entry`);
+            continue;
+          }
+          let matcher: string | undefined;
+          if (entryValue.matcher !== undefined) {
+            if (
+              typeof entryValue.matcher !== 'string' ||
+              entryValue.matcher.length > 200 ||
+              /[\u0000-\u001f]/.test(entryValue.matcher)
+            ) {
+              diagnostics.push(`hooks.${event}: ignored entry with invalid matcher`);
+              continue;
+            }
+            const trimmed = entryValue.matcher.trim();
+            if (trimmed) matcher = trimmed;
+          }
+          if (!Array.isArray(entryValue.hooks)) {
+            diagnostics.push(`hooks.${event}: entry hooks must be an array`);
+            continue;
+          }
+          const parsedHooks: HookCommandDefinition[] = [];
+          for (const hookValue of entryValue.hooks) {
+            if (totalHooks >= MAX_HOOKS_PER_FILE) {
+              diagnostics.push(`hooks: ignored entries beyond limit of ${MAX_HOOKS_PER_FILE}`);
+              break;
+            }
+            if (!isRecord(hookValue) || hookValue.type !== 'command' || typeof hookValue.command !== 'string') {
+              diagnostics.push(`hooks.${event}: ignored hook (only {type: "command", command} is supported)`);
+              continue;
+            }
+            const command = hookValue.command.trim();
+            if (!command || command.length > 2000 || command.includes('\u0000')) {
+              diagnostics.push(`hooks.${event}: ignored hook with empty or invalid command`);
+              continue;
+            }
+            let timeout: number | undefined;
+            if (hookValue.timeout !== undefined) {
+              if (
+                typeof hookValue.timeout !== 'number' ||
+                !Number.isFinite(hookValue.timeout) ||
+                hookValue.timeout < 1 ||
+                hookValue.timeout > 60
+              ) {
+                diagnostics.push(`hooks.${event}: ignored hook with invalid timeout (must be 1..60 seconds)`);
+                continue;
+              }
+              timeout = hookValue.timeout;
+            }
+            parsedHooks.push({type: 'command', command, ...(timeout !== undefined ? {timeout} : {})});
+            totalHooks++;
+          }
+          if (parsedHooks.length) {
+            parsedEntries.push({...(matcher ? {matcher} : {}), hooks: parsedHooks});
+          }
+        }
+        if (parsedEntries.length) settings.hooks[event] = parsedEntries;
+      }
+    }
+  }
   return {settings, diagnostics, raw};
+}
+
+/** Total configured command hooks in a parsed settings file. */
+export function countSettingsHooks(file: SettingsFile): number {
+  let count = 0;
+  for (const event of HOOK_EVENTS) {
+    for (const entry of file.hooks[event] ?? []) count += entry.hooks.length;
+  }
+  return count;
 }
 
 /** What a file would grant beyond tightening, in words for the trust prompt. Empty = nothing to approve. */
@@ -142,6 +237,15 @@ export function describeLoosening(file: SettingsFile): string[] {
   if (file.sandbox.allowUnsandboxedCommands === true) lines.push('sandbox.allowUnsandboxedCommands: true');
   for (const command of file.sandbox.excludedCommands) lines.push(`excluded from the sandbox: ${command}`);
   for (const domain of file.sandbox.allowedDomains) lines.push(`network domain: ${domain}`);
+  for (const event of HOOK_EVENTS) {
+    for (const entry of file.hooks[event] ?? []) {
+      for (const hook of entry.hooks) {
+        const target = entry.matcher ? `, matcher: ${entry.matcher}` : '';
+        const preview = hook.command.length > 120 ? hook.command.slice(0, 117) + '...' : hook.command;
+        lines.push(`hook (${event}${target}): ${preview}`);
+      }
+    }
+  }
   return lines;
 }
 
@@ -166,6 +270,8 @@ export interface EffectiveSettings {
     allowUnsandboxedCommands: boolean;
     allowedDomains: string[];
   };
+  /** Trusted lifecycle hooks merged in execution order (user -> project -> local). */
+  hooks: ConfiguredHook[];
 }
 
 const PRECEDENCE: Record<SettingsScope, number> = {cli: 3, local: 2, project: 1, user: 0};
@@ -240,6 +346,22 @@ export function mergeSettings(layers: readonly SettingsLayer[], home: string): E
         ) ?? true,
       allowedDomains: unique(trusted.flatMap(layer => layer.file.sandbox.allowedDomains)),
     },
+    hooks: [...trusted]
+      .reverse()
+      .filter((layer): layer is SettingsLayer & {scope: 'user' | 'project' | 'local'} => layer.scope !== 'cli')
+      .flatMap(layer =>
+        HOOK_EVENTS.flatMap(event =>
+          (layer.file.hooks[event] ?? []).flatMap(entry =>
+            entry.hooks.map(hook => ({
+              scope: layer.scope,
+              event,
+              ...(entry.matcher ? {matcher: entry.matcher} : {}),
+              command: hook.command,
+              timeoutMs: Math.round((hook.timeout ?? 10) * 1000),
+            })),
+          ),
+        ),
+      ),
   };
 }
 
@@ -272,6 +394,7 @@ export function splitRuleList(values: readonly string[]): {rules: string[]; inva
   return {rules, invalid};
 }
 
+/** Linear-time glob match for `*` wildcards without dynamic regex backtracking. */
 function matchWildcard(pattern: string, text: string): boolean {
   let p = 0;
   let t = 0;
@@ -301,6 +424,40 @@ export function matchesExcludedCommand(pattern: string, command: string): boolea
   const head = pattern.endsWith(':*') ? pattern.slice(0, -2) : pattern;
   if (head.includes('*')) return matchWildcard(head, text);
   return text === head || text.startsWith(head + ' ');
+}
+
+const HOOK_TOOL_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  exec_command: ['exec_command', 'Bash'],
+  write_stdin: ['write_stdin', 'Bash'],
+  edit: ['edit', 'Edit'],
+  write: ['write', 'Write'],
+  apply_patch: ['apply_patch', 'Edit', 'Write'],
+  read: ['read', 'Read'],
+  grep: ['grep', 'Grep'],
+  glob: ['glob', 'Glob'],
+  web_fetch: ['web_fetch', 'WebFetch'],
+  web_search: ['web_search', 'WebSearch'],
+  agent: ['agent', 'Agent', 'Task'],
+  skill: ['skill', 'Skill'],
+};
+
+/**
+ * Matches a hook `matcher` (`*`, `Bash|Edit`, `mcp__github__*`, or exact name) against a tool name
+ * and its Claude Code canonical aliases using linear-time wildcard matching (no ReDoS).
+ */
+export function matchesHookMatcher(matcher: string | undefined, toolName: string | undefined): boolean {
+  if (!matcher || matcher === '*') return true;
+  if (!toolName) return false;
+  const candidates = HOOK_TOOL_ALIASES[toolName] ?? [toolName];
+  for (const rawBranch of matcher.split('|')) {
+    const branch = rawBranch.trim();
+    if (!branch) continue;
+    if (branch === '*') return true;
+    for (const candidate of candidates) {
+      if (branch.includes('*') ? matchWildcard(branch, candidate) : branch === candidate) return true;
+    }
+  }
+  return false;
 }
 
 function canonicalVariants(base: string): string[] {

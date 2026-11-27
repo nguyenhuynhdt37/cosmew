@@ -68,23 +68,10 @@ export function compactionNotice(event: {
   const how = event.strategy === 'model' ? 'summarized by the model' : 'excerpt checkpoint';
   return `Context compacted (${how}${event.fallback ? '; model summary failed' : ''}): ~${event.tokensBefore.toLocaleString('en-US')} -> ~${event.tokensAfter.toLocaleString('en-US')} tokens.`;
 }
-/** Unsupported hook inspection has a host panel; implemented panels use the canonical SDK registry. */
-const HOST_PANELS: Record<string, string> = {
-  '/hooks': 'hooks',
-};
 /** Canonical SDK parser is shared with autocomplete/help; no duplicate command registry. */
 export async function routeCommand(host: CommandHost, raw: string): Promise<boolean | void> {
   const {client} = host;
-  // Hook inspection remains an informational host panel until execution support exists.
   const typed = raw.trim().split(/\s+/)[0]!.toLowerCase();
-  const local = HOST_PANELS[typed];
-  // Dialog commands open immediately without waiting for a turn, as in Claude
-  // Code. Commands with arguments continue through the canonical parser so an
-  // unsupported subcommand is reported instead of silently opening a panel.
-  if (local && !host.busy() && raw.trim().split(/\s+/).length === 1) {
-    host.open(local);
-    return;
-  }
   const parsed = parseSlashCommand(raw);
   if (parsed.error) {
     if (client.isSkillCommand(raw)) return host.submit(raw);
@@ -107,25 +94,45 @@ export async function routeCommand(host: CommandHost, raw: string): Promise<bool
       case 'init':
         return host.submit(INIT_PROMPT, '/init');
       case 'export': {
-        const content = host.exportTranscript?.();
-        if (!content?.trim()) {
+        const plain = host.exportTranscript?.() ?? '';
+        const hasMessages = (client.activeSession()?.messages.length ?? 0) > 0;
+        if (!plain.trim() && !hasMessages) {
           host.notice('No conversation to export yet.');
           break;
         }
-        const choice = args
-          ? {id: 'file'}
-          : await host.choose?.('Export conversation', [
-              {id: 'clipboard', label: 'Copy to clipboard'},
-              {id: 'file', label: 'Save to a file'},
-            ]);
+        if (args) {
+          const lower = args.toLowerCase();
+          const content = lower.endsWith('.json')
+            ? client.exportSession('json')
+            : lower.endsWith('.md') || lower.endsWith('.markdown')
+              ? client.exportSession('markdown')
+              : plain || client.exportSession('markdown');
+          await saveCommandText(host, args, content);
+          break;
+        }
+        const choice = await host.choose?.('Export conversation', [
+          {id: 'clipboard', label: 'Copy to clipboard'},
+          {id: 'file', label: 'Save to a file'},
+          {id: 'markdown', label: 'Save as Markdown (.md)'},
+          {id: 'json', label: 'Save as JSON (.json)'},
+        ]);
         if (!choice) break;
         if (choice.id === 'clipboard') {
+          const clipText = plain || client.exportSession('markdown');
           host.notice(
-            (await host.copyText?.(content)) ? 'Conversation copied to clipboard.' : 'Clipboard is unavailable.',
+            (await host.copyText?.(clipText)) ? 'Conversation copied to clipboard.' : 'Clipboard is unavailable.',
           );
           break;
         }
-        await saveCommandText(host, args || `cosmew-transcript-${Date.now()}.txt`, content);
+        if (choice.id === 'markdown') {
+          await saveCommandText(host, `cosmew-transcript-${Date.now()}.md`, client.exportSession('markdown'));
+          break;
+        }
+        if (choice.id === 'json') {
+          await saveCommandText(host, `cosmew-transcript-${Date.now()}.json`, client.exportSession('json'));
+          break;
+        }
+        await saveCommandText(host, `cosmew-transcript-${Date.now()}.txt`, plain || client.exportSession('markdown'));
         break;
       }
       case 'copy': {
@@ -293,15 +300,90 @@ export async function routeCommand(host: CommandHost, raw: string): Promise<bool
         host.reset();
         host.notice('Forked session; source unchanged and session grants reset.');
         break;
-      case 'clear':
+      case 'clear': {
+        let renamed: string | undefined;
+        if (args && client.activeSession()) {
+          try {
+            renamed = await client.renameCurrentSession(args, host.signal);
+          } catch {
+            /* keep clearing even if the previous session cannot be renamed */
+          }
+        }
         client.clearSessionView();
         host.reset();
         host.notice(
-          args
-            ? 'Started a fresh conversation. Naming the previous session is not implemented; it remains available in /resume.'
+          renamed
+            ? `Renamed previous session to ${renamed} and started a fresh conversation.`
             : 'Started a fresh conversation. Previous sessions remain in /resume.',
         );
         break;
+      }
+      case 'add-dir': {
+        if (!args) {
+          const dirs = client.permissionSettings().additionalDirectories;
+          host.notice(
+            dirs.length
+              ? `Additional working directories (${dirs.length}): ${dirs.join(', ')}`
+              : 'No additional working directories configured. Usage: /add-dir [--save] <path>',
+          );
+          break;
+        }
+        const savePrefix = /^--save\s+(.+)$/.exec(args);
+        const saveSuffix = /^(.+?)\s+--save$/.exec(args);
+        const persist = Boolean(savePrefix || saveSuffix);
+        const rawTarget = (savePrefix?.[1] ?? saveSuffix?.[1] ?? args).trim().replace(/^["']|["']$/g, '');
+        if (!rawTarget) {
+          host.notice('Usage: /add-dir [--save] <path>');
+          break;
+        }
+        const added = client.addAdditionalDirectory(rawTarget, {persist});
+        host.notice(
+          persist
+            ? `Added working directory (saved to local settings): ${added}`
+            : `Added working directory for this session: ${added}`,
+        );
+        break;
+      }
+      case 'reload-skills': {
+        const report = client.reloadSkills();
+        const errSuffix = report.errors.length
+          ? ` (${report.errors.length} error${report.errors.length === 1 ? '' : 's'})`
+          : '';
+        host.notice(`Reloaded ${report.skills.length} skill${report.skills.length === 1 ? '' : 's'}${errSuffix}.`);
+        break;
+      }
+      case 'autocompact': {
+        const normalized = args?.toLowerCase();
+        if (!normalized) {
+          const next = !client.userPreferences().autoCompact;
+          client.updateUserPreferences({autoCompact: next});
+          host.notice(`Auto-compact is now ${next ? 'on' : 'off'}.`);
+          break;
+        }
+        if (normalized === 'status') {
+          const current = client.userPreferences().autoCompact;
+          host.notice(`Auto-compact is currently ${current ? 'on' : 'off'}.`);
+          break;
+        }
+        if (normalized === 'on' || normalized === 'true' || normalized === '1') {
+          client.updateUserPreferences({autoCompact: true});
+          host.notice('Auto-compact is now on.');
+          break;
+        }
+        if (normalized === 'off' || normalized === 'false' || normalized === '0') {
+          client.updateUserPreferences({autoCompact: false});
+          host.notice('Auto-compact is now off.');
+          break;
+        }
+        host.notice('Usage: /autocompact [on|off|status]');
+        break;
+      }
+      case 'btw': {
+        await host.beforeWork?.();
+        const answer = await client.askSideQuestion(args!, host.signal);
+        host.notice(answer.text);
+        break;
+      }
       case 'doctor':
         await host.beforeWork?.();
         host.notice(await client.diagnose(host.signal));

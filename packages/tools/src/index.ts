@@ -33,3 +33,4 @@ export {
 } from './exec/proxy';
 
 export {validateImageAttachment} from './builtin/read-media';
+export {HookExecutor, type HookExecutorOptions} from './hooks';

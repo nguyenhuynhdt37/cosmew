@@ -1,4 +1,4 @@
-import type {CommandOutputChunk, ModelEvent, SubagentEvent, ToolCall} from '@cosmew/contracts';
+import type {CommandOutputChunk, HookRanEvent, ModelEvent, SubagentEvent, ToolCall} from '@cosmew/contracts';
 
 /** Bounds on live command output buffered between the tool and the event stream. */
 const MAX_QUEUED_EVENTS = 128;
@@ -38,6 +38,11 @@ export class ProgressQueue {
       }
       if (this.events.length >= MAX_QUEUED_EVENTS) return;
     }
+    this.events.push(event);
+    this.wake();
+  }
+
+  publishHook(event: HookRanEvent): void {
     this.events.push(event);
     this.wake();
   }

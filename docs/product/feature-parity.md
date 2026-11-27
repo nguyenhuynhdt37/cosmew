@@ -7,13 +7,13 @@
 | Capability | Trạng thái hiện tại | Giới hạn / bằng chứng |
 |---|---|---|
 | Agent headless và file/shell tools | Có CLI, SDK, dispatcher, stdin/JSONL, shell/PTY/background | [Hợp đồng](../contracts/agent-events.md), [test strategy](../delivery/test-strategy.md); mọi tool vẫn qua policy/approval/audit |
-| Provider abstraction | Có adapters/protocols, provider tùy chỉnh, API/OAuth | [Providers/auth](../subsystems/providers-and-auth.md); xác minh live theo từng model/endpoint, không chạy CLI agent bên ngoài |
-| Streaming/TUI | Có Ink fullscreen, queue/steer, hủy, search, transcript windowing | [Performance](../delivery/tui-v4/performance-transcript.md); cần kiểm tra lại tải dài và PTY sau các sửa mới |
-| Session/context/recovery | Có resume theo workspace, compaction, checkpoints, rewind, rename/export | [Stability delivery](../delivery/product-stability-fixes-2026-11-22.md); export hiện là plain text, không phải mọi định dạng |
+| Provider abstraction | Có adapters/protocols, Anthropic ephemeral prompt caching, OpenAI `prompt_cache_key`, provider tùy chỉnh, API/OAuth | [Providers/auth](../subsystems/providers-and-auth.md), [ADR 0120](../adr/0120-executable-hooks-and-prompt-caching.md); xác minh live theo từng model/endpoint, không chạy CLI agent bên ngoài |
+| Streaming/TUI | Có Ink fullscreen, queue/steer, hủy, search, transcript windowing, `/add-dir`, `/reload-skills`, `/autocompact`, `/btw` | [Performance](../delivery/tui-v4/performance-transcript.md); cần kiểm tra lại tải dài và PTY sau các sửa mới |
+| Session/context/recovery | Có resume theo workspace, compaction, checkpoints, rewind, rename, `/clear <name>`, export Markdown/JSON/text | [Stability delivery](../delivery/product-stability-fixes-2026-11-22.md), [ADR 0120](../adr/0120-executable-hooks-and-prompt-caching.md) |
 | Git/LSP/worktrees | Có diff, search, LSP/rename, isolated agents và handoff qua patch | [ADR 0097](../adr/0097-worktree-review-handoff.md); binary/symlink/oversized có đường review thủ công |
 | MCP | Có stdio/HTTP, manager, reconnect, OAuth/bearer, discovery và managed npm install | [ADR 0102](../adr/0102-mcp-manager.md); model tool_search/resources/prompts còn backlog |
-| Skills và memory | Có discovery/visibility, memory CRUD/index/citations/recovery | Auto memory extraction chưa có; settings trust và quyền ghi vẫn áp dụng |
-| Hooks/plugins | Chưa có executor hooks hoặc general plugin host | Snapshot/status không chứng minh thực thi hook |
+| Skills và memory | Có discovery/visibility/reload, memory CRUD/index/citations/recovery | Auto memory extraction chưa có; settings trust và quyền ghi vẫn áp dụng |
+| Hooks/plugins | Có Executable Hooks (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`) chuẩn trust SHA-256; chưa có general plugin host | [ADR 0120](../adr/0120-executable-hooks-and-prompt-caching.md); plugin host vẫn backlog |
 | Subagents/background/sandbox | Có agents, budget, cancel, background tasks và sandbox tùy chọn | macOS có native tests; Linux bubblewrap/network và Windows cần acceptance riêng |
 | IDE/ACP, web/desktop product, marketplace | Backlog | LSP đã có không đồng nghĩa IDE bridge hoặc giao diện web/desktop đã có |
 
