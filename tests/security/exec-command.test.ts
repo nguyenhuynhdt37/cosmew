@@ -451,3 +451,13 @@ test('a credential split by escape or control sequences is still redacted after 
     'https://***@host/r https://***@h',
   );
 });
+
+test('oversized exec_command cmd reports the exact 1024-character limit instead of generic parameter text', async () => {
+  const f = fixture();
+  const c = mock(f, async () => 'once');
+  const res = await invoke(c.dispatcher, {cmd: 'echo ' + 'x'.repeat(1025)});
+  expect(res.status).toBe('error');
+  expect(res.code).toBe('INVALID_INPUT');
+  expect(res.content).toContain('1024');
+  expect(c.calls()).toBe(0);
+});

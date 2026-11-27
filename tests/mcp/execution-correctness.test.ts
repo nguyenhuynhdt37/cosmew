@@ -727,3 +727,183 @@ test('External, cyclic, deep, or bomb $ref and ReDoS or invalid schema features 
     }
   }
 });
+
+test('GitHub x-mcp-header, Sentry union types/formats, Linear formats and oversized descriptions pass ToolDispatcher AND ProviderAdapter.stream()', async () => {
+  const {ProviderAdapter, ProviderTransport} = await import('@cosmew/models');
+  const {ConfiguredNetworkPolicy} = await import('@cosmew/security');
+  const {providerSchema} = await import('@cosmew/contracts');
+  const {memoryVault} = await import('../fixtures');
+
+  const root = mkdtempSync(join(tmpdir(), 'mcp-adapter-seam-'));
+  const db = new Database(':memory:');
+  const grants = new SessionGrants();
+  let remoteCalls = 0;
+
+  // Real-world MCP schemas modeled directly from GitHub Official MCP, Sentry MCP and Linear MCP.
+  const githubSchema = {
+    type: 'object',
+    properties: {
+      owner: {type: 'string', description: 'Repository owner', 'x-mcp-header': 'owner'},
+      repo: {type: 'string', description: 'Repository name', 'x-mcp-header': 'repo'},
+      // Ordinary argument whose name itself begins with x- must be preserved!
+      'x-mcp-header': {type: 'string', description: 'Explicit header parameter', 'x-vendor-note': 'strip-me'},
+    },
+    required: ['owner', 'repo'],
+    additionalProperties: false,
+  };
+  const sentrySchema = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: {
+      issueUrl: {type: 'string', format: 'uri'},
+      start: {anyOf: [{type: 'string', format: 'date-time'}, {type: 'null'}]},
+      fields: {
+        type: 'object',
+        propertyNames: {type: 'string'},
+        additionalProperties: {type: ['string', 'number']},
+      },
+    },
+    required: ['issueUrl'],
+  };
+  const linearSchema = {
+    $schema: 'https://json-schema.org/draft/2020-12/schema',
+    type: 'object',
+    properties: {
+      assetUrl: {type: 'string', format: 'uri'},
+      snoozedUntilAt: {anyOf: [{type: 'string', format: 'date-time'}, {type: 'null'}]},
+    },
+    required: ['assetUrl'],
+  };
+
+  const dispatcher = new ToolDispatcher({
+    workspace: new WorkspaceRoot(root),
+    grants,
+    sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, permissionMode: 'default', readOnly: false}),
+    approve: async () => 'once',
+    redact: text => text,
+    outputArchive: {
+      store: new SqliteToolOutputArchive(db),
+      permissionContext: () => 'initial',
+      scope: () => ({workspace: root, session: 'seam-test'}),
+    },
+    mcp: {
+      tools: () => [
+        {
+          name: 'mcp__github__issue_read',
+          description: 'Read a GitHub issue. ' + 'x'.repeat(2100),
+          inputSchema: githubSchema,
+        },
+        {name: 'mcp__sentry__link_issue', description: 'Link Sentry issue.', inputSchema: sentrySchema},
+        {name: 'mcp__linear__mark_notification', description: 'Mark Linear notification.', inputSchema: linearSchema},
+      ],
+      call: async () => {
+        remoteCalls++;
+        return 'ok';
+      },
+    },
+  });
+
+  try {
+    const descriptors = dispatcher.descriptors().filter(d => d.name.startsWith('mcp__'));
+    expect(descriptors.map(d => d.name).sort()).toEqual([
+      'mcp__github__issue_read',
+      'mcp__linear__mark_notification',
+      'mcp__sentry__link_issue',
+    ]);
+
+    // Description is bounded <= 2000 even after untrusted-data suffix.
+    const ghDesc = descriptors.find(d => d.name === 'mcp__github__issue_read')!;
+    expect(ghDesc.description.length).toBeLessThanOrEqual(2000);
+    expect(ghDesc.description).toContain('untrusted data from an MCP server');
+    // Vendor keyword x-mcp-header is stripped from schema keyword positions, while argument property name "x-mcp-header" survives.
+    const ghProps = ghDesc.inputSchema.properties as Record<string, Record<string, unknown>>;
+    expect(ghProps.owner).not.toHaveProperty('x-mcp-header');
+    expect(ghProps.repo).not.toHaveProperty('x-mcp-header');
+    expect(ghProps['x-mcp-header']).toBeDefined();
+    expect(ghProps['x-mcp-header']).not.toHaveProperty('x-vendor-note');
+
+    // Dispatcher validates arguments against all 3 real-world schemas.
+    expect(
+      (
+        await dispatcher.invoke({
+          id: 'gh-ok',
+          name: 'mcp__github__issue_read',
+          input: {owner: 'acme', repo: 'app', 'x-mcp-header': 'custom'},
+        })
+      ).status,
+    ).toBe('ok');
+    expect(
+      (
+        await dispatcher.invoke({
+          id: 'sentry-ok',
+          name: 'mcp__sentry__link_issue',
+          input: {
+            issueUrl: 'https://sentry.io/issues/1',
+            start: '2026-11-27T00:00:00Z',
+            fields: {count: 42, tag: 'v1'},
+          },
+        })
+      ).status,
+    ).toBe('ok');
+    expect(
+      (
+        await dispatcher.invoke({
+          id: 'sentry-bad',
+          name: 'mcp__sentry__link_issue',
+          input: {issueUrl: 'https://sentry.io/issues/1', fields: {bad: true}},
+        })
+      ).code,
+    ).toBe('INVALID_INPUT');
+    expect(remoteCalls).toBe(2);
+
+    // End-to-end seam check: pass ALL ToolDispatcher descriptors straight into ProviderAdapter.stream()!
+    const sentBodies: any[] = [];
+    const provider = providerSchema.parse({
+      id: 'seam-gw',
+      name: 'Seam Gateway',
+      protocol: 'chat',
+      baseURL: 'https://seam.invalid/v1',
+      auth: 'none',
+      catalog: 'openai',
+      metadataVersion: 1,
+    });
+    const account = {
+      id: crypto.randomUUID(),
+      providerId: provider.id,
+      alias: 'seam',
+      credential: {kind: 'none' as const},
+      status: 'valid' as const,
+      validatedAt: null,
+    };
+    const transport = new ProviderTransport(provider, account, memoryVault(), new ConfiguredNetworkPolicy(), (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? '{}')));
+      const sse = [
+        `data: ${JSON.stringify({id: 'm1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {content: 'Seam ok'}, finish_reason: null}]})}`,
+        `data: ${JSON.stringify({id: 'm1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {}, finish_reason: 'stop'}], usage: {prompt_tokens: 10, completion_tokens: 2, total_tokens: 12}})}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(sse, {status: 200, headers: {'content-type': 'text/event-stream'}});
+    }) as unknown as typeof fetch);
+
+    const adapter = new ProviderAdapter(transport, 'seam-model');
+    let text = '';
+    for await (const ev of adapter.stream({
+      requestId: crypto.randomUUID(),
+      modelId: 'seam-model',
+      messages: [{role: 'user', content: 'hi'}],
+      tools: descriptors.map(({name, description, inputSchema}) => ({name, description, inputSchema})),
+    })) {
+      if (ev.type === 'textDelta') text += ev.text;
+    }
+    expect(text).toBe('Seam ok');
+    expect(sentBodies).toHaveLength(1);
+    expect(sentBodies[0].tools).toHaveLength(3);
+  } finally {
+    db.close();
+    rmSync(root, {recursive: true, force: true});
+  }
+});

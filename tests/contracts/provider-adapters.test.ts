@@ -997,3 +997,81 @@ test('Anthropic adapter retries without cache_control when an Anthropic-compatib
     x.db.close();
   }
 });
+
+test('ProviderAdapter.generate falls back to stream() when an SSE-only gateway returns text/event-stream for non-streaming calls', async () => {
+  const x = setup('chat');
+  try {
+    const streamFlags: unknown[] = [];
+    const sseTransport = new ProviderTransport(x.provider, x.account, x.vault, new ConfiguredNetworkPolicy(), (async (
+      _url: string | URL | Request,
+      init?: RequestInit,
+    ) => {
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as {stream?: boolean};
+      streamFlags.push(parsed.stream);
+      const sse = [
+        `data: ${JSON.stringify({id: 's1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {content: 'SSE fallback ok'}, finish_reason: null}]})}`,
+        `data: ${JSON.stringify({id: 's1', object: 'chat.completion.chunk', choices: [{index: 0, delta: {}, finish_reason: 'stop'}], usage: {prompt_tokens: 10, completion_tokens: 4, total_tokens: 14}})}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(sse, {status: 200, headers: {'content-type': 'text/event-stream'}});
+    }) as unknown as typeof fetch);
+    const adapter = new ProviderAdapter(sseTransport, x.request.modelId);
+    const result = await adapter.generate(x.request);
+    expect(result.text).toBe('SSE fallback ok');
+    expect(streamFlags).toEqual([undefined, true]);
+  } finally {
+    x.db.close();
+  }
+});
+
+for (const protocol of ['chat', 'responses'] as const) {
+  test(`${protocol}: ProviderAdapter accepts standard JSON Schema format annotations and union types while still rejecting invalid schemas`, async () => {
+    const x = setup(protocol);
+    try {
+      const sentryStyleTool = {
+        name: 'mcp__sentry__link_issue',
+        description: 'Link Sentry issue',
+        inputSchema: {
+          $schema: 'https://json-schema.org/draft/2020-12/schema',
+          type: 'object',
+          properties: {
+            issueUrl: {type: 'string', format: 'uri'},
+            since: {type: 'string', format: 'date-time'},
+            id: {type: ['string', 'number']},
+          },
+          required: ['issueUrl'],
+        },
+      };
+      const draft07FormatTool = {
+        name: 'mcp__linear__create_item',
+        description: 'Create Linear item',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ownerEmail: {type: 'string', format: 'email'},
+            assetUrl: {type: 'string', format: 'uri'},
+            value: {type: ['string', 'null']},
+          },
+          required: ['assetUrl'],
+        },
+      };
+      const result = await new ProviderAdapter(x.transport, x.request.modelId).generate({
+        ...x.request,
+        tools: [sentryStyleTool, draft07FormatTool],
+      });
+      expect(result.text).toBe('Hello fixture');
+      expect(x.f.requests).toHaveLength(1);
+      // Invalid unknown keyword (non-standard) is still rejected before HTTP.
+      await expect(
+        new ProviderAdapter(x.transport, x.request.modelId).generate({
+          ...x.request,
+          tools: [{name: 'bad_tool', description: '', inputSchema: {type: 'object', bogusKeyword: true}}],
+        }),
+      ).rejects.toMatchObject({code: 'INVALID_INPUT'});
+      expect(x.f.requests).toHaveLength(1);
+    } finally {
+      x.db.close();
+    }
+  });
+}

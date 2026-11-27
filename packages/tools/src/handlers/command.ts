@@ -1,4 +1,5 @@
 import type {CommandRequest, CommandRuntime, CommandSandbox} from '@cosmew/contracts';
+import {MAX_COMMAND_CHARS} from '@cosmew/security';
 import {effectiveSandboxMode, sandboxConfig, type ToolDispatcherOptions, type ToolOutput} from '../context';
 import {outsideWorkingDirectories, resolveWorkspacePath} from '../working-roots';
 import {EXEC_LIMITS, clampYield, execDescriptor, execInput, shellOf, type ExecInput} from '../exec/command';
@@ -37,11 +38,23 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
 
     prepare(args) {
       const parsed = execInput.safeParse(args);
-      if (!parsed.success)
+      if (!parsed.success) {
+        const cmdTooLong = parsed.error.issues.some(issue => issue.path[0] === 'cmd' && issue.code === 'too_big');
+        if (cmdTooLong) {
+          return refuse(
+            'INVALID_INPUT',
+            `Invalid arguments for exec_command: cmd exceeds the ${MAX_COMMAND_CHARS}-character limit. Shorten the command, split it into steps, or run a script file instead.`,
+          );
+        }
+        const unknownKeys = parsed.error.issues.flatMap(issue =>
+          issue.code === 'unrecognized_keys' ? issue.keys.slice(0, 5) : [],
+        );
+        const detail = unknownKeys.length ? ` Unsupported parameter(s): ${unknownKeys.join(', ')}.` : '';
         return refuse(
           'INVALID_INPUT',
-          'Invalid arguments for exec_command. Supported: cmd (required), workdir, tty, shell, login, yield_time_ms, max_output_tokens, timeout_ms, dangerouslyDisableSandbox, justification.',
+          `Invalid arguments for exec_command.${detail} Supported: cmd (required, max ${MAX_COMMAND_CHARS} chars), workdir, tty, shell, login, yield_time_ms, max_output_tokens, timeout_ms, dangerouslyDisableSandbox, justification.`,
         );
+      }
       const input = parsed.data;
       const runtime = options.commands!;
       const config = sandboxConfig(options);

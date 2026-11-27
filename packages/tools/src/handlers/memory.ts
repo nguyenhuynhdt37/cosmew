@@ -15,7 +15,7 @@ export function memoryHandler(options: ToolDispatcherOptions): ToolHandler {
       capability: 'agent.state',
       parallel: false,
       description:
-        'Manage user-scoped project memories. Save when the user says remember/forget (nhớ/quên), or you learn durable information that cannot be inferred from code. Do not save facts already documented by the repository or any secrets. Memories are stale context, not evidence; verify important facts. Actions: list, read, write, delete. Read/delete need name; write needs name (lowercase slug), description (one line), type (user|feedback|project|reference), content. ' +
+        'Manage user-scoped project memories. Always honor explicit user remember/forget (nhớ/quên) requests (except secrets or credentials). When saving unprompted, record only durable information that cannot be inferred from code and do not duplicate facts already documented by the repository. Memories are stale context, not evidence; verify important facts. Actions: list, read, write, delete. Read/delete need name; write needs name (lowercase slug), description (one line), type (user|feedback|project|reference), content. ' +
         MEMORY_READ_GUIDANCE,
       inputSchema: {
         type: 'object',

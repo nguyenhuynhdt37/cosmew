@@ -26,7 +26,7 @@ export interface MemoryInfo extends MemoryMetadata {
 }
 export const MEMORY_READ_GUIDANCE = [
   'Memories describe history, not current evidence. Verify important facts and disclose stale unverified claims. Open relevant detail files with memory read.',
-  'Save only on a user remember/forget request or when you learn durable information that cannot be inferred from code; never duplicate repository documentation or store secrets.',
+  'Always honor explicit user remember/forget requests (except secrets or credentials, which must never be stored). For unprompted saves, store only durable information that cannot be inferred from code and never duplicate repository documentation.',
   'Only cite detail memory files you actually used. Never cite MEMORY.md. Never put memory contents or memory citations in PR descriptions or commit messages.',
   'When an answer uses memory, append exactly one block as the final content outside code fences: <oai-mem-citation>\n<citation_entries>\nname.md:1-3|note=[how it was used]\n</citation_entries>\n</oai-mem-citation>. Use real filenames and lines; omit the block when no detail file was used.',
 ].join(' ');

@@ -11,6 +11,8 @@ const MAX_PATTERN_LENGTH = 256;
 
 const FORBIDDEN_KEYWORDS = new Set(['$dynamicRef', '$recursiveRef', '$async', 'patternProperties', 'contains']);
 const LOCAL_REF_RE = /^#\/(\$defs|definitions)\/((?:[A-Za-z0-9_.-]|~[01])+)$/;
+/** Vendor extension annotation keywords (e.g. GitHub MCP `x-mcp-header`) stripped at schema keyword positions only. */
+const VENDOR_EXTENSION_KEY = /^x-[A-Za-z0-9._-]{1,64}$/;
 const REF_SIBLING_ANNOTATIONS = new Set([
   'title',
   'description',
@@ -504,7 +506,8 @@ function dereferenceSchemaNode(
     let hasOtherKeywords = false;
 
     for (const [key, item] of Object.entries(value)) {
-      if (key === '$ref' || (isRoot && (key === '$defs' || key === 'definitions'))) continue;
+      if (key === '$ref' || (isRoot && (key === '$defs' || key === 'definitions')) || VENDOR_EXTENSION_KEY.test(key))
+        continue;
       if (REF_SIBLING_ANNOTATIONS.has(key)) {
         setOwnProp(annotations, key, structuredClone(item));
         hasAnnotations = true;
@@ -559,7 +562,7 @@ function dereferenceSchemaNode(
 
   const out: SchemaMap = {};
   for (const [key, item] of Object.entries(value)) {
-    if (isRoot && (key === '$defs' || key === 'definitions')) continue;
+    if ((isRoot && (key === '$defs' || key === 'definitions')) || VENDOR_EXTENSION_KEY.test(key)) continue;
     if (SCHEMA_MAP_KEYS.has(key)) {
       if (isPlainObject(item)) {
         if (depth + 1 > MAX_DEPTH) throw new Error('schema bound');
@@ -619,8 +622,14 @@ function dereferenceSchemaNode(
   return out;
 }
 
-/** Remote schemas are untrusted. Bound compilation and refuse expensive/recursive features. */
-export function mcpValidator(schema: Record<string, unknown>): ValidateFunction | undefined {
+export interface CompiledMcpSchema {
+  validate: ValidateFunction;
+  /** Dereferenced, vendor-extension-sanitized schema shared with ToolDescriptor and ProviderAdapter. */
+  schema: Record<string, unknown>;
+}
+
+/** Remote schemas are untrusted. Bound compilation, sanitize vendor `x-*` keywords, and refuse costly/recursive features. */
+export function compileMcpSchema(schema: Record<string, unknown>): CompiledMcpSchema | undefined {
   try {
     if (!isPlainObject(schema) || schema.type !== 'object') return;
     const encoded = JSON.stringify(schema);
@@ -648,6 +657,7 @@ export function mcpValidator(schema: Record<string, unknown>): ValidateFunction 
     const Validator = is2020 ? Ajv2020 : Ajv;
     const ajv = new Validator({
       strict: true,
+      allowUnionTypes: true,
       allErrors: false,
       coerceTypes: false,
       useDefaults: false,
@@ -656,8 +666,13 @@ export function mcpValidator(schema: Record<string, unknown>): ValidateFunction 
       loopRequired: 32,
       loopEnum: 32,
     });
-    return ajv.compile(inlined);
+    return {validate: ajv.compile(inlined), schema: inlined};
   } catch {
     return;
   }
+}
+
+/** Backward-compatible validator wrapper over `compileMcpSchema`. */
+export function mcpValidator(schema: Record<string, unknown>): ValidateFunction | undefined {
+  return compileMcpSchema(schema)?.validate;
 }

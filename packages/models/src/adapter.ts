@@ -803,12 +803,16 @@ export class ProviderAdapter implements ModelPort {
     const tools: ToolSet = {};
     const toolNames: string[] = [];
     const names = new Set<string>();
+    // Keep Ajv dialect/strictness aligned with `compileMcpSchema`: reject invalid schemas, unknown dialects,
+    // unknown non-standard keywords and $async, while accepting standard JSON Schema `format` annotations
+    // (without requiring ajv-formats) and standard union `type` arrays such as `["string", "number"]`.
     const ajv = new Ajv({
       strict: true,
+      allowUnionTypes: true,
       coerceTypes: false,
       removeAdditional: false,
       useDefaults: false,
-      validateFormats: true,
+      validateFormats: false,
       logger: false,
     });
     let ajv2020: Ajv2020 | undefined;
@@ -821,10 +825,11 @@ export class ProviderAdapter implements ModelPort {
           dialect === 'https://json-schema.org/draft/2020-12/schema#'
             ? (ajv2020 ??= new Ajv2020({
                 strict: true,
+                allowUnionTypes: true,
                 coerceTypes: false,
                 removeAdditional: false,
                 useDefaults: false,
-                validateFormats: true,
+                validateFormats: false,
                 logger: false,
               }))
             : ajv;
@@ -1101,32 +1106,44 @@ export class ProviderAdapter implements ModelPort {
     }
   }
 
+  private async collectStream(
+    request: ModelRequest,
+    signal?: AbortSignal,
+  ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {
+    let text = '';
+    const calls: ToolCall[] = [];
+    let providerReplay: ProviderReplay | undefined;
+    let completion: {usage: Usage; finishReason: string} | undefined;
+    for await (const event of this.stream(request, signal)) {
+      if (event.type === 'responseDiscarded') {
+        text = '';
+        calls.length = 0;
+        providerReplay = undefined;
+      } else if (event.type === 'textDelta') text += event.text;
+      else if (event.type === 'toolCallComplete') calls.push(event.call);
+      else if (event.type === 'providerReplay') providerReplay = event.replay;
+      else if (event.type === 'completed') completion = event;
+    }
+    if (!completion) throw new FutrynError('PROTOCOL');
+    return {
+      text,
+      calls,
+      usage: completion.usage,
+      finishReason: completion.finishReason,
+      ...(providerReplay ? {providerReplay} : {}),
+    };
+  }
+
   private async doGenerate(
     request: ModelRequest,
     signal?: AbortSignal,
   ): Promise<{text: string; calls: ToolCall[]; usage: Usage; finishReason: string; providerReplay?: ProviderReplay}> {
     // ChatGPT plan inference requires stream=true and store=false, including validation probes.
     if (this.transport.provider.auth === 'oauth' && this.transport.provider.protocol === 'responses') {
-      let text = '';
-      const calls: ToolCall[] = [];
-      let providerReplay: ProviderReplay | undefined;
-      let completion: {usage: Usage; finishReason: string} | undefined;
-      for await (const event of this.stream(request, signal)) {
-        if (event.type === 'textDelta') text += event.text;
-        else if (event.type === 'toolCallComplete') calls.push(event.call);
-        else if (event.type === 'providerReplay') providerReplay = event.replay;
-        else if (event.type === 'completed') completion = event;
-      }
-      if (!completion) throw new FutrynError('PROTOCOL');
-      return {
-        text,
-        calls,
-        usage: completion.usage,
-        finishReason: completion.finishReason,
-        ...(providerReplay ? {providerReplay} : {}),
-      };
+      return this.collectStream(request, signal);
     }
     const options = await this.options(request, signal);
+    let sseFallback = false;
     try {
       const result = await generateText(options);
       if (
@@ -1147,10 +1164,18 @@ export class ProviderAdapter implements ModelPort {
         finishReason: result.finishReason.replaceAll('-', '_'),
       };
     } catch (e) {
-      throw normalizeError(e, options.abortSignal);
+      // Gateways such as 9Router may always return SSE (`text/event-stream`) even for non-streaming calls.
+      const contentType = options.responseHeaders.value?.get('content-type')?.toLowerCase() ?? '';
+      if (!signal?.aborted && contentType.includes('text/event-stream')) {
+        sseFallback = true;
+      } else {
+        throw normalizeError(e, options.abortSignal);
+      }
     } finally {
       options.controller.abort();
     }
+    if (sseFallback) return this.collectStream(request, signal);
+    throw new FutrynError('PROTOCOL');
   }
 }
 
