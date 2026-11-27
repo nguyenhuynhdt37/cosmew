@@ -31,8 +31,12 @@ import {mcpCli, MCP_HELP} from './mcp-cli';
 const HELP = `Cosmew (cosmew) provider, authentication & TUI CLI
 
   providers list | add [id] | show <id> | test | remove <id>
-    add --url <base-url> --protocol chat|responses|anthropic|gemini [--name <label>]
-        --catalog openai|anthropic|gemini|ollama|manual [--models a,b] [--catalog-url <url>] [--no-auth]
+    add [--url <base-url>] --protocol chat|responses|anthropic|gemini|azure|bedrock|vertex|vertex-anthropic
+        [--name <label>] --catalog openai|anthropic|gemini|ollama|bedrock|manual [--models a,b]
+        [--catalog-url <url>] [--no-auth] [--auth-mode api-key|aws-sigv4|google-adc|none]
+        [--aws-region <region>] [--aws-profile <profile>]
+        [--gcp-project <id> --gcp-location <loc> [--credential-file <path>]]
+        [--azure-api-version <ver>] [--azure-api-mode chat|responses] [--azure-deployment-urls]
         [--env-key NAME] [--header Name=Value]... [--env-header Name=ENV_NAME]... [--query name=value]...
         [--auth-command <exe> [--auth-arg <arg>]...] [--idle-timeout-ms n] [--request-retries n]
         [--stream-retries n] [--replay-reasoning]
@@ -110,6 +114,14 @@ const stringOptions = [
   'models',
   'env-key',
   'auth-command',
+  'auth-mode',
+  'aws-region',
+  'aws-profile',
+  'gcp-project',
+  'gcp-location',
+  'credential-file',
+  'azure-api-version',
+  'azure-api-mode',
   'catalog-url',
   'idle-timeout-ms',
   'request-retries',
@@ -128,6 +140,7 @@ const booleanOptions = [
   'tui',
   'no-auth',
   'replay-reasoning',
+  'azure-deployment-urls',
 ];
 type Options = Record<string, string | string[] | boolean | undefined>;
 const list = (options: Options, key: string): string[] =>
@@ -1023,17 +1036,40 @@ async function main() {
         // Writes `[model_providers.<id>]` in the user-level config.toml (ADR 0046), the same file a user edits by hand.
         const id = argument ?? (await ask('Configuration ID'));
         const preset = providerPresets.find(p => p.id === id);
-        const url =
-          str(options, 'url') ?? preset?.baseURL ?? (await ask('Provider base URL (e.g. https://gateway.example/v1)'));
         const protocol =
           str(options, 'protocol') ??
           preset?.protocol ??
-          (await ask('Protocol: chat, responses, anthropic, gemini', 'chat'));
+          (await ask('Protocol: chat, responses, anthropic, gemini, azure, bedrock, vertex, vertex-anthropic', 'chat'));
+        const awsRegion = str(options, 'aws-region');
+        const awsProfile = str(options, 'aws-profile');
+        const gcpProject = str(options, 'gcp-project');
+        const gcpLocation = str(options, 'gcp-location');
+        const credentialFile = str(options, 'credential-file');
+        const azureApiVersion = str(options, 'azure-api-version');
+        const azureApiMode = str(options, 'azure-api-mode');
+        const hasDerivedBaseUrl =
+          (protocol === 'bedrock' && !!awsRegion) ||
+          ((protocol === 'vertex' || protocol === 'vertex-anthropic') && !!gcpProject && !!gcpLocation);
+        const url =
+          str(options, 'url') ??
+          preset?.baseURL ??
+          (hasDerivedBaseUrl ? undefined : await ask('Provider base URL (e.g. https://gateway.example/v1)'));
         const authCommand = str(options, 'auth-command');
+        const azureTable: Record<string, unknown> = {
+          ...(azureApiVersion ? {api_version: azureApiVersion} : {}),
+          ...(azureApiMode ? {api_mode: azureApiMode} : {}),
+          ...(options['azure-deployment-urls'] === true ? {use_deployment_based_urls: true} : {}),
+        };
         const raw: Record<string, unknown> = {
           name: str(options, 'name') ?? preset?.name ?? id,
-          base_url: url,
+          ...(url ? {base_url: url} : {}),
           wire_api: protocol,
+          ...(awsRegion ? {aws: {region: awsRegion, ...(awsProfile ? {profile: awsProfile} : {})}} : {}),
+          ...(gcpProject ? {project_id: gcpProject} : {}),
+          ...(gcpLocation ? {location: gcpLocation} : {}),
+          ...(credentialFile ? {credential_file: credentialFile} : {}),
+          ...(Object.keys(azureTable).length ? {azure: azureTable} : {}),
+          ...(str(options, 'auth-mode') ? {auth_mode: str(options, 'auth-mode')} : {}),
           ...(str(options, 'catalog') ? {catalog: str(options, 'catalog')} : {}),
           ...(str(options, 'env-key') ? {env_key: str(options, 'env-key')} : {}),
           ...(str(options, 'models')

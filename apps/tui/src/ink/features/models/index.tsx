@@ -46,7 +46,10 @@ export function modelLimitsLabel(model: ModelInfo, showUnknown = false): string 
   return parts.join(' · ');
 }
 const budgetHint = (model?: ModelInfo | null, provider?: Provider | null) =>
-  (provider?.protocol === 'anthropic' || provider?.protocol === 'gemini') &&
+  (provider?.protocol === 'anthropic' ||
+    provider?.protocol === 'gemini' ||
+    provider?.protocol === 'vertex' ||
+    provider?.protocol === 'vertex-anthropic') &&
   levelsFor(model).some(level => level !== 'none') &&
   model?.reasoningOptions?.budgetMin !== undefined &&
   !model.reasoningOptions.efforts ? (

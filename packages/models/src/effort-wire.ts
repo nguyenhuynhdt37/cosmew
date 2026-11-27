@@ -7,6 +7,12 @@ import {FutrynError, budgetEfforts, type ModelInfo, type Provider} from '@cosmew
 type BudgetEffort = (typeof budgetEfforts)[number];
 type ThinkingProtocol = 'anthropic' | 'gemini';
 
+export function thinkingProtocolFor(protocol: Provider['protocol']): ThinkingProtocol | undefined {
+  if (protocol === 'anthropic' || protocol === 'vertex-anthropic') return 'anthropic';
+  if (protocol === 'gemini' || protocol === 'vertex') return 'gemini';
+  return undefined;
+}
+
 const budgetFractions: Record<BudgetEffort, number> = {
   minimal: 0.05,
   low: 0.2,
@@ -140,8 +146,8 @@ export function resolveThinkingWire(
 }
 
 export function selectableReasoningEfforts(provider: Provider, info: ModelInfo): ModelInfo {
-  const {protocol} = provider;
-  if (protocol !== 'anthropic' && protocol !== 'gemini') return info;
+  const protocol = thinkingProtocolFor(provider.protocol);
+  if (!protocol) return info;
   const candidates = info.reasoningEfforts?.length
     ? info.reasoningEfforts
     : info.reasoningOptions?.budgetMin !== undefined && !info.reasoningOptions.efforts

@@ -6,6 +6,9 @@ import {
   type NetworkPolicy,
   type Provider,
 } from '@cosmew/contracts';
+import {resolveAwsCredentials} from './aws-auth';
+import {signAwsSigV4} from './aws-sigv4';
+import {GoogleAdcTokenProvider} from './google-auth';
 
 function unwrapCosmewError(error: unknown): FutrynError | undefined {
   const seen = new Set<unknown>();
@@ -243,7 +246,52 @@ export function decorate(
   }
 }
 
+export interface CloudTransportOptions {
+  env?: Record<string, string | undefined>;
+  homeDir?: string;
+  onSecret?: (secret: string) => void;
+  googleAdc?: GoogleAdcTokenProvider;
+  googleTokenEndpointOverride?: string;
+  now?: () => Date;
+}
+
+function inferAwsRegion(provider: Provider, baseHost: string, env: Record<string, string | undefined>): string {
+  if (provider.aws?.region) return provider.aws.region;
+  const hostMatch = /^bedrock(?:-runtime)?\.([a-z]{2}(?:-[a-z]+)+-\d)\.amazonaws\.com(?:\.cn)?$/i.exec(baseHost);
+  if (hostMatch?.[1]) return hostMatch[1].toLowerCase();
+  const envRegion = (env.AWS_REGION ?? env.AWS_DEFAULT_REGION)?.trim();
+  if (envRegion && /^[a-z]{2}(?:-[a-z]+)+-\d$/.test(envRegion)) return envRegion;
+  return 'us-east-1';
+}
+
+/** Controlled AWS Bedrock control-plane catalog host matching the configured Bedrock runtime endpoint. */
+export function bedrockControlPlaneOrigin(provider: Provider): string | undefined {
+  if (provider.protocol !== 'bedrock') return undefined;
+  const base = new URL(provider.baseURL);
+  if (base.protocol === 'https:' && base.hostname.startsWith('bedrock-runtime.')) {
+    return `https://bedrock.${base.hostname.slice('bedrock-runtime.'.length)}`;
+  }
+  return undefined;
+}
+
+function isAllowedBedrockCatalogTarget(provider: Provider, target: URL): boolean {
+  if (provider.protocol !== 'bedrock' || provider.catalog !== 'bedrock') return false;
+  const controlOrigin = bedrockControlPlaneOrigin(provider);
+  if (!controlOrigin || target.origin !== controlOrigin) return false;
+  return target.pathname === '/foundation-models' || target.pathname === '/inference-profiles';
+}
+
+function toSignableBody(payload: BodyInit | null | undefined): Uint8Array | string | null {
+  if (payload == null) return null;
+  if (typeof payload === 'string') return payload;
+  if (payload instanceof Uint8Array) return payload;
+  if (payload instanceof ArrayBuffer) return new Uint8Array(payload);
+  if (ArrayBuffer.isView(payload)) return new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+  throw new FutrynError('PROTOCOL');
+}
+
 export class ProviderTransport {
+  private readonly defaultGoogleAdc = new GoogleAdcTokenProvider();
   constructor(
     readonly provider: Provider,
     readonly account: Account,
@@ -252,16 +300,42 @@ export class ProviderTransport {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly tokenSource?: TokenSource,
     private readonly sanitizeErrorText?: (text: string) => string,
+    private readonly cloudOptions?: CloudTransportOptions,
   ) {}
   async credential(signal?: AbortSignal): Promise<string | undefined> {
     this.policy.authorize(this.provider, this.account);
     if (this.provider.auth === 'command' || this.provider.auth === 'oauth') {
       const token = await this.tokenSource?.(this.provider, this.account, signal);
       if (!token) throw new FutrynError('AUTH');
+      this.cloudOptions?.onSecret?.(token);
       return token;
+    }
+    if (this.provider.auth === 'google-adc') {
+      const adc = this.cloudOptions?.googleAdc ?? this.defaultGoogleAdc;
+      return adc.getAccessToken({
+        credentialFile: this.provider.vertex?.credentialFile,
+        env: this.cloudOptions?.env,
+        homeDir: this.cloudOptions?.homeDir,
+        fetchImpl: this.fetchImpl,
+        tokenEndpointOverride: this.cloudOptions?.googleTokenEndpointOverride,
+        now: this.cloudOptions?.now ? () => this.cloudOptions!.now!().getTime() : undefined,
+        onSecret: this.cloudOptions?.onSecret,
+        signal,
+      });
+    }
+    if (this.provider.auth === 'aws-sigv4') {
+      // Validate AWS credentials eagerly so missing credentials surface as AUTH before invoking the SDK.
+      resolveAwsCredentials({
+        profile: this.provider.aws?.profile,
+        env: this.cloudOptions?.env,
+        homeDir: this.cloudOptions?.homeDir,
+        onSecret: this.cloudOptions?.onSecret,
+      });
+      return undefined;
     }
     const key = await this.vault.get(this.account.credential);
     if (this.provider.auth === 'api-key' && !key) throw new FutrynError('AUTH');
+    if (key) this.cloudOptions?.onSecret?.(key);
     return key;
   }
   /** `onActivity` runs when headers arrive and on every body chunk (idle-timeout bookkeeping). */
@@ -274,11 +348,13 @@ export class ProviderTransport {
     this.policy.authorize(this.provider, this.account);
     const target = new URL(url instanceof Request ? url.url : url.toString());
     const base = new URL(this.provider.baseURL);
+    const allowedBedrockControl = isAllowedBedrockCatalogTarget(this.provider, target);
     const allowedPath =
+      allowedBedrockControl ||
       target.pathname.startsWith(base.pathname.replace(/\/$/, '') + '/') ||
       (this.provider.catalog === 'ollama' && target.pathname === '/api/tags');
     if (
-      target.origin !== base.origin ||
+      (!allowedBedrockControl && target.origin !== base.origin) ||
       !allowedPath ||
       target.username ||
       target.password ||
@@ -287,7 +363,23 @@ export class ProviderTransport {
     )
       throw new FutrynError('POLICY');
     const headers = new Headers(init.headers);
-    decorate(this.provider, target, headers);
+    const env = this.cloudOptions?.env ?? process.env;
+    decorate(this.provider, target, headers, env);
+    if (
+      this.provider.protocol === 'azure' &&
+      this.provider.azure?.apiVersion &&
+      !target.searchParams.has('api-version') &&
+      this.provider.azure.useDeploymentBasedUrls !== false
+    ) {
+      target.searchParams.set('api-version', this.provider.azure.apiVersion);
+    }
+    if (this.provider.protocol === 'azure' && this.provider.auth === 'api-key') {
+      const bearer = headers.get('authorization');
+      if (bearer && /^Bearer\s+/i.test(bearer) && !headers.has('api-key')) {
+        headers.set('api-key', bearer.replace(/^Bearer\s+/i, ''));
+        headers.delete('authorization');
+      }
+    }
     let payload: BodyInit | null | undefined = init.body;
     // Large request bodies are zstd-compressed where the provider requires it (ADR 0047).
     if (
@@ -297,6 +389,25 @@ export class ProviderTransport {
     ) {
       payload = new Uint8Array(await Bun.zstdCompress(new TextEncoder().encode(payload))) as unknown as BodyInit;
       headers.set('content-encoding', 'zstd');
+    }
+    if (this.provider.protocol === 'bedrock' && this.provider.auth === 'aws-sigv4') {
+      const credentials = resolveAwsCredentials({
+        profile: this.provider.aws?.profile,
+        env,
+        homeDir: this.cloudOptions?.homeDir,
+        onSecret: this.cloudOptions?.onSecret,
+      });
+      const region = inferAwsRegion(this.provider, base.hostname, env);
+      signAwsSigV4({
+        method: init.method ?? 'GET',
+        url: target,
+        headers,
+        body: toSignableBody(payload),
+        service: 'bedrock',
+        region,
+        credentials,
+        now: this.cloudOptions?.now?.(),
+      });
     }
     let response: Response;
     try {
@@ -382,8 +493,17 @@ export class ProviderTransport {
       if (this.provider.protocol === 'anthropic') {
         headers['x-api-key'] = key;
         headers['anthropic-version'] = '2023-06-01';
-      } else if (this.provider.protocol === 'gemini') headers['x-goog-api-key'] = key;
-      else headers.authorization = `Bearer ${key}`;
+      } else if (
+        this.provider.protocol === 'gemini' ||
+        ((this.provider.protocol === 'vertex' || this.provider.protocol === 'vertex-anthropic') &&
+          this.provider.auth === 'api-key')
+      ) {
+        headers['x-goog-api-key'] = key;
+      } else if (this.provider.protocol === 'azure' && this.provider.auth === 'api-key') {
+        headers['api-key'] = key;
+      } else {
+        headers.authorization = `Bearer ${key}`;
+      }
     }
     for (let attempt = 0; ; attempt++) {
       try {

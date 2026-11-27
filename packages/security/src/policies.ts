@@ -26,9 +26,16 @@ export class ConfiguredNetworkPolicy implements NetworkPolicy {
     if (
       account.providerId !== provider.id ||
       account.status === 'logged-out' ||
-      ((provider.auth === 'api-key' || provider.auth === 'oauth') && account.credential.kind === 'none')
+      ((provider.auth === 'api-key' || provider.auth === 'oauth') && account.credential.kind === 'none') ||
+      (provider.auth === 'aws-sigv4' && provider.protocol !== 'bedrock') ||
+      (provider.auth === 'google-adc' && !['vertex', 'vertex-anthropic', 'gemini'].includes(provider.protocol))
     )
       throw new FutrynError('POLICY');
+    if (provider.vertex?.credentialFile) {
+      const file = provider.vertex.credentialFile;
+      const absolute = file.startsWith('/') || file.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(file);
+      if (!absolute || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(file)) throw new FutrynError('POLICY');
+    }
   }
 }
 

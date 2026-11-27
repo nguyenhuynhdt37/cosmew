@@ -44,7 +44,10 @@ export function connectionChoices(
           : []),
       ];
     case 'protocol':
-      return ['chat', 'responses', 'anthropic', 'gemini'].map(id => ({id, label: id}));
+      return ['chat', 'responses', 'anthropic', 'gemini', 'azure', 'bedrock', 'vertex', 'vertex-anthropic'].map(id => ({
+        id,
+        label: id,
+      }));
     case 'auth':
       return [
         {id: 'api-key', label: 'API key'},
@@ -56,6 +59,7 @@ export function connectionChoices(
         {id: 'anthropic', label: 'Discover models · Anthropic /models'},
         {id: 'gemini', label: 'Discover models · Gemini'},
         {id: 'ollama', label: 'Discover models · Ollama /api/tags'},
+        {id: 'bedrock', label: 'Discover models · AWS Bedrock /foundation-models'},
         {id: 'manual', label: 'Manual model ID · validate with a real generation'},
       ];
     case 'accounts':

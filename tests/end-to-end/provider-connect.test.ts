@@ -52,7 +52,9 @@ test('permission approvals bind the full target, expire, reject forged scopes an
   });
   expect(() => client.resolvePermission(expired.approvalId, expired.scopeHash, 'once')).toThrow();
   expect(client.listPermissions()).toHaveLength(3); // No production demo requests.
-  expect(client.capabilities().generalToolsExecution).toBe('not-implemented');
+  expect(client.capabilities().generalToolsExecution).toBe('implemented');
+  expect(client.capabilities().hooks).toBe('implemented');
+  expect(client.capabilities().delegatedSubagents).toBe('implemented');
   client.clearSessionView();
   const nextSession = client.enqueuePermissionRequest({
     capability: 'fs.write',

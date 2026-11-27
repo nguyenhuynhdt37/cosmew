@@ -121,6 +121,10 @@ export async function loginWizard(
           {id: 'chat', name: 'OpenAI Chat Completions'},
           {id: 'anthropic', name: 'Anthropic Messages'},
           {id: 'gemini', name: 'Google Gemini'},
+          {id: 'azure', name: 'Azure OpenAI / AI Foundry'},
+          {id: 'bedrock', name: 'AWS Bedrock (Converse)'},
+          {id: 'vertex', name: 'Google Vertex AI (Gemini)'},
+          {id: 'vertex-anthropic', name: 'Google Vertex AI (Claude)'},
         ],
         'responses',
       );
@@ -130,9 +134,17 @@ export async function loginWizard(
         'Xác thực',
         [
           {id: 'api-key', name: 'API key'},
+          ...(protocol === 'bedrock' ? [{id: 'aws-sigv4', name: 'AWS Credentials (IAM / SigV4)'}] : []),
+          ...(protocol === 'vertex' || protocol === 'vertex-anthropic'
+            ? [{id: 'google-adc', name: 'Google Cloud ADC / Service Account'}]
+            : []),
           {id: 'none', name: 'Không cần key (local/public)'},
         ],
-        'api-key',
+        protocol === 'bedrock'
+          ? 'aws-sigv4'
+          : protocol === 'vertex' || protocol === 'vertex-anthropic'
+            ? 'google-adc'
+            : 'api-key',
       );
       const discover = await input.ask('Gateway có API liệt kê models? (y/n)', 'n');
       if (!['y', 'n'].includes(discover.toLowerCase())) throw new FutrynError('INVALID_INPUT');
@@ -149,7 +161,9 @@ export async function loginWizard(
                 ? 'anthropic'
                 : protocol === 'gemini'
                   ? 'gemini'
-                  : 'openai'
+                  : protocol === 'bedrock'
+                    ? 'bedrock'
+                    : 'openai'
               : 'manual',
           metadataVersion: 1,
         }),

@@ -87,6 +87,7 @@ import {
 } from '@cosmew/workspace';
 import {
   AccountManager,
+  GoogleAdcTokenProvider,
   IntegrationRegistry,
   ModelCatalog,
   ModelRouter,
@@ -402,6 +403,7 @@ export function startup(
   const accounts = new AccountManager(settings, vault);
   const router = new ModelRouter(settings);
   const policy = new ConfiguredNetworkPolicy();
+  const googleAdc = new GoogleAdcTokenProvider();
 
   const transport = (account: Account) =>
     new ProviderTransport(
@@ -424,6 +426,10 @@ export function startup(
       (provider, account, signal) =>
         provider.auth === 'oauth' ? chatgpt.accessToken(account, vault, signal) : tokens.token(provider, signal),
       text => terminalText(redactor.text(text)),
+      {
+        onSecret: secret => redactor.register(secret),
+        googleAdc,
+      },
     );
 
   const metadataAbort = new AbortController();

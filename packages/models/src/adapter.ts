@@ -9,16 +9,18 @@ import {
 } from 'ai';
 import {createOpenAI} from '@ai-sdk/openai';
 import {createAnthropic} from '@ai-sdk/anthropic';
+import {createAmazonBedrock} from '@ai-sdk/amazon-bedrock';
 import {createGoogle} from '@ai-sdk/google';
 import {createOpenAICompatible} from '@ai-sdk/openai-compatible';
 import Ajv, {type ValidateFunction} from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
 import {parseRateLimitHeaders} from './limits';
-import {resolveThinkingWire} from './effort-wire';
+import {resolveThinkingWire, thinkingProtocolFor} from './effort-wire';
 import {
   FutrynError,
   requestSchema,
   type Message,
+  type Provider,
   type ProviderReplay,
   providerReplaySchema,
   type ModelEvent,
@@ -34,13 +36,31 @@ import {
   codexBackoffMs,
 } from '@cosmew/contracts';
 
+const isAnthropicWire = (protocol: Provider['protocol'] | undefined) =>
+  protocol === 'anthropic' || protocol === 'vertex-anthropic';
+const isGeminiWire = (protocol: Provider['protocol'] | undefined) => protocol === 'gemini' || protocol === 'vertex';
+const isAzureResponses = (provider: Provider) =>
+  provider.protocol === 'azure' && provider.azure?.apiMode === 'responses';
+const isResponsesWire = (provider: Provider) => provider.protocol === 'responses' || isAzureResponses(provider);
+const isChatWire = (provider: Provider) =>
+  provider.protocol === 'chat' || (provider.protocol === 'azure' && !isAzureResponses(provider));
+
+function replayNamespaceFor(protocol: Provider['protocol']): 'openai' | 'google' | 'anthropic' | 'bedrock' {
+  if (protocol === 'responses' || protocol === 'azure') return 'openai';
+  if (isGeminiWire(protocol)) return 'google';
+  if (protocol === 'bedrock') return 'bedrock';
+  return 'anthropic';
+}
+
 export interface MediaOptions {
   /** Private continuation state is replayed only to its exact originating endpoint/model. */
   replayBinding?: Pick<ProviderReplay, 'providerId' | 'accountId' | 'protocol' | 'modelId' | 'endpointHash'>;
   /** Send assistant reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
   replayReasoning?: boolean;
   /** Wire protocol of the provider; decides where tool media goes (ADR 0041). */
-  protocol?: 'chat' | 'anthropic' | 'responses' | 'gemini';
+  protocol?: Provider['protocol'];
+  /** Override whether fallback user messages may carry PDF attachments (Chat Completions cannot). */
+  supportsPdf?: boolean;
   /** The model's vision capability; `unsupported` never receives media. */
   vision?: 'supported' | 'unsupported' | 'unknown';
 }
@@ -72,7 +92,7 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
     if (m.role === 'tool') {
       const attachments = m.attachments ?? [];
       const blocked = attachments.length > 0 && media.vision === 'unsupported';
-      if (attachments.length && !blocked && media.protocol === 'anthropic') {
+      if (attachments.length && !blocked && isAnthropicWire(media.protocol)) {
         out.push({
           role: 'tool',
           content: [
@@ -100,7 +120,8 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
       let text = m.content;
       if (blocked) text += '\n' + mediaNote(attachments.length);
       else if (attachments.length) {
-        const sendable = attachments.filter(a => a.mime !== 'application/pdf' || media.protocol !== 'chat');
+        const allowPdf = media.supportsPdf ?? media.protocol !== 'chat';
+        const sendable = attachments.filter(a => a.mime !== 'application/pdf' || allowPdf);
         if (sendable.length < attachments.length)
           text += `\n[${attachments.length - sendable.length} PDF attachment(s) not sent: this provider protocol cannot carry PDFs.]`;
         for (const a of sendable) pending.push({type: 'file', data: a.data, mediaType: a.mime, filename: a.name});
@@ -137,8 +158,7 @@ export function toModelMessages(messages: Message[], media: MediaOptions = {}): 
         replay.modelId === bound.modelId &&
         replay.endpointHash === bound.endpointHash
       ) {
-        const namespace =
-          replay.protocol === 'responses' ? 'openai' : replay.protocol === 'gemini' ? 'google' : 'anthropic';
+        const namespace = replayNamespaceFor(replay.protocol);
         out.push({
           role: 'assistant',
           content: replay.parts.map(part => {
@@ -259,6 +279,69 @@ export function applyAnthropicCacheControl(
     nextMessages[index] = {
       ...candidate,
       providerOptions: mergeAnthropicCacheControl(candidate.providerOptions),
+    };
+    taggedMessages++;
+  }
+  return {
+    messages: nextMessages,
+    tools: nextTools,
+    ...(system ? {system} : {}),
+  };
+}
+
+const BEDROCK_DEFAULT_CACHE_POINT = {type: 'default' as const};
+
+function mergeBedrockCachePoint(existing: MessageProviderOptions): NonNullable<MessageProviderOptions> {
+  const bedrock = existing?.bedrock;
+  return {
+    ...existing,
+    bedrock: {
+      ...(bedrock && typeof bedrock === 'object' ? bedrock : {}),
+      cachePoint: BEDROCK_DEFAULT_CACHE_POINT,
+    },
+  };
+}
+
+/**
+ * Applies up to 4 AWS Bedrock Converse prompt-caching checkpoints (ADR 0122):
+ * last tool definition, system prompt message, and up to 2 recent cacheable conversation messages.
+ */
+export function applyBedrockCachePoints(
+  instructions: string | undefined,
+  messages: ModelMessage[],
+  tools: ToolSet,
+  toolNames: readonly string[],
+): {messages: ModelMessage[]; tools: ToolSet; system?: SystemModelMessage} {
+  let used = 0;
+  const nextTools: ToolSet = {...tools};
+  const lastToolName = toolNames[toolNames.length - 1];
+  if (lastToolName && nextTools[lastToolName] && used < ANTHROPIC_MAX_CACHE_BREAKPOINTS) {
+    const lastTool = nextTools[lastToolName]!;
+    nextTools[lastToolName] = {
+      ...lastTool,
+      providerOptions: mergeBedrockCachePoint(lastTool.providerOptions),
+    };
+    used++;
+  }
+  const hasSystem = typeof instructions === 'string' && instructions.trim().length > 0;
+  let system: SystemModelMessage | undefined;
+  if (hasSystem && used < ANTHROPIC_MAX_CACHE_BREAKPOINTS) {
+    system = {
+      role: 'system',
+      content: instructions,
+      providerOptions: {bedrock: {cachePoint: BEDROCK_DEFAULT_CACHE_POINT}},
+    };
+    used++;
+  }
+  const nextMessages: ModelMessage[] = [...messages];
+  const remaining = Math.min(2, ANTHROPIC_MAX_CACHE_BREAKPOINTS - used);
+  let taggedMessages = 0;
+  for (let index = nextMessages.length - 1; index >= 0 && taggedMessages < remaining; index--) {
+    const candidate = nextMessages[index]!;
+    if (candidate.role === 'system' || !isCacheableAnthropicMessage(candidate)) continue;
+    nextMessages[index] = {
+      ...candidate,
+      providerOptions: mergeBedrockCachePoint(candidate.providerOptions),
     };
     taggedMessages++;
   }
@@ -471,7 +554,7 @@ function idleDeadline(ms: number): {signal: AbortSignal; touch: () => void; stop
 }
 
 export class ProviderAdapter implements ModelPort {
-  /** Set on an Anthropic endpoint that rejects prompt-caching markers before any output. */
+  /** Set on an Anthropic/Bedrock endpoint that rejects prompt-caching markers before any output. */
   private promptCacheUnsupported = false;
   constructor(
     private readonly transport: ProviderTransport,
@@ -497,16 +580,18 @@ export class ProviderAdapter implements ModelPort {
   }
   /** SDK content is authoritative for ordering and final signatures; deltas are display-only. */
   private captureReplay(content: readonly unknown[]): ProviderReplay | undefined {
-    const protocol = this.transport.provider.protocol;
-    if (protocol === 'chat' && !this.transport.provider.replayReasoning) return;
-    const namespace = protocol === 'responses' ? 'openai' : protocol === 'gemini' ? 'google' : 'anthropic';
-    const keys =
-      protocol === 'responses'
-        ? ['itemId', 'reasoningEncryptedContent']
-        : protocol === 'gemini'
-          ? ['thoughtSignature']
-          : protocol === 'anthropic'
-            ? ['signature', 'redactedData', 'type']
+    const p = this.transport.provider;
+    const protocol = p.protocol;
+    if (isChatWire(p) && !p.replayReasoning) return;
+    const namespace = replayNamespaceFor(protocol);
+    const keys = isResponsesWire(p)
+      ? ['itemId', 'reasoningEncryptedContent']
+      : isGeminiWire(protocol)
+        ? ['thoughtSignature']
+        : isAnthropicWire(protocol)
+          ? ['signature', 'redactedData', 'type']
+          : protocol === 'bedrock'
+            ? ['signature', 'redactedData']
             : [];
     let hasMetadata = false;
     const parts: ProviderReplay['parts'] = [];
@@ -527,7 +612,7 @@ export class ProviderAdapter implements ModelPort {
       if (part.type === 'tool-call') parts.push({type: 'tool-call', callId: part.toolCallId!, ...extra});
       else parts.push({type: part.type as 'text' | 'reasoning', text: part.text ?? '', ...extra});
     }
-    if (!hasMetadata && !(protocol === 'chat' && parts.some(part => part.type === 'reasoning'))) return;
+    if (!hasMetadata && !(isChatWire(p) && parts.some(part => part.type === 'reasoning'))) return;
     const parsed = providerReplaySchema.safeParse({version: 1, ...this.replayBinding(), parts});
     if (!parsed.success) {
       const onlyContentSizeLimit = parsed.error.issues.every(
@@ -553,9 +638,10 @@ export class ProviderAdapter implements ModelPort {
     if (request.modelId !== this.modelId) throw new FutrynError('INVALID_INPUT');
     const p = this.transport.provider;
     const effort = request.reasoningEffort;
+    const thinkingProtocol = thinkingProtocolFor(p.protocol);
     const thinking =
-      effort && (p.protocol === 'anthropic' || p.protocol === 'gemini')
-        ? resolveThinkingWire(p, p.protocol, this.info, effort, request.maxOutputTokens)
+      effort && thinkingProtocol
+        ? resolveThinkingWire(p, thinkingProtocol, this.info, effort, request.maxOutputTokens)
         : undefined;
     const maxOutputTokens = thinking?.maxOutputTokens ?? this.outputCap(request);
     // The Anthropic SDK adds the budget back to max_tokens. Keep the wire cap
@@ -595,6 +681,7 @@ export class ProviderAdapter implements ModelPort {
         headers.delete('authorization');
         headers.delete('x-api-key');
         headers.delete('x-goog-api-key');
+        headers.delete('api-key');
       }
       return this.requestWithRetries(url, {...init, headers}, idle.touch).then(response => {
         responseHeaders.value = response.headers;
@@ -603,20 +690,118 @@ export class ProviderAdapter implements ModelPort {
     }) as typeof fetch;
     const settings = {baseURL: p.baseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch};
     let model: LanguageModel;
-    if (p.protocol === 'anthropic') model = createAnthropic(settings)(this.modelId);
-    else if (p.protocol === 'gemini') model = createGoogle(settings)(this.modelId);
-    else if (p.protocol === 'responses') model = createOpenAI(settings).responses(this.modelId);
-    else
+    if (p.protocol === 'anthropic') {
+      model = createAnthropic(settings)(this.modelId);
+    } else if (p.protocol === 'vertex-anthropic') {
+      const vertexAnthropicFetch = ((_url: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.delete('x-api-key');
+        headers.delete('anthropic-version');
+        if (p.auth === 'api-key' && key) {
+          headers.delete('authorization');
+          headers.set('x-goog-api-key', key);
+        } else if ((p.auth === 'google-adc' || p.auth === 'command') && key) {
+          headers.delete('x-goog-api-key');
+          headers.set('authorization', `Bearer ${key}`);
+        } else {
+          headers.delete('authorization');
+          headers.delete('x-goog-api-key');
+        }
+        let bodyObj: Record<string, unknown> = {};
+        if (typeof init?.body === 'string' && init.body) {
+          try {
+            const parsed: unknown = JSON.parse(init.body);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+              bodyObj = {...(parsed as Record<string, unknown>)};
+            }
+          } catch {
+            throw new FutrynError('PROTOCOL');
+          }
+        }
+        const modelName = typeof bodyObj.model === 'string' && bodyObj.model ? bodyObj.model : this.modelId;
+        const isStream = bodyObj.stream === true;
+        delete bodyObj.model;
+        bodyObj.anthropic_version = 'vertex-2023-10-16';
+        const endpoint = `${p.baseURL.replace(/\/$/, '')}/models/${encodeURIComponent(modelName)}:${isStream ? 'streamRawPredict' : 'rawPredict'}`;
+        return this.requestWithRetries(endpoint, {...init, headers, body: JSON.stringify(bodyObj)}, idle.touch).then(
+          response => {
+            responseHeaders.value = response.headers;
+            return response;
+          },
+        );
+      }) as typeof fetch;
+      model = createAnthropic({baseURL: p.baseURL, apiKey: 'cosmew-vertex-anthropic', fetch: vertexAnthropicFetch})(
+        this.modelId,
+      );
+    } else if (p.protocol === 'gemini') {
+      model = createGoogle(settings)(this.modelId);
+    } else if (p.protocol === 'vertex') {
+      const vertexGeminiFetch = ((url: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        if (p.auth === 'api-key' && key) {
+          headers.delete('authorization');
+          headers.set('x-goog-api-key', key);
+        } else if ((p.auth === 'google-adc' || p.auth === 'command') && key) {
+          headers.delete('x-goog-api-key');
+          headers.set('authorization', `Bearer ${key}`);
+        } else {
+          headers.delete('authorization');
+          headers.delete('x-goog-api-key');
+        }
+        return this.requestWithRetries(url, {...init, headers}, idle.touch).then(response => {
+          responseHeaders.value = response.headers;
+          return response;
+        });
+      }) as typeof fetch;
+      model = createGoogle({baseURL: p.baseURL, apiKey: key ?? 'cosmew-vertex-gemini', fetch: vertexGeminiFetch})(
+        this.modelId,
+      );
+    } else if (p.protocol === 'bedrock') {
+      const bedrockFetch = ((url: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        headers.delete('authorization');
+        if ((p.auth === 'api-key' || p.auth === 'command') && key) {
+          headers.set('authorization', `Bearer ${key}`);
+        }
+        return this.requestWithRetries(url, {...init, headers}, idle.touch).then(response => {
+          responseHeaders.value = response.headers;
+          return response;
+        });
+      }) as typeof fetch;
+      model = createAmazonBedrock({
+        region: p.aws?.region ?? 'us-east-1',
+        baseURL: p.baseURL,
+        apiKey: 'cosmew-managed-bedrock',
+        fetch: bedrockFetch,
+      })(this.modelId);
+    } else if (p.protocol === 'azure') {
+      const azureBaseURL = p.azure?.useDeploymentBasedUrls
+        ? `${p.baseURL.replace(/\/$/, '').replace(/\/openai$/, '')}/openai/deployments/${encodeURIComponent(this.modelId)}`
+        : p.baseURL;
+      const azureSettings = {baseURL: azureBaseURL, apiKey: key ?? 'hannes-no-credential', fetch: customFetch};
+      model = isAzureResponses(p)
+        ? createOpenAI(azureSettings).responses(this.modelId)
+        : createOpenAICompatible({
+            ...azureSettings,
+            name: p.id,
+            includeUsage: p.streamUsage ?? true,
+            convertUsage: chatUsage,
+          }).chatModel(this.modelId);
+    } else if (p.protocol === 'responses') {
+      model = createOpenAI(settings).responses(this.modelId);
+    } else {
       model = createOpenAICompatible({
         ...settings,
         name: p.id,
         includeUsage: p.streamUsage ?? false,
         convertUsage: chatUsage,
       }).chatModel(this.modelId);
+    }
     // Adapters convert, never decide (ADR 0029): a call with wrong arguments or an unknown name is
     // passed to the Cosmew ToolRouter, which answers the model with INVALID_INPUT / UNKNOWN_TOOL, as
     // Codex responds-to-model. Only genuine wire faults (duplicate ids, >32 calls, oversize) fail here.
     const tools: ToolSet = {};
+    const toolNames: string[] = [];
     const names = new Set<string>();
     const ajv = new Ajv({
       strict: true,
@@ -649,6 +834,7 @@ export class ProviderAdapter implements ModelPort {
         throw new FutrynError('INVALID_INPUT');
       }
       names.add(descriptor.name);
+      toolNames.push(descriptor.name);
       tools[descriptor.name] = {
         description: descriptor.description,
         inputSchema: jsonSchema(descriptor.inputSchema, {
@@ -665,45 +851,72 @@ export class ProviderAdapter implements ModelPort {
     // OpenAI prompt caching (Responses API `prompt_cache_key`): a stable per-conversation value so the
     // provider routes every round of one session to the same cache. It is a hash, never the raw id.
     // Needs verification: xAI `x-grok-conv-id` is not sent until its documentation is cited.
-    const providerOptions =
-      p.protocol === 'responses'
-        ? {
-            store: false,
-            include: ['reasoning.encrypted_content'],
-            ...(request.cacheKey ? {promptCacheKey: promptCacheKey(request.cacheKey)} : {}),
-            ...(request.reasoningEffort
-              ? {
-                  reasoningEffort: request.reasoningEffort,
-                  forceReasoning: true,
-                  // Explicit null suppresses the AI SDK's implicit detailed summary.
-                  reasoningSummary: p.id === 'openai' && p.baseURL === 'https://api.openai.com/v1' ? 'auto' : null,
-                }
-              : {}),
-          }
-        : p.protocol === 'chat' && request.reasoningEffort
-          ? {reasoningEffort: request.reasoningEffort}
-          : undefined;
+    const providerOptions = isResponsesWire(p)
+      ? {
+          store: false,
+          include: ['reasoning.encrypted_content'],
+          ...(request.cacheKey ? {promptCacheKey: promptCacheKey(request.cacheKey)} : {}),
+          ...(request.reasoningEffort
+            ? {
+                reasoningEffort: request.reasoningEffort,
+                forceReasoning: true,
+                // Explicit null suppresses the AI SDK's implicit detailed summary.
+                reasoningSummary: p.id === 'openai' && p.baseURL === 'https://api.openai.com/v1' ? 'auto' : null,
+              }
+            : {}),
+        }
+      : isChatWire(p) && request.reasoningEffort
+        ? {reasoningEffort: request.reasoningEffort}
+        : undefined;
+    const bedrockReasoningOptions =
+      p.protocol === 'bedrock' && request.reasoningEffort
+        ? (() => {
+            const level = request.reasoningEffort;
+            if (level === 'none') return {bedrock: {reasoningConfig: {type: 'disabled' as const}}};
+            const modelDecl = p.reasoning?.models?.[this.modelId];
+            const budget =
+              level === 'minimal' ||
+              level === 'low' ||
+              level === 'medium' ||
+              level === 'high' ||
+              level === 'xhigh' ||
+              level === 'max'
+                ? (modelDecl?.budgets?.[level] ?? p.reasoning?.budgets?.[level])
+                : undefined;
+            if (budget !== undefined) {
+              return {bedrock: {reasoningConfig: {type: 'enabled' as const, budgetTokens: budget}}};
+            }
+            if (level === 'low' || level === 'medium' || level === 'high' || level === 'xhigh' || level === 'max') {
+              return {bedrock: {reasoningConfig: {type: 'enabled' as const, maxReasoningEffort: level}}};
+            }
+            return undefined;
+          })()
+        : undefined;
     // The OpenAI-compatible AI SDK adapter names its provider options after the configured
     // provider (`<id>.chat` -> `<id>`). This is the only generic Chat transport option we
     // pass through: model metadata must explicitly advertise the effort first (above).
     const providerOptionsByProtocol =
       thinking?.providerOptions ??
+      bedrockReasoningOptions ??
       (providerOptions === undefined
         ? undefined
-        : p.protocol === 'responses'
+        : isResponsesWire(p)
           ? {openai: providerOptions}
           : {[p.id]: providerOptions});
     const baseMessages = toModelMessages(request.messages, {
       protocol: p.protocol,
+      supportsPdf: !isChatWire(p),
       replayBinding: this.replayBinding(),
       vision: this.info?.capabilities.vision,
-      replayReasoning: p.protocol === 'chat' && p.replayReasoning === true,
+      replayReasoning: isChatWire(p) && p.replayReasoning === true,
     });
-    const toolNames = request.tools.map(t => t.name);
-    const useAnthropicCache = p.protocol === 'anthropic' && !this.promptCacheUnsupported;
+    const useAnthropicCache = isAnthropicWire(p.protocol) && !this.promptCacheUnsupported;
+    const useBedrockCache = p.protocol === 'bedrock' && !this.promptCacheUnsupported;
     const cached = useAnthropicCache
       ? applyAnthropicCacheControl(request.instructions, baseMessages, tools, toolNames)
-      : undefined;
+      : useBedrockCache
+        ? applyBedrockCachePoints(request.instructions, baseMessages, tools, toolNames)
+        : null;
     const finalMessages = cached ? cached.messages : baseMessages;
     const finalTools = cached ? cached.tools : tools;
     const systemPrompt = cached ? cached.system : request.instructions || undefined;
@@ -728,7 +941,7 @@ export class ProviderAdapter implements ModelPort {
   private outputCap(request: ModelRequest): number | undefined {
     const limit = this.info?.outputLimit ?? undefined;
     if (request.maxOutputTokens !== undefined) return Math.min(request.maxOutputTokens, limit ?? Infinity);
-    if (this.transport.provider.protocol === 'anthropic')
+    if (isAnthropicWire(this.transport.provider.protocol))
       return limit ?? GENERATION_LIMITS.anthropicFallbackOutputTokens;
     return undefined;
   }
@@ -779,7 +992,7 @@ export class ProviderAdapter implements ModelPort {
             continue;
           }
           if (
-            this.transport.provider.protocol === 'anthropic' &&
+            (isAnthropicWire(this.transport.provider.protocol) || this.transport.provider.protocol === 'bedrock') &&
             !this.promptCacheUnsupported &&
             isCacheControlRejectionError(e)
           ) {
@@ -875,7 +1088,7 @@ export class ProviderAdapter implements ModelPort {
             continue;
           }
           if (
-            this.transport.provider.protocol === 'anthropic' &&
+            (isAnthropicWire(this.transport.provider.protocol) || this.transport.provider.protocol === 'bedrock') &&
             !this.promptCacheUnsupported &&
             isCacheControlRejectionError(e)
           ) {

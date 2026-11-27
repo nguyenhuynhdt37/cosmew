@@ -3154,12 +3154,17 @@ export class FutrynClient {
     if (value !== 'default') {
       if (!model.reasoningEfforts?.length || model.capabilities.reasoning === 'unsupported') {
         const protocol = status.activeProvider?.protocol;
-        if (protocol === 'anthropic' || protocol === 'gemini')
+        if (
+          protocol === 'anthropic' ||
+          protocol === 'gemini' ||
+          protocol === 'vertex' ||
+          protocol === 'vertex-anthropic'
+        )
           throw new FutrynError(
             'UNSUPPORTED',
             false,
             null,
-            protocol,
+            protocol === 'vertex-anthropic' ? 'anthropic' : protocol === 'vertex' ? 'gemini' : protocol,
             model.capabilities.reasoning === 'supported' ? 'mapping' : model.capabilities.reasoning,
           );
         throw new FutrynError('UNSUPPORTED', false, null, 'levels');

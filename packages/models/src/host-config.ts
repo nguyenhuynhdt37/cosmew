@@ -47,10 +47,6 @@ const REFUSED_FIELDS: Record<string, string> = {
   experimental_bearer_token:
     'plaintext tokens are never stored in config files; use env_key, the keyring or an auth command',
   gateway_oauth: 'not supported',
-  aws: 'not supported',
-  project_id: 'not supported',
-  location: 'not supported',
-  credential_file: 'not supported',
   capabilities: 'not supported',
   requires_openai_auth: 'not supported',
   supports_websockets: 'not supported',
@@ -74,12 +70,30 @@ const ALLOWED_FIELDS = new Set([
   'models',
   'catalog',
   'requires_auth',
+  'auth_mode',
   'replay_reasoning',
   'reasoning',
   'auth',
+  'aws',
+  'vertex',
+  'azure',
+  'project_id',
+  'location',
+  'credential_file',
+  'api_version',
 ]);
 const ALLOWED_AUTH_FIELDS = new Set(['command', 'args', 'timeout_ms', 'refresh_interval_ms']);
-const CATALOGS = ['openai', 'anthropic', 'gemini', 'ollama', 'manual'] as const;
+const ALLOWED_AWS_FIELDS = new Set(['region', 'profile']);
+const ALLOWED_VERTEX_FIELDS = new Set(['project_id', 'location', 'credential_file']);
+const ALLOWED_AZURE_FIELDS = new Set(['api_version', 'api_mode', 'use_deployment_based_urls']);
+const CATALOGS = ['openai', 'anthropic', 'gemini', 'ollama', 'bedrock', 'manual'] as const;
+const AUTH_MODES = ['api-key', 'none', 'aws-sigv4', 'google-adc'] as const;
+const AWS_REGION_RE = /^[a-z]{2}(?:-[a-z]+)+-\d$/;
+const AWS_PROFILE_RE = /^[A-Za-z0-9._-]{1,100}$/;
+const GCP_PROJECT_RE = /^[a-z0-9][a-z0-9.:-]{2,99}$/;
+const GCP_LOCATION_RE = /^(?:global|[a-z]{2,12}-[a-z0-9-]{2,20})$/;
+const AZURE_API_VERSION_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[a-z0-9-]+)?$/;
+const DEFAULT_AZURE_API_VERSION = '2024-10-21';
 
 /** Codex DEFAULT_PROVIDER_AUTH_TIMEOUT_MS / refresh interval. Cosmew caps the timeout at one minute. */
 const AUTH_TIMEOUT_MS = 5_000;
@@ -173,9 +187,122 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     fail(
       'reasoning must use known keys, a boolean supported, 1–20 unique effort strings (1–40 characters; default is reserved), and positive integer budgets keyed by minimal, low, medium, high, xhigh or max',
     );
-  const baseURL = validateBaseURL(raw.base_url);
   const protocol = protocolSchema.safeParse(raw.wire_api ?? 'chat');
-  if (!protocol.success) return fail('wire_api must be chat, responses, anthropic or gemini');
+  if (!protocol.success)
+    return fail('wire_api must be chat, responses, anthropic, gemini, azure, bedrock, vertex or vertex-anthropic');
+
+  let aws: Provider['aws'];
+  if (raw.aws !== undefined) {
+    if (protocol.data !== 'bedrock') return fail('aws settings are only supported with wire_api = "bedrock"');
+    if (!isRecord(raw.aws)) return fail('aws must be a table');
+    const awsRaw = raw.aws;
+    for (const key of Object.keys(awsRaw)) if (!ALLOWED_AWS_FIELDS.has(key)) return fail(`aws.${key} is not supported`);
+    if (typeof awsRaw.region !== 'string' || !AWS_REGION_RE.test(awsRaw.region))
+      return fail('aws.region must be a valid AWS region (e.g. us-east-1)');
+    if (awsRaw.profile !== undefined && (typeof awsRaw.profile !== 'string' || !AWS_PROFILE_RE.test(awsRaw.profile)))
+      return fail('aws.profile must be a valid profile name');
+    aws = {region: awsRaw.region, ...(typeof awsRaw.profile === 'string' ? {profile: awsRaw.profile} : {})};
+  }
+
+  let vertex: Provider['vertex'];
+  const hasVertexFields =
+    raw.vertex !== undefined ||
+    raw.project_id !== undefined ||
+    raw.location !== undefined ||
+    raw.credential_file !== undefined;
+  if (hasVertexFields) {
+    if (protocol.data !== 'vertex' && protocol.data !== 'vertex-anthropic')
+      return fail(
+        'project_id, location, credential_file and vertex settings require wire_api = "vertex" or "vertex-anthropic"',
+      );
+    const vt = raw.vertex === undefined ? {} : isRecord(raw.vertex) ? raw.vertex : fail('vertex must be a table');
+    for (const key of Object.keys(vt))
+      if (!ALLOWED_VERTEX_FIELDS.has(key)) return fail(`vertex.${key} is not supported`);
+    const projectId = raw.project_id ?? vt.project_id;
+    const location = raw.location ?? vt.location;
+    const credentialFile = raw.credential_file ?? vt.credential_file;
+    if (raw.project_id !== undefined && vt.project_id !== undefined)
+      return fail('specify project_id either at top level or in [vertex], not both');
+    if (raw.location !== undefined && vt.location !== undefined)
+      return fail('specify location either at top level or in [vertex], not both');
+    if (raw.credential_file !== undefined && vt.credential_file !== undefined)
+      return fail('specify credential_file either at top level or in [vertex], not both');
+    if (typeof projectId !== 'string' || !GCP_PROJECT_RE.test(projectId))
+      return fail('project_id must be a valid Google Cloud project id');
+    if (typeof location !== 'string' || !GCP_LOCATION_RE.test(location))
+      return fail('location must be "global" or a valid Google Cloud region (e.g. us-central1)');
+    let validCredentialFile: string | undefined;
+    if (credentialFile !== undefined) {
+      if (
+        typeof credentialFile !== 'string' ||
+        !credentialFile.trim() ||
+        credentialFile.length > 1024 ||
+        /[\x00-\x1f\x7f]/.test(credentialFile)
+      )
+        return fail('credential_file must be a valid file path');
+      const absolute =
+        credentialFile.startsWith('/') || credentialFile.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(credentialFile);
+      if (!absolute || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(credentialFile))
+        return fail('credential_file must be an absolute path (or ~/...) without parent traversal');
+      validCredentialFile = credentialFile;
+    }
+    vertex = {
+      projectId,
+      location,
+      ...(validCredentialFile ? {credentialFile: validCredentialFile} : {}),
+    };
+  }
+
+  let baseURL: string;
+  if (raw.base_url !== undefined) {
+    baseURL = validateBaseURL(raw.base_url);
+  } else if (protocol.data === 'bedrock' && aws?.region) {
+    baseURL = `https://bedrock-runtime.${aws.region}.amazonaws.com`;
+  } else if ((protocol.data === 'vertex' || protocol.data === 'vertex-anthropic') && vertex) {
+    const host =
+      vertex.location === 'global' ? 'aiplatform.googleapis.com' : `${vertex.location}-aiplatform.googleapis.com`;
+    const publisher = protocol.data === 'vertex-anthropic' ? 'anthropic' : 'google';
+    baseURL = `https://${host}/v1/projects/${vertex.projectId}/locations/${vertex.location}/publishers/${publisher}`;
+  } else {
+    baseURL = fail('base_url is required (or specify aws.region for bedrock / project_id + location for vertex)');
+  }
+
+  if (protocol.data === 'bedrock' && !aws) {
+    const match = /^bedrock-runtime\.([a-z]{2}(?:-[a-z]+)+-\d)\.amazonaws\.com(?:\.cn)?$/i.exec(
+      new URL(baseURL).hostname,
+    );
+    if (match?.[1]) aws = {region: match[1].toLowerCase()};
+  }
+
+  let azure: Provider['azure'];
+  if (raw.azure !== undefined || raw.api_version !== undefined || protocol.data === 'azure') {
+    if (protocol.data !== 'azure')
+      return fail('azure and api_version settings are only supported with wire_api = "azure"');
+    const az = raw.azure === undefined ? {} : isRecord(raw.azure) ? raw.azure : fail('azure must be a table');
+    for (const key of Object.keys(az)) if (!ALLOWED_AZURE_FIELDS.has(key)) return fail(`azure.${key} is not supported`);
+    if (raw.api_version !== undefined && az.api_version !== undefined)
+      return fail('specify api_version either at top level or in [azure], not both');
+    const apiVersion = raw.api_version ?? az.api_version;
+    if (apiVersion !== undefined && (typeof apiVersion !== 'string' || !AZURE_API_VERSION_RE.test(apiVersion)))
+      return fail('azure.api_version must match YYYY-MM-DD (optional suffix, e.g. 2024-10-21)');
+    const apiMode = az.api_mode;
+    if (apiMode !== undefined && apiMode !== 'chat' && apiMode !== 'responses')
+      return fail('azure.api_mode must be "chat" or "responses"');
+    if (az.use_deployment_based_urls !== undefined && typeof az.use_deployment_based_urls !== 'boolean')
+      return fail('azure.use_deployment_based_urls must be true or false');
+    const isV1Endpoint = /\/openai\/v1$/i.test(new URL(baseURL).pathname.replace(/\/$/, ''));
+    const useDeploymentBasedUrls: boolean =
+      typeof az.use_deployment_based_urls === 'boolean' ? az.use_deployment_based_urls : !isV1Endpoint;
+    const resolvedMode: 'chat' | 'responses' =
+      apiMode === 'chat' || apiMode === 'responses' ? apiMode : useDeploymentBasedUrls ? 'chat' : 'responses';
+    const resolvedVersion =
+      typeof apiVersion === 'string' ? apiVersion : useDeploymentBasedUrls ? DEFAULT_AZURE_API_VERSION : undefined;
+    azure = {
+      ...(resolvedVersion ? {apiVersion: resolvedVersion} : {}),
+      apiMode: resolvedMode,
+      useDeploymentBasedUrls,
+    };
+  }
 
   const queryParams = raw.query_params === undefined ? undefined : stringMap(raw.query_params, 'query_params');
   for (const [name, value] of Object.entries(queryParams ?? {})) {
@@ -220,7 +347,15 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     models = raw.models as string[];
   }
   let catalog: Provider['catalog'] =
-    protocol.data === 'anthropic' ? 'anthropic' : protocol.data === 'gemini' ? 'gemini' : 'openai';
+    protocol.data === 'anthropic'
+      ? 'anthropic'
+      : protocol.data === 'gemini'
+        ? 'gemini'
+        : protocol.data === 'bedrock'
+          ? 'bedrock'
+          : protocol.data === 'vertex' || protocol.data === 'vertex-anthropic'
+            ? 'manual'
+            : 'openai';
   if (raw.catalog !== undefined) {
     if (!(CATALOGS as readonly unknown[]).includes(raw.catalog)) fail(`catalog must be one of ${CATALOGS.join(', ')}`);
     catalog = raw.catalog as Provider['catalog'];
@@ -238,15 +373,42 @@ function convert(id: string, raw: unknown): HostProviderEntry {
 
   let command: TokenCommand | undefined;
   if (raw.auth !== undefined) {
-    if (raw.requires_auth === false) fail('auth and requires_auth = false contradict each other');
+    if (raw.requires_auth === false || raw.auth_mode !== undefined)
+      fail('auth command cannot be combined with requires_auth = false or auth_mode');
     command = tokenCommand(raw.auth);
   }
+  if (raw.auth_mode !== undefined && !(AUTH_MODES as readonly unknown[]).includes(raw.auth_mode))
+    fail(`auth_mode must be one of ${AUTH_MODES.join(', ')}`);
+  if (raw.auth_mode !== undefined && raw.requires_auth === false && raw.auth_mode !== 'none')
+    fail('auth_mode and requires_auth = false contradict each other');
+
+  const resolvedAuth: Provider['auth'] = command
+    ? 'command'
+    : raw.auth_mode !== undefined
+      ? (raw.auth_mode as Provider['auth'])
+      : raw.requires_auth === false
+        ? 'none'
+        : protocol.data === 'bedrock'
+          ? raw.env_key
+            ? 'api-key'
+            : 'aws-sigv4'
+          : protocol.data === 'vertex' || protocol.data === 'vertex-anthropic'
+            ? raw.env_key
+              ? 'api-key'
+              : 'google-adc'
+            : 'api-key';
+
+  if (resolvedAuth === 'aws-sigv4' && protocol.data !== 'bedrock')
+    fail('auth_mode = "aws-sigv4" requires wire_api = "bedrock"');
+  if (resolvedAuth === 'google-adc' && !['vertex', 'vertex-anthropic', 'gemini'].includes(protocol.data))
+    fail('auth_mode = "google-adc" requires wire_api = "vertex", "vertex-anthropic" or "gemini"');
+
   const provider = providerSchema.safeParse({
     id,
     name: typeof raw.name === 'string' && raw.name.trim() ? raw.name : id,
     protocol: protocol.data,
     baseURL,
-    auth: command ? 'command' : raw.requires_auth === false ? 'none' : 'api-key',
+    auth: resolvedAuth,
     catalog,
     metadataVersion: 1,
     timeoutMs: 60000,
@@ -269,8 +431,13 @@ function convert(id: string, raw: unknown): HostProviderEntry {
     ...(models?.length ? {models} : {}),
     ...(raw.replay_reasoning === true ? {replayReasoning: true} : {}),
     ...(reasoning?.success ? {reasoning: reasoning.data} : {}),
+    ...(aws ? {aws} : {}),
+    ...(vertex ? {vertex} : {}),
+    ...(azure ? {azure} : {}),
     // Streams are chatty; a chat gateway reports usage only when asked.
-    ...(protocol.data === 'chat' ? {streamUsage: raw.stream_usage !== false} : {}),
+    ...(protocol.data === 'chat' || (protocol.data === 'azure' && azure?.apiMode === 'chat')
+      ? {streamUsage: raw.stream_usage !== false}
+      : {}),
   });
   if (!provider.success) return fail('invalid provider definition');
   return {provider: provider.data, ...(command ? {tokenCommand: command} : {})};
@@ -510,14 +677,43 @@ export function renderProviderToml(entry: HostProviderEntry): string {
   const head = `model_providers.${tomlKey(provider.id)}`;
   const lines = [`[${head}]`, `name = ${tomlString(provider.name)}`, `base_url = ${tomlString(provider.baseURL)}`];
   lines.push(`wire_api = ${tomlString(provider.protocol)}`);
-  if (provider.protocol === 'chat' && provider.streamUsage === false) lines.push('stream_usage = false');
+  if (
+    (provider.protocol === 'chat' || (provider.protocol === 'azure' && provider.azure?.apiMode === 'chat')) &&
+    provider.streamUsage === false
+  )
+    lines.push('stream_usage = false');
   const defaultCatalog =
-    provider.protocol === 'anthropic' ? 'anthropic' : provider.protocol === 'gemini' ? 'gemini' : 'openai';
+    provider.protocol === 'anthropic'
+      ? 'anthropic'
+      : provider.protocol === 'gemini'
+        ? 'gemini'
+        : provider.protocol === 'bedrock'
+          ? 'bedrock'
+          : provider.protocol === 'vertex' || provider.protocol === 'vertex-anthropic'
+            ? 'manual'
+            : 'openai';
   if (provider.catalog !== defaultCatalog && !(provider.catalog === 'manual' && provider.models?.length))
     lines.push(`catalog = ${tomlString(provider.catalog)}`);
   if (provider.envKey) lines.push(`env_key = ${tomlString(provider.envKey)}`);
   if (provider.envKeyInstructions) lines.push(`env_key_instructions = ${tomlString(provider.envKeyInstructions)}`);
+  const defaultAuth =
+    provider.protocol === 'bedrock'
+      ? provider.envKey
+        ? 'api-key'
+        : 'aws-sigv4'
+      : provider.protocol === 'vertex' || provider.protocol === 'vertex-anthropic'
+        ? provider.envKey
+          ? 'api-key'
+          : 'google-adc'
+        : 'api-key';
   if (provider.auth === 'none') lines.push('requires_auth = false');
+  else if (!command && provider.auth !== 'oauth' && provider.auth !== 'command' && provider.auth !== defaultAuth)
+    lines.push(`auth_mode = ${tomlString(provider.auth)}`);
+  if (provider.vertex) {
+    lines.push(`project_id = ${tomlString(provider.vertex.projectId)}`);
+    lines.push(`location = ${tomlString(provider.vertex.location)}`);
+    if (provider.vertex.credentialFile) lines.push(`credential_file = ${tomlString(provider.vertex.credentialFile)}`);
+  }
   if (provider.streamIdleTimeoutMs !== undefined)
     lines.push(`stream_idle_timeout_ms = ${provider.streamIdleTimeoutMs}`);
   if (provider.requestMaxRetries !== undefined) lines.push(`request_max_retries = ${provider.requestMaxRetries}`);
@@ -525,6 +721,17 @@ export function renderProviderToml(entry: HostProviderEntry): string {
   if (provider.modelCatalogURL) lines.push(`model_catalog_url = ${tomlString(provider.modelCatalogURL)}`);
   if (provider.models?.length) lines.push(`models = [${provider.models.map(tomlString).join(', ')}]`);
   if (provider.replayReasoning) lines.push('replay_reasoning = true');
+  if (provider.aws) {
+    lines.push('', `[${head}.aws]`, `region = ${tomlString(provider.aws.region)}`);
+    if (provider.aws.profile) lines.push(`profile = ${tomlString(provider.aws.profile)}`);
+  }
+  if (provider.azure) {
+    lines.push('', `[${head}.azure]`);
+    if (provider.azure.apiVersion) lines.push(`api_version = ${tomlString(provider.azure.apiVersion)}`);
+    if (provider.azure.apiMode) lines.push(`api_mode = ${tomlString(provider.azure.apiMode)}`);
+    if (provider.azure.useDeploymentBasedUrls !== undefined)
+      lines.push(`use_deployment_based_urls = ${provider.azure.useDeploymentBasedUrls}`);
+  }
   const table = (name: string, values: Record<string, string> | undefined) => {
     if (!values || !Object.keys(values).length) return;
     lines.push('', `[${head}.${name}]`);

@@ -90,6 +90,10 @@ test('provider choices preserve advanced, account actions and custom protocols',
     'responses',
     'anthropic',
     'gemini',
+    'azure',
+    'bedrock',
+    'vertex',
+    'vertex-anthropic',
   ]);
   expect(connectionChoices({...base, step: 'catalog'}, integrations, []).map(c => c.id)).toContain('manual');
 });

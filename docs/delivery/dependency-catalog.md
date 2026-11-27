@@ -220,3 +220,15 @@ ADR 0084 (2026-11-21) adds `@cosmew/tools` as a direct consumer of the already s
 compilation is now explicitly bounded to 8 KiB/512 nodes/depth 16, with references,
 async schemas, regex/patterns, format, contains and uniqueItems refused; no external
 loading, coercion, default insertion or field removal. No new transitive dependency.
+
+## Enterprise Cloud Providers (ADR 0122, 2026-11-27)
+
+Direct dependency pinned in `packages/models/package.json`:
+
+| Package | Selected version | License | Role / source |
+|---|---|---|---|
+| `@ai-sdk/amazon-bedrock` | **5.0.142** | Apache-2.0 | Amazon Bedrock Converse & ConverseStream EventStream wire adapter; <https://github.com/vercel/ai/tree/main/packages/amazon-bedrock> |
+
+- **Lock alignment:** Matches the exact lockfile versions already in `bun.lock` (`@ai-sdk/provider@4.0.38`, `@ai-sdk/provider-utils@5.0.81`, `@ai-sdk/anthropic@4.0.105`, `@ai-sdk/openai@4.0.118`). Transitive additions are `@smithy/eventstream-codec`, `@smithy/util-utf8`, `@smithy/core`, `@smithy/types` (Apache-2.0), `aws4fetch` (MIT), and `tslib` (0BSD). Installed with `bun install --ignore-scripts`.
+- **Threat surface:** Cosmew disables the SDK's ambient AWS env/SigV4 fallback by injecting a placeholder key and replacing auth inside `ProviderTransport.request()` with Cosmew's own SigV4 signer (`packages/models/src/aws-sigv4.ts`) or Bedrock Bearer key after `NetworkPolicy` and `decorate()`. Azure OpenAI and Google Vertex AI add **no** new dependencies.
+- **Compatibility evidence:** Verified against AWS SigV4 official vectors and local HTTP/EventStream fixtures under Bun 1.4.4 on Darwin arm64. Live AWS Bedrock, Google Vertex AI, and Azure OpenAI tenant verification remains **Needs verification**.

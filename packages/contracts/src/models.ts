@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {SKILL_VISIBILITIES} from './skills';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.66' as const;
+export const CONTRACT_VERSION = '1.67' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
@@ -28,7 +28,16 @@ export const modelIdSchema = z
   .min(1)
   .max(200)
   .regex(/^[\w~./:@+-]+$/);
-export const protocolSchema = z.enum(['chat', 'responses', 'anthropic', 'gemini']);
+export const protocolSchema = z.enum([
+  'chat',
+  'responses',
+  'anthropic',
+  'gemini',
+  'azure',
+  'bedrock',
+  'vertex',
+  'vertex-anthropic',
+]);
 export const envNameSchema = z.string().regex(/^[A-Z_][A-Z0-9_]{0,99}$/);
 /** HTTP header name (RFC 9110 token); credentials never travel in static headers (ADR 0046). */
 export const headerNameSchema = z.string().regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$/);
@@ -78,9 +87,14 @@ export const providerSchema = z.strictObject({
     .regex(/^[^\x00-\x1f\x7f]+$/),
   protocol: protocolSchema,
   baseURL: z.string().url().max(2048),
-  /** `command`: a bearer token printed by a user-configured command (host config only, ADR 0046). `oauth`: an access token the sign-in flow refreshes (ADR 0047). */
-  auth: z.enum(['api-key', 'none', 'command', 'oauth']),
-  catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'manual']),
+  /**
+   * `command`: a bearer token printed by a user-configured command (host config only, ADR 0046).
+   * `oauth`: an access token the sign-in flow refreshes (ADR 0047).
+   * `aws-sigv4`: AWS IAM credentials signed per request with SigV4 (ADR 0122).
+   * `google-adc`: Google Cloud ADC / service-account JSON exchanged for OAuth2 Bearer tokens (ADR 0122).
+   */
+  auth: z.enum(['api-key', 'none', 'command', 'oauth', 'aws-sigv4', 'google-adc']),
+  catalog: z.enum(['openai', 'anthropic', 'gemini', 'ollama', 'bedrock', 'manual']),
   metadataVersion: z.literal(1),
   /** Metadata requests. Model streams use `streamIdleTimeoutMs`. */
   timeoutMs: z.number().int().min(100).max(300000).default(60000),
@@ -124,6 +138,42 @@ export const providerSchema = z.strictObject({
   /** Send the assistant's earlier reasoning back as `reasoning_content` (DeepSeek, ADR 0048). */
   replayReasoning: z.boolean().optional(),
   reasoning: providerReasoningSchema.optional(),
+  /** AWS Bedrock non-secret settings (user-level host config only, ADR 0122). Contract 1.67. */
+  aws: z
+    .strictObject({
+      region: z.string().regex(/^[a-z]{2}(?:-[a-z]+)+-\d$/),
+      profile: z
+        .string()
+        .min(1)
+        .max(100)
+        .regex(/^[A-Za-z0-9._-]+$/)
+        .optional(),
+    })
+    .optional(),
+  /** Google Vertex AI non-secret settings (user-level host config only, ADR 0122). Contract 1.67. */
+  vertex: z
+    .strictObject({
+      projectId: z.string().regex(/^[a-z0-9][a-z0-9.:-]{2,99}$/),
+      location: z.string().regex(/^(?:global|[a-z]{2,12}-[a-z0-9-]{2,20})$/),
+      credentialFile: z
+        .string()
+        .min(1)
+        .max(1024)
+        .regex(/^[^\x00-\x1f\x7f]+$/)
+        .optional(),
+    })
+    .optional(),
+  /** Azure OpenAI / AI Foundry non-secret settings (user-level host config only, ADR 0122). Contract 1.67. */
+  azure: z
+    .strictObject({
+      apiVersion: z
+        .string()
+        .regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:-[a-z0-9-]+)?$/)
+        .optional(),
+      apiMode: z.enum(['chat', 'responses']).optional(),
+      useDeploymentBasedUrls: z.boolean().optional(),
+    })
+    .optional(),
 });
 export type Provider = z.infer<typeof providerSchema>;
 
@@ -278,11 +328,11 @@ export const providerReplaySchema = z
   })
   .superRefine((replay, ctx) => {
     const allowed =
-      replay.protocol === 'responses'
+      replay.protocol === 'responses' || replay.protocol === 'azure'
         ? ['itemId', 'reasoningEncryptedContent']
-        : replay.protocol === 'gemini'
+        : replay.protocol === 'gemini' || replay.protocol === 'vertex'
           ? ['thoughtSignature']
-          : replay.protocol === 'anthropic'
+          : replay.protocol === 'anthropic' || replay.protocol === 'vertex-anthropic' || replay.protocol === 'bedrock'
             ? ['signature', 'redactedData', 'type']
             : [];
     if (replay.parts.some(part => part.metadata && Object.keys(part.metadata).some(key => !allowed.includes(key))))

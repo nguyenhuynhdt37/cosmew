@@ -155,15 +155,33 @@ export class AuthMethodRegistry {
                 description: 'The bearer token comes from the command set in your host config; nothing is stored.',
               },
             ]
-          : [
-              {id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.'},
-              {
-                id: 'env',
-                name: 'Environment variable',
-                description: 'Use an existing environment variable.',
-                advanced: true,
-              },
-            ];
+          : provider.auth === 'aws-sigv4'
+            ? [
+                {
+                  id: 'none',
+                  name: 'AWS Credentials (IAM / SigV4)',
+                  description:
+                    'Signs Bedrock requests with AWS SigV4 using AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY or ~/.aws/credentials.',
+                },
+              ]
+            : provider.auth === 'google-adc'
+              ? [
+                  {
+                    id: 'none',
+                    name: 'Google Cloud ADC / Service Account',
+                    description:
+                      'Exchanges GOOGLE_APPLICATION_CREDENTIALS, configured credential_file, or gcloud ADC for OAuth2 Bearer tokens.',
+                  },
+                ]
+              : [
+                  {id: 'api-key', name: 'API key', description: 'Store securely in the operating system keyring.'},
+                  {
+                    id: 'env',
+                    name: 'Environment variable',
+                    description: 'Use an existing environment variable.',
+                    advanced: true,
+                  },
+                ];
     if (
       provider.id === 'openrouter' &&
       provider.baseURL === 'https://openrouter.ai/api/v1' &&

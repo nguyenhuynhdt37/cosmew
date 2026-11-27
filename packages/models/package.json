@@ -11,6 +11,7 @@
     "ai": "7.0.173",
     "@ai-sdk/openai": "4.0.118",
     "@ai-sdk/anthropic": "4.0.105",
+    "@ai-sdk/amazon-bedrock": "5.0.142",
     "@ai-sdk/google": "4.0.121",
     "@ai-sdk/openai-compatible": "3.0.92",
     "ajv": "8.20.0"

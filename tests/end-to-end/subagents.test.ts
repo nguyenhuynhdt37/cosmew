@@ -851,7 +851,7 @@ test('subagent events emit in order (started -> progress -> finished), render in
   expect(subTypes[0]).toBe('subagent.started');
   expect(subTypes.at(-1)).toBe('subagent.finished');
   expect(subTypes).toContain('subagent.progress');
-  expect(headlessEvents.every(e => e.contractVersion === '1.66')).toBe(true);
+  expect(headlessEvents.every(e => e.contractVersion === '1.67')).toBe(true);
 });
 
 test('S5c: isolation worktree edits stay out of the main checkout; unchanged worktrees vanish; non-git is refused', async () => {

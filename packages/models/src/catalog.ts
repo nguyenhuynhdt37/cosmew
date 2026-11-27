@@ -1,5 +1,5 @@
 import {FutrynError, modelSchema, type ModelInfo, type Provider, type SettingsStore} from '@cosmew/contracts';
-import {ProviderTransport} from './http';
+import {bedrockControlPlaneOrigin, ProviderTransport} from './http';
 import {providerPresets} from './registry';
 import {selectableReasoningEfforts} from './effort-wire';
 
@@ -92,6 +92,19 @@ export function applyCatalogMetadata(
       model.capabilities.text = 'supported';
     else model.capabilities.text = 'unsupported';
   }
+  if (kind === 'bedrock') {
+    const inputMods = Array.isArray(item.inputModalities)
+      ? item.inputModalities.filter((v): v is string => typeof v === 'string').map(v => v.toUpperCase())
+      : [];
+    const outputMods = Array.isArray(item.outputModalities)
+      ? item.outputModalities.filter((v): v is string => typeof v === 'string').map(v => v.toUpperCase())
+      : [];
+    if (outputMods.length) model.capabilities.text = outputMods.includes('TEXT') ? 'supported' : 'unsupported';
+    if (inputMods.includes('IMAGE')) model.capabilities.vision = 'supported';
+    if (typeof item.responseStreamingSupported === 'boolean') {
+      model.capabilities.streaming = item.responseStreamingSupported ? 'supported' : 'unsupported';
+    }
+  }
   const caps = record(item.capabilities);
   const limits = record(item.limits);
   const limit = record(item.limit);
@@ -157,7 +170,12 @@ export function parseCatalogPage(
   chatgpt = false,
 ): {models: ModelInfo[]; data: Record<string, unknown>} {
   const data = object(raw);
-  const items = chatgpt || kind === 'ollama' || kind === 'gemini' ? data.models : data.data;
+  const items =
+    chatgpt || kind === 'ollama' || kind === 'gemini'
+      ? data.models
+      : kind === 'bedrock'
+        ? data.modelSummaries
+        : data.data;
   if (!Array.isArray(items) || items.length > 10000) throw new FutrynError('PROTOCOL');
   const models: ModelInfo[] = [];
   for (const value of items) {
@@ -170,12 +188,16 @@ export function parseCatalogPage(
         ? item.name
         : kind === 'gemini'
           ? String(item.name).replace(/^models\//, '')
-          : (item.id ?? item.name);
+          : kind === 'bedrock'
+            ? (item.modelId ?? item.inferenceProfileId ?? item.id)
+            : (item.id ?? item.name);
     const model = normalizeModel(
       rawID,
       chatgpt
         ? (item.display_name ?? item.displayName ?? rawID)
-        : (item.display_name ?? item.displayName ?? item.name ?? rawID),
+        : kind === 'bedrock'
+          ? (item.modelName ?? item.inferenceProfileName ?? rawID)
+          : (item.display_name ?? item.displayName ?? item.name ?? rawID),
     );
     applyCatalogMetadata(model, item, baseURL, kind);
     models.push(modelSchema.parse(model));
@@ -362,12 +384,20 @@ export class ModelCatalog {
             })()
           : kind === 'ollama'
             ? '/api/tags'
-            : 'models' +
-              (cursor
-                ? kind === 'gemini'
-                  ? '?pageToken=' + encodeURIComponent(cursor)
-                  : '?after_id=' + encodeURIComponent(cursor)
-                : '');
+            : kind === 'bedrock'
+              ? (() => {
+                  const controlOrigin = bedrockControlPlaneOrigin(this.transport.provider);
+                  const query = 'foundation-models?byOutputModality=TEXT&byInferenceType=ON_DEMAND';
+                  return controlOrigin ? `${controlOrigin}/${query}` : query;
+                })()
+              : this.transport.provider.protocol === 'azure' && this.transport.provider.azure?.useDeploymentBasedUrls
+                ? 'openai/models'
+                : 'models' +
+                  (cursor
+                    ? kind === 'gemini'
+                      ? '?pageToken=' + encodeURIComponent(cursor)
+                      : '?after_id=' + encodeURIComponent(cursor)
+                    : '');
         return this.transport.json(path, signal);
       };
       const models = await readCatalogPages(await readPage(), kind, this.transport.provider.baseURL, readPage, chatgpt);

@@ -7,3 +7,6 @@ export * from './router';
 export * from './limits';
 export * from './host-config';
 export * from './custom-probe';
+export * from './aws-sigv4';
+export * from './aws-auth';
+export * from './google-auth';
