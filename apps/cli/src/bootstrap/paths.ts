@@ -20,7 +20,7 @@ export function takeStateMigrationNotices(): string[] {
 
 /** Another live Cosmew process holding the database must exit before the directory can move. */
 function databaseIsOpen(path: string): boolean {
-  if (!existsSync(path)) return false;
+  if (process.platform === 'win32' || !existsSync(path)) return false;
   const probe = spawnSync('lsof', ['-t', '--', path], {encoding: 'utf8'});
   if (probe.error || probe.status !== 0) return false;
   return probe.stdout.split(/\s+/).some(pid => pid && pid !== String(process.pid));

@@ -20,7 +20,22 @@ export {
 } from './exec/runtime';
 export type {CommandOutcome, CommandRequest, CommandRuntime, RuntimeAvailability} from '@cosmew/contracts';
 export {likelySandboxDenied} from './exec/sandbox-denial';
-export {sandboxDependencies, NativeCommandRuntime, NATIVE_LIMITS, type NativeRuntimeOptions} from './exec/native';
+export {
+  sandboxDependencies,
+  NativeCommandRuntime,
+  NATIVE_LIMITS,
+  findExecutable,
+  shellArgvForPlatform,
+  type NativeRuntimeOptions,
+} from './exec/native';
+export {
+  BubblewrapSandbox,
+  BWRAP_PROXY_PORT,
+  BWRAP_PROXY_PORT_HEX,
+  BWRAP_PROXY_URL,
+  BWRAP_PROXY_SOCKET_GUEST,
+  type BubblewrapOptions,
+} from './exec/bubblewrap';
 export {DEFAULT_SANDBOX_CONFIG, type SandboxConfig} from './context';
 export {
   SandboxProxy,

@@ -13,7 +13,7 @@ import {
 } from 'node:fs';
 import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
 import {homedir, tmpdir} from 'node:os';
-import {delimiter, dirname, isAbsolute, join, resolve} from 'node:path';
+import {dirname, isAbsolute, join, resolve} from 'node:path';
 import {
   FutrynError,
   type BackgroundTask,
@@ -29,7 +29,7 @@ import {
   type ServiceProcess,
 } from '@cosmew/contracts';
 import {WorkspaceRoot} from '@cosmew/workspace';
-import {BubblewrapSandbox} from './bubblewrap';
+import {BWRAP_PROXY_URL, BubblewrapSandbox} from './bubblewrap';
 import type {NativeSandbox} from './native-sandbox';
 import {HeadTailBuffer} from './output';
 import {proxyEnvironment} from './proxy';
@@ -230,11 +230,14 @@ export class NativeCommandRuntime implements CommandRuntime {
   private proven?: RuntimeAvailability;
   private closed = false;
 
+  private readonly os: NodeJS.Platform;
   private readonly serviceSandbox?: NativeSandbox;
   private readonly bwrapPath?: string;
+  private readonly socatPath?: string;
 
   constructor(private readonly options: NativeRuntimeOptions) {
     const os = options.platform ?? process.platform;
+    this.os = os;
     const home = realPath(options.home ?? homedir());
     this.configuredWorkspaceRoot = resolve(options.workspaceRoot);
     let resolvedWorkspace = this.configuredWorkspaceRoot;
@@ -251,19 +254,26 @@ export class NativeCommandRuntime implements CommandRuntime {
     mkdirSync(join(this.scratch, 'home'));
     mkdirSync(join(this.scratch, 'tmp'));
 
+    const pathSep = os === 'win32' ? ';' : ':';
     const pathDirectories = [
       ...new Set(
-        (options.hostPath ?? process.env.PATH ?? '').split(delimiter).filter(dir => isAbsolute(dir) && existsSync(dir)),
+        (options.hostPath ?? process.env.PATH ?? '')
+          .split(pathSep)
+          .filter(dir => isPlatformAbsolute(dir, os) && existsSync(dir)),
       ),
     ];
-    this.path = [...new Set([...pathDirectories, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])].join(':');
-    const rustup = rustToolchainDirectories(pathDirectories, this.path, home, this.scratch);
+    this.path =
+      os === 'win32'
+        ? pathDirectories.join(';')
+        : [...new Set([...pathDirectories, '/usr/bin', '/bin', '/usr/sbin', '/sbin'])].join(':');
+    const rustup = rustToolchainDirectories(pathDirectories, this.path, home, this.scratch, os);
     this.rustupHome = rustup.rustupHome;
     this.cargoHome = rustup.cargoHome;
     const toolchains = [...new Set([...toolchainDirectories(pathDirectories, home), ...rustup.readable])];
     this.deniedFiles = cargoSecretFiles([...pathDirectories, ...toolchains], home);
 
-    const bwrap = os === 'linux' ? findExecutable('bwrap', this.path) : undefined;
+    const bwrap = os === 'linux' ? findExecutable('bwrap', this.path, os) : undefined;
+    const socat = os === 'linux' ? findExecutable('socat', this.path, os) : undefined;
     if (os === 'darwin' && existsSync('/usr/bin/sandbox-exec')) {
       this.sandbox = new SeatbeltSandbox({
         workspace: this.canonicalWorkspaceRoot,
@@ -286,8 +296,10 @@ export class NativeCommandRuntime implements CommandRuntime {
       });
     } else if (os === 'linux' && bwrap) {
       this.bwrapPath = bwrap;
+      this.socatPath = socat;
       this.sandbox = new BubblewrapSandbox({
         bwrap,
+        socat,
         workspace: this.canonicalWorkspaceRoot,
         state: this.canonicalStateDirectory,
         scratch: this.scratch,
@@ -471,8 +483,17 @@ export class NativeCommandRuntime implements CommandRuntime {
     };
   }
 
-  private env(tty: boolean, unsandboxed = false, proxyUrl?: string): Record<string, string> {
+  private effectiveProxyUrl(sandbox?: CommandSandbox): string | undefined {
+    if (!sandbox || sandbox.unsandboxed) return undefined;
+    if (this.sandbox?.name === 'linux-bubblewrap') {
+      return this.socatPath && sandbox.proxySocketPath ? BWRAP_PROXY_URL : undefined;
+    }
+    return sandbox.proxyUrl;
+  }
+
+  private env(tty: boolean, unsandboxed = false, sandbox?: CommandSandbox): Record<string, string> {
     if (unsandboxed) return this.hostEnv(tty);
+    const proxyUrl = this.effectiveProxyUrl(sandbox);
     return {
       ...(proxyUrl ? {...proxyEnvironment(proxyUrl), NODE_USE_ENV_PROXY: '1'} : {}),
       ...EXEC_ENV,
@@ -500,12 +521,14 @@ export class NativeCommandRuntime implements CommandRuntime {
       inherited[key] = value;
     }
     const {COSMEW_SANDBOX: _marker, ...overlay} = EXEC_ENV;
+    const resolvedHome = this.options.home ?? process.env.HOME ?? process.env.USERPROFILE ?? homedir();
     return {
       ...inherited,
       ...overlay,
       ...(tty ? {TERM: 'xterm-256color', NO_COLOR: ''} : {}),
-      PATH: this.path,
-      HOME: this.options.home ?? process.env.HOME ?? homedir(),
+      PATH: this.path || process.env.PATH || '',
+      HOME: resolvedHome,
+      ...(process.platform === 'win32' ? {USERPROFILE: resolvedHome} : {}),
     };
   }
 
@@ -534,8 +557,12 @@ export class NativeCommandRuntime implements CommandRuntime {
 
     // Only an explicit, user-approved escalation (ADR 0053) skips the sandbox, and only for this
     // command. A sandbox that fails to start is reported; it is never replaced by this path.
-    const argv =
-      sandbox.unsandboxed === true ? shellArgv(request) : this.sandbox!.wrap(shellArgv(request), sandbox, cwd.absolute);
+    // The launched shell must match the real host OS (process.platform), even when options.platform
+    // overrides sandbox-backend selection (e.g. testing missing-backend behavior on POSIX hosts).
+    const execOs = process.platform;
+    const execPath = execOs === this.os ? this.path : (process.env.PATH ?? '');
+    const baseArgv = shellArgvForPlatform(request, execOs, execPath);
+    const argv = sandbox.unsandboxed === true ? baseArgv : this.sandbox!.wrap(baseArgv, sandbox, cwd.absolute);
     const session = createSession(request, sandbox);
 
     try {
@@ -573,7 +600,7 @@ export class NativeCommandRuntime implements CommandRuntime {
   private startPty(session: NativeSession, argv: string[], cwd: string): void {
     const child = Bun.spawn(argv, {
       cwd,
-      env: this.env(true, session.sandbox.unsandboxed === true, session.sandbox.proxyUrl),
+      env: this.env(true, session.sandbox.unsandboxed === true, session.sandbox),
       terminal: {cols: 120, rows: 40, data: (_terminal, data) => recordOutput(session, 'stdout', Buffer.from(data))},
     });
     session.ptyChild = child;
@@ -587,13 +614,14 @@ export class NativeCommandRuntime implements CommandRuntime {
     });
   }
 
-  /** Pipe session: a detached process group so the whole group can be signalled. */
+  /** Pipe session: a detached process group on POSIX (hidden console on Windows) so the whole tree can be stopped. */
   private startPipes(session: NativeSession, argv: string[], cwd: string): void {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd,
-      env: this.env(false, session.sandbox.unsandboxed === true, session.sandbox.proxyUrl),
+      env: this.env(false, session.sandbox.unsandboxed === true, session.sandbox),
       stdio: ['pipe', 'pipe', 'pipe'],
-      detached: true,
+      detached: process.platform !== 'win32',
+      ...(process.platform === 'win32' ? {windowsHide: true} : {}),
     });
     session.pipeChild = child;
     session.pid = child.pid;
@@ -940,6 +968,23 @@ function outcomeKind(session: NativeSession): CommandOutcome['kind'] {
 
 function signalGroup(session: NativeSession, signal: NodeJS.Signals): void {
   if (session.exitObserved || session.spawnFailed) return;
+  if (process.platform === 'win32') {
+    if (session.pid) {
+      try {
+        spawnSync('taskkill', ['/T', '/F', '/PID', String(session.pid)], {stdio: 'ignore', windowsHide: true});
+        return;
+      } catch {
+        /* fall through to direct child kill */
+      }
+    }
+    try {
+      session.pipeChild?.kill();
+      session.ptyChild?.kill();
+    } catch {
+      /* already gone */
+    }
+    return;
+  }
   try {
     if (session.pid) process.kill(-session.pid, signal);
   } catch {
@@ -955,6 +1000,10 @@ function signalGroup(session: NativeSession, signal: NodeJS.Signals): void {
 function interruptForeground(session: NativeSession): void {
   if (session.tty) {
     session.ptyChild?.terminal?.write('\u0003');
+    return;
+  }
+  if (process.platform === 'win32') {
+    signalGroup(session, 'SIGINT');
     return;
   }
   try {
@@ -986,9 +1035,30 @@ function validateRequest(request: CommandRequest): void {
 }
 
 /** The shell never reads project startup files unless a login shell was requested. */
-function shellArgv(request: CommandRequest): string[] {
+export function shellArgvForPlatform(
+  request: Pick<CommandRequest, 'command' | 'shell' | 'login'>,
+  os: NodeJS.Platform = process.platform,
+  path: string = process.env.PATH ?? '',
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  if (os === 'win32') {
+    if (request.shell === 'bash') {
+      const bash = findExecutable('bash', path, 'win32');
+      if (bash) return [bash, ...(request.login ? ['--login'] : ['--noprofile', '--norc']), '-c', request.command];
+    }
+    const pwsh = findExecutable('pwsh', path, 'win32') ?? findExecutable('powershell', path, 'win32');
+    if (pwsh) return [pwsh, '-NoProfile', '-NonInteractive', '-Command', request.command];
+    const comspec = env.ComSpec || env.COMSPEC || 'cmd.exe';
+    return [comspec, '/d', '/s', '/c', request.command];
+  }
   if (request.shell === 'sh') return ['/bin/sh', ...(request.login ? ['-l'] : []), '-c', request.command];
   return ['/bin/bash', ...(request.login ? ['--login'] : ['--noprofile', '--norc']), '-c', request.command];
+}
+
+function isPlatformAbsolute(dir: string, os: NodeJS.Platform): boolean {
+  if (!dir) return false;
+  if (os === 'win32') return /^[A-Za-z]:[\\/]/.test(dir) || dir.startsWith('\\\\');
+  return isAbsolute(dir);
 }
 
 /**
@@ -1011,10 +1081,11 @@ function rustToolchainDirectories(
   path: string,
   home: string,
   scratch: string,
+  os: NodeJS.Platform = process.platform,
 ): {rustupHome?: string; cargoHome?: string; readable: string[]} {
   const under = (dir: string) => dir.startsWith(home + '/');
   const rustupShim =
-    findExecutable('rustup', path) !== undefined ||
+    findExecutable('rustup', path, os) !== undefined ||
     pathDirectories.some(dir => under(realPath(dir)) && existsSync(join(dir, 'rustup')));
   if (!rustupShim) return {readable: []};
   const rustup = realPath(join(home, '.rustup'));
@@ -1068,13 +1139,26 @@ function unavailableReason(os: NodeJS.Platform): string {
   return `No native command sandbox for ${os}.`;
 }
 
-function findExecutable(name: string, path: string): string | undefined {
-  for (const dir of path.split(':')) {
-    const candidate = join(dir, name);
+export function findExecutable(
+  name: string,
+  path: string,
+  os: NodeJS.Platform = process.platform,
+  exists: (candidate: string) => boolean = candidate => {
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      return statSync(candidate).isFile();
     } catch {
-      /* try the next directory */
+      return false;
+    }
+  },
+): string | undefined {
+  const sepChar = os === 'win32' ? ';' : ':';
+  const hasExt = /\.(?:exe|cmd|bat|com)$/i.test(name);
+  const variants = os === 'win32' && !hasExt ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
+  for (const dir of path.split(sepChar)) {
+    if (!dir) continue;
+    for (const variant of variants) {
+      const candidate = os === 'win32' ? `${dir.replace(/[\\/]+$/, '')}\\${variant}` : join(dir, variant);
+      if (exists(candidate)) return candidate;
     }
   }
   return undefined;
@@ -1092,12 +1176,18 @@ export async function sandboxDependencies(
 ): Promise<SandboxDependenciesReport> {
   const platform = options.platform ?? process.platform;
   const names: SandboxDependenciesReport['items'][number]['name'][] =
-    platform === 'darwin' ? ['seatbelt', 'ripgrep'] : platform === 'linux' ? ['ripgrep', 'bwrap', 'socat'] : [];
+    platform === 'darwin'
+      ? ['seatbelt', 'ripgrep']
+      : platform === 'linux'
+        ? ['ripgrep', 'bwrap', 'socat']
+        : platform === 'win32'
+          ? ['ripgrep']
+          : [];
   const probe =
     options.probe ??
     (name =>
       name === 'seatbelt'
         ? existsSync('/usr/bin/sandbox-exec')
-        : !!findExecutable(name === 'ripgrep' ? 'rg' : name, options.path ?? process.env.PATH ?? ''));
+        : !!findExecutable(name === 'ripgrep' ? 'rg' : name, options.path ?? process.env.PATH ?? '', platform));
   return {platform, items: names.map(name => ({name, ok: probe(name)}))};
 }

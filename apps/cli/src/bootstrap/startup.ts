@@ -1258,7 +1258,7 @@ export function startup(
               permissionRuleDecision(client?.permissionRules(), {tool: 'Edit', target: relative}),
             commands: childCommands,
             sandbox: () => effectiveSubagentSandbox(sandboxConfigNow(), runContext.profile),
-            proxy: {ensure: () => sandboxProxy.start()},
+            proxy: {ensure: () => sandboxProxy.start(), ensureUnix: () => sandboxProxy.startUnix()},
             sessionId: () => runContext.agentId,
             turnId: () => childConv?.activeTurnId() ?? runContext.parentTurnId ?? client?.currentTurnId(),
             codeIntel: worktree ? undefined : languageServers(),
@@ -1436,7 +1436,7 @@ export function startup(
         commands: commands(),
         // The sandbox settings and permission mode are read for every call (ADR 0061).
         sandbox: sandboxConfigNow,
-        proxy: {ensure: () => sandboxProxy.start()},
+        proxy: {ensure: () => sandboxProxy.start(), ensureUnix: () => sandboxProxy.startUnix()},
         sessionId: () => client?.activeSession()?.id ?? resolveRootConversation()?.id,
         turnId: () => client?.currentTurnId(),
         codeIntel: languageServers(),

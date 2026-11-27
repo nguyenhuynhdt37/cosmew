@@ -1,6 +1,10 @@
+import {randomBytes} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
+import {chmodSync, mkdirSync, rmSync, unlinkSync} from 'node:fs';
 import {createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse} from 'node:http';
 import {connect, isIP, type Socket} from 'node:net';
+import {tmpdir} from 'node:os';
+import {dirname, join} from 'node:path';
 
 /**
  * The sandbox network gate (ADR 0061, Claude Code's sandbox proxy). Commands in the OS sandbox have
@@ -137,6 +141,10 @@ export function parseConnectTarget(text: string): ProxyTarget | null {
 export class SandboxProxy {
   private server: Server | undefined;
   private starting: Promise<string> | undefined;
+  private unixServer: Server | undefined;
+  private unixStarting: Promise<string> | undefined;
+  private unixSocketPath: string | undefined;
+  private unixSocketOwnedDir: string | undefined;
   private readonly sockets = new Set<Socket>();
   private readonly resolve: (host: string) => Promise<string[]>;
 
@@ -144,12 +152,17 @@ export class SandboxProxy {
     this.resolve = options.resolve ?? defaultResolve;
   }
 
+  private createProxyHttpServer(): Server {
+    const server = createServer((req, res) => void this.forward(req, res));
+    server.on('connect', (req, socket, head) => void this.tunnel(req, socket as Socket, head));
+    server.on('clientError', (_error, socket) => socket.destroy());
+    return server;
+  }
+
   /** Start once; resolves the loopback URL commands use as their proxy. */
   start(): Promise<string> {
     this.starting ??= new Promise<string>((resolve, reject) => {
-      const server = createServer((req, res) => void this.forward(req, res));
-      server.on('connect', (req, socket, head) => void this.tunnel(req, socket as Socket, head));
-      server.on('clientError', (_error, socket) => socket.destroy());
+      const server = this.createProxyHttpServer();
       server.once('error', reject);
       server.listen(0, '127.0.0.1', () => {
         this.server = server;
@@ -164,13 +177,83 @@ export class SandboxProxy {
     return this.starting;
   }
 
+  /**
+   * Start a Unix domain socket listener sharing the exact same domain policy, DNS pinning,
+   * and connection accounting as `start()`, for bridging into Linux `bwrap --unshare-net` (ADR 0123).
+   */
+  startUnix(socketPath?: string): Promise<string> {
+    this.unixStarting ??= new Promise<string>((resolve, reject) => {
+      let targetPath = socketPath;
+      let ownedDir: string | undefined;
+      if (!targetPath) {
+        const tag = `cmw-px-${randomBytes(4).toString('hex')}`;
+        const preferred = join(tmpdir(), tag, 'p.sock');
+        // Keep well under Linux UNIX_PATH_MAX (108 bytes) and macOS sun_path (104 bytes).
+        const candidate = Buffer.byteLength(preferred) <= 96 ? preferred : join('/tmp', tag, 'p.sock');
+        ownedDir = dirname(candidate);
+        mkdirSync(ownedDir, {recursive: true, mode: 0o700});
+        chmodSync(ownedDir, 0o700);
+        targetPath = candidate;
+      } else {
+        if (Buffer.byteLength(targetPath) > 100) {
+          reject(new Error('Unix socket path exceeds platform limit'));
+          return;
+        }
+        mkdirSync(dirname(targetPath), {recursive: true, mode: 0o700});
+        try {
+          unlinkSync(targetPath);
+        } catch {
+          /* ignore absent socket */
+        }
+      }
+      const server = this.createProxyHttpServer();
+      server.once('error', error => {
+        if (ownedDir) rmSync(ownedDir, {recursive: true, force: true});
+        reject(error);
+      });
+      server.listen(targetPath, () => {
+        try {
+          chmodSync(targetPath!, 0o600);
+        } catch {
+          /* best effort on non-POSIX filesystems */
+        }
+        this.unixServer = server;
+        this.unixSocketPath = targetPath;
+        this.unixSocketOwnedDir = ownedDir;
+        resolve(targetPath!);
+      });
+    }).catch(error => {
+      this.unixStarting = undefined;
+      throw error;
+    });
+    return this.unixStarting;
+  }
+
   async stop(): Promise<void> {
     const server = this.server;
+    const unixServer = this.unixServer;
+    const unixPath = this.unixSocketPath;
+    const unixDir = this.unixSocketOwnedDir;
     this.server = undefined;
     this.starting = undefined;
+    this.unixServer = undefined;
+    this.unixStarting = undefined;
+    this.unixSocketPath = undefined;
+    this.unixSocketOwnedDir = undefined;
     for (const socket of this.sockets) socket.destroy();
     this.sockets.clear();
-    if (server) await new Promise<void>(resolve => server.close(() => resolve()));
+    const closes: Promise<void>[] = [];
+    if (server) closes.push(new Promise<void>(resolve => server.close(() => resolve())));
+    if (unixServer) closes.push(new Promise<void>(resolve => unixServer.close(() => resolve())));
+    await Promise.all(closes);
+    if (unixPath) {
+      try {
+        unlinkSync(unixPath);
+      } catch {
+        /* already removed */
+      }
+    }
+    if (unixDir) rmSync(unixDir, {recursive: true, force: true});
   }
 
   private track(socket: Socket): void {

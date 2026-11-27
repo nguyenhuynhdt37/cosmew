@@ -126,8 +126,8 @@ export interface ToolDispatcherOptions {
    * change before launch invalidates the pending request. Defaults to read-only, on-request.
    */
   sandbox?: () => SandboxConfig;
-  /** The sandbox network gate (ADR 0061); without it sandboxed commands have loopback only. */
-  proxy?: {ensure(): Promise<string>};
+  /** The sandbox network gate (ADR 0061, ADR 0123); without it sandboxed commands have loopback only. */
+  proxy?: {ensure(): Promise<string>; ensureUnix?(): Promise<string>};
   /** Identity of the running turn, when the composition root tracks it. */
   turnId?: () => string | undefined;
   /** Language servers (ADR 0043); `lsp`/`lsp_rename` are offered only while they are available. */

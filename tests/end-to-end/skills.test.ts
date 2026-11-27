@@ -212,7 +212,7 @@ test('headless cosmew exec resolves a dollar mention through the same dispatcher
     .trim()
     .split('\n')
     .map(line => JSON.parse(line));
-  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.67'});
+  expect(events.at(-1)).toMatchObject({type: 'turn.completed', contractVersion: '1.68'});
 });
 
 test('default state and user skills coexist through production discovery and dispatcher', async () => {

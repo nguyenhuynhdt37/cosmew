@@ -29,6 +29,8 @@
     "link:cli": "bun link --cwd apps/cli",
     "format": "prettier --write \"**/*.{ts,tsx,js}\"",
     "format:check": "prettier --check \"**/*.{ts,tsx,js}\"",
+    "build:binary": "bun scripts/build-binary.ts",
+    "build:binary:all": "bun scripts/build-binary.ts --all",
     "quality": "bun run typecheck && bun run lint && bun run test",
     "test:native": "bun scripts/test.ts native",
     "test:pty": "bun scripts/test.ts pty",

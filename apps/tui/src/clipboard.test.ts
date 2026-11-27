@@ -3,9 +3,13 @@ import {
   MAX_NATIVE_CLIPBOARD_BYTES,
   MAX_OSC52_CLIPBOARD_BYTES,
   copyToClipboard,
+  readClipboardImage,
+  readLinuxClipboardImage,
   readMacClipboardImage,
+  readWindowsClipboardImage,
   writeLinuxClipboard,
   writeMacClipboard,
+  writeWindowsClipboard,
 } from './clipboard';
 const encoder = new TextEncoder();
 const processFor = (output: string | Uint8Array, exitCode = 0) => ({
@@ -187,4 +191,102 @@ test('copyToClipboard copies > 64 KiB via native writer, rejects > 4 MiB, and fa
     }),
   ).toBe(false);
   expect(rejectedOsc52).toEqual([]);
+});
+
+test('readLinuxClipboardImage supports Wayland wl-paste and X11 xclip with magic-byte validation', async () => {
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
+  const webpBytes = Buffer.from('RIFF\x10\x00\x00\x00WEBPVP8 ', 'latin1');
+
+  const waylandCalls: (readonly string[])[] = [];
+  const waylandImg = await readLinuxClipboardImage(200, {
+    env: {WAYLAND_DISPLAY: 'wayland-0'},
+    exists: p => p === '/usr/bin/wl-paste',
+    launch: cmd => {
+      waylandCalls.push(cmd);
+      if (cmd.includes('--list-types')) return processFor('text/plain\nimage/png\nimage/jpeg\n');
+      return processFor(pngBytes);
+    },
+  });
+  expect(waylandCalls).toEqual([
+    ['/usr/bin/wl-paste', '--list-types'],
+    ['/usr/bin/wl-paste', '--no-newline', '--type', 'image/png'],
+  ]);
+  expect(waylandImg).toEqual({mediaType: 'image/png', data: pngBytes.toString('base64')});
+
+  const x11Calls: (readonly string[])[] = [];
+  const x11Img = await readLinuxClipboardImage(200, {
+    env: {DISPLAY: ':0'},
+    exists: p => p === '/usr/bin/xclip',
+    launch: cmd => {
+      x11Calls.push(cmd);
+      if (cmd.includes('TARGETS')) return processFor('UTF8_STRING\nimage/webp\n');
+      return processFor(webpBytes);
+    },
+  });
+  expect(x11Calls).toEqual([
+    ['/usr/bin/xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o'],
+    ['/usr/bin/xclip', '-selection', 'clipboard', '-t', 'image/webp', '-o'],
+  ]);
+  expect(x11Img).toEqual({mediaType: 'image/webp', data: webpBytes.toString('base64')});
+
+  // Rejects fake non-PNG bytes advertised as image/png
+  await expect(
+    readLinuxClipboardImage(200, {
+      env: {WAYLAND_DISPLAY: 'wayland-0'},
+      exists: p => p === '/usr/bin/wl-paste',
+      launch: cmd => (cmd.includes('--list-types') ? processFor('image/png\n') : processFor('not a png')),
+    }),
+  ).rejects.toThrow('does not contain');
+
+  // Reports missing display/tool clearly
+  await expect(
+    readLinuxClipboardImage(200, {env: {}, exists: () => true, launch: () => processFor('')}),
+  ).rejects.toThrow('wl-paste');
+});
+
+test('Windows text and image clipboard helpers use fixed PowerShell executable without shell or argv text', async () => {
+  const winCmds: (readonly string[])[] = [];
+  const written: string[] = [];
+  expect(
+    await writeWindowsClipboard('hello việt nam', 200, {
+      env: {SystemRoot: 'C:\\Windows'},
+      exists: p => p === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      launch: cmd => {
+        winCmds.push(cmd);
+        return writerFor(written);
+      },
+    }),
+  ).toBe(true);
+  expect(winCmds[0]?.[0]).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  expect(winCmds[0]).toContain('-STA');
+  expect(winCmds[0]?.join(' ')).not.toContain('hello việt nam');
+  expect(written).toEqual(['hello việt nam']);
+
+  const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x01, 0x02]);
+  const winImg = await readWindowsClipboardImage(200, {
+    env: {SystemRoot: 'C:\\Windows'},
+    exists: p => p === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    launch: () => processFor(pngBytes.toString('base64') + '\r\n'),
+  });
+  expect(winImg).toEqual({mediaType: 'image/png', data: pngBytes.toString('base64')});
+
+  // Dispatcher routes platform=linux / win32 cleanly
+  const dispatched = await readClipboardImage({
+    platform: 'win32',
+    timeoutMs: 200,
+    windows: {
+      env: {SystemRoot: 'C:\\Windows'},
+      exists: p => p === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      launch: () => processFor(pngBytes.toString('base64')),
+    },
+  });
+  expect(dispatched?.mediaType).toBe('image/png');
+
+  await expect(
+    readWindowsClipboardImage(200, {
+      env: {SystemRoot: 'C:\\Windows'},
+      exists: p => p === 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      launch: () => processFor(Buffer.from('fake-data').toString('base64')),
+    }),
+  ).rejects.toThrow('does not contain');
 });

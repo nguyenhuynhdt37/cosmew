@@ -32,7 +32,7 @@ import {
 } from './hooks';
 import {useTheme} from './theme';
 import {Panel, TextLine, safeText, spinnerTip} from './ui';
-import {copyToClipboard, readMacClipboardImage} from '../clipboard';
+import {copyToClipboard, readClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
 import {StartupGate, useStartupGate} from './features/startup-gate';
 import {verificationMessage} from './features/startup-gate/logic';
@@ -626,11 +626,15 @@ export function IntegratedShell({
   };
   /** Hand the terminal to $VISUAL/$EDITOR on `file`; true when the editor exited cleanly. */
   const runEditor = async (file: string): Promise<boolean> => {
-    const [bin, ...args] = (process.env.VISUAL || process.env.EDITOR || 'vi').trim().split(/\s+/);
+    const fallbackEditor = process.platform === 'win32' ? 'notepad.exe' : 'vi';
+    const [bin, ...args] = (process.env.VISUAL || process.env.EDITOR || fallbackEditor).trim().split(/\s+/);
     let failed = false;
     await suspendTerminal(async () => {
       await new Promise<void>(resolve => {
-        const child = spawn(bin!, [...args, file], {stdio: 'inherit'});
+        const child = spawn(bin!, [...args, file], {
+          stdio: 'inherit',
+          ...(process.platform === 'win32' ? {windowsHide: false} : {}),
+        });
         child.once('error', () => {
           failed = true;
           resolve();
@@ -645,10 +649,7 @@ export function IntegratedShell({
   };
   /** Ctrl+G: edit the draft in $VISUAL/$EDITOR on a private temp file while Ink hands over the terminal. */
   const editInExternalEditor = async () => {
-    if (editing.current || process.platform === 'win32') {
-      if (process.platform === 'win32') notices.addNotice('Not implemented: external editor on Windows.');
-      return;
-    }
+    if (editing.current) return;
     editing.current = true;
     let dir: string | undefined;
     try {
@@ -667,7 +668,6 @@ export function IntegratedShell({
   /** Edit a private copy; only the SDK may publish a new pending plan revision. */
   const editPlanInExternalEditor = async (plan: string): Promise<string | undefined> => {
     if (editing.current) return;
-    if (process.platform === 'win32') throw new Error('External editor on Windows is unavailable.');
     editing.current = true;
     let dir: string | undefined;
     try {
@@ -690,10 +690,6 @@ export function IntegratedShell({
       setViewerStatus('no $VISUAL/$EDITOR set');
       return;
     }
-    if (process.platform === 'win32') {
-      notices.addNotice('Not implemented: external editor on Windows.');
-      return;
-    }
     editing.current = true;
     let dir: string | undefined;
     try {
@@ -711,10 +707,6 @@ export function IntegratedShell({
   /** `/keybindings`: create the user file from the template when missing, edit it, then reload it right away. */
   const editKeybindings = async () => {
     if (editing.current) return;
-    if (process.platform === 'win32') {
-      notices.addNotice('Not implemented: external editor on Windows.');
-      return;
-    }
     editing.current = true;
     const file = keybindingsPath();
     try {
@@ -887,7 +879,7 @@ export function IntegratedShell({
     onRedraw: () => void suspendTerminal(() => {}),
     onOpenAgents: id => open('background-tasks', id),
     onOpenBackgroundTasks: id => open('background-tasks', id),
-    onReadClipboardImage: () => readMacClipboardImage(),
+    onReadClipboardImage: () => readClipboardImage(),
     onNotice: notices.addNotice,
     onEmptyHomeEnd: edge =>
       overlay.open(
@@ -1018,8 +1010,9 @@ export function IntegratedShell({
     const isModalOverlay = (id?: string) =>
       Boolean(id && (id.startsWith('permission:') || id.startsWith('question:') || id.startsWith('plan:')));
     const presentModal = (id: string, element: React.ReactNode) => {
-      if (overlay.active && !isModalOverlay(overlay.active.id)) overlay.push(id, element);
-      else overlay.open(id, element);
+      if (!overlay.active) overlay.open(id, element);
+      else if (!isModalOverlay(overlay.active.id)) overlay.push(id, element);
+      else overlay.replace(id, element);
     };
     if (permission) {
       if (overlay.active?.id === `permission:${permission.approvalId}`) return;

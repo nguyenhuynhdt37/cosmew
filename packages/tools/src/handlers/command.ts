@@ -124,6 +124,9 @@ export function commandHandler(options: ToolDispatcherOptions): ToolHandler {
           if (!sandbox.unsandboxed && config.network && options.proxy) {
             try {
               sandbox.proxyUrl = await options.proxy.ensure();
+              if (process.platform === 'linux' && options.proxy.ensureUnix) {
+                sandbox.proxySocketPath = await options.proxy.ensureUnix();
+              }
             } catch {
               return refuse('SANDBOX_FAILED', 'The sandbox network proxy could not start. Nothing was run.');
             }

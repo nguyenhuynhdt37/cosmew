@@ -1,13 +1,38 @@
 import {existsSync, readdirSync, realpathSync, statSync} from 'node:fs';
-import {join} from 'node:path';
+import {isAbsolute, join} from 'node:path';
 import type {CommandSandbox} from '@cosmew/contracts';
 import {evaluateRead, SENSITIVE_HOME_PATHS} from '@cosmew/security';
 import {WorkspaceRoot, scanExecutionMasks, type MaskDecision} from '@cosmew/workspace';
 import type {NativeSandbox} from './native-sandbox';
 
+export const BWRAP_PROXY_PORT = 3128;
+export const BWRAP_PROXY_PORT_HEX = BWRAP_PROXY_PORT.toString(16).toUpperCase().padStart(4, '0');
+export const BWRAP_PROXY_URL = `http://127.0.0.1:${BWRAP_PROXY_PORT}`;
+export const BWRAP_PROXY_SOCKET_GUEST = '/tmp/cosmew-proxy.sock';
+
+/**
+ * Fixed shell trampoline run inside `bwrap --unshare-net` when a host proxy Unix socket and
+ * `socat` are both available (ADR 0123). All dynamic values pass via positional parameters
+ * (`$1..$4` and `"$@"`) — never interpolated into shell syntax. Because `bwrap` runs with
+ * `--unshare-pid --die-with-parent`, the background `socat` terminates cleanly with the command.
+ */
+const BWRAP_PROXY_TRAMPOLINE = [
+  'socat="$1"; sock="$2"; port="$3"; hex="$4"; shift 4',
+  '"$socat" "TCP-LISTEN:${port},bind=127.0.0.1,fork,reuseaddr" "UNIX-CONNECT:${sock}" >/dev/null 2>&1 &',
+  'i=0',
+  'while [ "$i" -lt 50 ]; do',
+  '  if [ -r /proc/net/tcp ] && grep -q ":${hex} " /proc/net/tcp 2>/dev/null; then break; fi',
+  '  i=$((i + 1))',
+  '  sleep 0.01 2>/dev/null || break',
+  'done',
+  'exec "$@"',
+].join('\n');
+
 export interface BubblewrapOptions {
   /** Absolute path of the `bwrap` executable. */
   bwrap: string;
+  /** Optional absolute path of `socat` used to bridge the host Unix proxy socket into `--unshare-net`. */
+  socat?: string;
   workspace: string;
   state?: string;
   /** Private per-runtime directory holding the command's HOME and TMPDIR. */
@@ -189,14 +214,36 @@ export class BubblewrapSandbox implements NativeSandbox {
     const denyReadTargets = resolveSandboxTargets(sandbox.denyRead, true);
     const denyWriteTargets = writeMode ? resolveSandboxTargets(sandbox.denyWrite) : [];
 
+    const proxySocket =
+      this.options.socat &&
+      sandbox.proxySocketPath &&
+      isAbsolute(sandbox.proxySocketPath) &&
+      !/[\x00-\x1f\x7f]/.test(sandbox.proxySocketPath)
+        ? sandbox.proxySocketPath
+        : undefined;
+    const finalArgv = proxySocket
+      ? [
+          '/bin/sh',
+          '-c',
+          BWRAP_PROXY_TRAMPOLINE,
+          'cosmew-bwrap-proxy',
+          this.options.socat!,
+          BWRAP_PROXY_SOCKET_GUEST,
+          String(BWRAP_PROXY_PORT),
+          BWRAP_PROXY_PORT_HEX,
+          ...argv,
+        ]
+      : argv;
+
     return [
       bwrap,
       '--die-with-parent',
       '--new-session',
       '--unshare-pid',
       '--unshare-ipc',
-      // No network namespace member can reach the host's loopback proxy: on Linux a sandboxed
-      // command has no network at all (ADR 0061; a socket bridge to the proxy is Needs verification).
+      // Always unshare the network namespace. When the host proxy Unix socket and socat are both
+      // available (ADR 0123), the socket is bind-mounted read-write and bridged to 127.0.0.1:3128
+      // inside this isolated namespace; otherwise the sandbox stays completely offline.
       '--unshare-net',
       '--ro-bind',
       '/',
@@ -211,6 +258,7 @@ export class BubblewrapSandbox implements NativeSandbox {
       '--bind',
       join(scratch, 'tmp'),
       join(scratch, 'tmp'),
+      ...(proxySocket ? ['--bind', proxySocket, BWRAP_PROXY_SOCKET_GUEST] : []),
       writeMode ? '--bind' : '--ro-bind',
       workspace.root,
       workspace.root,
@@ -233,7 +281,7 @@ export class BubblewrapSandbox implements NativeSandbox {
       '--chdir',
       cwd,
       '--',
-      ...argv,
+      ...finalArgv,
     ];
   }
 

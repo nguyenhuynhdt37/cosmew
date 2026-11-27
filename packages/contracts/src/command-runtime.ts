@@ -24,6 +24,8 @@ export interface CommandSandbox {
   unsandboxed?: boolean;
   /** Loopback URL of the domain-filtering proxy a sandboxed command reaches the network through. Absent: no network. */
   proxyUrl?: string;
+  /** Host Unix domain socket path for the domain-filtering proxy bridged into Linux bubblewrap `--unshare-net` (ADR 0123). */
+  proxySocketPath?: string;
   /** Absolute directories besides the workspace whose files may be written (`permissions.additionalDirectories`). */
   writableRoots?: string[];
   /** Absolute globs the command can neither read nor write (`Read(...)` deny rules). */
