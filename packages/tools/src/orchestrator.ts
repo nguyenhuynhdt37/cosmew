@@ -284,11 +284,23 @@ export class ToolOrchestrator {
                     : '',
             )
             .slice(0, 1000),
+          ...(prepared.kind === 'mcp' && prepared.identity ? {identity: prepared.identity} : {}),
           truncated: false,
         };
         archiveContext = outputPermissionContext(this.options);
         archiveScope = this.options.outputArchive.scope();
       }
+      const streamSafePrefix = (text: string): string => {
+        let end = text.length;
+        // Hold back incomplete trailing ANSI CSI/OSC escapes so chunk boundaries never shrink sanitized text.
+        const ansi = /\x1b(?:\[[0-9;?:<=>!#$%&'()*+,\-./]*|\][^\x07\x1b]*(?:\x1b)?)?$/.exec(text);
+        if (ansi) end = Math.min(end, ansi.index);
+        // Hold back incomplete URL userinfo (`https://user:pass` before `@`) up to 256 chars.
+        const tail = text.slice(Math.max(0, end - 256), end);
+        const urlCred = /https?:\/\/[^\s"'<>/@]*:[^\s"'<>/@]*$/i.exec(tail);
+        if (urlCred) end = Math.min(end, end - (tail.length - urlCred.index));
+        return text.slice(0, end);
+      };
       const output = await prepared.execute(
         signal,
         onOutput
@@ -297,9 +309,9 @@ export class ToolOrchestrator {
               const text = chunk.text.slice(0, 56000 - streamed);
               streamed += text.length;
               raw[chunk.stream] += text;
-              const safe = plainTerminalText(this.options.redact(raw[chunk.stream], true));
+              const safe = plainTerminalText(this.options.redact(streamSafePrefix(raw[chunk.stream]), true));
               const delta = safe.slice(sent[chunk.stream]);
-              sent[chunk.stream] = safe.length;
+              if (safe.length > sent[chunk.stream]) sent[chunk.stream] = safe.length;
               if (delta) onOutput({stream: chunk.stream, text: delta});
             }
           : undefined,
@@ -420,7 +432,28 @@ export class ToolOrchestrator {
       return {gate, viaSession: authorization.viaSession, sourceRead: {file, decision: initialDecision}};
     }
     if (prepared.source.kind === 'mcp') {
-      const authorization = await this.authorizeMcp(prepared.source.tool, prepared.source.target, audit, signal);
+      const identity = prepared.source.identity;
+      if (identity && this.options.mcp) {
+        const mcpWithServers = this.options.mcp as typeof this.options.mcp & {
+          servers?: () => readonly {name: string; identity: string}[];
+        };
+        const identityValid =
+          prepared.source.tool === 'mcp_resource'
+            ? mcpWithServers.servers
+              ? mcpWithServers.servers().some(server => server.identity === identity)
+              : true
+            : this.options.mcp
+                .tools()
+                .some(tool => tool.name === prepared.source.tool && (!tool.identity || tool.identity === identity));
+        if (!identityValid) return deny();
+      }
+      const authorization = await this.authorizeMcp(
+        prepared.source.tool,
+        prepared.source.target,
+        audit,
+        signal,
+        identity,
+      );
       if (authorization.gate) return authorization;
       if (!prepared.valid()) return deny();
       return authorization;
@@ -934,8 +967,11 @@ export class ToolOrchestrator {
           classification: prepared.classification,
         });
     // Preserve hard denials and terminal transport (polls and interrupts).
-    if (decision.effect !== 'ask' || !prepared.outsideCwd) return decision;
-    if (config.permissionMode === 'plan') return {effect: 'deny', reason: 'plan-mode'};
+    if (decision.effect !== 'ask') return decision;
+    if (config.permissionMode === 'plan' || this.options.analysisOnly?.()) {
+      return {effect: 'deny', reason: 'plan-mode'};
+    }
+    if (!prepared.outsideCwd) return decision;
     return {effect: 'ask', reason: 'outside-working-directories'};
   }
 
@@ -1073,6 +1109,18 @@ export class ToolOrchestrator {
     const current = this.commandDecision(prepared, again);
     // The configured sandbox is part of the approval: a change before launch voids it (no retrofit).
     const config = sandboxConfig(this.options);
+    const expectedWritableRoots =
+      prepared.sandbox && !prepared.sandbox.unsandboxed && prepared.sandbox.mode === 'workspace-write'
+        ? config.additionalDirectories
+        : [];
+    const expectedDenyRead = prepared.sandbox && !prepared.sandbox.unsandboxed ? (config.denyRead ?? []) : [];
+    const expectedDenyWrite = prepared.sandbox && !prepared.sandbox.unsandboxed ? (config.denyWrite ?? []) : [];
+    const sandboxBoundsChanged =
+      !!prepared.sandbox &&
+      !prepared.sandbox.unsandboxed &&
+      (JSON.stringify(prepared.sandbox.writableRoots ?? []) !== JSON.stringify(expectedWritableRoots) ||
+        JSON.stringify(prepared.sandbox.denyRead ?? []) !== JSON.stringify(expectedDenyRead) ||
+        JSON.stringify(prepared.sandbox.denyWrite ?? []) !== JSON.stringify(expectedDenyWrite));
     const sandboxChanged =
       !!prepared.sandbox &&
       (prepared.escalation
@@ -1083,7 +1131,7 @@ export class ToolOrchestrator {
               excluded: false,
               sandbox: {...prepared.sandbox, unsandboxed: false},
             })
-          : effectiveSandboxMode(this.options, runtime) !== prepared.sandbox.mode);
+          : effectiveSandboxMode(this.options, runtime) !== prepared.sandbox.mode || sandboxBoundsChanged);
     if (
       again.absolute !== file.absolute ||
       again.kind !== 'directory' ||

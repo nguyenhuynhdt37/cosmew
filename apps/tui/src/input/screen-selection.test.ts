@@ -347,3 +347,36 @@ test('stdout resize updates virtual screen dimensions for lines and extract', ()
     h.cleanup();
   }
 });
+
+test('VirtualScreen preserves ZWJ/VS16/flag graphemes across chunks, restores cell SGR colors, and clears highlight on selection reset', () => {
+  const h = createHarness({columns: 30, rows: 4});
+  try {
+    // ZWJ family emoji, cross-chunk VS16 sun (width 1 -> 2), and cross-chunk flag pair.
+    h.bridge.stdout.write('A👨‍👩‍👧B');
+    h.bridge.stdout.write('\u2600');
+    h.bridge.stdout.write('\uFE0F');
+    h.bridge.stdout.write('C\u{1F1FA}');
+    h.bridge.stdout.write('\u{1F1F8}D\r\n');
+    // Colored diff line including truecolor SGR with 0 channel (`38;2;0;255;0`) that must not reset SGR.
+    h.bridge.stdout.write('\x1b[32m+add\x1b[0m \x1b[38;2;0;255;0mrgb\x1b[0m');
+    expect(h.bridge.lines()[0]).toBe('A👨‍👩‍👧B☀️C🇺🇸D');
+    expect(h.bridge.extract({column: 1, row: 1}, {column: 12, row: 1})).toBe('A👨‍👩‍👧B☀️C🇺🇸D');
+
+    // Drag over colored line 2, then cancel via setCaptureEnabled(false) -> selection reset clears highlight and restores original SGR!
+    h.rawStdout.chunks.length = 0;
+    h.stdin.write('\x1b[<0;1;2M\x1b[<32;8;2M');
+    h.mouse.stdin.read();
+    const highlighted = h.rawStdout.chunks.join('');
+    expect(highlighted).toContain('\x1b[32m\x1b[7m+add');
+    expect(highlighted).toContain('\x1b[38;2;0;255;0m\x1b[7mrgb');
+
+    h.rawStdout.chunks.length = 0;
+    h.mouse.setCaptureEnabled!(false);
+    const restored = h.rawStdout.chunks.join('');
+    expect(restored).toContain('\x1b[0m\x1b[32m+add');
+    expect(restored).toContain('\x1b[0m\x1b[38;2;0;255;0mrgb');
+    expect(restored).not.toContain('\x1b[7m');
+  } finally {
+    h.cleanup();
+  }
+});

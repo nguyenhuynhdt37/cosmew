@@ -7,6 +7,8 @@ export interface OutputArchiveSource {
   tool: string;
   kind: 'read' | 'search' | 'command' | 'web' | 'mcp';
   target: string;
+  /** Live MCP server/hub generation identity bound at capture time. */
+  identity?: string;
   /** Producer already omitted bytes (for example command head/tail capture). */
   truncated: boolean;
 }

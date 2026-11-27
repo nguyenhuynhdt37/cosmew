@@ -139,3 +139,62 @@ test('source quota snapshots survive missing headers and ignore older observatio
   );
   expect(combineUsage(noFraction, millisecond).breakdown?.[0]?.quota?.[0]?.usedPercent).toBe(45);
 });
+
+test('combineUsage preserves optional counters across undefined, numeric and explicit null values', () => {
+  const identity = source('optional-counters');
+  const withoutOptional = attributeUsage({inputTokens: 10, outputTokens: 5, costUSD: 0.01}, identity);
+  const withOptional = attributeUsage(
+    {
+      inputTokens: 20,
+      outputTokens: 15,
+      costUSD: 0.02,
+      cacheReadTokens: 80,
+      reasoningTokens: 10,
+    },
+    identity,
+  );
+
+  // Merging undefined optional counters with reported numbers keeps the reported numbers (never turns into null).
+  const mergedForward = combineUsage(withoutOptional, withOptional);
+  expect(mergedForward.cacheReadTokens).toBe(80);
+  expect(mergedForward.reasoningTokens).toBe(10);
+  expect(mergedForward.breakdown?.[0]?.cacheReadTokens).toBe(80);
+  expect(mergedForward.breakdown?.[0]?.reasoningTokens).toBe(10);
+  expect('cacheWriteTokens' in mergedForward).toBe(false);
+  expect('premiumRequests' in mergedForward).toBe(false);
+  expect(usageSchema.safeParse(mergedForward).success).toBe(true);
+
+  const mergedReverse = combineUsage(withOptional, withoutOptional);
+  expect(mergedReverse.cacheReadTokens).toBe(80);
+  expect(mergedReverse.reasoningTokens).toBe(10);
+
+  // Merging two usages whose optional counters are both undefined never invents null keys.
+  const bothUndefined = combineUsage(
+    {inputTokens: 4, outputTokens: 2, costUSD: 0.01, cacheReadTokens: undefined},
+    {inputTokens: 6, outputTokens: 3, costUSD: 0.02},
+  );
+  expect(bothUndefined.cacheReadTokens).toBeUndefined();
+  expect('cacheReadTokens' in bothUndefined).toBe(false);
+  expect('cacheWriteTokens' in bothUndefined).toBe(false);
+  expect('reasoningTokens' in bothUndefined).toBe(false);
+  expect('premiumRequests' in bothUndefined).toBe(false);
+  expect(usageSchema.safeParse(bothUndefined).success).toBe(true);
+
+  // When either side explicitly reports null, null is preserved.
+  const explicitNullLeft = combineUsage(
+    attributeUsage({inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null}, identity),
+    withOptional,
+  );
+  expect(explicitNullLeft.cacheReadTokens).toBeNull();
+  expect(explicitNullLeft.reasoningTokens).toBe(10);
+  expect(explicitNullLeft.breakdown?.[0]?.cacheReadTokens).toBeNull();
+  expect(usageSchema.safeParse(explicitNullLeft).success).toBe(true);
+
+  const explicitNullRight = combineUsage(
+    withOptional,
+    attributeUsage({inputTokens: 5, outputTokens: 5, costUSD: 0.01, cacheReadTokens: null}, identity),
+  );
+  expect(explicitNullRight.cacheReadTokens).toBeNull();
+  expect(explicitNullRight.reasoningTokens).toBe(10);
+  expect(usageSchema.safeParse(explicitNullRight).success).toBe(true);
+});

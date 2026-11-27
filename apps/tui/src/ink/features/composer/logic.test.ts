@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test';
 import {createPasteState, expandPastes, insertPaste} from '../paste';
-import {edit, insertText, moveCursor, verticalMove, visualRows} from './logic';
+import {edit, insertText, moveCursor, verticalMove, visualRows, wordLeft, wordRight} from './logic';
 
 test('grapheme edits never split combining accents or emoji families and selections replace cleanly', () => {
   let state = createPasteState('A👩‍👩‍👧‍👦éB');
@@ -33,4 +33,12 @@ test('wrapping measures CJK cells and resizes while vertical navigation follows 
   const state = {...createPasteState('你好ab\nxyz'), cursor: 2};
   expect(verticalMove(state, 1, 8)?.cursor).toBe(8);
   expect(verticalMove({...state, cursor: 0}, -1, 8)).toBeNull();
+});
+
+test('wordLeft and wordRight step across astral Unicode letters without splitting surrogate pairs', () => {
+  const text = 'foo 𐐷bar baz';
+  expect(wordRight(text, 0)).toBe(3);
+  expect(wordRight(text, 3)).toBe(9);
+  expect(wordLeft(text, 9)).toBe(4);
+  expect(wordLeft(text, 4)).toBe(0);
 });

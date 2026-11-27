@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {SqliteToolOutputArchive} from '@cosmew/persistence';
 import {WorkspaceRoot} from '@cosmew/workspace';
 import {SessionGrants} from '@cosmew/security';
-import {ToolDispatcher} from '@cosmew/tools';
+import {DEFAULT_SANDBOX_CONFIG, ToolDispatcher} from '@cosmew/tools';
 
 test('dispatcher archives redacted producer output and retrieves middle evidence without repeating execution', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'fyn-output-'));
@@ -216,6 +216,47 @@ test('archive survives reopening SQLite without changing conversation schema ver
     db = new Database(path);
     expect(new SqliteToolOutputArchive(db).get(scope, id)?.content).toBe('durable captured evidence');
     expect((db.query('PRAGMA user_version').get() as {user_version: number}).user_version).toBe(8);
+  } finally {
+    db.close();
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('archived MCP tool output is invalidated when the MCP server identity changes on reconnect', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'fyn-output-mcp-id-'));
+  const db = new Database(':memory:');
+  try {
+    const store = new SqliteToolOutputArchive(db);
+    let identity = 'hub:srv:1';
+    const grants = new SessionGrants();
+    const dispatcher = new ToolDispatcher({
+      workspace: new WorkspaceRoot(dir),
+      grants,
+      sandbox: () => ({...DEFAULT_SANDBOX_CONFIG, permissionMode: 'default', readOnly: false}),
+      approve: async () => 'session',
+      redact: s => s,
+      outputArchive: {store, scope: () => ({workspace: dir, session: 'a'}), permissionContext: () => 'rules'},
+      mcp: {
+        tools: () => [{name: 'mcp__srv__dump', description: 'dump', inputSchema: {type: 'object'}, identity}],
+        call: async () => 'payload '.repeat(8000) + 'TAIL_MARKER',
+      },
+    });
+    const captured = await dispatcher.invoke({id: 'call-1', name: 'mcp__srv__dump', input: {}});
+    const id = captured.content.match(/output_id=([\w-]+)/)?.[1];
+    expect(id).toBeDefined();
+
+    const sameIdPage = await dispatcher.invoke({
+      id: 'read-1',
+      name: 'tool_output',
+      input: {output_id: id, query: 'TAIL_MARKER'},
+    });
+    expect(sameIdPage.status).toBe('ok');
+    expect(sameIdPage.content).toContain('TAIL_MARKER');
+
+    // Server reconnect rotates identity -> archived retrieval must be refused.
+    identity = 'hub:srv:2';
+    const rotated = await dispatcher.invoke({id: 'read-2', name: 'tool_output', input: {output_id: id}});
+    expect(rotated.status).toBe('denied');
   } finally {
     db.close();
     rmSync(dir, {recursive: true, force: true});

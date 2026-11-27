@@ -1,5 +1,5 @@
 import {pathToFileURL} from 'node:url';
-import {dirname, extname} from 'node:path';
+import {dirname, extname, isAbsolute} from 'node:path';
 import {watch, type FSWatcher} from 'node:fs';
 import {ignoredDirectory} from '@cosmew/workspace';
 import {FutrynError, type ServiceProcess} from '@cosmew/contracts';
@@ -34,12 +34,31 @@ interface Entry {
  * Authorized open files are re-synced before requests and by a coalesced recursive watcher.
  * Missing watcher support falls back to request-time synchronization.
  */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new FutrynError('CANCELLED'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new FutrynError('CANCELLED'));
+    signal.addEventListener('abort', onAbort, {once: true});
+    promise.then(
+      value => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 export class LspManager {
   private readonly entries = new Map<string, Entry>();
   private closed = false;
   private readonly lifetime = new AbortController();
   private watcher?: FSWatcher;
-  private readonly watching = new Map<string, {client: LspClient; spec: ServerSpec}>();
+  private readonly watching = new Map<string, {client: LspClient; spec: ServerSpec; absolute: string}>();
   private readonly changed = new Set<string>();
   private watchTimer?: ReturnType<typeof setTimeout>;
 
@@ -99,15 +118,15 @@ export class LspManager {
       this.touch(entry);
       return {client: entry.client, spec: entry.spec};
     }
-    entry.starting ??= this.start(entry, signal).finally(() => {
+    entry.starting ??= this.start(entry).finally(() => {
       entry!.starting = undefined;
     });
-    const client = await entry.starting;
+    const client = await raceAbort(entry.starting, signal);
     return {client, spec: entry.spec};
   }
 
-  private async start(entry: Entry, signal?: AbortSignal): Promise<LspClient> {
-    signal = AbortSignal.any([this.lifetime.signal, ...(signal ? [signal] : [])]);
+  private async start(entry: Entry): Promise<LspClient> {
+    const signal = this.lifetime.signal;
     signal.throwIfAborted();
     if (entry.client) {
       // A crash: back off, then try again within the restart budget.
@@ -173,18 +192,19 @@ export class LspManager {
     file: ResolvedPath,
   ): {uri: string; text: string; changed: boolean} {
     const {bytes} = this.options.workspace.readBytes(file, 8 * 1024 * 1024);
-    const text = new TextDecoder().decode(bytes);
+    const text = new TextDecoder('utf-8', {ignoreBOM: true}).decode(bytes);
     const uri = pathToFileURL(file.absolute).href;
     const changed = client.sync(uri, spec.languageId(extname(file.relative).toLowerCase()), text);
-    if (this.options.canRead && !ignoredDirectory(this.options.workspace, dirname(file.relative))) {
+    if (
+      this.options.canRead &&
+      !isAbsolute(file.relative) &&
+      !ignoredDirectory(this.options.workspace, dirname(file.relative))
+    ) {
       for (const [path, open] of this.watching) {
-        if (
-          open.client.connection.closed ||
-          !open.client.isOpen(pathToFileURL(this.options.workspace.root + '/' + path).href)
-        )
+        if (open.client.connection.closed || !open.client.isOpen(pathToFileURL(open.absolute).href))
           this.watching.delete(path);
       }
-      this.watching.set(file.relative, {client, spec});
+      this.watching.set(file.relative, {client, spec, absolute: file.absolute});
       this.startWatcher();
     }
     return {uri, text, changed};
@@ -233,7 +253,7 @@ export class LspManager {
         }
         this.syncFile(open.client, open.spec, file);
       } catch {
-        open.client.closeDocument(pathToFileURL(this.options.workspace.root + '/' + path).href);
+        open.client.closeDocument(pathToFileURL(open.absolute).href);
         this.watching.delete(path);
       }
     }

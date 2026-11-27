@@ -9,6 +9,9 @@ import {
   MAX_MCP_OUTPUT_BYTES,
   type McpTextResult,
   discoverTools,
+  discoverResources,
+  discoverResourceTemplates,
+  readRemoteResource,
   normalizeResult,
 } from './client';
 import {qualifiedMcpName, type McpServerSpec} from './config';
@@ -31,6 +34,23 @@ export interface McpToolRecord {
   inputSchema: Record<string, unknown>;
   readOnlyHint?: boolean;
   identity?: string;
+}
+
+export interface McpResourceItem {
+  server: string;
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  size?: number;
+}
+
+export interface McpResourceTemplateItem {
+  server: string;
+  uriTemplate: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
 }
 
 export interface McpSnapshot {
@@ -59,6 +79,9 @@ interface LiveServer {
     args: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<string | {text: string; isError: true}>;
+  listResources(signal?: AbortSignal): Promise<readonly McpResourceItem[]>;
+  listResourceTemplates(signal?: AbortSignal): Promise<readonly McpResourceTemplateItem[]>;
+  readResource(uri: string, signal?: AbortSignal): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -177,6 +200,36 @@ export class McpHub {
     return this.connect(signal);
   }
 
+  servers(): readonly {name: string; identity: string}[] {
+    return [...this.entries.values()]
+      .filter(entry => entry.status.state === 'connected' && Boolean(entry.live))
+      .map(entry => ({
+        name: entry.spec.name,
+        identity: `${this.identity}:${entry.identity}:${entry.generation}`,
+      }));
+  }
+
+  async listResources(server: string, signal?: AbortSignal): Promise<readonly McpResourceItem[]> {
+    this.check(signal);
+    const entry = this.entries.get(server);
+    if (!entry || entry.status.state !== 'connected' || !entry.live) throw new FutrynError('NOT_FOUND');
+    return entry.live.listResources(signal);
+  }
+
+  async listResourceTemplates(server: string, signal?: AbortSignal): Promise<readonly McpResourceTemplateItem[]> {
+    this.check(signal);
+    const entry = this.entries.get(server);
+    if (!entry || entry.status.state !== 'connected' || !entry.live) throw new FutrynError('NOT_FOUND');
+    return entry.live.listResourceTemplates(signal);
+  }
+
+  async readResource(server: string, uri: string, signal?: AbortSignal): Promise<string> {
+    this.check(signal);
+    const entry = this.entries.get(server);
+    if (!entry || entry.status.state !== 'connected' || !entry.live) throw new FutrynError('NOT_FOUND');
+    return entry.live.readResource(uri, signal);
+  }
+
   async call(
     qualifiedName: string,
     args: Record<string, unknown>,
@@ -244,10 +297,12 @@ export class McpHub {
         }
       },
     };
+    const priorStopping = entry.stopping;
     const pending = (async () => {
       let live: LiveServer | undefined;
       try {
-        if (startup.aborted) throw new FutrynError('CANCELLED');
+        if (priorStopping) await priorStopping;
+        if (!current() || startup.aborted) throw new FutrynError('CANCELLED');
         live =
           entry.spec.transport === 'stdio'
             ? await connectStdio(entry.spec, options, startup, lifetime.signal)
@@ -312,6 +367,11 @@ async function connectHttp(
       status: {name: spec.name, transport: 'http', state: 'connected', tools: tools.length},
       tools,
       call: async (tool, args, callSignal) => textOf(await client.call(tool, args, callSignal)),
+      listResources: async callSignal =>
+        (await client.listResources(callSignal)).map(item => ({server: spec.name, ...item})),
+      listResourceTemplates: async callSignal =>
+        (await client.listResourceTemplates(callSignal)).map(item => ({server: spec.name, ...item})),
+      readResource: (uri, callSignal) => client.readResource(uri, callSignal),
       close: () => client.close(),
     };
   } catch (error) {
@@ -347,20 +407,35 @@ async function connectStdio(
   // Drain stderr so a noisy server cannot fill the pipe. The bytes are not returned: they can echo env.
   if (errStream && 'on' in errStream) errStream.on('data', () => undefined);
   const client = new Client({name: 'cosmew', version: '0.1.0'}, {capabilities: {}});
+  const connectDeadline = AbortSignal.timeout(timeout);
   try {
     await client.connect(transport, {
       timeout,
-      signal: AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), AbortSignal.timeout(timeout)]),
+      signal: AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), connectDeadline]),
     });
     if (lifetime.signal.aborted) throw new FutrynError('CANCELLED');
     const listed = await discoverTools(
       client,
       timeout,
-      AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]),
+      AbortSignal.any([lifetime.signal, ...(signal ? [signal] : []), connectDeadline]),
       options.warnings ?? [],
     );
     client.onclose = () => options.onDisconnect?.();
     const tools = expose(spec.name, listed, options.redact, options.warnings);
+    const stdioRun = async <T>(callSignal: AbortSignal | undefined, fn: (combined: AbortSignal) => Promise<T>) => {
+      if (callSignal?.aborted || lifetime.signal.aborted) throw new FutrynError('CANCELLED');
+      const deadline = AbortSignal.timeout(timeout);
+      const combined = AbortSignal.any([lifetime.signal, deadline, ...(callSignal ? [callSignal] : [])]);
+      try {
+        return await fn(combined);
+      } catch (error) {
+        if (callSignal?.aborted || lifetime.signal.aborted) throw new FutrynError('CANCELLED');
+        if (deadline.aborted || (error instanceof Error && /timed out|timeout/i.test(error.message)))
+          throw new FutrynError('TIMEOUT');
+        if (error instanceof FutrynError) throw error;
+        throw new FutrynError('TRANSPORT');
+      }
+    };
     return {
       status: {name: spec.name, transport: 'stdio', state: 'connected', tools: tools.length},
       tools,
@@ -373,6 +448,21 @@ async function connectStdio(
           timeout,
           AbortSignal.any([lifetime.signal, ...(callSignal ? [callSignal] : [])]),
         ),
+      listResources: callSignal =>
+        stdioRun(callSignal, async combined =>
+          (await discoverResources(client, timeout, combined, options.redact, options.warnings ?? [])).map(item => ({
+            server: spec.name,
+            ...item,
+          })),
+        ),
+      listResourceTemplates: callSignal =>
+        stdioRun(callSignal, async combined =>
+          (await discoverResourceTemplates(client, timeout, combined, options.redact, options.warnings ?? [])).map(
+            item => ({server: spec.name, ...item}),
+          ),
+        ),
+      readResource: (uri, callSignal) =>
+        stdioRun(callSignal, combined => readRemoteResource(client, uri, timeout, combined, options.redact)),
       close: async () => {
         lifetime.abort();
         ownedSignal?.removeEventListener('abort', onAbort);
@@ -382,7 +472,11 @@ async function connectStdio(
   } catch (error) {
     ownedSignal?.removeEventListener('abort', onAbort);
     await close();
-    throw error instanceof FutrynError ? error : new FutrynError('TRANSPORT');
+    if (error instanceof FutrynError) throw error;
+    if (connectDeadline.aborted || (error instanceof Error && /timed out|timeout/i.test(error.message)))
+      throw new FutrynError('TIMEOUT');
+    if (signal?.aborted || ownedSignal?.aborted || lifetime.signal.aborted) throw new FutrynError('CANCELLED');
+    throw new FutrynError('TRANSPORT');
   }
 }
 

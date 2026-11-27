@@ -38,7 +38,7 @@ function handle(line: string): void {
   let message: {
     id?: number | string;
     method?: string;
-    params?: {protocolVersion?: string; name?: string; arguments?: {text?: string}};
+    params?: {protocolVersion?: string; name?: string; uri?: string; arguments?: {text?: string}};
   };
   try {
     message = JSON.parse(line) as typeof message;
@@ -53,7 +53,7 @@ function handle(line: string): void {
       id,
       result: {
         protocolVersion: message.params?.protocolVersion ?? '2025-11-25',
-        capabilities: {tools: {}},
+        capabilities: {tools: {}, resources: {}},
         serverInfo: {name: 'fixture', version: '0.0.0'},
       },
     });
@@ -82,6 +82,83 @@ function handle(line: string): void {
       id,
       result: {content: [{type: 'text', text: `echo:${message.params.arguments?.text ?? ''}`}]},
     });
+    return;
+  }
+  if (message.method === 'resources/list') {
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        resources: [
+          {
+            uri: 'fixture://docs/guide.md',
+            name: 'guide.md',
+            description: 'Fixture documentation guide',
+            mimeType: 'text/markdown',
+          },
+          {
+            uri: 'fixture://bin/logo.png',
+            name: 'logo.png',
+            description: 'Binary image resource',
+            mimeType: 'image/png',
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (message.method === 'resources/templates/list') {
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        resourceTemplates: [
+          {
+            uriTemplate: 'fixture://docs/{slug}.md',
+            name: 'doc-by-slug',
+            description: 'Fetch a fixture document by slug',
+            mimeType: 'text/markdown',
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (message.method === 'resources/read') {
+    const uri = message.params?.uri;
+    if (uri === 'fixture://docs/guide.md') {
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          contents: [
+            {
+              uri,
+              mimeType: 'text/markdown',
+              text: `# Fixture Guide\nToken: ${process.env.TOKEN ?? 'none'}`,
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (uri === 'fixture://bin/logo.png') {
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          contents: [
+            {
+              uri,
+              mimeType: 'image/png',
+              blob: Buffer.from([137, 80, 78, 71]).toString('base64'),
+            },
+          ],
+        },
+      });
+      return;
+    }
+    send({jsonrpc: '2.0', id, error: {code: -32002, message: 'Resource not found'}});
     return;
   }
   if (message.method === 'ping') {

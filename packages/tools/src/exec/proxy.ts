@@ -36,33 +36,83 @@ export interface SandboxProxyOptions {
 
 const ipv4 = (address: string) => address.split('.').map(Number) as [number, number, number, number];
 
-/** Loopback, private, link-local, CGNAT, multicast and unspecified addresses (IPv4 and IPv6). */
-export function isPrivateAddress(address: string): boolean {
-  const lower = address.toLowerCase();
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-  if (mapped) return isPrivateAddress(mapped[1]!);
-  if (isIP(lower) === 4) {
-    const [a, b] = ipv4(lower);
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      a >= 224
-    );
+function isPrivateIpv4(a: number, b: number, c: number, _d: number): boolean {
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && c === 0) ||
+    (a === 192 && b === 88 && c === 99) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    a >= 224
+  );
+}
+
+function parseIpv6Hextets(address: string): number[] | null {
+  const raw = address.toLowerCase().split('%')[0] ?? '';
+  if (!raw || raw.includes(':::')) return null;
+  let normalized = raw;
+  if (normalized.includes('.')) {
+    const lastColon = normalized.lastIndexOf(':');
+    if (lastColon === -1) return null;
+    const v4Part = normalized.slice(lastColon + 1);
+    if (isIP(v4Part) !== 4) return null;
+    const [a, b, c, d] = ipv4(v4Part);
+    const hi = ((a << 8) | b).toString(16);
+    const lo = ((c << 8) | d).toString(16);
+    normalized = `${normalized.slice(0, lastColon + 1)}${hi}:${lo}`;
   }
-  if (isIP(lower) === 6)
-    return (
-      lower === '::' ||
-      lower === '::1' ||
-      /^f[cd]/.test(lower) ||
-      /^fe[89ab]/.test(lower) ||
-      /^ff/.test(lower) ||
-      /^::ffff:/.test(lower)
-    );
+  const halves = normalized.split('::');
+  if (halves.length > 2) return null;
+  const parseGroup = (part: string): number[] | null => {
+    if (!part) return [];
+    const groups = part.split(':');
+    const out: number[] = [];
+    for (const group of groups) {
+      if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+      out.push(parseInt(group, 16));
+    }
+    return out;
+  };
+  const left = parseGroup(halves[0]!);
+  if (!left) return null;
+  if (halves.length === 1) return left.length === 8 ? left : null;
+  const right = parseGroup(halves[1]!);
+  if (!right) return null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 1) return null;
+  return [...left, ...Array<number>(missing).fill(0), ...right];
+}
+
+/** Loopback, private, link-local, CGNAT, multicast, transition and reserved addresses (IPv4 and IPv6). */
+export function isPrivateAddress(address: string): boolean {
+  const lower = address.trim().toLowerCase();
+  const bare = lower.split('%')[0] ?? '';
+  if (isIP(bare) === 4) {
+    const [a, b, c, d] = ipv4(bare);
+    return isPrivateIpv4(a, b, c, d);
+  }
+  if (isIP(bare) === 6) {
+    const hextets = parseIpv6Hextets(bare);
+    if (!hextets) return true;
+    const [h0, h1, h2] = hextets as [number, number, number, number, number, number, number, number];
+    // Only global unicast 2000::/3 may ever be public; everything else (loopback ::1, unspecified ::,
+    // IPv4-mapped ::ffff:0:0/96, IPv4-compatible, NAT64 64:ff9b::/96, ULA fc00::/7, link-local fe80::/10,
+    // multicast ff00::/8, etc.) is rejected.
+    if ((h0 & 0xe000) !== 0x2000) return true;
+    // Reject special-purpose and transition ranges inside 2000::/3 (Teredo, BMWG, ORCHID, docs, 6to4).
+    if (h0 === 0x2001 && h1 === 0x0000) return true;
+    if (h0 === 0x2001 && h1 === 0x0002 && h2 === 0x0000) return true;
+    if (h0 === 0x2001 && ((h1 & 0xfff0) === 0x0010 || (h1 & 0xfff0) === 0x0020)) return true;
+    if (h0 === 0x2001 && h1 === 0x0db8) return true;
+    if (h0 === 0x2002) return true;
+    if (h0 === 0x3fff && (h1 & 0xf000) === 0x0000) return true;
+    return false;
+  }
   return true;
 }
 
@@ -205,6 +255,7 @@ export class SandboxProxy {
   }
 
   private async forward(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (req.socket) this.track(req.socket);
     const controller = new AbortController();
     res.once('close', () => controller.abort());
     let url: URL | undefined;
@@ -241,6 +292,7 @@ export class SandboxProxy {
         response.pipe(res);
       },
     );
+    upstream.once('socket', socket => this.track(socket));
     upstream.on('error', () => fail(502, 'Bad gateway.'));
     res.once('close', () => upstream.destroy());
     req.pipe(upstream);

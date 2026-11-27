@@ -58,12 +58,12 @@ export class WebSearchClient {
     if (this.provider !== 'tavily') {
       const url = new URL(this.endpoint);
       const headers: Record<string, string> = {'User-Agent': 'cosmew/0.1.0'};
-      if (this.provider === 'exa' && options.keys.EXA_API_KEY)
-        url.searchParams.set('exaApiKey', options.keys.EXA_API_KEY);
-      if (this.provider === 'firecrawl' && options.keys.FIRECRAWL_API_KEY)
-        headers.Authorization = `Bearer ${options.keys.FIRECRAWL_API_KEY}`;
-      if (this.provider === 'parallel' && options.keys.PARALLEL_API_KEY)
-        headers.Authorization = `Bearer ${options.keys.PARALLEL_API_KEY}`;
+      const exaKey = options.keys.EXA_API_KEY?.trim();
+      const firecrawlKey = options.keys.FIRECRAWL_API_KEY?.trim();
+      const parallelKey = options.keys.PARALLEL_API_KEY?.trim();
+      if (this.provider === 'exa' && exaKey) url.searchParams.set('exaApiKey', exaKey);
+      if (this.provider === 'firecrawl' && firecrawlKey) headers.Authorization = `Bearer ${firecrawlKey}`;
+      if (this.provider === 'parallel' && parallelKey) headers.Authorization = `Bearer ${parallelKey}`;
       this.mcp = new McpClient({
         endpoint: url,
         headers,
@@ -129,12 +129,16 @@ export class WebSearchClient {
     const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
     const combined = AbortSignal.any([deadline, ...(signal ? [signal] : [])]);
     try {
+      const tavilyKey = this.options.keys.TAVILY_API_KEY?.trim();
       const response = await (this.options.fetch ?? fetch)(this.endpoint, {
         method: 'POST',
         redirect: 'error',
         credentials: 'omit',
         signal: combined,
-        headers: {'Content-Type': 'application/json', Authorization: `Bearer ${this.options.keys.TAVILY_API_KEY}`},
+        headers: {
+          'Content-Type': 'application/json',
+          ...(tavilyKey ? {Authorization: `Bearer ${tavilyKey}`} : {}),
+        },
         body: JSON.stringify({query, search_depth: 'basic', chunks_per_source: 3, max_results: numResults}),
       });
       if (!response.ok || !response.body) throw new FutrynError('TRANSPORT');

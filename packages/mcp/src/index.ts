@@ -3,11 +3,22 @@ export {
   MCP_TIMEOUT_MS,
   MAX_MCP_RESPONSE_BYTES,
   MAX_MCP_OUTPUT_BYTES,
+  MAX_MCP_RESOURCES,
   type McpClientOptions,
   type McpTextResult,
+  type RemoteResource,
+  type RemoteResourceTemplate,
 } from './client';
 export {parseMcpConfig, qualifiedMcpName, type McpConfigParse, type McpServerSpec} from './config';
-export {McpHub, type McpHubOptions, type McpServerStatus, type McpSnapshot, type McpToolRecord} from './servers';
+export {
+  McpHub,
+  type McpHubOptions,
+  type McpServerStatus,
+  type McpSnapshot,
+  type McpToolRecord,
+  type McpResourceItem,
+  type McpResourceTemplateItem,
+} from './servers';
 export {
   WebSearchClient,
   selectSearchProvider,

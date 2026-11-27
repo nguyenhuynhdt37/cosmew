@@ -4,6 +4,10 @@ const AUTH_SCHEME_VALUE = /^(?:Bearer|Basic|Digest|Token|ApiKey)\s+(.+)$/i;
 const URL_USER_PASSWORD = /^[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:([^/\s@]+)@/i;
 const SENSITIVE_KEY_WORD =
   /^(?:key|keys|secret|secrets|token|tokens|password|passwords|passwd|pwd|auth|authorization|proxy-authorization|credential|credentials|cookie|cookies|set-cookie|private|bearer|pat|jwt|session|sessions|dsn|signature|signatures|cert|certs)$/i;
+const COMPOUND_SENSITIVE_KEY =
+  /(?:apikey|pgpassword|authtoken|secretkey|accesstoken|refreshtoken|clientsecret|privatekey|bearertoken|passphrase|sessiontoken|signingkey|encryptionkey)/i;
+const NON_SECRET_KEY_SUFFIX =
+  /(?:^|[_.-])(?:mode|type|kind|policy|timeout|ttl|port|host|hostname|level|format|enabled|disabled|count|limit|size|interval|retries|version|alg|algorithm|method|scheme|provider|driver|region|zone|env|name)$/i;
 const SECRET_VALUE_PATTERN =
   /^(?:sk-|rk-|pk-|gh[pousr]_|github_pat_|glpat-|xox[abprs]-|npm_|pypi-|AIza[0-9A-Za-z_-]{16,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|ak_|pat_)/;
 
@@ -18,6 +22,8 @@ function safeDecodeURIComponent(value: string): string {
 function isSensitiveConfigKey(key: string): boolean {
   const normalized = key.trim().toLowerCase();
   if (/^(?:authorization|proxy-authorization|cookie|set-cookie)$/.test(normalized)) return true;
+  if (NON_SECRET_KEY_SUFFIX.test(normalized)) return false;
+  if (COMPOUND_SENSITIVE_KEY.test(normalized.replace(/[-_.\s/:]+/g, ''))) return true;
   const words = key
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
@@ -81,12 +87,29 @@ export class Redactor {
   }
   stream() {
     let pending = '';
+    const dynamicReserve = (text: string): number => {
+      // Withhold trailing incomplete dynamic-secret tokens so chunk boundaries cannot leak Bearer/sk- values.
+      const tail = text.slice(-256);
+      const patterns = [
+        /(?:^|[\s"'=:(])(Bearer\s+[^\s"']*)$/i,
+        /(?:^|[\s"'=:(])(Bearer\s*)$/i,
+        /(?:^|[\s"'=:(])(B|Be|Bea|Bear|Beare)$/i,
+        /\b(sk-[\w-]*)$/,
+        /\b(sk)$/,
+      ];
+      let best = 0;
+      for (const pattern of patterns) {
+        const match = pattern.exec(tail);
+        if (match?.[1] && match[1].length > best) best = match[1].length;
+      }
+      return best;
+    };
     return {
       push: (chunk: string) => {
         let safe = pending + chunk;
         for (const secret of [...this.secrets].sort((a, b) => b.length - a.length))
           safe = safe.split(secret).join('[REDACTED]');
-        let reserve = 0;
+        let reserve = dynamicReserve(safe);
         for (const secret of this.secrets) {
           for (let length = Math.min(secret.length - 1, safe.length); length > reserve; length--) {
             if (safe.endsWith(secret.slice(0, length))) {

@@ -60,7 +60,153 @@ function assertBounds(root: unknown, maxNodes: number, maxDepth: number): void {
   walk(root, 0);
 }
 
-/** Reject backreferences, lookarounds, and nested/alternating quantifiers that can cause ReDoS. */
+interface RegexAtomClass {
+  kind: 'any' | 'char' | 'class' | 'group';
+  source: string;
+  char?: string;
+}
+
+interface RegexQuantifier {
+  min: number;
+  max: number;
+  end: number;
+}
+
+interface BranchState {
+  repeats: {atom: RegexAtomClass; separatedBy: RegexAtomClass[]}[];
+}
+
+interface GroupFrame {
+  hasAnyQuantifier: boolean;
+  hasAlternation: boolean;
+  branch: BranchState;
+}
+
+const SAMPLE_CHARS = [
+  'a',
+  'z',
+  'A',
+  'Z',
+  '0',
+  '9',
+  '_',
+  '-',
+  '.',
+  '/',
+  ' ',
+  '\t',
+  '\n',
+  '@',
+  ':',
+  '!',
+  '?',
+  '#',
+  '$',
+  '+',
+  '=',
+  ',',
+  ';',
+  'é',
+  '中',
+];
+
+function parseRegexQuantifier(pattern: string, start: number): RegexQuantifier | 'none' | 'invalid' {
+  const ch = pattern[start];
+  if (ch === undefined) return 'none';
+  let min: number;
+  let max: number;
+  let end = start + 1;
+  if (ch === '?') {
+    min = 0;
+    max = 1;
+  } else if (ch === '*') {
+    min = 0;
+    max = Infinity;
+  } else if (ch === '+') {
+    min = 1;
+    max = Infinity;
+  } else if (ch === '{') {
+    const close = pattern.indexOf('}', start + 1);
+    if (close === -1) return 'invalid';
+    const body = pattern.slice(start + 1, close);
+    const match = /^(\d{1,4})(?:,(\d{1,4})?)?$/.exec(body);
+    if (!match) return 'invalid';
+    min = Number(match[1]);
+    if (body.includes(',')) {
+      max = match[2] !== undefined ? Number(match[2]) : Infinity;
+    } else {
+      max = min;
+    }
+    if (min > 1000 || (Number.isFinite(max) && (max > 1000 || max < min))) return 'invalid';
+    end = close + 1;
+  } else {
+    return 'none';
+  }
+  if (pattern[end] === '?') end++;
+  const trailing = pattern[end];
+  if (trailing === '*' || trailing === '+' || trailing === '?' || trailing === '{') return 'invalid';
+  return {min, max, end};
+}
+
+function atomMatchesChar(atom: RegexAtomClass, ch: string): boolean {
+  if (atom.kind === 'any') return ch !== '\n' && ch !== '\r';
+  if (atom.kind === 'char') return atom.char === ch;
+  if (atom.kind === 'group') return true;
+  try {
+    return new RegExp(`^(?:${atom.source})$`, 'u').test(ch);
+  } catch {
+    return true;
+  }
+}
+
+function atomsMayOverlap(a: RegexAtomClass, b: RegexAtomClass): boolean {
+  if (a.kind === 'any' || b.kind === 'any' || a.kind === 'group' || b.kind === 'group') return true;
+  if (a.kind === 'char' && b.kind === 'char') return a.char === b.char;
+  if (a.kind === 'char') return atomMatchesChar(b, a.char!);
+  if (b.kind === 'char') return atomMatchesChar(a, b.char!);
+  if (a.source === b.source) return true;
+  try {
+    const reA = new RegExp(`^(?:${a.source})$`, 'u');
+    const reB = new RegExp(`^(?:${b.source})$`, 'u');
+    return SAMPLE_CHARS.some(ch => reA.test(ch) && reB.test(ch));
+  } catch {
+    return true;
+  }
+}
+
+function atomMatchesAllSeparators(atom: RegexAtomClass, separators: readonly RegexAtomClass[]): boolean {
+  if (separators.length === 0) return true;
+  return separators.every(sep => atomsMayOverlap(atom, sep));
+}
+
+function recordAtom(branch: BranchState, atom: RegexAtomClass, quant: RegexQuantifier | 'none'): boolean {
+  const min = quant === 'none' ? 1 : quant.min;
+  const max = quant === 'none' ? 1 : quant.max;
+  const isBacktrackingRepeat = max >= 2 && max > min;
+  if (isBacktrackingRepeat) {
+    for (const prev of branch.repeats) {
+      if (prev.separatedBy.length === 0) {
+        if (atomsMayOverlap(prev.atom, atom)) return false;
+      } else if (
+        (prev.atom.kind === 'any' || atom.kind === 'any' || prev.separatedBy.length <= 2) &&
+        atomsMayOverlap(prev.atom, atom) &&
+        atomMatchesAllSeparators(prev.atom, prev.separatedBy)
+      ) {
+        return false;
+      }
+    }
+    branch.repeats.push({atom, separatedBy: []});
+    return true;
+  }
+  if (min >= 1) {
+    for (const prev of branch.repeats) {
+      prev.separatedBy.push(atom);
+    }
+  }
+  return true;
+}
+
+/** Reject backreferences, lookarounds, nested/alternating quantifiers, and polynomial ReDoS patterns. */
 export function isSafeRegexPattern(pattern: string): boolean {
   if (pattern.length === 0 || pattern.length > MAX_PATTERN_LENGTH) return false;
   try {
@@ -69,35 +215,22 @@ export function isSafeRegexPattern(pattern: string): boolean {
     return false;
   }
 
-  let inCharClass = false;
-  const groupStack: {hasQuantifier: boolean; hasAlternation: boolean}[] = [];
+  const root: GroupFrame = {hasAnyQuantifier: false, hasAlternation: false, branch: {repeats: []}};
+  const groupStack: GroupFrame[] = [root];
 
-  for (let i = 0; i < pattern.length; i++) {
+  for (let i = 0; i < pattern.length;) {
+    const current = groupStack[groupStack.length - 1]!;
     const ch = pattern[i]!;
-    if (ch === '\\') {
-      const next = pattern[i + 1];
-      if (next === undefined) return false;
-      if (!inCharClass) {
-        if (next >= '1' && next <= '9') return false;
-        if (next === 'k' && pattern[i + 2] === '<') return false;
-      }
-      if ((next === 'p' || next === 'P' || next === 'u') && pattern[i + 2] === '{') {
-        const close = pattern.indexOf('}', i + 3);
-        if (close === -1) return false;
-        i = close;
-        continue;
-      }
+
+    if (ch === '|') {
+      current.hasAlternation = true;
+      current.branch = {repeats: []};
       i++;
       continue;
     }
 
-    if (inCharClass) {
-      if (ch === ']') inCharClass = false;
-      continue;
-    }
-
-    if (ch === '[') {
-      inCharClass = true;
+    if (ch === '^' || ch === '$') {
+      i++;
       continue;
     }
 
@@ -107,50 +240,133 @@ export function isSafeRegexPattern(pattern: string): boolean {
         if (p2 === '=' || p2 === '!') return false;
         if (p2 === '<' && (pattern[i + 3] === '=' || pattern[i + 3] === '!')) return false;
         if (p2 === ':') {
-          groupStack.push({hasQuantifier: false, hasAlternation: false});
-          i += 2;
+          groupStack.push({hasAnyQuantifier: false, hasAlternation: false, branch: {repeats: []}});
+          i += 3;
           continue;
         }
         if (p2 === '<') {
           const close = pattern.indexOf('>', i + 3);
           if (close === -1) return false;
-          groupStack.push({hasQuantifier: false, hasAlternation: false});
-          i = close;
+          groupStack.push({hasAnyQuantifier: false, hasAlternation: false, branch: {repeats: []}});
+          i = close + 1;
           continue;
         }
         return false;
       }
-      groupStack.push({hasQuantifier: false, hasAlternation: false});
+      groupStack.push({hasAnyQuantifier: false, hasAlternation: false, branch: {repeats: []}});
+      i++;
       continue;
     }
 
     if (ch === ')') {
-      const frame = groupStack.pop();
-      if (!frame) return false;
-      const next = pattern[i + 1];
-      const hasPostfixQuantifier = next === '*' || next === '+' || next === '?' || next === '{';
-      if (hasPostfixQuantifier && (frame.hasQuantifier || frame.hasAlternation)) return false;
-      const parent = groupStack[groupStack.length - 1];
-      if (parent) {
-        if (hasPostfixQuantifier || frame.hasQuantifier) parent.hasQuantifier = true;
-        if (frame.hasAlternation) parent.hasAlternation = true;
+      if (groupStack.length <= 1) return false;
+      const frame = groupStack.pop()!;
+      const parent = groupStack[groupStack.length - 1]!;
+      const quant = parseRegexQuantifier(pattern, i + 1);
+      if (quant === 'invalid') return false;
+      const hasQuantifier = quant !== 'none';
+      const isRepeating = hasQuantifier && quant.max >= 2;
+      // Optional groups like `(https?:\/\/)?` are linear unless nested inside an outer repeating group.
+      if (isRepeating && (frame.hasAnyQuantifier || frame.hasAlternation)) return false;
+      if (hasQuantifier || frame.hasAnyQuantifier) parent.hasAnyQuantifier = true;
+      if (frame.hasAlternation) parent.hasAlternation = true;
+      if (hasQuantifier) {
+        if (!recordAtom(parent.branch, {kind: 'group', source: ''}, quant)) return false;
+        i = quant.end;
+      } else {
+        if (!frame.hasAlternation && frame.branch.repeats.length > 0) {
+          for (const repeat of frame.branch.repeats) {
+            if (!recordAtom(parent.branch, repeat.atom, {min: 0, max: Infinity, end: i + 1})) return false;
+            const pushed = parent.branch.repeats[parent.branch.repeats.length - 1];
+            if (pushed) pushed.separatedBy.push(...repeat.separatedBy);
+          }
+        } else if (!frame.hasAlternation) {
+          if (!recordAtom(parent.branch, {kind: 'group', source: ''}, 'none')) return false;
+        }
+        i++;
       }
       continue;
     }
 
-    if (ch === '|') {
-      const current = groupStack[groupStack.length - 1];
-      if (current) current.hasAlternation = true;
-      continue;
+    if (ch === '*' || ch === '+' || ch === '?' || ch === '{') return false;
+
+    let atom: RegexAtomClass;
+    let nextIdx: number;
+
+    if (ch === '\\') {
+      const next = pattern[i + 1];
+      if (next === undefined) return false;
+      if (next >= '1' && next <= '9') return false;
+      if (next === 'k' && pattern[i + 2] === '<') return false;
+      if (next === 'b' || next === 'B') {
+        i += 2;
+        continue;
+      }
+      if ((next === 'p' || next === 'P' || next === 'u') && pattern[i + 2] === '{') {
+        const close = pattern.indexOf('}', i + 3);
+        if (close === -1) return false;
+        const src = pattern.slice(i, close + 1);
+        atom =
+          next === 'u'
+            ? {kind: 'char', source: src, char: String.fromCodePoint(parseInt(pattern.slice(i + 3, close), 16))}
+            : {kind: 'class', source: src};
+        nextIdx = close + 1;
+      } else if (next === 'x' && i + 3 < pattern.length) {
+        const src = pattern.slice(i, i + 4);
+        atom = {kind: 'char', source: src, char: String.fromCharCode(parseInt(pattern.slice(i + 2, i + 4), 16))};
+        nextIdx = i + 4;
+      } else if (next === 'u' && i + 5 < pattern.length) {
+        const src = pattern.slice(i, i + 6);
+        atom = {kind: 'char', source: src, char: String.fromCharCode(parseInt(pattern.slice(i + 2, i + 6), 16))};
+        nextIdx = i + 6;
+      } else if ('dDwWsS'.includes(next)) {
+        atom = {kind: 'class', source: `\\${next}`};
+        nextIdx = i + 2;
+      } else {
+        const literal =
+          next === 'n'
+            ? '\n'
+            : next === 'r'
+              ? '\r'
+              : next === 't'
+                ? '\t'
+                : next === 'f'
+                  ? '\f'
+                  : next === 'v'
+                    ? '\v'
+                    : next;
+        atom = {kind: 'char', source: `\\${next}`, char: literal};
+        nextIdx = i + 2;
+      }
+    } else if (ch === '[') {
+      let j = i + 1;
+      while (j < pattern.length) {
+        if (pattern[j] === '\\') {
+          j += 2;
+          continue;
+        }
+        if (pattern[j] === ']') break;
+        j++;
+      }
+      if (j >= pattern.length) return false;
+      atom = {kind: 'class', source: pattern.slice(i, j + 1)};
+      nextIdx = j + 1;
+    } else if (ch === '.') {
+      atom = {kind: 'any', source: '.'};
+      nextIdx = i + 1;
+    } else {
+      atom = {kind: 'char', source: ch, char: ch};
+      nextIdx = i + 1;
     }
 
-    if (ch === '*' || ch === '+' || ch === '?' || ch === '{') {
-      const current = groupStack[groupStack.length - 1];
-      if (current) current.hasQuantifier = true;
-    }
+    const quant = parseRegexQuantifier(pattern, nextIdx);
+    if (quant === 'invalid') return false;
+    if (quant !== 'none') current.hasAnyQuantifier = true;
+    if (!recordAtom(current.branch, atom, quant)) return false;
+    i = quant === 'none' ? nextIdx : quant.end;
   }
 
-  return !inCharClass && groupStack.length === 0;
+  return groupStack.length === 1;
 }
 
 function parseLocalRef(

@@ -3,6 +3,8 @@ import type {ToolDispatcherOptions} from './context';
 import {createHandlers} from './handlers';
 import {InstructionReader} from './handlers/instructions';
 import {McpToolSource} from './handlers/mcp';
+import {mcpResourceHandler} from './handlers/mcp-resource';
+import {toolSearchHandler} from './handlers/tool-search';
 import {ToolRegistry} from './registry';
 import {ToolRouter} from './router';
 import {ToolOrchestrator} from './orchestrator';
@@ -23,8 +25,10 @@ export class ToolDispatcher implements ToolPort {
   private readonly instructions: InstructionReader;
   constructor(private readonly options: ToolDispatcherOptions) {
     const filesystem = new FileSystemRuntime(options);
-    for (const handler of createHandlers(options, filesystem)) this.registry.register(handler);
     this.mcpTools = new McpToolSource(options);
+    for (const handler of createHandlers(options, filesystem)) this.registry.register(handler);
+    this.registry.register(toolSearchHandler(options, this.mcpTools));
+    this.registry.register(mcpResourceHandler(options));
     this.orchestrator = new ToolOrchestrator(options, new ToolRouter(this.registry, this.mcpTools));
     this.instructions = new InstructionReader(options, this.orchestrator, filesystem);
   }

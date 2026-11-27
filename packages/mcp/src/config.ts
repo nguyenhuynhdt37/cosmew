@@ -16,7 +16,7 @@ export interface McpConfigParse {
 
 /** `mcp__server__tool`, or null when the pair cannot be a permission-rule target of at most 100 characters. */
 export function qualifiedMcpName(server: string, tool: string): string | null {
-  if (!SERVER_NAME.test(server) || !TOOL_NAME.test(tool)) return null;
+  if (!SERVER_NAME.test(server) || server.includes('__') || !TOOL_NAME.test(tool)) return null;
   const name = `mcp__${server}__${tool}`;
   return name.length <= 100 ? name : null;
 }
@@ -47,8 +47,8 @@ export function parseMcpConfig(text: string): McpConfigParse {
   if (entries.length > 16) problems.push('Only the first 16 MCP servers are loaded.');
   const seen = new Set<string>();
   for (const [name, value] of entries.slice(0, 16)) {
-    if (!SERVER_NAME.test(name)) {
-      problems.push('One server name was skipped (use letters, digits, "_" and "-", at most 32).');
+    if (!SERVER_NAME.test(name) || name.includes('__')) {
+      problems.push('One server name was skipped (use letters, digits, "_" and "-", no "__", at most 32).');
       continue;
     }
     if (seen.has(name)) continue;

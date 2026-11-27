@@ -231,6 +231,24 @@ test('SGR selection ignores modified presses, orphan releases and zero coordinat
   expect(selections).toHaveLength(3);
 });
 
+test('wheel events are suppressed while left-button drag selection is active and resume after release', () => {
+  const parser = new MouseInputFilter();
+  const wheels: TerminalWheel[] = [];
+  const selections: TerminalSelectionEvent[] = [];
+  const onWheel = (e: TerminalWheel) => wheels.push(e);
+  const onSel = (e: TerminalSelectionEvent) => selections.push(e);
+
+  parser.feed('\x1b[<0;5;3M\x1b[<32;10;3M\x1b[<64;10;3M\x1b[<65;10;3M', onWheel, undefined, onSel);
+  expect(wheels).toEqual([]);
+  expect(selections).toEqual([
+    {phase: 'start', column: 5, row: 3},
+    {phase: 'move', column: 10, row: 3},
+  ]);
+
+  parser.feed('\x1b[<0;10;3m\x1b[<65;10;3M', onWheel, undefined, onSel);
+  expect(wheels).toEqual([{direction: 1, column: 10, row: 3}]);
+});
+
 test('legacy X10 drag emits start, move, and end selection events across split chunks', () => {
   const x10 = (btn: number, col: number, row: number) => '\x1b[M' + String.fromCharCode(btn + 32, col + 32, row + 32);
   const seq = x10(0, 2, 3) + x10(32, 7, 3) + x10(3, 7, 3) + x10(3, 7, 3);

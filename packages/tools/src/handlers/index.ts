@@ -34,7 +34,7 @@ export function createHandlers(options: ToolDispatcherOptions, filesystem = new 
     webSearchHandler(options),
     webFetchHandler(options),
     lspHandler(options),
-    lspRenameHandler(options),
+    lspRenameHandler(options, filesystem.ledger),
     agentHandler(options),
     ...agentControlHandlers(options),
   ];

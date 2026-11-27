@@ -197,7 +197,7 @@ export class GitWorktrees {
       repositoryRoot,
       gitCommonDir,
       parent,
-      branch: `futryn/agent-${agentId.slice(0, 8)}`,
+      branch: `futryn/agent-${agentId}`,
       path: join(parent, agentId),
     };
   }

@@ -71,7 +71,11 @@ function collectGlobMatches(pattern: string, out: Map<string, ResolvedTarget>): 
       return;
     }
     for (const entry of entries) {
-      if (++visited > MAX_GLOB_ENTRIES) return;
+      if (++visited > MAX_GLOB_ENTRIES) {
+        throw new Error(
+          `Sandbox deny pattern exceeded ${MAX_GLOB_ENTRIES} scanned entries; refusing fail-open launch.`,
+        );
+      }
       if (entry.isSymbolicLink()) continue;
       const full = join(dir, entry.name);
       const directory = entry.isDirectory();
@@ -85,7 +89,10 @@ function collectGlobMatches(pattern: string, out: Map<string, ResolvedTarget>): 
   visit(baseTarget.path);
 }
 
-function resolveSandboxTargets(patterns: readonly string[] | undefined): ResolvedTarget[] {
+function resolveSandboxTargets(
+  patterns: readonly string[] | undefined,
+  pruneNestedUnderDirs = false,
+): ResolvedTarget[] {
   if (!patterns?.length) return [];
   const targets = new Map<string, ResolvedTarget>();
   for (const raw of patterns) {
@@ -101,7 +108,16 @@ function resolveSandboxTargets(patterns: readonly string[] | undefined): Resolve
     }
     collectGlobMatches(normalized, targets);
   }
-  return [...targets.values()].sort((a, b) => a.path.length - b.path.length);
+  const sorted = [...targets.values()].sort((a, b) => a.path.length - b.path.length);
+  if (!pruneNestedUnderDirs) return sorted;
+  const maskedDirs: string[] = [];
+  const pruned: ResolvedTarget[] = [];
+  for (const target of sorted) {
+    if (maskedDirs.some(dir => target.path.startsWith(dir + '/'))) continue;
+    pruned.push(target);
+    if (target.directory) maskedDirs.push(target.path);
+  }
+  return pruned;
 }
 
 /**
@@ -170,7 +186,7 @@ export class BubblewrapSandbox implements NativeSandbox {
       }
     }
 
-    const denyReadTargets = resolveSandboxTargets(sandbox.denyRead);
+    const denyReadTargets = resolveSandboxTargets(sandbox.denyRead, true);
     const denyWriteTargets = writeMode ? resolveSandboxTargets(sandbox.denyWrite) : [];
 
     return [
@@ -189,7 +205,6 @@ export class BubblewrapSandbox implements NativeSandbox {
       '/dev',
       '--proc',
       '/proc',
-      ...this.sensitiveHome(home),
       '--bind',
       join(scratch, 'home'),
       join(scratch, 'home'),
@@ -200,6 +215,9 @@ export class BubblewrapSandbox implements NativeSandbox {
       workspace.root,
       workspace.root,
       ...extraRoots.flatMap(root => ['--bind', root.root, root.root]),
+      // Mount sensitive home paths AFTER workspace/extraRoots binds so workspace === home or an
+      // extraRoot containing home can never expose ~/.ssh, ~/.aws, ~/.gnupg, ~/.cosmew, etc.
+      ...this.sensitiveHome(home, [workspace, ...extraRoots]),
       ...denyWriteTargets.flatMap(target => ['--ro-bind', target.path, target.path]),
       ...readOnly.flatMap(abs => ['--ro-bind', abs, abs]),
       // Git works with an empty repository config; credentials stay hidden.
@@ -220,12 +238,43 @@ export class BubblewrapSandbox implements NativeSandbox {
   }
 
   /** Credential directories under the real home are hidden; the rest of the filesystem stays readable (ADR 0061). */
-  private sensitiveHome(home: string): string[] {
-    return SENSITIVE_HOME_PATHS.map(path => join(home, path))
-      .filter(
-        path => existsSync(path) && !(this.options.workspace === path || this.options.workspace.startsWith(path + '/')),
-      )
-      .flatMap(path => (statSync(path).isDirectory() ? ['--tmpfs', path] : ['--ro-bind', '/dev/null', path]));
+  private sensitiveHome(home: string, roots: readonly WorkspaceRoot[]): string[] {
+    let canonicalHome = home;
+    try {
+      canonicalHome = realpathSync.native(home);
+    } catch {
+      /* keep raw home when non-existent */
+    }
+    const candidates = new Set<string>();
+    for (const rel of SENSITIVE_HOME_PATHS) {
+      const candidate = join(canonicalHome, rel);
+      if (!existsSync(candidate)) continue;
+      let resolved = candidate;
+      try {
+        resolved = realpathSync.native(candidate);
+      } catch {
+        /* keep candidate */
+      }
+      if (roots.some(root => root.root === resolved || root.root.startsWith(resolved + '/'))) continue;
+      candidates.add(resolved);
+    }
+    const sorted = [...candidates].sort((a, b) => a.length - b.length);
+    const maskedDirs: string[] = [];
+    const out: string[] = [];
+    for (const path of sorted) {
+      if (maskedDirs.some(dir => path.startsWith(dir + '/'))) continue;
+      try {
+        if (statSync(path).isDirectory()) {
+          maskedDirs.push(path);
+          out.push('--tmpfs', path, '--remount-ro', path);
+        } else {
+          out.push('--ro-bind', '/dev/null', path);
+        }
+      } catch {
+        /* skip vanishing path */
+      }
+    }
+    return out;
   }
 
   private classify(workspace: WorkspaceRoot, path: string, directory: boolean): MaskDecision {

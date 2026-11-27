@@ -188,6 +188,56 @@ test('CLI -c/--continue and --account/--model apply cleanly before entering TUI'
   expect(runCli(['tui', '--account', 'personal', '--model', 'missing-model']).exitCode).toBe(1);
 });
 
+test('CLI run routes --resume, -c/--continue, --account and --model to chat() without hijacking to TUI resume', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'cosmew-cli-run-home-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'cosmew-cli-run-ws-'));
+  const server = fixtureServer();
+  try {
+    const app = startup(home, {vault: memoryVault()});
+    app.registry.add(server.provider('chat', {id: 'cli-run-provider', auth: 'none'}));
+    await app.accounts.add('cli-run-provider', 'personal', {kind: 'none'});
+    const client = app.createFutrynClient(workspace);
+    await client.discoverModels();
+    client.selectModel('fixture-model');
+    const session = client.createSession();
+    app.conversations.append(session.id, {role: 'user', content: 'seed'}, 'committed');
+    await app.shutdownCommands();
+    app.db.close();
+
+    const cliEntry = resolve('apps/cli/src/index.ts');
+    const runAsync = async (args: string[], input: string) => {
+      const proc = Bun.spawn([process.execPath, '--config=/dev/null', '--no-env-file', cliEntry, ...args], {
+        cwd: workspace,
+        env: {...process.env, COSMEW_HOME: home},
+        stdin: Buffer.from(input),
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return {stdout, stderr, exitCode};
+    };
+
+    const resumed = await runAsync(
+      ['run', '--resume', session.id, '--account', 'personal', '--model', 'fixture-model', '--json'],
+      'follow up\n',
+    );
+    expect(resumed.exitCode, resumed.stderr).toBe(0);
+    expect((JSON.parse(resumed.stdout.trim()) as {conversationId: string}).conversationId).toBe(session.id);
+
+    const continued = await runAsync(['run', '-c', '--json'], 'continue msg\n');
+    expect(continued.exitCode, continued.stderr).toBe(0);
+    expect((JSON.parse(continued.stdout.trim()) as {conversationId: string}).conversationId).toBe(session.id);
+  } finally {
+    server.server.stop(true);
+    rmSync(home, {recursive: true, force: true});
+    rmSync(workspace, {recursive: true, force: true});
+  }
+});
+
 test('ScrollViewport hides Jump to bottom while drag-selecting and resets cleanly on capture/raw disable', () => {
   const script = `
     import {PassThrough} from 'node:stream';

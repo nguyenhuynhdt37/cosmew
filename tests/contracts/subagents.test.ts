@@ -53,8 +53,8 @@ const SAMPLE_DESCRIPTORS: ToolDescriptor[] = [
   {name: 'agent', capability: 'agent.spawn', parallel: true, description: 'agent', inputSchema: {}},
 ];
 
-test('contract version is bumped to 1.63 and Codex defaults are preserved', () => {
-  expect(CONTRACT_VERSION).toBe('1.63');
+test('contract version is bumped to 1.64 and Codex defaults are preserved', () => {
+  expect(CONTRACT_VERSION).toBe('1.64');
   expect(DEFAULT_AGENT_MAX_THREADS).toBe(6);
   expect(DEFAULT_AGENT_MAX_DEPTH).toBe(1);
   expect(
@@ -411,4 +411,194 @@ test('explore and plan profiles carry bounded default budgets and concise search
   expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/grep.*glob.*lsp/i);
   expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/same turn|batch/i);
   expect(BUILTIN_AGENT_PROFILES.plan.developerInstructions).toMatch(/sufficient evidence/i);
+});
+
+test('tool_search and mcp_resource are permitted for worker/general in normal mode and withheld in read-only or parent analysis mode', () => {
+  const mcpControlTools: ToolDescriptor[] = [
+    ...SAMPLE_DESCRIPTORS,
+    {name: 'tool_search', capability: 'agent.state', parallel: true, description: 'search mcp tools', inputSchema: {}},
+    {name: 'mcp_resource', capability: 'mcp.call', parallel: true, description: 'read mcp resource', inputSchema: {}},
+    {name: 'mcp__srv__ping', capability: 'mcp.call', description: 'mcp tool', inputSchema: {}},
+  ];
+
+  for (const role of ['worker', 'general'] as const) {
+    const profile = BUILTIN_AGENT_PROFILES[role];
+    const normal = filterSubagentTools(mcpControlTools, profile, {depth: 1, maxDepth: 1}).map(d => d.name);
+    expect(normal).toContain('tool_search');
+    expect(normal).toContain('mcp_resource');
+    expect(normal).toContain('mcp__srv__ping');
+    expect(isToolAllowedForProfile('tool_search', profile, {depth: 1, maxDepth: 1})).toBe(true);
+    expect(isToolAllowedForProfile('mcp_resource', profile, {depth: 1, maxDepth: 1})).toBe(true);
+
+    const analysis = filterSubagentTools(mcpControlTools, profile, {
+      depth: 1,
+      maxDepth: 1,
+      parentAnalysisOnly: true,
+    }).map(d => d.name);
+    expect(analysis).not.toContain('tool_search');
+    expect(analysis).not.toContain('mcp_resource');
+    expect(analysis).not.toContain('mcp__srv__ping');
+    expect(isToolAllowedForProfile('tool_search', profile, {depth: 1, maxDepth: 1, parentAnalysisOnly: true})).toBe(
+      false,
+    );
+    expect(isToolAllowedForProfile('mcp_resource', profile, {depth: 1, maxDepth: 1, parentAnalysisOnly: true})).toBe(
+      false,
+    );
+  }
+
+  for (const role of ['explore', 'plan'] as const) {
+    const profile = BUILTIN_AGENT_PROFILES[role];
+    const offered = filterSubagentTools(mcpControlTools, profile, {depth: 1, maxDepth: 1}).map(d => d.name);
+    expect(offered).not.toContain('tool_search');
+    expect(offered).not.toContain('mcp_resource');
+    expect(isToolAllowedForProfile('tool_search', profile, {depth: 1, maxDepth: 1})).toBe(false);
+    expect(isToolAllowedForProfile('mcp_resource', profile, {depth: 1, maxDepth: 1})).toBe(false);
+  }
+
+  // Even a read-only profile with an explicit allowlist cannot retain tool_search or mcp_resource.
+  const customReadOnly = {
+    ...BUILTIN_AGENT_PROFILES.explore,
+    allowedTools: ['read', 'tool_search', 'mcp_resource'],
+  };
+  expect(filterSubagentTools(mcpControlTools, customReadOnly, {depth: 1, maxDepth: 1}).map(d => d.name)).toEqual([
+    'read',
+  ]);
+  expect(isToolAllowedForProfile('tool_search', customReadOnly, {depth: 1, maxDepth: 1})).toBe(false);
+  expect(isToolAllowedForProfile('mcp_resource', customReadOnly, {depth: 1, maxDepth: 1})).toBe(false);
+});
+
+test('updateSubagentSession clears finishedAt/errorCode on resume and dead owner turns do not block updateSelection or delete', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cosmew-subagent-dead-turns-'));
+  const db = openPrivateDatabase(dir);
+  cleanup.push(() => {
+    try {
+      db.close();
+    } catch {
+      /* already closed */
+    }
+    rmSync(dir, {recursive: true, force: true});
+  });
+  const store = new SqliteConversations(db, s => s.replaceAll('SECRET', '[REDACTED]'));
+  const selection = {accountId: '00000000-0000-4000-8000-000000000010', modelId: 'fixture-model'};
+  const nextSelection = {accountId: selection.accountId, modelId: 'upgraded-model'};
+  const parentId = store.create(selection);
+  const childId = store.create(selection);
+  const createdAt = new Date().toISOString();
+
+  store.saveSubagentSession({
+    id: childId,
+    parentConversationId: parentId,
+    parentTurnId: 'turn-1',
+    callId: 'call-1',
+    depth: 1,
+    agentType: 'explore',
+    description: 'resumable child',
+    prompt: 'initial prompt',
+    selection,
+    forkContext: false,
+    background: true,
+    status: 'failed',
+    createdAt,
+    finishedAt: createdAt,
+    errorCode: 'BUDGET_SECRET',
+  });
+  expect(store.getSubagentSession(childId)?.errorCode).toBe('BUDGET_[REDACTED]');
+  expect(store.getSubagentSession(childId)?.finishedAt).toBe(createdAt);
+
+  // Resuming sets finishedAt: null and clears errorCode.
+  store.updateSubagentSession(childId, {status: 'running', finishedAt: null});
+  const rawRunning = db
+    .query('SELECT status, finished_at, error_code FROM subagent_sessions WHERE id=?')
+    .get(childId) as {status: string; finished_at: string | null; error_code: string | null};
+  expect(rawRunning).toEqual({status: 'running', finished_at: null, error_code: null});
+
+  // Fail again, then complete without passing errorCode -> error_code clears to NULL while explicit finishedAt persists.
+  const failedAt = new Date().toISOString();
+  store.updateSubagentSession(childId, {status: 'failed', finishedAt: failedAt, errorCode: 'TRANSPORT'});
+  expect(store.getSubagentSession(childId)).toMatchObject({
+    status: 'failed',
+    finishedAt: failedAt,
+    errorCode: 'TRANSPORT',
+  });
+  const completedAt = new Date().toISOString();
+  store.updateSubagentSession(childId, {status: 'completed', finishedAt: completedAt});
+  expect(store.getSubagentSession(childId)).toMatchObject({status: 'completed', finishedAt: completedAt});
+  expect(store.getSubagentSession(childId)?.errorCode).toBeUndefined();
+
+  // Omitting finishedAt preserves the existing finished_at value; errorCode: null clears error_code explicitly.
+  store.updateSubagentSession(childId, {status: 'failed', errorCode: 'CANCELLED'});
+  expect(store.getSubagentSession(childId)).toMatchObject({
+    status: 'failed',
+    finishedAt: completedAt,
+    errorCode: 'CANCELLED',
+  });
+  store.updateSubagentSession(childId, {status: 'cancelled', errorCode: null});
+  expect(store.getSubagentSession(childId)?.finishedAt).toBe(completedAt);
+  expect(store.getSubagentSession(childId)?.errorCode).toBeUndefined();
+
+  // Live turn owned by the current process MUST still block updateSelection and delete with POLICY.
+  const liveId = store.create(selection);
+  store.beginExecution(
+    liveId,
+    {role: 'user', content: 'active prompt'},
+    {
+      requestId: crypto.randomUUID(),
+      accountId: selection.accountId,
+      modelId: selection.modelId,
+      startedAt: new Date().toISOString(),
+      finishedAt: null,
+      outcome: 'pending',
+      usage: null,
+      context: null,
+    },
+  );
+  expect(() => store.updateSelection(liveId, nextSelection)).toThrow(expect.objectContaining({code: 'POLICY'}));
+  expect(() => store.delete(liveId)).toThrow(expect.objectContaining({code: 'POLICY'}));
+
+  // Spawn two crashed sessions in a separate process that exits without finishing, then call updateSelection
+  // and delete directly WITHOUT calling get()/recover()/getSubagentSession() first.
+  const crashParentA = store.create(selection);
+  const crashParentB = store.create(selection);
+  const crashChildB = store.create(selection);
+  store.saveSubagentSession({
+    id: crashChildB,
+    parentConversationId: crashParentB,
+    parentTurnId: 'turn-b',
+    callId: 'call-b',
+    depth: 1,
+    agentType: 'explore',
+    description: 'crashed child',
+    prompt: 'work',
+    selection,
+    forkContext: false,
+    background: true,
+    status: 'running',
+    createdAt,
+    finishedAt: null,
+  });
+  db.close();
+
+  const crashScript = `import {openPrivateDatabase,SqliteConversations} from ${JSON.stringify(resolve('packages/persistence/src/index.ts'))};
+const db=openPrivateDatabase(${JSON.stringify(dir)});const store=new SqliteConversations(db,s=>s);
+const receipt=()=>({requestId:crypto.randomUUID(),accountId:${JSON.stringify(selection.accountId)},modelId:${JSON.stringify(selection.modelId)},startedAt:new Date().toISOString(),finishedAt:null,outcome:'pending',usage:null,context:null});
+store.beginExecution(${JSON.stringify(crashParentA)},{role:'user',content:'crash A'},receipt());
+store.beginExecution(${JSON.stringify(crashParentB)},{role:'user',content:'crash B'},receipt());
+store.beginExecution(${JSON.stringify(crashChildB)},{role:'user',content:'crash child B'},receipt());
+process.exit(0);`;
+  const proc = Bun.spawnSync([process.execPath, '--eval', crashScript], {stdout: 'pipe', stderr: 'pipe'});
+  expect(proc.exitCode).toBe(0);
+
+  const reopened = openPrivateDatabase(dir);
+  cleanup.push(() => reopened.close());
+  const reopenedStore = new SqliteConversations(reopened, s => s);
+
+  // Immediately updateSelection on crashParentA (dead owner_pid) succeeds and marks the dead turn interrupted.
+  reopenedStore.updateSelection(crashParentA, nextSelection);
+  expect(reopenedStore.get(crashParentA)?.selection).toEqual(nextSelection);
+  expect(reopenedStore.get(crashParentA)?.turns?.[0]?.outcome).toBe('interrupted');
+
+  // Immediately delete crashParentB (and its dead running child) without prior recovery succeeds.
+  expect(reopenedStore.delete(crashParentB)).toBe(true);
+  expect(reopenedStore.get(crashParentB)).toBeUndefined();
+  expect(reopenedStore.get(crashChildB)).toBeUndefined();
 });

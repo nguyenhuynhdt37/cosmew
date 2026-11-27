@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto';
-import {isAbsolute, resolve} from 'node:path';
+import {realpathSync} from 'node:fs';
+import {isAbsolute, posix, resolve} from 'node:path';
 import {
   DOMAIN_PATTERN,
   permissionModeSchema,
@@ -168,6 +169,12 @@ export interface EffectiveSettings {
 }
 
 const PRECEDENCE: Record<SettingsScope, number> = {cli: 3, local: 2, project: 1, user: 0};
+const MODE_STRICTNESS: Record<PermissionMode, number> = {
+  bypassPermissions: 0,
+  acceptEdits: 1,
+  default: 2,
+  plan: 3,
+};
 const unique = (items: string[]) => [...new Set(items)];
 
 /** Merge layers: deny/ask always, everything that loosens only from trusted layers. */
@@ -190,10 +197,20 @@ export function mergeSettings(layers: readonly SettingsLayer[], home: string): E
       : isAbsolute(dir)
         ? resolve(dir)
         : resolve(layer.baseDir, dir);
-  const defaultMode = first(
-    layer => layer.file.permissions.defaultMode,
-    mode => mode === 'default' || mode === 'plan',
-  );
+  let defaultMode: PermissionMode | undefined;
+  let untrustedFloor = 0;
+  for (const layer of ordered) {
+    const mode = layer.file.permissions.defaultMode;
+    if (!mode) continue;
+    if (layer.trusted) {
+      if (!defaultMode || MODE_STRICTNESS[mode] > MODE_STRICTNESS[defaultMode]) defaultMode = mode;
+      break;
+    }
+    if ((mode === 'default' || mode === 'plan') && MODE_STRICTNESS[mode] > untrustedFloor) {
+      untrustedFloor = MODE_STRICTNESS[mode];
+      defaultMode = mode;
+    }
+  }
   return {
     rules: {
       allow: unique(trusted.flatMap(layer => layer.file.permissions.allow)).slice(0, 400),
@@ -272,6 +289,23 @@ export function matchesExcludedCommand(pattern: string, command: string): boolea
   return text === head || text.startsWith(head + ' ');
 }
 
+function canonicalVariants(base: string): string[] {
+  const cleaned = posix.normalize(base.replace(/\\/g, '/')).replace(/\/+$/, '') || '/';
+  const variants = [cleaned];
+  try {
+    const real = realpathSync.native(base).replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+    if (!variants.includes(real)) variants.push(real);
+  } catch {
+    /* non-existent path in unit tests keeps its logical base */
+  }
+  return variants;
+}
+
+function normalizeAbsoluteGlob(raw: string): string {
+  const normalized = posix.normalize(raw.replace(/\\/g, '/'));
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+}
+
 /** Absolute filesystem globs the OS sandbox must hide or protect, from `Read(...)`/`Edit(...)` rules. */
 export function sandboxPathGlobs(
   rules: readonly string[],
@@ -279,15 +313,24 @@ export function sandboxPathGlobs(
   workspace: string,
   home: string,
 ): string[] {
-  const out: string[] = [];
+  const workspaces = canonicalVariants(workspace);
+  const homes = canonicalVariants(home);
+  const out = new Set<string>();
   for (const rule of rules) {
     const match = /^(Read|Edit)\((.+)\)$/.exec(rule);
     if (!match || match[1] !== tool) continue;
     const pattern = match[2]!.trim();
-    if (pattern.startsWith('//')) out.push(pattern.slice(1));
-    else if (pattern === '~' || pattern.startsWith('~/')) out.push(home.replace(/\/+$/, '') + pattern.slice(1));
-    else if (pattern.startsWith('/')) out.push(workspace + pattern);
-    else out.push(workspace + '/' + pattern.replace(/^\.\//, ''));
+    if (pattern.startsWith('//')) {
+      out.add(normalizeAbsoluteGlob(pattern.slice(1)));
+    } else if (pattern === '~' || pattern.startsWith('~/')) {
+      const tail = pattern.slice(1);
+      for (const h of homes) out.add(normalizeAbsoluteGlob(h + tail));
+    } else if (pattern.startsWith('/')) {
+      for (const ws of workspaces) out.add(normalizeAbsoluteGlob(ws + pattern));
+    } else {
+      const rel = pattern.replace(/^\.\//, '');
+      for (const ws of workspaces) out.add(normalizeAbsoluteGlob(ws + '/' + rel));
+    }
   }
-  return out;
+  return [...out];
 }

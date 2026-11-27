@@ -162,7 +162,7 @@ export class MouseInputFilter {
     onClick?: (event: TerminalClick) => void,
     onSelection?: (event: TerminalSelectionEvent) => void,
   ): void {
-    this.wheel(button, column, row, onWheel);
+    if (!this.leftPressed) this.wheel(button, column, row, onWheel);
     // Only plain left-button presses activate controls; never motion or selection modifiers.
     if (button === 0) {
       onClick?.({kind: 'click', column, row});

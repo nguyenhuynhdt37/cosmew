@@ -120,6 +120,15 @@ export interface SessionUsage {
 
 const addCounter = (a: number | null | undefined, b: number | null | undefined) =>
   a == null || b == null ? null : a + b;
+const addOptionalCounter = (a: number | null | undefined, b: number | null | undefined): number | null | undefined => {
+  if (a === undefined && b === undefined) return undefined;
+  if (a === null || b === null) return null;
+  return (a ?? 0) + (b ?? 0);
+};
+const optionalCounterEntry = <K extends string>(key: K, a: number | null | undefined, b: number | null | undefined) => {
+  const sum = addOptionalCounter(a, b);
+  return sum === undefined ? {} : ({[key]: sum} as Record<K, number | null>);
+};
 type UsageValue = z.infer<typeof usageSchema>;
 const countersOnly = (value: UsageValue): UsageBreakdown => {
   const {breakdown: _breakdown, breakdownTruncated: _truncated, ...counters} = value;
@@ -136,22 +145,25 @@ const latestQuota = (previous: UsageQuota[] | undefined, next: UsageQuota[] | un
   }
   return [...snapshots.values()].sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt)).slice(0, 20);
 };
-const sumCounters = (previous: UsageBreakdown, next: UsageBreakdown): UsageBreakdown => ({
-  ...next,
-  ...(previous.quota || next.quota ? {quota: latestQuota(previous.quota, next.quota)} : {}),
-  ...(next.pricingSource === undefined && previous.pricingSource !== undefined
-    ? {pricingSource: previous.pricingSource}
-    : {}),
-  ...(next.pricingAt === undefined && previous.pricingAt !== undefined ? {pricingAt: previous.pricingAt} : {}),
-  inputTokens: addCounter(previous.inputTokens, next.inputTokens),
-  outputTokens: addCounter(previous.outputTokens, next.outputTokens),
-  costUSD: addCounter(previous.costUSD, next.costUSD),
-  costEstimated: Boolean(previous.costEstimated || next.costEstimated),
-  cacheReadTokens: addCounter(previous.cacheReadTokens, next.cacheReadTokens),
-  cacheWriteTokens: addCounter(previous.cacheWriteTokens, next.cacheWriteTokens),
-  reasoningTokens: addCounter(previous.reasoningTokens, next.reasoningTokens),
-  premiumRequests: addCounter(previous.premiumRequests, next.premiumRequests),
-});
+const sumCounters = (previous: UsageBreakdown, next: UsageBreakdown): UsageBreakdown => {
+  const {cacheReadTokens: _cr, cacheWriteTokens: _cw, reasoningTokens: _rt, premiumRequests: _pr, ...restNext} = next;
+  return {
+    ...restNext,
+    ...(previous.quota || next.quota ? {quota: latestQuota(previous.quota, next.quota)} : {}),
+    ...(next.pricingSource === undefined && previous.pricingSource !== undefined
+      ? {pricingSource: previous.pricingSource}
+      : {}),
+    ...(next.pricingAt === undefined && previous.pricingAt !== undefined ? {pricingAt: previous.pricingAt} : {}),
+    inputTokens: addCounter(previous.inputTokens, next.inputTokens),
+    outputTokens: addCounter(previous.outputTokens, next.outputTokens),
+    costUSD: addCounter(previous.costUSD, next.costUSD),
+    costEstimated: Boolean(previous.costEstimated || next.costEstimated),
+    ...optionalCounterEntry('cacheReadTokens', previous.cacheReadTokens, next.cacheReadTokens),
+    ...optionalCounterEntry('cacheWriteTokens', previous.cacheWriteTokens, next.cacheWriteTokens),
+    ...optionalCounterEntry('reasoningTokens', previous.reasoningTokens, next.reasoningTokens),
+    ...optionalCounterEntry('premiumRequests', previous.premiumRequests, next.premiumRequests),
+  };
+};
 const sourceKey = (source: UsageBreakdown) =>
   JSON.stringify([
     source.accountId,

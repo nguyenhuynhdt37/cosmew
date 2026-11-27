@@ -11,13 +11,24 @@ export function useTerminalWheel(handler: (event: TerminalWheel) => void, isActi
   const source = useContext(MouseContext);
   const latest = useRef({handler, isActive});
   latest.current = {handler, isActive};
-  useEffect(
-    () =>
-      source?.subscribe(event => {
-        if (latest.current.isActive) latest.current.handler(event);
-      }),
-    [source],
-  );
+  useEffect(() => {
+    if (!source) return;
+    let selecting = false;
+    const unsubSelection = source.subscribeSelection?.(event => {
+      selecting = event.phase !== 'end';
+    });
+    const unsubReset = source.subscribeSelectionReset?.(() => {
+      selecting = false;
+    });
+    const unsubWheel = source.subscribe(event => {
+      if (latest.current.isActive && !selecting) latest.current.handler(event);
+    });
+    return () => {
+      unsubWheel();
+      unsubSelection?.();
+      unsubReset?.();
+    };
+  }, [source]);
 }
 
 /** Hit test the current layout, including scrolled/clipped ancestors. Terminal coordinates are 1-based. */

@@ -1805,6 +1805,7 @@ export class FutrynClient {
       if (chosen) this.ports.selectModel(refreshed, chosen);
       this.clearSessionAuthorization();
       this.currentSession = null;
+      this.sessionSelection = null;
       this.lastUsage = null;
       this.notifyStateChange();
       return this.ports.getAccount(refreshed.id);
@@ -1812,6 +1813,7 @@ export class FutrynClient {
       // A failed or cancelled login cannot leave a usable credential behind.
       // Failed cleanup is surfaced so the account remains retryable via /logout.
       if (account) await this.ports.logoutAccount(account.id, !input.reauthenticateAccountId);
+      if (account && this.sessionSelection?.accountId === account.id) this.sessionSelection = null;
       if (account && this.currentSession?.selection.accountId === account.id) {
         this.clearSessionAuthorization();
         this.currentSession = null;
@@ -1902,6 +1904,7 @@ export class FutrynClient {
     const account = this.ports.useAccount(idOrAlias);
     this.clearSessionAuthorization();
     this.currentSession = null;
+    this.sessionSelection = null;
     this.lastUsage = null;
     this.notifyStateChange();
     return account;
@@ -1915,6 +1918,7 @@ export class FutrynClient {
 
   async logoutAccount(idOrAlias: string, remove = true): Promise<void> {
     const target = this.ports.getAccount(idOrAlias);
+    if (this.sessionSelection?.accountId === target.id) this.sessionSelection = null;
     if (this.currentSession?.selection.accountId === target.id) {
       this.clearSessionAuthorization();
       this.currentSession = null;
@@ -2296,6 +2300,7 @@ export class FutrynClient {
         const next = this.ports.resumeSession(outcome.sessionId);
         this.clearSessionAuthorization();
         this.currentSession = next;
+        this.lastUsage = null;
         this.rememberSessionMode(next.id, this.currentMode);
       }
       this.notifyStateChange();
@@ -2527,6 +2532,13 @@ export class FutrynClient {
     this.claimedNextTurn.set(id, next);
     this.notifyStateChange();
     return next.content;
+  }
+  /** Release an unconsumed queued-message claim if submission aborted before `sendMessage()` began. */
+  releaseQueuedMessage(sessionId?: string): void {
+    const id = sessionId ?? this.currentSession?.id;
+    if (!id || !this.claimedNextTurn.has(id)) return;
+    this.claimedNextTurn.delete(id);
+    this.notifyStateChange();
   }
   queuedMessages(): readonly string[] {
     return this.currentSession
@@ -3020,6 +3032,7 @@ export class FutrynClient {
       this.currentSession = {...updated, title: source.title};
       this.lastUsage = null;
       this.emitReactiveEvent('idle', 'Account switched');
+      this.notifyStateChange();
       return target;
     }
     if (continueHistory && source?.messages.length && !this.ports.forkSession) throw new FutrynError('UNSUPPORTED');
@@ -3041,6 +3054,7 @@ export class FutrynClient {
     this.currentSession = fork;
     this.lastUsage = null;
     this.emitReactiveEvent('idle', 'Account switched');
+    this.notifyStateChange();
     return target;
   }
 

@@ -106,7 +106,7 @@ export class ExecutionJournal {
       .run(state, current, id, row.id);
     this.append(id, row.id, {type: 'turn.finished', state, ...(errorCode ? {errorCode} : {})});
   }
-  private abandonDead(id: string): void {
+  abandonDead(id: string): void {
     const rows = this.db
       .query("SELECT * FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")
       .all(id) as TurnRow[];

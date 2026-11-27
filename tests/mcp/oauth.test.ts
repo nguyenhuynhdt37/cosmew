@@ -306,23 +306,44 @@ test('real loopback OAuth verifies PKCE, persists only references, refreshes aft
 for (const fault of ['state', 'issuer', 'resource', 'denied', 'duplicate'] as const)
   test(`callback rejects ${fault} before any token exchange`, async () => {
     const remote = fixture();
-    const state = setup(async url => {
-      const response = await fetch(url, {redirect: 'manual'});
-      const callback = new URL(response.headers.get('location')!);
-      if (fault === 'state') callback.searchParams.set('state', 'invalid-state');
-      if (fault === 'issuer') callback.searchParams.set('iss', 'https://wrong.example/');
-      if (fault === 'resource') callback.searchParams.set('resource', `${remote.origin}/other`);
-      if (fault === 'denied') {
-        callback.searchParams.delete('code');
-        callback.searchParams.set('error', 'access_denied');
-        callback.searchParams.set('error_description', 'SECRET_ERROR');
-      }
-      if (fault === 'duplicate') callback.searchParams.append('state', callback.searchParams.get('state')!);
-      expect((await fetch(callback)).status).toBe(400);
-    });
+    const state = setup(
+      async url => {
+        const response = await fetch(url, {redirect: 'manual'});
+        const callback = new URL(response.headers.get('location')!);
+        if (fault === 'state') callback.searchParams.set('state', 'invalid-state');
+        if (fault === 'issuer') callback.searchParams.set('iss', 'https://wrong.example/');
+        if (fault === 'resource') callback.searchParams.set('resource', `${remote.origin}/other`);
+        if (fault === 'denied') {
+          callback.searchParams.delete('code');
+          callback.searchParams.set('error', 'access_denied');
+          callback.searchParams.set('error_description', 'SECRET_ERROR');
+        }
+        if (fault === 'duplicate') callback.searchParams.append('state', callback.searchParams.get('state')!);
+        expect((await fetch(callback)).status).toBe(400);
+      },
+      fault === 'state' || fault === 'duplicate' ? {timeoutMs: 120} : {},
+    );
     await expect(state.service.login(remote.endpoint)).rejects.toThrow('MCP_OAUTH_FAILED');
     expect(remote.tokenCalls).toBe(0);
   });
+
+test('stray callback with wrong state returns 400 without aborting the pending legitimate login', async () => {
+  const remote = fixture();
+  const state = setup(async url => {
+    const response = await fetch(url, {redirect: 'manual'});
+    const legit = new URL(response.headers.get('location')!);
+    const stray = new URL(legit.href);
+    stray.searchParams.set('state', 'wrong-state-from-stray-tab');
+    expect((await fetch(stray)).status).toBe(400);
+    const dup = new URL(legit.href);
+    dup.searchParams.append('state', legit.searchParams.get('state')!);
+    expect((await fetch(dup)).status).toBe(400);
+    expect((await fetch(legit)).status).toBe(200);
+  });
+  await state.service.login(remote.endpoint);
+  expect(await state.service.status(remote.endpoint)).toMatchObject({status: 'authorized'});
+  expect(remote.tokenCalls).toBe(1);
+});
 
 for (const fault of ['wrongIssuer', 'wrongResource'] as const)
   test(`discovery rejects ${fault} before browser or token exchange`, async () => {

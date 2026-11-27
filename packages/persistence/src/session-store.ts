@@ -428,15 +428,23 @@ export class SqliteConversations implements ConversationStore {
   }
   updateSubagentSession(
     id: string,
-    patch: {status: SubagentStatus; finishedAt?: string | null; errorCode?: string},
+    patch: {status: SubagentStatus; finishedAt?: string | null; errorCode?: string | null},
   ): void {
     try {
-      const cleanCode = patch.errorCode ? this.redact(patch.errorCode).slice(0, 64) : null;
-      this.db
-        .query(
-          'UPDATE subagent_sessions SET status=?, finished_at=COALESCE(?, finished_at), error_code=COALESCE(?, error_code) WHERE id=?',
-        )
-        .run(patch.status, patch.finishedAt ?? null, cleanCode, id);
+      const sets = ['status=?'];
+      const params: (string | null)[] = [patch.status];
+      if ('finishedAt' in patch && patch.finishedAt !== undefined) {
+        sets.push('finished_at=?');
+        params.push(patch.finishedAt);
+      }
+      if (patch.errorCode !== undefined) {
+        sets.push('error_code=?');
+        params.push(patch.errorCode ? this.redact(patch.errorCode).slice(0, 64) : null);
+      } else if (patch.status === 'running' || patch.status === 'completed') {
+        sets.push('error_code=NULL');
+      }
+      params.push(id);
+      this.db.query(`UPDATE subagent_sessions SET ${sets.join(', ')} WHERE id=?`).run(...params);
     } catch {
       throw new FutrynError('STORAGE');
     }
@@ -589,6 +597,7 @@ export class SqliteConversations implements ConversationStore {
         .transaction(() => {
           const exists = this.db.query('SELECT 1 FROM conversations WHERE id=?').get(id);
           if (!exists) throw new FutrynError('NOT_FOUND');
+          this.journal.abandonDead(id);
           if (
             this.db
               .query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")
@@ -982,6 +991,7 @@ export class SqliteConversations implements ConversationStore {
       return this.db
         .transaction(() => {
           const removeConversation = (targetId: string): boolean => {
+            this.journal.abandonDead(targetId);
             if (
               this.db
                 .query("SELECT 1 FROM execution_turns WHERE conversation=? AND state IN ('pending','running')")

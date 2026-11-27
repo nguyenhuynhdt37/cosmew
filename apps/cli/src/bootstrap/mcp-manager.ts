@@ -321,32 +321,49 @@ export class McpManager {
       let message: string | undefined, logout: McpManagementResult['logout'];
       if (action.type === 'add' || action.type === 'edit') {
         const config = action.config;
-        const raw =
+        const baseRaw =
           config.transport === 'http'
-            ? {url: config.url, headers: config.headers ?? {}, enabled: config.enabled ?? true}
+            ? {url: config.url, headers: config.headers ?? {}}
             : {
                 command: config.command,
                 args: config.args ?? [],
                 env: config.env ?? {},
-                enabled: config.enabled ?? true,
               };
-        const checked = parseMcpConfig(JSON.stringify({mcpServers: {[name]: raw}}));
+        const checked = parseMcpConfig(
+          JSON.stringify({mcpServers: {[name]: {...baseRaw, enabled: config.enabled ?? true}}}),
+        );
         if (checked.servers.length !== 1 || checked.problems.length) throw new FutrynError('INVALID_INPUT');
         this.change(name, previous => {
           if (action.type === 'add' && previous) throw new FutrynError('INVALID_INPUT');
           if (action.type === 'edit' && !previous) throw new FutrynError('NOT_FOUND');
           if (action.type === 'edit' && object(previous?.cosmew).installationId) throw new FutrynError('UNSUPPORTED');
+          const previousMeta = object(previous?.cosmew);
+          const enabled =
+            config.enabled !== undefined
+              ? config.enabled
+              : action.type === 'edit' && typeof previous?.enabled === 'boolean'
+                ? previous.enabled
+                : true;
+          const catalogId =
+            action.type === 'add'
+              ? action.catalogId
+              : typeof previousMeta.catalogId === 'string'
+                ? previousMeta.catalogId
+                : undefined;
           return {
-            ...raw,
+            ...baseRaw,
+            enabled,
             cosmew: {
-              source:
-                action.type === 'add' ? (action.source ?? 'manual') : (object(previous?.cosmew).source ?? 'manual'),
-              ...(action.type === 'add' && action.catalogId ? {catalogId: action.catalogId.slice(0, 256)} : {}),
+              source: action.type === 'add' ? (action.source ?? 'manual') : (previousMeta.source ?? 'manual'),
+              ...(catalogId ? {catalogId: catalogId.slice(0, 256)} : {}),
             },
           };
         });
         await this.connect(signal);
-        message = 'Server added. Connection and authentication are shown separately.';
+        message =
+          action.type === 'add'
+            ? 'Server added. Connection and authentication are shown separately.'
+            : 'Server updated. Connection and authentication are shown separately.';
       } else if (action.type === 'install') {
         if (this.read().servers.some(server => server.name === name)) throw new FutrynError('INVALID_INPUT');
         const installed = await this.installer.install(

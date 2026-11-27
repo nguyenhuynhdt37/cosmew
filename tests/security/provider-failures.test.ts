@@ -101,7 +101,7 @@ test('a provider context rejection is classified without exposing the error body
     x.db.close();
   }
 });
-test('bounded response rejects flood and redirects without credential forwarding', async () => {
+test('bounded response rejects flood and redirects without credential forwarding, while mid-stream socket drops are retryable TRANSPORT', async () => {
   const x = setup();
   let forwarded = 0;
   const evil = Bun.serve({
@@ -126,9 +126,40 @@ test('bounded response rejects flood and redirects without credential forwarding
     const transport = new ProviderTransport(x.provider, x.account, x.vault, new ConfiguredNetworkPolicy());
     await expect((await transport.request(x.provider.baseURL + '/flood', {}, 100)).text()).rejects.toMatchObject({
       code: 'PROTOCOL',
+      retryable: false,
     });
     await expect(transport.request(x.provider.baseURL + '/redirect')).rejects.toMatchObject({code: 'TRANSPORT'});
     expect(forwarded).toBe(0);
+
+    const droppingTransport = new ProviderTransport(
+      x.provider,
+      x.account,
+      x.vault,
+      new ConfiguredNetworkPolicy(),
+      (async () => {
+        let emitted = false;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (!emitted) {
+                emitted = true;
+                controller.enqueue(new TextEncoder().encode('partial'));
+                return;
+              }
+              controller.error(new Error('RAW-SENSITIVE-SOCKET-DROP'));
+            },
+          }),
+          {status: 200},
+        );
+      }) as unknown as typeof fetch,
+    );
+    try {
+      await (await droppingTransport.request(x.provider.baseURL + '/stream')).text();
+      throw new Error('Expected stream drop failure');
+    } catch (err) {
+      expect(err).toMatchObject({code: 'TRANSPORT', retryable: true});
+      expect(String(err)).not.toContain('RAW-SENSITIVE-SOCKET-DROP');
+    }
   } finally {
     source.stop(true);
     evil.stop(true);

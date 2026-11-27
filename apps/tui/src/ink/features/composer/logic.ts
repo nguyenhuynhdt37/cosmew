@@ -56,18 +56,49 @@ export type EditAction =
   | 'killWordForward'
   | 'deleteWordBack';
 const WORD = /[\p{L}\p{N}]/u;
+function prevChar(value: string, at: number): {ch: string; step: number} {
+  if (at >= 2) {
+    const low = value.charCodeAt(at - 1);
+    const high = value.charCodeAt(at - 2);
+    if (low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff) {
+      return {ch: value.slice(at - 2, at), step: 2};
+    }
+  }
+  return {ch: value[at - 1]!, step: 1};
+}
+function nextChar(value: string, at: number): {ch: string; step: number} {
+  const cp = value.codePointAt(at)!;
+  const step = cp > 0xffff ? 2 : 1;
+  return {ch: value.slice(at, at + step), step};
+}
 /** Start of the word before `cursor`: letters and digits make a word, punctuation and spaces separate (Alt+B). */
 export function wordLeft(value: string, cursor: number): number {
   let at = cursor;
-  while (at > 0 && !WORD.test(value[at - 1]!)) at--;
-  while (at > 0 && WORD.test(value[at - 1]!)) at--;
+  while (at > 0) {
+    const prev = prevChar(value, at);
+    if (WORD.test(prev.ch)) break;
+    at -= prev.step;
+  }
+  while (at > 0) {
+    const prev = prevChar(value, at);
+    if (!WORD.test(prev.ch)) break;
+    at -= prev.step;
+  }
   return at;
 }
 /** End of the word after `cursor` (Alt+F / Alt+D). */
 export function wordRight(value: string, cursor: number): number {
   let at = cursor;
-  while (at < value.length && !WORD.test(value[at]!)) at++;
-  while (at < value.length && WORD.test(value[at]!)) at++;
+  while (at < value.length) {
+    const next = nextChar(value, at);
+    if (WORD.test(next.ch)) break;
+    at += next.step;
+  }
+  while (at < value.length) {
+    const next = nextChar(value, at);
+    if (!WORD.test(next.ch)) break;
+    at += next.step;
+  }
   return at;
 }
 /** Span a deleting action removes, or undefined when it only moves the cursor or has nothing to remove. */

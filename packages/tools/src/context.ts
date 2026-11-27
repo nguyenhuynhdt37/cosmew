@@ -133,8 +133,8 @@ export interface ToolDispatcherOptions {
   /** Public web operations, wired only by the composition root. */
   web?: {search?(query: string, numResults: number, signal?: AbortSignal): Promise<string>; searchEndpoint?: string};
   /**
-   * User-configured MCP tools (ADR 0068), wired only by the composition root. Names are
-   * `mcp__server__tool`. The dispatcher authorizes each call before `call`.
+   * User-configured MCP tools (ADR 0068) and resources (ADR 0119), wired only by the composition
+   * root. Names are `mcp__server__tool`. The dispatcher authorizes each call before `call`.
    */
   mcp?: {
     tools(): readonly {
@@ -149,6 +149,33 @@ export interface ToolDispatcherOptions {
       args: Record<string, unknown>,
       signal?: AbortSignal,
     ): Promise<string | {text: string; isError?: boolean}>;
+    servers?(): readonly {name: string; identity: string}[];
+    listResources?(
+      server: string,
+      signal?: AbortSignal,
+    ): Promise<
+      readonly {
+        server: string;
+        uri: string;
+        name: string;
+        description?: string;
+        mimeType?: string;
+        size?: number;
+      }[]
+    >;
+    listResourceTemplates?(
+      server: string,
+      signal?: AbortSignal,
+    ): Promise<
+      readonly {
+        server: string;
+        uriTemplate: string;
+        name: string;
+        description?: string;
+        mimeType?: string;
+      }[]
+    >;
+    readResource?(server: string, uri: string, signal?: AbortSignal): Promise<string>;
   };
   /**
    * The agent's own session state (ADR 0042), owned by the composition root. Tools that need it

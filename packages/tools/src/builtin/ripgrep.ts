@@ -1,3 +1,4 @@
+import {realpathSync} from 'node:fs';
 import {isAbsolute, relative} from 'node:path';
 import {readDecision, type ToolDispatcherOptions} from '../context';
 import type {ResolvedPath, WorkspaceRoot} from '@cosmew/workspace';
@@ -40,8 +41,25 @@ const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
  */
 export function locateRipgrep(workspaceRoot: string, candidate = Bun.which('rg')): string | null {
   if (!candidate || !isAbsolute(candidate)) return null;
-  const inside = relative(workspaceRoot, candidate);
-  if (!inside.startsWith('..') && !isAbsolute(inside)) return null;
+  let canonicalWorkspace = workspaceRoot;
+  let canonicalCandidate = candidate;
+  try {
+    canonicalWorkspace = realpathSync.native(workspaceRoot);
+  } catch {
+    /* keep raw root if unavailable */
+  }
+  try {
+    canonicalCandidate = realpathSync.native(candidate);
+  } catch {
+    /* keep raw candidate in unit tests with synthetic paths */
+  }
+  for (const [root, target] of [
+    [workspaceRoot, candidate],
+    [canonicalWorkspace, canonicalCandidate],
+  ] as const) {
+    const inside = relative(root, target);
+    if (!inside.startsWith('..') && !isAbsolute(inside)) return null;
+  }
   return candidate;
 }
 
@@ -103,7 +121,8 @@ async function runRg(
     if (timedOut) throw new FutrynError('TIMEOUT');
     const stdout = new TextDecoder().decode(Buffer.concat(chunks));
     // A cut stream may end in the middle of a record; drop the incomplete tail.
-    return {stdout: cut ? stdout.slice(0, stdout.lastIndexOf('\n') + 1) : stdout, stderr, exitCode, cut};
+    const delimiter = args.includes('--files-with-matches') ? '\0' : '\n';
+    return {stdout: cut ? stdout.slice(0, stdout.lastIndexOf(delimiter) + 1) : stdout, stderr, exitCode, cut};
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', kill);

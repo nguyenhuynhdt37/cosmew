@@ -273,6 +273,21 @@ describe('merging and precedence', () => {
     });
   });
 
+  test('an untrusted layer cannot downgrade user defaultMode from plan to default', () => {
+    const merged = mergeSettings(
+      [
+        layer('user', true, f => {
+          f.permissions.defaultMode = 'plan';
+        }),
+        layer('project', false, f => {
+          f.permissions.defaultMode = 'default';
+        }),
+      ],
+      '/home/u',
+    );
+    expect(merged.defaultMode).toBe('plan');
+  });
+
   test('what a file would grant is listed for the trust prompt; tightening-only files need none', () => {
     const file = emptySettingsFile();
     expect(describeLoosening(file)).toEqual([]);

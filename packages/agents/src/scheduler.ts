@@ -25,6 +25,8 @@ export interface ActiveSubagentTask {
   toolCount: number;
   currentTool?: string;
   usage: Usage | null;
+  /** Unfolded usage reported by the currently executing turn, used for sibling reservation without double counting. */
+  turnUsage?: Usage | null;
   steps: SubagentTranscriptStep[];
   abortController: AbortController;
   /** S5b: follow-ups queued for the child's next turn when steering was not accepted. */
@@ -135,7 +137,6 @@ export class SubagentScheduler {
       task.cancelReason ??= 'shutdown';
       task.abortController.abort();
     }
-    this.liveTasks.clear();
   }
 
   /** Session/application close: no new children, abort all running (including background) and await their loops. */
@@ -144,5 +145,6 @@ export class SubagentScheduler {
     const pending = [...this.liveTasks.values()].map(task => task.done).filter((p): p is Promise<void> => !!p);
     this.cancelAll();
     await Promise.allSettled(pending);
+    this.liveTasks.clear();
   }
 }

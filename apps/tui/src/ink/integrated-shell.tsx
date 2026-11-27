@@ -514,8 +514,14 @@ export function IntegratedShell({
     client.setToolsEnabled(false);
     if (engine.isPreviewing()) engine.cancelPreview();
   };
-  const submit = async (text: string, label?: string): Promise<boolean> => {
-    if (!ready || closing.current || turn.current || !client.toolsEnabled()) return false;
+  const submit = async (text: string, label?: string, fromQueue = false): Promise<boolean> => {
+    const releaseIfQueued = () => {
+      if (fromQueue && !closing.current) client.releaseQueuedMessage();
+    };
+    if (!ready || closing.current || turn.current || !client.toolsEnabled()) {
+      releaseIfQueued();
+      return false;
+    }
     const abort = new AbortController();
     turn.current = abort;
     scroll.toBottom();
@@ -527,7 +533,10 @@ export function IntegratedShell({
     );
     try {
       const result = await verification;
-      if (closing.current || abort.signal.aborted || !mounted.current) return false;
+      if (closing.current || abort.signal.aborted || !mounted.current) {
+        releaseIfQueued();
+        return false;
+      }
       if (!result.ok) {
         notices.addNotice(
           result.reason === 'billing'
@@ -535,6 +544,7 @@ export function IntegratedShell({
             : verificationMessage(result.reason),
         );
         open(result.reason === 'no-account' ? 'connect' : 'accounts');
+        releaseIfQueued();
         return false;
       }
     } finally {
@@ -578,7 +588,14 @@ export function IntegratedShell({
           );
         }
         session.current = client.status().activeSessionId ?? undefined;
-        prompt = abort.signal.aborted ? undefined : client.takeQueuedMessage();
+        prompt = closing.current || abort.signal.aborted ? undefined : client.takeQueuedMessage();
+        if (
+          prompt !== undefined &&
+          (closing.current || abort.signal.aborted || (!prompt.trim() && !client.imageAttachments().length))
+        ) {
+          if (!closing.current) client.releaseQueuedMessage();
+          prompt = undefined;
+        }
       }
     })().finally(() => {
       turn.current = null;
@@ -587,7 +604,7 @@ export function IntegratedShell({
       if (sendNow.current) {
         sendNow.current = false;
         const next = !closing.current && mounted.current ? client.takeQueuedMessage() : undefined;
-        if (next !== undefined) submit(next);
+        if (next !== undefined) void submit(next, undefined, true);
       }
     });
     return true;
@@ -597,12 +614,14 @@ export function IntegratedShell({
       notices.addNotice('Nothing queued to send.');
       return;
     }
-    sendNow.current = true;
     const disposition = client.sendQueuedNow();
+    if (disposition === 'interrupted') {
+      sendNow.current = true;
+      return;
+    }
     if (disposition === 'idle' && !turn.current) {
-      sendNow.current = false;
       const next = client.takeQueuedMessage();
-      if (next !== undefined) submit(next);
+      if (next !== undefined) void submit(next, undefined, true);
     }
   };
   /** Hand the terminal to $VISUAL/$EDITOR on `file`; true when the editor exited cleanly. */
@@ -978,7 +997,7 @@ export function IntegratedShell({
       if (notice.delivery !== 'queued' || !ready || closing.current || turn.current || shellCall.current) return;
       if ((client.status().activeSessionId ?? undefined) !== notice.parentSessionId) return;
       const next = client.takeQueuedMessage();
-      if (next !== undefined) submit(next);
+      if (next !== undefined) void submit(next, undefined, true);
     },
     reactive: event => {
       setInteraction(n => n + 1); // permissions resolved through the SDK elsewhere must close their dialog
@@ -996,9 +1015,15 @@ export function IntegratedShell({
     const permission = waiting.find(p => overlay.active?.id === `permission:${p.approvalId}`) ?? waiting.at(-1);
     const question = client.listPendingQuestions()[0];
     const proposal = client.pendingPlanApproval();
+    const isModalOverlay = (id?: string) =>
+      Boolean(id && (id.startsWith('permission:') || id.startsWith('question:') || id.startsWith('plan:')));
+    const presentModal = (id: string, element: React.ReactNode) => {
+      if (overlay.active && !isModalOverlay(overlay.active.id)) overlay.push(id, element);
+      else overlay.open(id, element);
+    };
     if (permission) {
       if (overlay.active?.id === `permission:${permission.approvalId}`) return;
-      overlay.open(
+      presentModal(
         `permission:${permission.approvalId}`,
         <PermissionRequestDialog
           width={width}
@@ -1017,10 +1042,10 @@ export function IntegratedShell({
       );
     } else if (question) {
       if (overlay.active?.id !== `question:${question.questionId}`)
-        overlay.open(`question:${question.questionId}`, <QuestionRequestDialog width={width} request={question} />);
+        presentModal(`question:${question.questionId}`, <QuestionRequestDialog width={width} request={question} />);
     } else if (proposal) {
       if (overlay.active?.id !== `plan:${proposal.id}`)
-        overlay.open(
+        presentModal(
           `plan:${proposal.id}`,
           <PlanApprovalDialog
             width={width}
@@ -1029,12 +1054,9 @@ export function IntegratedShell({
             editorLabel={editorName({...process.env, EDITOR: process.env.EDITOR || 'vi'})}
           />,
         );
-    } else if (
-      overlay.active?.id.startsWith('permission:') ||
-      overlay.active?.id.startsWith('question:') ||
-      overlay.active?.id.startsWith('plan:')
-    )
+    } else if (isModalOverlay(overlay.active?.id)) {
       overlay.close();
+    }
   }, [interaction, ready, overlay.active?.id]);
   /** Esc on a panel a slash command opened leaves `❯ /cmd` and `⎿  <noun> cancelled` behind (spec 7). */
   const closeOverlay = () => {
@@ -1049,9 +1071,11 @@ export function IntegratedShell({
         return;
       }
     }
-    opened.current = null;
     if (overlay.active.id.startsWith('plan:')) turn.current?.abort();
-    if (info && info.id === overlay.active.id) printResult(dismissalResult(info.route, info.raw));
+    if (info && info.id === overlay.active.id) {
+      opened.current = null;
+      printResult(dismissalResult(info.route, info.raw));
+    }
     overlay.close();
   };
   closePanel.current = closeOverlay;

@@ -28,6 +28,50 @@ type ParserState = 'normal' | 'esc' | 'esc-ignore-one' | 'csi' | 'osc' | 'dcs';
 
 const MAX_CSI_LENGTH = 256;
 const MAX_STRING_LENGTH = 65536;
+const MAX_SGR_LENGTH = 256;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
+
+function isContinuationStarter(grapheme: string): boolean {
+  const cp = grapheme.codePointAt(0);
+  if (cp === undefined) return false;
+  if (cp === 0x200d || cp === 0xfe0f || cp === 0xfe0e || cp === 0x20e3) return true;
+  if (cp >= 0x1f3fb && cp <= 0x1f3ff) return true; // Fitzpatrick skin tone modifiers
+  if (cp >= 0xe0020 && cp <= 0xe007f) return true; // Emoji tag sequences
+  return /^\p{Mark}/u.test(grapheme);
+}
+
+function isSingleRegionalIndicator(text: string): boolean {
+  const cp = text.codePointAt(0);
+  return cp !== undefined && cp >= 0x1f1e6 && cp <= 0x1f1ff && text.length === 2;
+}
+
+function applySgrBody(current: string, body: string): string {
+  if (!body) return '';
+  const parts = body.split(';');
+  // Scan top-level SGR parameters without misreading 0 inside 38;2;r;g;b or 38;5;n.
+  let lastReset = -1;
+  for (let i = 0; i < parts.length; i++) {
+    const token = parts[i] ?? '';
+    const head = token.includes(':') ? token.slice(0, token.indexOf(':')) : token;
+    if (head === '' || head === '0') {
+      lastReset = i;
+      continue;
+    }
+    if ((head === '38' || head === '48' || head === '58') && !token.includes(':')) {
+      const mode = parts[i + 1];
+      if (mode === '5') i += 2;
+      else if (mode === '2') i += 4;
+    }
+  }
+  if (lastReset >= 0) {
+    const rest = parts.slice(lastReset + 1);
+    return rest.length > 0 ? `\x1b[${rest.join(';')}m` : '';
+  }
+  const next = `\x1b[${body}m`;
+  if (!current) return next;
+  const combined = current + next;
+  return combined.length <= MAX_SGR_LENGTH ? combined : next;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -49,11 +93,13 @@ function normalizePoints(
   return {fromRow: r1, fromCol: c1, toRow: r2, toCol: c2};
 }
 
-/** 2D VT screen model tracking printable cells, wide glyphs, combining marks, and cursor/erase sequences. */
+/** 2D VT screen model tracking printable grapheme cells, per-cell SGR attributes, and cursor/erase sequences. */
 class VirtualScreen {
   columns: number;
   rows: number;
   private grid: string[][] = [];
+  private sgrGrid: string[][] = [];
+  private currentSgr = '';
   private row = 0;
   private col = 0;
   private savedRow = 0;
@@ -81,26 +127,35 @@ class VirtualScreen {
     const rows = Math.max(1, nextRows);
     if (cols === this.columns && rows === this.rows) return;
     const resized: string[][] = [];
+    const resizedSgr: string[][] = [];
     for (let r = 0; r < rows; r++) {
       const existing = this.grid[r];
-      if (!existing) {
+      const existingSgr = this.sgrGrid[r];
+      if (!existing || !existingSgr) {
         resized.push(this.emptyRow(cols));
+        resizedSgr.push(this.emptySgrRow(cols));
         continue;
       }
       if (existing.length === cols) {
         resized.push(existing);
+        resizedSgr.push(existingSgr);
       } else if (existing.length < cols) {
         resized.push(existing.concat(this.emptyRow(cols - existing.length)));
+        resizedSgr.push(existingSgr.concat(this.emptySgrRow(cols - existingSgr.length)));
       } else {
         const sliced = existing.slice(0, cols);
+        const slicedSgr = existingSgr.slice(0, cols);
         // If shrinking cut right between a wide character and its continuation cell, clear the orphaned half.
         if (existing[cols] === '' && cols > 0) {
           sliced[cols - 1] = ' ';
+          slicedSgr[cols - 1] = '';
         }
         resized.push(sliced);
+        resizedSgr.push(slicedSgr);
       }
     }
     this.grid = resized;
+    this.sgrGrid = resizedSgr;
     this.columns = cols;
     this.rows = rows;
     this.row = clamp(this.row, 0, rows - 1);
@@ -122,8 +177,32 @@ class VirtualScreen {
       this.pendingHighSurrogate = text.slice(-1);
       text = text.slice(0, -1);
     }
-    for (const ch of text) {
-      this.consumeChar(ch);
+    let i = 0;
+    while (i < text.length) {
+      if (this.state !== 'normal') {
+        const cp = text.codePointAt(i)!;
+        const step = cp > 0xffff ? 2 : 1;
+        this.consumeChar(text.slice(i, i + step));
+        i += step;
+        continue;
+      }
+      const code = text.charCodeAt(i);
+      if (code < 0x20 || code === 0x7f) {
+        this.consumeNormal(text[i]!);
+        i += 1;
+        continue;
+      }
+      let runEnd = i + 1;
+      while (runEnd < text.length) {
+        const nextCode = text.charCodeAt(runEnd);
+        if (nextCode < 0x20 || nextCode === 0x7f) break;
+        runEnd++;
+      }
+      const run = text.slice(i, runEnd);
+      for (const {segment} of GRAPHEME_SEGMENTER.segment(run)) {
+        this.writeGrapheme(segment);
+      }
+      i = runEnd;
     }
   }
 
@@ -145,6 +224,46 @@ class VirtualScreen {
     if (s > 0 && cells[s] === '') s -= 1;
     if (e + 1 < this.columns && cells[e + 1] === '') e += 1;
     return {colStart0: s, colEnd0: e, text: cells.slice(s, e + 1).join('')};
+  }
+
+  renderRangeAnsi(
+    row0: number,
+    start0: number,
+    end0: number,
+    reverse = false,
+  ): {colStart0: number; colEnd0: number; ansi: string} {
+    const r = clamp(row0, 0, this.rows - 1);
+    const cells = this.grid[r];
+    const sgrs = this.sgrGrid[r];
+    if (!cells || !sgrs) return {colStart0: 0, colEnd0: 0, ansi: ''};
+    let s = clamp(start0, 0, this.columns - 1);
+    let e = clamp(end0, 0, this.columns - 1);
+    if (s > e) {
+      const tmp = s;
+      s = e;
+      e = tmp;
+    }
+    if (s > 0 && cells[s] === '') s -= 1;
+    if (e + 1 < this.columns && cells[e + 1] === '') e += 1;
+
+    let out = '';
+    let activeSgr: string | undefined;
+    for (let c = s; c <= e; c++) {
+      const ch = cells[c];
+      if (ch === '') continue;
+      const cellSgr = sgrs[c] ?? '';
+      if (cellSgr !== activeSgr) {
+        if (reverse && activeSgr === undefined && cellSgr === '') {
+          out += '\x1b[7m';
+        } else {
+          out += `\x1b[0m${cellSgr}${reverse ? '\x1b[7m' : ''}`;
+        }
+        activeSgr = cellSgr;
+      }
+      out += ch ?? ' ';
+    }
+    if (out) out += '\x1b[0m';
+    return {colStart0: s, colEnd0: e, ansi: out};
   }
 
   extract(start: ScreenPoint, end: ScreenPoint): string {
@@ -172,12 +291,18 @@ class VirtualScreen {
     return Array.from({length: cols}, () => ' ');
   }
 
+  private emptySgrRow(cols = this.columns): string[] {
+    return Array.from({length: cols}, () => '');
+  }
+
   private clearScreen(): void {
     this.grid = Array.from({length: this.rows}, () => this.emptyRow());
+    this.sgrGrid = Array.from({length: this.rows}, () => this.emptySgrRow());
   }
 
   private resetScreen(): void {
     this.clearScreen();
+    this.currentSgr = '';
     this.row = 0;
     this.col = 0;
     this.savedRow = 0;
@@ -191,6 +316,8 @@ class VirtualScreen {
     } else {
       this.grid.shift();
       this.grid.push(this.emptyRow());
+      this.sgrGrid.shift();
+      this.sgrGrid.push(this.emptySgrRow());
     }
     this.pendingWrap = false;
   }
@@ -201,39 +328,56 @@ class VirtualScreen {
     } else {
       this.grid.pop();
       this.grid.unshift(this.emptyRow());
+      this.sgrGrid.pop();
+      this.sgrGrid.unshift(this.emptySgrRow());
     }
     this.pendingWrap = false;
   }
 
   private clearHalfWideAt(r: number, c: number): void {
     const cells = this.grid[r];
-    if (!cells) return;
+    const sgrs = this.sgrGrid[r];
+    if (!cells || !sgrs) return;
     if (cells[c] === '' && c > 0) {
       cells[c - 1] = ' ';
       cells[c] = ' ';
+      sgrs[c - 1] = '';
+      sgrs[c] = '';
     } else if (c + 1 < this.columns && cells[c + 1] === '') {
       cells[c] = ' ';
       cells[c + 1] = ' ';
+      sgrs[c] = '';
+      sgrs[c + 1] = '';
     }
   }
 
   private clearRange(r: number, startCol: number, endColExclusive: number): void {
     const cells = this.grid[r];
-    if (!cells) return;
+    const sgrs = this.sgrGrid[r];
+    if (!cells || !sgrs) return;
     const from = Math.max(0, startCol);
     const to = Math.min(this.columns, endColExclusive);
     if (from >= to) return;
     this.clearHalfWideAt(r, from);
     this.clearHalfWideAt(r, to - 1);
-    for (let c = from; c < to; c++) cells[c] = ' ';
+    for (let c = from; c < to; c++) {
+      cells[c] = ' ';
+      sgrs[c] = '';
+    }
   }
 
   private eraseDisplay(mode: number): void {
     if (mode === 0) {
       this.clearRange(this.row, this.col, this.columns);
-      for (let r = this.row + 1; r < this.rows; r++) this.grid[r] = this.emptyRow();
+      for (let r = this.row + 1; r < this.rows; r++) {
+        this.grid[r] = this.emptyRow();
+        this.sgrGrid[r] = this.emptySgrRow();
+      }
     } else if (mode === 1) {
-      for (let r = 0; r < this.row; r++) this.grid[r] = this.emptyRow();
+      for (let r = 0; r < this.row; r++) {
+        this.grid[r] = this.emptyRow();
+        this.sgrGrid[r] = this.emptySgrRow();
+      }
       this.clearRange(this.row, 0, this.col + 1);
     } else if (mode === 2 || mode === 3) {
       this.clearScreen();
@@ -247,6 +391,7 @@ class VirtualScreen {
       this.clearRange(this.row, 0, this.col + 1);
     } else if (mode === 2) {
       this.grid[this.row] = this.emptyRow();
+      this.sgrGrid[this.row] = this.emptySgrRow();
     }
   }
 
@@ -256,6 +401,8 @@ class VirtualScreen {
     for (let i = 0; i < n; i++) {
       this.grid.splice(this.row, 0, this.emptyRow());
       this.grid.pop();
+      this.sgrGrid.splice(this.row, 0, this.emptySgrRow());
+      this.sgrGrid.pop();
     }
     this.col = 0;
     this.pendingWrap = false;
@@ -266,7 +413,11 @@ class VirtualScreen {
     const n = Math.min(count, available);
     if (n <= 0) return;
     this.grid.splice(this.row, n);
-    for (let i = 0; i < n; i++) this.grid.push(this.emptyRow());
+    this.sgrGrid.splice(this.row, n);
+    for (let i = 0; i < n; i++) {
+      this.grid.push(this.emptyRow());
+      this.sgrGrid.push(this.emptySgrRow());
+    }
     this.col = 0;
     this.pendingWrap = false;
   }
@@ -317,7 +468,7 @@ class VirtualScreen {
       return;
     }
     if (code < 0x20 || code === 0x7f) return;
-    this.writePrintable(ch);
+    this.writeGrapheme(ch);
   }
 
   private consumeEscape(ch: string): void {
@@ -524,24 +675,53 @@ class VirtualScreen {
       case 'M':
         this.deleteLines(p1());
         break;
+      case 'm':
+        this.currentSgr = applySgrBody(this.currentSgr, body);
+        break;
       default:
         break;
     }
   }
 
-  private writePrintable(ch: string): void {
-    const width = Bun.stringWidth(ch);
-    if (width === 0) {
-      const cells = this.grid[this.row];
-      if (!cells) return;
-      let targetCol = this.pendingWrap ? this.col : this.col - 1;
-      if (targetCol > 0 && cells[targetCol] === '') targetCol -= 1;
-      if (targetCol >= 0 && targetCol < this.columns) {
-        cells[targetCol] = (cells[targetCol] ?? ' ') + ch;
+  private writeGrapheme(grapheme: string): void {
+    const cells = this.grid[this.row];
+    const sgrs = this.sgrGrid[this.row];
+    if (!cells || !sgrs) return;
+
+    // Cross-chunk grapheme continuations (combining marks, VS16, skin tones, ZWJ sequences, regional indicator pairs).
+    const prevColRaw = this.pendingWrap ? this.col : this.col - 1;
+    let prevCol = prevColRaw;
+    if (prevCol > 0 && cells[prevCol] === '') prevCol -= 1;
+    const prevText = prevCol >= 0 && prevCol < this.columns ? cells[prevCol] : undefined;
+    const width = Bun.stringWidth(grapheme);
+    const shouldMerge =
+      prevText !== undefined &&
+      (width === 0 ||
+        isContinuationStarter(grapheme) ||
+        prevText.endsWith('\u200d') ||
+        (isSingleRegionalIndicator(prevText) && isSingleRegionalIndicator(grapheme)));
+
+    if (shouldMerge && prevText !== undefined) {
+      const oldSpan = prevCol + 1 < this.columns && cells[prevCol + 1] === '' ? 2 : 1;
+      const merged = prevText + grapheme;
+      const newWidth = Math.min(2, Math.max(1, Bun.stringWidth(merged)));
+      cells[prevCol] = merged;
+      if (oldSpan === 1 && newWidth === 2 && prevCol + 1 < this.columns) {
+        this.clearHalfWideAt(this.row, prevCol + 1);
+        cells[prevCol + 1] = '';
+        sgrs[prevCol + 1] = sgrs[prevCol] ?? '';
+        if (prevCol + 2 >= this.columns) {
+          this.col = this.columns - 1;
+          this.pendingWrap = true;
+        } else {
+          this.col = prevCol + 2;
+          this.pendingWrap = false;
+        }
       }
       return;
     }
-    if (width === 2) {
+
+    if (width >= 2) {
       if (this.pendingWrap) {
         this.col = 0;
         this.lineFeed();
@@ -551,18 +731,22 @@ class VirtualScreen {
         this.col = 0;
         this.lineFeed();
       }
-      const cells = this.grid[this.row];
-      if (!cells) return;
+      const rowCells = this.grid[this.row];
+      const rowSgrs = this.sgrGrid[this.row];
+      if (!rowCells || !rowSgrs) return;
       if (this.columns < 2) {
-        cells[0] = ch;
+        rowCells[0] = grapheme;
+        rowSgrs[0] = this.currentSgr;
         this.col = 0;
         this.pendingWrap = true;
         return;
       }
       this.clearHalfWideAt(this.row, this.col);
       this.clearHalfWideAt(this.row, this.col + 1);
-      cells[this.col] = ch;
-      cells[this.col + 1] = '';
+      rowCells[this.col] = grapheme;
+      rowCells[this.col + 1] = '';
+      rowSgrs[this.col] = this.currentSgr;
+      rowSgrs[this.col + 1] = this.currentSgr;
       if (this.col + 2 >= this.columns) {
         this.col = this.columns - 1;
         this.pendingWrap = true;
@@ -572,14 +756,17 @@ class VirtualScreen {
       }
       return;
     }
+
     if (this.pendingWrap) {
       this.col = 0;
       this.lineFeed();
     }
-    const cells = this.grid[this.row];
-    if (!cells) return;
+    const rowCells = this.grid[this.row];
+    const rowSgrs = this.sgrGrid[this.row];
+    if (!rowCells || !rowSgrs) return;
     this.clearHalfWideAt(this.row, this.col);
-    cells[this.col] = ch;
+    rowCells[this.col] = grapheme;
+    rowSgrs[this.col] = this.currentSgr;
     if (this.col + 1 >= this.columns) {
       this.col = this.columns - 1;
       this.pendingWrap = true;
@@ -621,21 +808,27 @@ export function createScreenSelectionBridge(options: ScreenSelectionOptions): Sc
     for (const [row1, prev] of highlightedLines) {
       const next = nextSpans.get(row1);
       if (!next) {
-        const restored = screen.cellRangeText(row1 - 1, prev.colStart0, prev.colEnd0);
-        out += `\x1b[${row1};${restored.colStart0 + 1}H\x1b[0m${restored.text}`;
+        const restored = screen.renderRangeAnsi(row1 - 1, prev.colStart0, prev.colEnd0, false);
+        out += `\x1b[${row1};${restored.colStart0 + 1}H${restored.ansi}`;
         continue;
       }
       if (prev.colStart0 < next.colStart0) {
-        const left = screen.cellRangeText(row1 - 1, prev.colStart0, Math.min(prev.colEnd0, next.colStart0 - 1));
-        out += `\x1b[${row1};${left.colStart0 + 1}H\x1b[0m${left.text}`;
+        const left = screen.renderRangeAnsi(
+          row1 - 1,
+          prev.colStart0,
+          Math.min(prev.colEnd0, next.colStart0 - 1),
+          false,
+        );
+        out += `\x1b[${row1};${left.colStart0 + 1}H${left.ansi}`;
       }
       if (prev.colEnd0 > next.colEnd0) {
-        const right = screen.cellRangeText(row1 - 1, Math.max(prev.colStart0, next.colEnd0 + 1), prev.colEnd0);
-        out += `\x1b[${row1};${right.colStart0 + 1}H\x1b[0m${right.text}`;
+        const right = screen.renderRangeAnsi(row1 - 1, Math.max(prev.colStart0, next.colEnd0 + 1), prev.colEnd0, false);
+        out += `\x1b[${row1};${right.colStart0 + 1}H${right.ansi}`;
       }
     }
     for (const [row1, next] of nextSpans) {
-      out += `\x1b[${row1};${next.colStart0 + 1}H\x1b[7m${next.text}\x1b[0m`;
+      const highlighted = screen.renderRangeAnsi(row1 - 1, next.colStart0, next.colEnd0, true);
+      out += `\x1b[${row1};${highlighted.colStart0 + 1}H${highlighted.ansi}`;
     }
     out += '\x1b8';
     highlightedLines.clear();
@@ -648,8 +841,8 @@ export function createScreenSelectionBridge(options: ScreenSelectionOptions): Sc
     if (options.stdout.isTTY) {
       let out = '\x1b7';
       for (const [row1, prev] of highlightedLines) {
-        const restored = screen.cellRangeText(row1 - 1, prev.colStart0, prev.colEnd0);
-        out += `\x1b[${row1};${restored.colStart0 + 1}H\x1b[0m${restored.text}`;
+        const restored = screen.renderRangeAnsi(row1 - 1, prev.colStart0, prev.colEnd0, false);
+        out += `\x1b[${row1};${restored.colStart0 + 1}H${restored.ansi}`;
       }
       out += '\x1b8';
       options.stdout.write(out);
@@ -716,7 +909,16 @@ export function createScreenSelectionBridge(options: ScreenSelectionOptions): Sc
       .catch(() => {});
   };
 
+  const handleSelectionReset = () => {
+    if (disposed) return;
+    anchor = null;
+    focus = null;
+    moved = false;
+    clearHighlight();
+  };
+
   const unsubscribeSelection = options.mouse.subscribeSelection?.(handleSelection);
+  const unsubscribeSelectionReset = options.mouse.subscribeSelectionReset?.(handleSelectionReset);
 
   const stdout = new Proxy(options.stdout, {
     get(target, property) {
@@ -750,6 +952,7 @@ export function createScreenSelectionBridge(options: ScreenSelectionOptions): Sc
       clearHighlight();
       disposed = true;
       unsubscribeSelection?.();
+      unsubscribeSelectionReset?.();
       if (typeof options.stdout.off === 'function') {
         options.stdout.off('resize', onResize);
       } else if (typeof options.stdout.removeListener === 'function') {

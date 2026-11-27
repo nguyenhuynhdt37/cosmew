@@ -7,17 +7,58 @@ import {
   type Provider,
 } from '@cosmew/contracts';
 
+function unwrapCosmewError(error: unknown): FutrynError | undefined {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  for (let depth = 0; depth <= 10 && current && typeof current === 'object'; depth++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (current instanceof FutrynError) return current;
+    current = (current as {cause?: unknown}).cause;
+  }
+  return undefined;
+}
+
+function normalizedErrorFields(error: unknown): {message: string; markers: string[]} {
+  if (!error || typeof error !== 'object') return {message: '', markers: []};
+  const value = error as Record<string, unknown>;
+  const messages: string[] = [];
+  const markers: string[] = [];
+  const collect = (source: unknown) => {
+    const fields = errorFields(source);
+    if (fields.message) messages.push(fields.message);
+    for (const marker of fields.markers) if (marker) markers.push(marker);
+  };
+  collect(value);
+  if (value.data && typeof value.data === 'object') collect(value.data);
+  if (typeof value.responseBody === 'string' && value.responseBody.length <= 8192) {
+    try {
+      collect(JSON.parse(value.responseBody));
+    } catch {
+      messages.push(value.responseBody);
+    }
+  }
+  return {message: messages.join(' '), markers};
+}
+
 export function normalizeError(error: unknown, signal?: AbortSignal): FutrynError {
   if (signal?.aborted) return new FutrynError(signal.reason?.name === 'TimeoutError' ? 'TIMEOUT' : 'CANCELLED');
-  if (error instanceof FutrynError) {
-    if (isEncryptedHistoryError(error)) (error as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
-    return error;
+  const wrapped = unwrapCosmewError(error);
+  if (wrapped) {
+    if (isEncryptedHistoryError(wrapped) || isEncryptedHistoryError(error))
+      (wrapped as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
+    return wrapped;
   }
   if (isEncryptedHistoryError(error)) {
     const err = new FutrynError('INVALID_INPUT');
     (err as unknown as {encryptedHistory?: boolean}).encryptedHistory = true;
     if (error instanceof Error && error.message) err.message = error.message;
     return err;
+  }
+  const fields = normalizedErrorFields(error);
+  if (fields.markers.some(marker => contextErrorCodes.has(marker))) return new FutrynError('CONTEXT_LIMIT');
+  if ([...fields.markers, fields.message].some(text => billingMarker.test(text.replaceAll('_', ' ')))) {
+    return new ProviderBillingError();
   }
   const status = (() => {
     if (!error || typeof error !== 'object') return undefined;
@@ -31,7 +72,22 @@ export function normalizeError(error: unknown, signal?: AbortSignal): FutrynErro
     }
     return undefined;
   })();
-  if (status) return statusError(status, null);
+  if (status && status >= 400) return statusError(status, null);
+  if (error && typeof error === 'object') {
+    const value = error as Record<string, unknown>;
+    const cause = value.cause;
+    const message = typeof value.message === 'string' ? value.message : '';
+    const causeMessage = cause instanceof Error ? cause.message : '';
+    if (
+      value.isRetryable === true ||
+      cause instanceof TypeError ||
+      /\b(?:socket|network|econnreset|epipe|etimedout|premature close|terminated|fetch failed)\b/i.test(
+        `${message} ${causeMessage}`,
+      )
+    ) {
+      return new FutrynError('TRANSPORT', true);
+    }
+  }
   return new FutrynError('PROTOCOL');
 }
 export function retryAfter(value: string | null, now = Date.now()): number | null {
@@ -274,7 +330,7 @@ export class ProviderTransport {
               ? e
               : init.signal?.aborted
                 ? normalizeError(null, init.signal)
-                : new FutrynError('PROTOCOL'),
+                : new FutrynError('TRANSPORT', true),
           );
         }
       },

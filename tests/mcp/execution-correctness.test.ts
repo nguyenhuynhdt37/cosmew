@@ -589,6 +589,8 @@ test('Zod and FastMCP schemas with local $ref, format, uniqueItems and ReDoS-saf
         b: {$ref: '#/$defs/D8'},
         $ref: {type: 'string', pattern: '^(?:[a-z]+)$'},
         unicode: {type: 'string', pattern: '^\\p{L}+$'},
+        optionalScheme: {type: 'string', pattern: '^(https?:\\/\\/)?[a-z0-9.-]+$'},
+        semver: {type: 'string', pattern: '^\\d+\\.\\d+\\.\\d+$'},
       },
       required: ['a', 'b'],
       additionalProperties: false,
@@ -613,7 +615,14 @@ test('Zod and FastMCP schemas with local $ref, format, uniqueItems and ReDoS-saf
           await f.dispatcher.invoke({
             id: 'depth8-ok',
             name: 'mcp__fixture__run',
-            input: {a: 'ok', b: 'yes', $ref: 'safe', unicode: 'XinChao'},
+            input: {
+              a: 'ok',
+              b: 'yes',
+              $ref: 'safe',
+              unicode: 'XinChao',
+              optionalScheme: 'https://example.com',
+              semver: '1.2.3',
+            },
           })
         ).status,
       ).toBe('ok');
@@ -683,6 +692,11 @@ test('External, cyclic, deep, or bomb $ref and ReDoS or invalid schema features 
     {type: 'object', properties: {s: {type: 'string', pattern: '^((a|b))+$'}}},
     {type: 'object', properties: {s: {type: 'string', pattern: '^(a?)*$'}}},
     {type: 'object', properties: {s: {type: 'string', pattern: '^(?:[a-z]+)+$'}}},
+    // Polynomial ReDoS patterns (adjacent/overlapping repeating quantifiers)
+    {type: 'object', properties: {s: {type: 'string', pattern: '^a*a*a*a*b$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '.*.*!'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^\\w+\\w+\\w+!$'}}},
+    {type: 'object', properties: {s: {type: 'string', pattern: '^[a-z]+[a-z0-9]+$'}}},
     {type: 'object', properties: {s: {type: 'string', pattern: '^([a-z]+)\\1$'}}},
     {type: 'object', properties: {s: {type: 'string', pattern: '^(?=a+b)[a-z]+$'}}},
     {type: 'object', properties: {s: {type: 'string', pattern: '^(?<=a)[a-z]+$'}}},

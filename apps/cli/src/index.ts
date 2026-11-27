@@ -500,6 +500,21 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     fail();
   }
   const project = options.project ? resolve('.') : undefined;
+  const requestedAccount = str(options, 'account');
+  const requestedModel = str(options, 'model');
+  if (requestedAccount || requestedModel) {
+    const setupClient = app.createFutrynClient(resolve('.'));
+    if (requestedAccount) setupClient.useAccount(requestedAccount);
+    if (requestedModel) {
+      const targetAccount = requestedAccount ? app.resolveAccount(requestedAccount) : app.resolveAccount(undefined);
+      const model =
+        app
+          .catalog(targetAccount)
+          .cached()
+          .find(m => m.id === requestedModel) ?? app.catalog(targetAccount).manual(requestedModel);
+      app.router.select(targetAccount, model, project);
+    }
+  }
   let conversation: ReturnType<Application['conversation']> | undefined;
   let conversationAccountId: string | undefined;
   const telemetryClient = () => {
@@ -507,9 +522,19 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
     if (conversation) client.resumeSession(conversation.id);
     return client;
   };
-  const resetConversation = () => {
+  const resetConversation = (resumeTarget?: string) => {
     conversation = undefined;
     conversationAccountId = undefined;
+    if (resumeTarget) {
+      if (requestedAccount || requestedModel) {
+        const nextSelection = app.router.resolve(project);
+        app.resumeConversation(resumeTarget);
+        app.conversations.updateSelection(resumeTarget, nextSelection);
+      }
+      conversation = app.resumeConversation(resumeTarget);
+      conversationAccountId = app.conversations.get(resumeTarget)?.selection.accountId;
+      return;
+    }
     try {
       const selection = app.router.resolve(project);
       conversation = app.conversation(project);
@@ -518,7 +543,15 @@ async function chat(app: Application, options: Options, signal: AbortSignal, sin
       if (single || !(e instanceof FutrynError) || !['AUTH', 'POLICY', 'NOT_FOUND'].includes(e.code)) throw e;
     }
   };
-  resetConversation();
+  const resumeId = str(options, 'resume');
+  if (resumeId) {
+    resetConversation(resumeId);
+  } else if (options.continue === true) {
+    const latest = app.createFutrynClient(resolve('.')).listSessions()[0];
+    resetConversation(latest?.id);
+  } else {
+    resetConversation();
+  }
   const send = async (message: string) => {
     if (!message.trim()) return;
     if (!conversation) {
@@ -826,9 +859,10 @@ async function main() {
     throw new FutrynError('INVALID_INPUT');
   }
   const options = parsed.values as Options;
-  const [group, action, argument] = str(options, 'resume')
-    ? ['resume', str(options, 'resume'), undefined]
-    : parsed.positionals;
+  const [group, action, argument] =
+    str(options, 'resume') && (parsed.positionals.length === 0 || parsed.positionals[0] === 'tui')
+      ? ['resume', str(options, 'resume'), undefined]
+      : parsed.positionals;
   if (options.help || group === 'help') {
     process.stdout.write(HELP);
     return;

@@ -1,8 +1,12 @@
 import {afterEach, test, expect} from 'bun:test';
+import {mkdtempSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {Database} from 'bun:sqlite';
-import {FutrynError, GENERATION_LIMITS, type Account, type ModelRequest} from '@cosmew/contracts';
+import {FutrynError, GENERATION_LIMITS, ProviderBillingError, type Account, type ModelRequest} from '@cosmew/contracts';
+import {Conversation} from '@cosmew/core';
 import {ConfiguredNetworkPolicy} from '@cosmew/security';
-import {SqliteSettings} from '@cosmew/persistence';
+import {openPrivateDatabase, SqliteConversations, SqliteSettings} from '@cosmew/persistence';
 import {
   AccountManager,
   ModelCatalog,
@@ -27,6 +31,64 @@ test('provider SDK errors with status or response.status preserve auth and HTTP 
   expect(normalizeError({status: 401}).code).toBe('AUTH');
   expect(normalizeError({response: {status: 403}}).code).toBe('FORBIDDEN');
   expect(normalizeError({statusCode: 404}).code).toBe('NOT_FOUND');
+});
+
+test('normalizeError unwraps nested cause chains safely, classifies context/billing payloads, and never maps HTTP 200 to INVALID_INPUT', () => {
+  // Deep FutrynError inside error.cause (up to 8 hops) survives intact.
+  let wrapped: unknown = new FutrynError('TRANSPORT', true);
+  for (let i = 0; i < 8; i++) wrapped = {statusCode: 200, message: `layer-${i}`, cause: wrapped};
+  const recovered = normalizeError(wrapped);
+  expect(recovered.code).toBe('TRANSPORT');
+  expect(recovered.retryable).toBe(true);
+
+  // Encrypted history marker on outer wrapper tags the unwrapped FutrynError.
+  const encryptedInner = new FutrynError('INVALID_INPUT');
+  const encryptedWrapped = {
+    statusCode: 400,
+    responseBody: '{"error":{"message":"This conversation contains encrypted history for the original account."}}',
+    cause: encryptedInner,
+  };
+  const normalizedEncrypted = normalizeError(encryptedWrapped) as FutrynError & {encryptedHistory?: boolean};
+  expect(normalizedEncrypted).toBe(encryptedInner);
+  expect(normalizedEncrypted.encryptedHistory).toBe(true);
+
+  // Cyclic cause chains terminate cleanly without infinite recursion.
+  const cycleA: {statusCode: number; cause?: unknown} = {statusCode: 200};
+  const cycleB: {cause?: unknown} = {cause: cycleA};
+  cycleA.cause = cycleB;
+  expect(normalizeError(cycleA).code).toBe('PROTOCOL');
+
+  // Context limit and billing markers extracted from error / data / responseBody.
+  expect(normalizeError({statusCode: 400, data: {error: {code: 'context_length_exceeded'}}}).code).toBe(
+    'CONTEXT_LIMIT',
+  );
+  expect(
+    normalizeError({statusCode: 400, responseBody: JSON.stringify({error: {code: 'context_window_exceeded'}})}).code,
+  ).toBe('CONTEXT_LIMIT');
+  const billingFromData = normalizeError({statusCode: 429, data: {error: {code: 'insufficient_quota'}}});
+  expect(billingFromData).toBeInstanceOf(ProviderBillingError);
+  expect(billingFromData.code).toBe('PROVIDER_BILLING');
+  const billingFromBody = normalizeError({
+    statusCode: 400,
+    responseBody: JSON.stringify({error: {message: 'Your credit balance is too low to access the API.'}}),
+  });
+  expect(billingFromBody).toBeInstanceOf(ProviderBillingError);
+
+  // 2xx stream wrappers from @ai-sdk/provider-utils never call statusError(200) -> INVALID_INPUT.
+  const retryable200 = normalizeError({statusCode: 200, isRetryable: true, message: 'stream interrupted'});
+  expect(retryable200).toMatchObject({code: 'TRANSPORT', retryable: true});
+  const network200 = normalizeError({
+    statusCode: 200,
+    isRetryable: false,
+    cause: new Error('The socket connection was closed unexpectedly.'),
+  });
+  expect(network200).toMatchObject({code: 'TRANSPORT', retryable: true});
+  const malformed200 = normalizeError({
+    statusCode: 200,
+    isRetryable: false,
+    cause: new SyntaxError('Unexpected end of JSON input'),
+  });
+  expect(malformed200).toMatchObject({code: 'PROTOCOL', retryable: false});
 });
 const setup = (protocol: 'chat' | 'responses' | 'anthropic' | 'gemini' = 'chat') => {
   const f = fixtureServer();
@@ -695,6 +757,137 @@ test('F5: chat protocol never receives prompt_cache_key', async () => {
     const before = x.f.requests.length;
     await Array.fromAsync(adapter.stream({...x.request, cacheKey: 'session-A'}));
     expect(JSON.stringify(x.f.requests.slice(before).map(r => r.body))).not.toContain('cache_key');
+  } finally {
+    x.db.close();
+  }
+});
+
+test('mid-stream HTTP 200 disconnect surfaces retryable TRANSPORT and lets Conversation retry the stream', async () => {
+  const x = setup('chat');
+  try {
+    let attempts = 0;
+    const base = {id: 'mid-drop', object: 'chat.completion.chunk', created: 123, model: 'fixture-model'};
+    const flakyFetch = (async () => {
+      attempts++;
+      const currentAttempt = attempts;
+      let step = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          step++;
+          if (step === 1) {
+            const first = {
+              ...base,
+              choices: [{index: 0, delta: {role: 'assistant', content: 'Hello '}, finish_reason: null}],
+            };
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(first)}\n\n`));
+            return;
+          }
+          if (currentAttempt === 1) {
+            controller.error(new TypeError('The socket connection was closed unexpectedly.'));
+            return;
+          }
+          const rest = [
+            {...base, choices: [{index: 0, delta: {content: 'recovered'}, finish_reason: null}]},
+            {
+              ...base,
+              choices: [{index: 0, delta: {}, finish_reason: 'stop'}],
+              usage: {prompt_tokens: 4, completion_tokens: 2, total_tokens: 6},
+            },
+          ];
+          controller.enqueue(
+            new TextEncoder().encode(rest.map(p => `data: ${JSON.stringify(p)}\n\n`).join('') + 'data: [DONE]\n\n'),
+          );
+          controller.close();
+        },
+      });
+      return new Response(stream, {status: 200, headers: {'content-type': 'text/event-stream'}});
+    }) as unknown as typeof fetch;
+
+    const transport = new ProviderTransport(x.provider, x.account, x.vault, new ConfiguredNetworkPolicy(), flakyFetch);
+    const adapter = new ProviderAdapter(transport, x.request.modelId);
+
+    // First attempt alone throws retryable TRANSPORT, not PROTOCOL or INVALID_INPUT.
+    await expect(Array.fromAsync(adapter.stream(x.request))).rejects.toMatchObject({
+      code: 'TRANSPORT',
+      retryable: true,
+    });
+
+    // Conversation TurnRun retries the dropped HTTP 200 stream and completes cleanly.
+    attempts = 0;
+    const convDir = mkdtempSync(join(tmpdir(), 'cosmew-adapter-conv-'));
+    const convDb = openPrivateDatabase(convDir);
+    try {
+      const store = new SqliteConversations(convDb);
+      const conversation = new Conversation({accountId: x.account.id, modelId: x.request.modelId}, adapter, store);
+      const events = await Array.fromAsync(conversation.send('hi'));
+      expect(attempts).toBe(2);
+      expect(events.some(e => e.type === 'responseDiscarded' && e.reason === 'retry')).toBe(true);
+      expect(events.at(-1)?.type).toBe('completed');
+      expect(conversation.history().at(-1)?.content).toBe('Hello recovered');
+    } finally {
+      convDb.close();
+      rmSync(convDir, {recursive: true, force: true});
+    }
+  } finally {
+    x.db.close();
+  }
+});
+
+test('captureReplay drops oversized continuation state without failing valid responses while still rejecting malformed metadata', async () => {
+  const x = setup('gemini');
+  try {
+    let geminiParts: unknown[] = [];
+    const customTransport = new ProviderTransport(
+      x.provider,
+      x.account,
+      x.vault,
+      new ConfiguredNetworkPolicy(),
+      (async (_url: string | URL | Request, init?: RequestInit) => {
+        const isStream =
+          String(_url).includes('streamGenerateContent') || String(init?.body ?? '').includes('"stream"');
+        const payload = {
+          candidates: [{content: {role: 'model', parts: geminiParts}, finishReason: 'STOP', index: 0}],
+          usageMetadata: {promptTokenCount: 5, candidatesTokenCount: 10},
+        };
+        if (isStream) {
+          return new Response(`data: ${JSON.stringify(payload)}\n\n`, {headers: {'content-type': 'text/event-stream'}});
+        }
+        return Response.json(payload);
+      }) as unknown as typeof fetch,
+    );
+    const adapter = new ProviderAdapter(customTransport, x.request.modelId);
+
+    // 1. Oversized single part.text (> 524,288 chars) succeeds with providerReplay omitted.
+    const hugeText = 'a'.repeat(530_000);
+    geminiParts = [{text: hugeText, thoughtSignature: 'valid-sig'}];
+    const genHugePart = await adapter.generate(x.request);
+    expect(genHugePart.text).toBe(hugeText);
+    expect(genHugePart.providerReplay).toBeUndefined();
+    const streamHugePart = await Array.fromAsync(adapter.stream(x.request));
+    expect(streamHugePart.some(e => e.type === 'providerReplay')).toBe(false);
+    expect(streamHugePart.at(-1)?.type).toBe('completed');
+
+    // 2. Total UTF-8 bytes > 1,048,576 while each part.text.length <= 524,288 succeeds with providerReplay omitted.
+    const multiByteChunk = 'ă'.repeat(300_000); // 300k chars <= 524,288, 600k UTF-8 bytes each -> 1.2MB total
+    geminiParts = [
+      {text: multiByteChunk, thought: true, thoughtSignature: 'sig-1'},
+      {text: multiByteChunk, thoughtSignature: 'sig-2'},
+    ];
+    const genHugeUtf8 = await adapter.generate(x.request);
+    expect(genHugeUtf8.text).toBe(multiByteChunk);
+    expect(genHugeUtf8.providerReplay).toBeUndefined();
+
+    // 3. parts.length > 2048 succeeds with providerReplay omitted.
+    geminiParts = Array.from({length: 2050}, (_, idx) =>
+      idx === 0 ? {text: 'p', thoughtSignature: 'sig-many'} : {text: 'p'},
+    );
+    const genManyParts = await adapter.generate(x.request);
+    expect(genManyParts.text.length).toBe(2050);
+    expect(genManyParts.providerReplay).toBeUndefined();
+
+    // 4. Invalid metadata (e.g. thoughtSignature > 524,288 chars) still rejects with PROTOCOL even when text is also huge.
+    geminiParts = [{text: hugeText, thoughtSignature: 's'.repeat(530_000)}];
+    await expect(adapter.generate(x.request)).rejects.toMatchObject({code: 'PROTOCOL'});
   } finally {
     x.db.close();
   }

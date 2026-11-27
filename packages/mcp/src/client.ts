@@ -1,7 +1,13 @@
 import {pinnedMcpOAuthFetch, validateMcpOAuthFetchTarget, type McpOAuthLookup} from './oauth-network';
 import {UnauthorizedError} from '@modelcontextprotocol/sdk/client/auth.js';
 import type {OAuthClientProvider} from '@modelcontextprotocol/sdk/client/auth.js';
-import {ResultSchema, ToolSchema} from '@modelcontextprotocol/sdk/types.js';
+import {
+  ReadResourceResultSchema,
+  ResourceSchema,
+  ResourceTemplateSchema,
+  ResultSchema,
+  ToolSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StreamableHTTPClientTransport, StreamableHTTPError} from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import {FutrynError} from '@cosmew/contracts';
@@ -9,6 +15,7 @@ import {FutrynError} from '@cosmew/contracts';
 export const MCP_TIMEOUT_MS = 30_000;
 export const MAX_MCP_RESPONSE_BYTES = 2 * 1024 * 1024;
 export const MAX_MCP_OUTPUT_BYTES = 64 * 1024;
+export const MAX_MCP_RESOURCES = 128;
 
 export interface McpClientOptions {
   endpoint: URL;
@@ -29,6 +36,11 @@ export interface McpTextResult {
   structuredContent?: unknown;
 }
 
+interface ClientSession {
+  client: Client;
+  oversize?: FutrynError;
+}
+
 /**
  * One SDK Streamable HTTP session per configured endpoint. OAuth is injected by the host; no
  * sampling or server-requested filesystem access. This client is a transport adapter; callers must authorize
@@ -36,13 +48,12 @@ export interface McpTextResult {
  */
 export class McpClient {
   readonly warnings: string[] = [];
-  private client?: Client;
+  private session?: ClientSession;
   private pendingClient?: Client;
   private attempt?: AbortController;
   private activeCalls = 0;
   private transport?: StreamableHTTPClientTransport;
-  private connecting?: Promise<void>;
-  private transportError?: FutrynError;
+  private connecting?: Promise<ClientSession>;
   private closed = false;
   private readonly lifetime = new AbortController();
   constructor(private readonly options: McpClientOptions) {
@@ -51,21 +62,21 @@ export class McpClient {
       throw new FutrynError('POLICY');
   }
 
-  private connect(): Promise<void> {
+  private connect(): Promise<ClientSession> {
     if (this.closed) return Promise.reject(new FutrynError('RUNTIME_UNAVAILABLE'));
-    if (this.client) return Promise.resolve();
+    if (this.session) return Promise.resolve(this.session);
     return (this.connecting ??= (async () => {
-      this.transportError = undefined;
       const attempt = new AbortController();
       this.attempt = attempt;
       const client = new Client({name: 'cosmew', version: '0.1.0'}, {capabilities: {}});
       this.pendingClient = client;
+      const session: ClientSession = {client};
       const fetchImpl = this.options.fetch ?? fetch;
       const maxResponseBytes = this.options.maxResponseBytes ?? MAX_MCP_RESPONSE_BYTES;
       const failOversize = () => {
         const error = new FutrynError('PROTOCOL');
-        this.transportError ??= error;
-        attempt.abort();
+        session.oversize ??= error;
+        attempt.abort(error);
         // Close the transport so SSE-backed requests reject immediately instead of idling until MCP_TIMEOUT_MS.
         void this.transport?.close().catch(() => undefined);
         return error;
@@ -137,18 +148,20 @@ export class McpClient {
           timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
           signal: AbortSignal.any([this.lifetime.signal, attempt.signal]),
         });
+        if (session.oversize) throw session.oversize;
         if (this.closed || attempt.signal.aborted) throw new FutrynError('CANCELLED');
-        this.client = client;
+        this.session = session;
         client.onclose = () => {
-          if (this.client === client) {
-            this.client = undefined;
+          if (this.session === session) {
+            this.session = undefined;
             this.options.onDisconnect?.();
           }
         };
+        return session;
       } catch (error) {
         attempt.abort();
         await client.close().catch(() => undefined);
-        throw error;
+        throw session.oversize ?? error;
       } finally {
         if (this.pendingClient === client) this.pendingClient = undefined;
         if (this.attempt === attempt) this.attempt = undefined;
@@ -157,22 +170,23 @@ export class McpClient {
     })());
   }
 
-  async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpTextResult> {
+  private async run<T>(
+    signal: AbortSignal | undefined,
+    execute: (client: Client, combined: AbortSignal) => Promise<T>,
+  ): Promise<T> {
     if (signal?.aborted) throw new FutrynError('CANCELLED');
     const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
     const combined = AbortSignal.any([this.lifetime.signal, deadline, ...(signal ? [signal] : [])]);
     this.activeCalls++;
-    this.transportError = undefined;
+    let session: ClientSession | undefined;
     try {
-      await abortable(this.connect(), combined);
-      if (combined.aborted || !this.client) throw this.transportError ?? new FutrynError('CANCELLED');
-      const result = await this.client.callTool({name, arguments: args}, undefined, {
-        signal: combined,
-        timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
-      });
-      return normalizeResult(result, this.options.redact);
+      session = await abortable(this.connect(), combined);
+      if (session.oversize) throw session.oversize;
+      if (combined.aborted) throw new FutrynError('CANCELLED');
+      return await execute(session.client, combined);
     } catch (error) {
-      if (this.transportError) throw this.transportError;
+      if (session?.oversize) throw session.oversize;
+      if (error instanceof FutrynError && error.code === 'PROTOCOL') throw error;
       if (signal?.aborted || this.lifetime.signal.aborted) throw new FutrynError('CANCELLED');
       if (deadline.aborted || (error instanceof Error && /timed out/i.test(error.message)))
         throw new FutrynError('TIMEOUT');
@@ -187,40 +201,54 @@ export class McpClient {
     }
   }
 
+  async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpTextResult> {
+    return this.run(signal, async (client, combined) => {
+      const result = await client.callTool({name, arguments: args}, undefined, {
+        signal: combined,
+        timeout: this.options.timeoutMs ?? MCP_TIMEOUT_MS,
+      });
+      return normalizeResult(result, this.options.redact);
+    });
+  }
+
   /** Tool names and schemas. Same deadlines and error mapping as `call`. No sampling or filesystem host services. */
   async listTools(
     signal?: AbortSignal,
   ): Promise<{name: string; description?: string; inputSchema?: Record<string, unknown>; readOnlyHint?: boolean}[]> {
-    if (signal?.aborted) throw new FutrynError('CANCELLED');
-    const deadline = AbortSignal.timeout(this.options.timeoutMs ?? MCP_TIMEOUT_MS);
-    const combined = AbortSignal.any([this.lifetime.signal, deadline, ...(signal ? [signal] : [])]);
-    this.activeCalls++;
-    this.transportError = undefined;
-    try {
-      await abortable(this.connect(), combined);
-      if (combined.aborted || !this.client) throw this.transportError ?? new FutrynError('CANCELLED');
-      const tools = await discoverTools(this.client, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.warnings);
-      return tools;
-    } catch (error) {
-      if (this.transportError) throw this.transportError;
-      if (signal?.aborted || this.lifetime.signal.aborted) throw new FutrynError('CANCELLED');
-      if (deadline.aborted || (error instanceof Error && /timed out/i.test(error.message)))
-        throw new FutrynError('TIMEOUT');
-      if (error instanceof FutrynError) throw error;
-      if (error instanceof UnauthorizedError || (error instanceof StreamableHTTPError && error.code === 401))
-        throw new FutrynError('AUTH');
-      throw new FutrynError('TRANSPORT');
-    } finally {
-      this.activeCalls--;
-      if (!this.activeCalls && this.connecting) this.attempt?.abort();
-    }
+    return this.run(signal, (client, combined) =>
+      discoverTools(client, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.warnings),
+    );
+  }
+
+  async listResources(signal?: AbortSignal): Promise<RemoteResource[]> {
+    return this.run(signal, (client, combined) =>
+      discoverResources(client, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.options.redact, this.warnings),
+    );
+  }
+
+  async listResourceTemplates(signal?: AbortSignal): Promise<RemoteResourceTemplate[]> {
+    return this.run(signal, (client, combined) =>
+      discoverResourceTemplates(
+        client,
+        this.options.timeoutMs ?? MCP_TIMEOUT_MS,
+        combined,
+        this.options.redact,
+        this.warnings,
+      ),
+    );
+  }
+
+  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+    return this.run(signal, (client, combined) =>
+      readRemoteResource(client, uri, this.options.timeoutMs ?? MCP_TIMEOUT_MS, combined, this.options.redact),
+    );
   }
 
   async close(): Promise<void> {
     this.closed = true;
     this.lifetime.abort();
     this.attempt?.abort();
-    await Promise.allSettled([this.client?.close(), this.pendingClient?.close()]);
+    await Promise.allSettled([this.session?.client.close(), this.pendingClient?.close()]);
   }
 }
 
@@ -252,6 +280,178 @@ export interface RemoteTool {
   description?: string;
   inputSchema?: Record<string, unknown>;
   readOnlyHint?: boolean;
+}
+
+export interface RemoteResource {
+  uri: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+  size?: number;
+}
+
+export interface RemoteResourceTemplate {
+  uriTemplate: string;
+  name: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export function isMcpMethodNotFound(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  if ((error as {code?: unknown}).code === -32601) return true;
+  if (error instanceof Error && /method not found|-32601/i.test(error.message)) return true;
+  return false;
+}
+
+/** Bound resource discovery visibly; servers without resource capability return an empty list. */
+export async function discoverResources(
+  client: Client,
+  timeout: number,
+  signal: AbortSignal,
+  redact: (text: string) => string,
+  warnings: string[],
+): Promise<RemoteResource[]> {
+  const resources: RemoteResource[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 4; page++) {
+    let listed: Record<string, unknown>;
+    try {
+      listed = await client.request({method: 'resources/list', params: cursor ? {cursor} : undefined}, ResultSchema, {
+        timeout,
+        signal,
+      });
+    } catch (error) {
+      if (isMcpMethodNotFound(error)) return [];
+      throw error;
+    }
+    if (!Array.isArray(listed.resources)) throw new FutrynError('PROTOCOL');
+    for (const raw of listed.resources) {
+      const parsed = ResourceSchema.safeParse(raw);
+      if (!parsed.success) {
+        if (!warnings.includes('A resource was skipped: invalid resource metadata.'))
+          warnings.push('A resource was skipped: invalid resource metadata.');
+        continue;
+      }
+      if (resources.length >= MAX_MCP_RESOURCES) {
+        warnings.push(`MCP resource discovery truncated at ${MAX_MCP_RESOURCES} resources.`);
+        return resources;
+      }
+      const item = parsed.data;
+      resources.push({
+        uri: clip(redact(item.uri), 2048),
+        name: clip(redact(item.name), 256),
+        ...(item.description !== undefined ? {description: clip(redact(item.description), 500)} : {}),
+        ...(item.mimeType !== undefined ? {mimeType: clip(redact(item.mimeType), 128)} : {}),
+        ...(typeof item.size === 'number' && Number.isFinite(item.size) && item.size >= 0 ? {size: item.size} : {}),
+      });
+    }
+    const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
+    if (!next) return resources;
+    if (resources.length >= MAX_MCP_RESOURCES || page === 3 || cursors.has(next)) {
+      warnings.push(`MCP resource discovery truncated (${MAX_MCP_RESOURCES} resources, 4 pages or repeated cursor).`);
+      return resources;
+    }
+    cursors.add(next);
+    cursor = next;
+  }
+  return resources;
+}
+
+/** Bound resource template discovery visibly; servers without templates return an empty list. */
+export async function discoverResourceTemplates(
+  client: Client,
+  timeout: number,
+  signal: AbortSignal,
+  redact: (text: string) => string,
+  warnings: string[],
+): Promise<RemoteResourceTemplate[]> {
+  const templates: RemoteResourceTemplate[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < 4; page++) {
+    let listed: Record<string, unknown>;
+    try {
+      listed = await client.request(
+        {method: 'resources/templates/list', params: cursor ? {cursor} : undefined},
+        ResultSchema,
+        {timeout, signal},
+      );
+    } catch (error) {
+      if (isMcpMethodNotFound(error)) return [];
+      throw error;
+    }
+    if (!Array.isArray(listed.resourceTemplates)) throw new FutrynError('PROTOCOL');
+    for (const raw of listed.resourceTemplates) {
+      const parsed = ResourceTemplateSchema.safeParse(raw);
+      if (!parsed.success) {
+        if (!warnings.includes('A resource template was skipped: invalid template metadata.'))
+          warnings.push('A resource template was skipped: invalid template metadata.');
+        continue;
+      }
+      if (templates.length >= MAX_MCP_RESOURCES) {
+        warnings.push(`MCP resource template discovery truncated at ${MAX_MCP_RESOURCES} templates.`);
+        return templates;
+      }
+      const item = parsed.data;
+      templates.push({
+        uriTemplate: clip(redact(item.uriTemplate), 2048),
+        name: clip(redact(item.name), 256),
+        ...(item.description !== undefined ? {description: clip(redact(item.description), 500)} : {}),
+        ...(item.mimeType !== undefined ? {mimeType: clip(redact(item.mimeType), 128)} : {}),
+      });
+    }
+    const next = typeof listed.nextCursor === 'string' ? listed.nextCursor : undefined;
+    if (!next) return templates;
+    if (templates.length >= MAX_MCP_RESOURCES || page === 3 || cursors.has(next)) {
+      warnings.push(
+        `MCP resource template discovery truncated (${MAX_MCP_RESOURCES} templates, 4 pages or repeated cursor).`,
+      );
+      return templates;
+    }
+    cursors.add(next);
+    cursor = next;
+  }
+  return templates;
+}
+
+/** Read one MCP server resource strictly via MCP JSON-RPC. Binary blobs are omitted, text is redacted and clipped. */
+export async function readRemoteResource(
+  client: Client,
+  uri: string,
+  timeout: number,
+  signal: AbortSignal,
+  redact: (text: string) => string,
+): Promise<string> {
+  if (!uri.trim() || uri.length > 2048 || /[\x00-\x1f\x7f]/.test(uri)) throw new FutrynError('INVALID_INPUT');
+  let raw: Record<string, unknown>;
+  try {
+    raw = await client.request({method: 'resources/read', params: {uri}}, ResultSchema, {timeout, signal});
+  } catch (error) {
+    if (
+      isMcpMethodNotFound(error) ||
+      (error && typeof error === 'object' && (error as {code?: unknown}).code === -32002)
+    )
+      throw new FutrynError('NOT_FOUND');
+    throw error;
+  }
+  const parsed = ReadResourceResultSchema.safeParse(raw);
+  if (!parsed.success) throw new FutrynError('PROTOCOL');
+  const sections: string[] = [];
+  for (const item of parsed.data.contents) {
+    const headerParts = [`URI: ${redact(item.uri)}`];
+    if (item.mimeType) headerParts.push(`MIME: ${redact(item.mimeType)}`);
+    const header = headerParts.join(' | ');
+    if ('text' in item && typeof item.text === 'string') {
+      sections.push(`${header}\n${safeText(item.text, redact)}`);
+    } else if ('blob' in item && typeof item.blob === 'string') {
+      const mime = item.mimeType ? redact(item.mimeType) : 'application/octet-stream';
+      sections.push(`${header}\n[MCP binary resource content (${mime}) is unsupported; content was omitted.]`);
+    }
+  }
+  if (!sections.length) return '[MCP resource returned no content.]';
+  return clip(sections.join('\n\n---\n\n'), MAX_MCP_OUTPUT_BYTES);
 }
 
 /** Bound discovery visibly; metadata is untrusted and never grants execution authority. */

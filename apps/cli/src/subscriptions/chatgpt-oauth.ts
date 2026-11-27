@@ -299,6 +299,7 @@ export class ChatGPTOAuth {
         );
         login.respond = undefined;
         login.server.stop();
+        clearTimeout(login.timer);
         const next = await this.begin(signal, login.clientID);
         login.progress = this.logins.get(next.id)!.progress;
         login.progress.message = 'OpenAI refused the first code. Complete the fresh browser sign-in. Esc cancels.';
@@ -501,6 +502,8 @@ export class ChatGPTOAuth {
         );
         const merged = {...tokens, refresh_token: tokens.refresh_token ?? record.refresh};
         const next = this.record(merged, record.clientID, Boolean(tokens.refresh_token));
+        // Never revive a credential that the user logged out while this refresh was in flight.
+        if (!(await vault.get(account.credential))) throw new FutrynError('AUTH');
         // Refresh tokens may rotate: the new record replaces the old one before anything is used.
         await vault.set(key, JSON.stringify(next));
         return next;

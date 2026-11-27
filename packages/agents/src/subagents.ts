@@ -559,6 +559,12 @@ export class SubagentManager implements SubagentExecutionPort {
     };
 
     let handedOff = false;
+    let resolveSyncDone: (() => void) | undefined;
+    const syncDone = !background
+      ? new Promise<void>(resolve => {
+          resolveSyncDone = resolve;
+        })
+      : undefined;
     try {
       const initialMessages = forkContext ? prepareForkedParentMessages(parent.messages) : [];
       agentId = this.deps.store.create(selection);
@@ -621,12 +627,14 @@ export class SubagentManager implements SubagentExecutionPort {
         startedAt,
         toolCount: 0,
         usage: null,
+        turnUsage: null,
         steps: [],
         reservation: inherited.limits,
         abortController: childAbort,
         inbox: [],
         waiters: 0,
         listeners: new Set(),
+        ...(syncDone ? {done: syncDone} : {}),
         ...(isolated ? {isolation: 'worktree' as const} : {}),
       };
       this.scheduler.registerTask(task);
@@ -780,6 +788,7 @@ export class SubagentManager implements SubagentExecutionPort {
         if (agentId) this.scheduler.removeTask(agentId);
         slot.reservation.release();
       }
+      resolveSyncDone?.();
     }
   }
 
@@ -789,14 +798,17 @@ export class SubagentManager implements SubagentExecutionPort {
       this.scheduler
         .listTasks(parentId)
         .filter(task => task.status === 'running' && !!task.reservation)
-        .map(task => ({limits: task.reservation, usage: task.usage})),
+        .map(task => ({limits: task.reservation, usage: task.turnUsage ?? null})),
     );
   }
 
   /** Folds a finished turn's usage into the parent, releases its reservation and stops siblings if the aggregate overran. */
   private foldChildUsage(task: ActiveSubagentTask | undefined, usage: Usage, release: boolean): void {
     this.deps.addParentUsage(task ? attributeUsage(usage, {agentId: task.agentId, sessionId: task.agentId}) : usage);
-    if (task && release) task.reservation = undefined;
+    if (task) {
+      task.turnUsage = null;
+      if (release) task.reservation = undefined;
+    }
     const parent = this.deps.getParentState();
     if (!parent.limits || !parentCapsExceeded(parent.limits)) return;
     for (const sibling of this.scheduler.listTasks(task?.parentConversationId)) {
@@ -947,6 +959,7 @@ export class SubagentManager implements SubagentExecutionPort {
           }
         } else if (event.type === 'usage') {
           latestUsage = event.usage;
+          task.turnUsage = event.usage;
           task.usage = priorUsage ? combineUsage(priorUsage, event.usage) : event.usage;
           onUsage(event.usage);
           progress();
@@ -978,6 +991,7 @@ export class SubagentManager implements SubagentExecutionPort {
         } else if (event.type === 'completed') {
           flushText();
           latestUsage = event.usage;
+          task.turnUsage = event.usage;
           task.usage = priorUsage ? combineUsage(priorUsage, event.usage) : event.usage;
           onUsage(event.usage);
         }
@@ -1016,6 +1030,7 @@ export class SubagentManager implements SubagentExecutionPort {
         for (;;) {
           const turnStarted = Date.now();
           const priorUsage = task.usage;
+          task.turnUsage = null;
           const priorTurnCount = this.deps.store.get?.(task.agentId)?.turns?.length ?? 0;
           let status: 'completed' | 'failed' | 'cancelled' = 'completed';
           let errorCode: string | undefined;
@@ -1049,12 +1064,17 @@ export class SubagentManager implements SubagentExecutionPort {
           let continues = false;
           if (wantsContinue) {
             const deducted = deductChildLimits(context.limits, finalUsage, turnElapsedMs);
+            const parentLimits = this.deps.getParentState().limits;
+            const effectiveParentLimits =
+              parentLimits && finalUsage
+                ? {...parentLimits, usage: combineUsage(parentLimits.usage, finalUsage)}
+                : parentLimits;
             if (!deducted.ok) {
               status = 'failed';
               errorCode = 'BUDGET';
               summary = [summary, this.deps.redact(deducted.message)].filter(Boolean).join('\n\n');
               task.inbox.splice(0);
-            } else if (parentCapsExceeded(this.deps.getParentState().limits)) {
+            } else if (parentCapsExceeded(effectiveParentLimits)) {
               status = 'failed';
               errorCode = 'BUDGET';
               summary = [summary, 'Subagent follow-up stopped: the parent turn budget is exhausted.']
@@ -1202,6 +1222,12 @@ export class SubagentManager implements SubagentExecutionPort {
       const outcome = this.deps.steerChild?.(id, text);
       if (outcome?.accepted)
         return {status: 'ok', content: JSON.stringify({id, status: 'running', delivery: 'steered'})};
+      if (!task.background)
+        return {
+          status: 'error',
+          code: 'AGENT_BUSY',
+          content: 'Foreground subagent cannot queue follow-up messages while busy; wait for it to finish first.',
+        };
       task.inbox.push(text);
       return {status: 'ok', content: JSON.stringify({id, status: 'running', delivery: 'queued'})};
     }
@@ -1246,9 +1272,11 @@ export class SubagentManager implements SubagentExecutionPort {
     const candidateEffort = task?.reasoningEffort ?? profile.reasoningEffort ?? cfg.defaultReasoningEffort;
     const supportedEfforts = found.model.reasoningEfforts ?? [];
     const reasoningEffort =
-      candidateEffort && (supportedEfforts.length === 0 || supportedEfforts.includes(candidateEffort))
+      candidateEffort && supportedEfforts.includes(candidateEffort)
         ? candidateEffort
-        : found.model.defaultReasoningEffort;
+        : found.model.defaultReasoningEffort && supportedEfforts.includes(found.model.defaultReasoningEffort)
+          ? found.model.defaultReasoningEffort
+          : undefined;
     const slot = this.scheduler.tryReserveSlot();
     if (!slot.ok)
       return {
@@ -1304,8 +1332,11 @@ export class SubagentManager implements SubagentExecutionPort {
       task2.cancelReason = undefined;
       task2.abortController = new AbortController();
       task2.finalSummary = undefined;
+      task2.errorCode = undefined;
+      task2.finishedAt = undefined;
+      task2.turnUsage = null;
       this.scheduler.registerTask(task2);
-      this.deps.store.updateSubagentSession?.(id, {status: 'running', finishedAt: null});
+      this.deps.store.updateSubagentSession?.(id, {status: 'running', finishedAt: null, errorCode: null});
       const context: ChildRunContext = {
         agentId: id,
         parentConversationId: owned.parentId,

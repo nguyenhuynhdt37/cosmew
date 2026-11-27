@@ -12,6 +12,7 @@ import {
 } from '../working-roots';
 import {PatchError} from '../patch/parser';
 import {ApplyPatchRuntime} from '../runtimes/apply-patch';
+import type {ReadLedger} from '../runtimes/read-ledger';
 import type {PreparedTool, ToolHandler} from './types';
 
 /**
@@ -463,7 +464,7 @@ function applyEdits(text: string, edits: TextEdit[]): string {
   return out;
 }
 
-export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
+export function lspRenameHandler(options: ToolDispatcherOptions, ledger?: ReadLedger): ToolHandler {
   const runtime = new ApplyPatchRuntime(options);
   return {
     descriptor: lspRenameDescriptor,
@@ -537,7 +538,11 @@ export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
             byPath.set(path, [...(byPath.get(path) ?? []), ...list]);
           }
           try {
-            if (new TextDecoder().decode(options.workspace.readBytes(file, 8 * 1024 * 1024).bytes) !== sourceText)
+            if (
+              new TextDecoder('utf-8', {ignoreBOM: true}).decode(
+                options.workspace.readBytes(file, 8 * 1024 * 1024).bytes,
+              ) !== sourceText
+            )
               throw new PatchError('STALE_PATCH', 'The source file changed while preparing rename. Retry.');
             const plan = runtime.verifyFiles([...byPath.keys()], (path, before) => {
               if (path === file.relative && before !== sourceText)
@@ -547,7 +552,22 @@ export function lspRenameHandler(options: ToolDispatcherOptions): ToolHandler {
                 );
               return applyEdits(before, byPath.get(path)!);
             });
-            return {kind: 'patch', plan, runtime, execute: s => runtime.apply(plan, s)};
+            return {
+              kind: 'patch',
+              plan,
+              runtime,
+              execute: async s => {
+                const outcome = await runtime.apply(plan, s);
+                if (outcome.status === 'ok' && ledger) {
+                  for (const change of plan.changes) {
+                    const key = change.snapshot.identity ?? change.snapshot.path;
+                    if (change.after === null) ledger.forget(key);
+                    else ledger.record(key, change.after);
+                  }
+                }
+                return outcome;
+              },
+            };
           } catch (error) {
             if (error instanceof PatchError) return refuse(error.code, error.message);
             if (error instanceof WorkspaceDenied) throw error;

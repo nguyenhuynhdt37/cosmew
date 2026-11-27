@@ -430,7 +430,18 @@ export class ProviderAdapter implements ModelPort {
     }
     if (!hasMetadata && !(protocol === 'chat' && parts.some(part => part.type === 'reasoning'))) return;
     const parsed = providerReplaySchema.safeParse({version: 1, ...this.replayBinding(), parts});
-    if (!parsed.success) throw new FutrynError('PROTOCOL');
+    if (!parsed.success) {
+      const onlyContentSizeLimit = parsed.error.issues.every(
+        issue =>
+          issue.message === 'continuation state exceeds limit' ||
+          (issue.code === 'too_big' &&
+            !issue.path.includes('metadata') &&
+            issue.path[0] === 'parts' &&
+            (issue.path.length === 1 || issue.path[2] === 'text')),
+      );
+      if (onlyContentSizeLimit) return;
+      throw new FutrynError('PROTOCOL');
+    }
     return parsed.data;
   }
   private async options(input: ModelRequest, signal?: AbortSignal) {

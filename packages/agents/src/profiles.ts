@@ -360,7 +360,10 @@ export function filterSubagentTools(
     if (forbidSet.has(descriptor.name)) return false;
     if (
       (options.parentAnalysisOnly || profile.readOnly) &&
-      (descriptor.capability === 'mcp.call' || descriptor.name.startsWith('mcp__'))
+      (descriptor.capability === 'mcp.call' ||
+        descriptor.name.startsWith('mcp__') ||
+        descriptor.name === 'tool_search' ||
+        descriptor.name === 'mcp_resource')
     )
       return false;
     if (allowSet && !allowSet.has(descriptor.name)) return false;
@@ -383,7 +386,7 @@ export function isToolAllowedForProfile(
   if (profile.forbiddenTools.includes(toolName)) return false;
   if (profile.allowedTools && !profile.allowedTools.includes(toolName)) return false;
   if (options.parentAnalysisOnly || profile.readOnly) {
-    if (toolName.startsWith('mcp__')) return false;
+    if (toolName.startsWith('mcp__') || toolName === 'tool_search' || toolName === 'mcp_resource') return false;
     if (['edit', 'write', 'apply_patch', 'lsp_rename'].includes(toolName)) return false;
     if (options.parentAnalysisOnly && (toolName === 'exec_command' || toolName === 'write_stdin')) return false;
   }

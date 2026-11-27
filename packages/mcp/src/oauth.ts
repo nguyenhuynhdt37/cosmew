@@ -315,15 +315,13 @@ export class McpOAuthService {
           const duplicate = ['state', 'code', 'error', 'iss', 'resource'].some(
             key => callback.searchParams.getAll(key).length > 1,
           );
-          if (
-            duplicate ||
-            login.consumed ||
-            Date.now() >= login.expiresAt ||
-            a.length !== b.length ||
-            !timingSafeEqual(a, b)
-          ) {
+          if (Date.now() >= login.expiresAt) {
             finish(400, 'Invalid OAuth callback');
             reject(failed());
+            return;
+          }
+          if (duplicate || login.consumed || a.length !== b.length || !timingSafeEqual(a, b)) {
+            finish(400, 'Invalid OAuth callback');
             return;
           }
           login.consumed = true;

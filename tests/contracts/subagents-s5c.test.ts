@@ -230,7 +230,9 @@ test('running siblings count against the cap before they finish', async () => {
   // A running child has used 900 tokens (reported through consumeTurn's usage events, mirrored on the task).
   const first = m.subagents.run('call-a', {agent_type: 'explore', description: 'a', prompt: 'first', background: true});
   const id = JSON.parse((await first).content).id as string;
-  m.subagents.scheduler.getTask(id)!.usage = usage(500, 400);
+  const liveTask = m.subagents.scheduler.getTask(id)!;
+  liveTask.usage = usage(500, 400);
+  liveTask.turnUsage = usage(500, 400);
   expect((await spawn(m, {prompt: 'second'})).code).toBe('AGENT_BUDGET_EXHAUSTED');
   release();
 });
@@ -728,4 +730,231 @@ test('deductChildLimits rejects exhausted duration and updates remaining child c
   }
   const timeOut = deductChildLimits(initial, usage(10, 10, 0.01), 5000);
   expect(timeOut).toMatchObject({ok: false, what: 'time budget'});
+});
+
+test('background inbox loop checks parentCapsExceeded with projected finalUsage before starting follow-up turn', async () => {
+  let releaseTurn1!: () => void;
+  const gateTurn1 = new Promise<void>(resolve => (releaseTurn1 = resolve));
+  const delivered: string[] = [];
+  let parentSpent: Usage | null = usage(400, 200); // 600 tokens already spent by parent
+
+  const m = manager({
+    config: {maxChildTokens: 500},
+    limits: () => ({budget: {maxTokens: 1000}, usage: parentSpent, elapsedMs: 0}),
+    onParentUsage: u => {
+      parentSpent = parentSpent
+        ? {
+            inputTokens: (parentSpent.inputTokens ?? 0) + (u.inputTokens ?? 0),
+            outputTokens: (parentSpent.outputTokens ?? 0) + (u.outputTokens ?? 0),
+            costUSD: null,
+          }
+        : u;
+    },
+    deliverToParent: (_p, text) => {
+      delivered.push(text);
+      return 'queued';
+    },
+    runEvents: async function* () {
+      yield {type: 'started', requestId: crypto.randomUUID()};
+      await gateTurn1;
+      // Child was granted min(1000 - 600, 500) = 400 tokens; suppose parent concurrently spent 100 more tokens
+      // while child used 300 tokens -> child still has 100 left in its own 400 grant, but parent total (700 + 300 = 1000) hits cap!
+      parentSpent = usage(500, 200);
+      yield {type: 'textDelta', text: 'turn-1-done'};
+      yield {type: 'completed', finishReason: 'stop', usage: usage(200, 100)};
+    },
+  });
+
+  const started = await spawn(m, {background: true, prompt: 'one'});
+  const id = JSON.parse(started.content).id as string;
+  await m.subagents.message({id, message: 'two-must-not-run'});
+  releaseTurn1();
+  for (let n = 0; n < 200 && !delivered.length; n++) await new Promise(resolve => setTimeout(resolve, 5));
+
+  expect(m.contexts).toHaveLength(1);
+  expect(delivered[0]).toContain('error="BUDGET"');
+  expect(delivered[0]).toContain('parent turn budget is exhausted');
+  expect(m.subagents.inspectSubagent(id)?.status).toBe('failed');
+  expect(m.subagents.inspectSubagent(id)?.errorCode).toBe('BUDGET');
+});
+
+test('reservedForChildren uses per-turn turnUsage instead of cumulative task.usage across resumed turns', async () => {
+  let releaseTurn2!: () => void;
+  const gateTurn2 = new Promise<void>(resolve => (releaseTurn2 = resolve));
+  let parentSpent: Usage | null = null;
+  let turnCount = 0;
+
+  const m = manager({
+    config: {maxChildTokens: 300},
+    limits: () => ({budget: {maxTokens: 700}, usage: parentSpent, elapsedMs: 0}),
+    onParentUsage: u => {
+      parentSpent = parentSpent
+        ? {
+            inputTokens: (parentSpent.inputTokens ?? 0) + (u.inputTokens ?? 0),
+            outputTokens: (parentSpent.outputTokens ?? 0) + (u.outputTokens ?? 0),
+            costUSD: null,
+          }
+        : u;
+    },
+    runEvents: async function* (ctx) {
+      if (ctx.prompt === 'sibling') {
+        yield {type: 'started', requestId: crypto.randomUUID()};
+        yield {type: 'textDelta', text: 'sibling ok'};
+        yield {type: 'completed', finishReason: 'stop', usage: usage(10, 10)};
+        return;
+      }
+      turnCount++;
+      yield {type: 'started', requestId: crypto.randomUUID()};
+      if (turnCount === 1) {
+        // Turn 1 uses 280 tokens -> folded into parentSpent (280), task.usage = 280.
+        yield {type: 'textDelta', text: 'turn 1'};
+        yield {type: 'completed', finishReason: 'stop', usage: usage(200, 80)};
+      } else {
+        // Turn 2 streams 150 tokens so far -> cumulative task.usage = 430, but turnUsage = 150 (within 300 reservation).
+        // Parent spent (280) + child reservation max(300, 150) = 580 < 700, leaving 120 tokens for a sibling!
+        // If cumulative task.usage (430) were used instead, 280 + 430 = 710 >= 700 would falsely exhaust the budget!
+        yield {type: 'usage', usage: usage(100, 50)};
+        await gateTurn2;
+        yield {type: 'textDelta', text: 'turn 2'};
+        yield {type: 'completed', finishReason: 'stop', usage: usage(100, 50)};
+      }
+    },
+  });
+
+  const first = await spawn(m, {background: true, prompt: 'turn-1'});
+  const id = JSON.parse(first.content).id as string;
+  await m.subagents.scheduler.getTask(id)!.done;
+  expect(parentSpent).toMatchObject({inputTokens: 200, outputTokens: 80});
+
+  const resumed = await m.subagents.message({id, message: 'turn-2'});
+  expect(JSON.parse(resumed.content).delivery).toBe('resumed');
+  for (let n = 0; n < 100 && m.contexts.length < 2; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  const sibling = await spawn(m, {prompt: 'sibling'});
+  expect(sibling.status).toBe('ok');
+  expect(m.contexts.at(-1)?.limits.budget.maxTokens).toBe(120);
+
+  releaseTurn2();
+  await m.subagents.scheduler.getTask(id)!.done;
+});
+
+test('agent_message omits reasoningEffort on models without reasoningEfforts and clears stale errorCode/finishedAt', async () => {
+  let shouldFail = true;
+  const m = manager({
+    config: {
+      defaultReasoningEffort: 'medium',
+      roles: {explore: {reasoningEffort: 'low'}},
+    },
+    // Note: modelEfforts omitted -> found.model.reasoningEfforts is undefined ([]).
+    runEvents: async function* () {
+      yield {type: 'started', requestId: crypto.randomUUID()};
+      if (shouldFail) {
+        throw new Error('boom');
+      }
+      yield {type: 'textDelta', text: 'recovered'};
+      yield {type: 'completed', finishReason: 'stop', usage: usage(10, 5)};
+    },
+  });
+
+  const started = await spawn(m, {agent_type: 'explore', background: true, prompt: 'initial'});
+  const id = JSON.parse(started.content).id as string;
+  await m.subagents.scheduler.getTask(id)!.done;
+  expect(m.contexts[0]!.reasoningEffort).toBeUndefined();
+  expect(m.subagents.inspectSubagent(id)?.status).toBe('failed');
+  expect(m.subagents.inspectSubagent(id)?.errorCode).toBe('EXECUTION_FAILED');
+
+  shouldFail = false;
+  const resumed = await m.subagents.message({id, message: 'retry cleanly'});
+  expect(JSON.parse(resumed.content).delivery).toBe('resumed');
+  await m.subagents.scheduler.getTask(id)!.done;
+
+  expect(m.contexts[1]!.reasoningEffort).toBeUndefined();
+  const after = m.subagents.inspectSubagent(id)!;
+  expect(after.status).toBe('completed');
+  expect(after.errorCode).toBeUndefined();
+  expect(m.store.getSubagentSession(id)?.errorCode).toBeUndefined();
+});
+
+test('agent_message rejects unsteerable follow-ups to a busy foreground subagent with AGENT_BUSY', async () => {
+  let releaseFg!: () => void;
+  const gateFg = new Promise<void>(resolve => (releaseFg = resolve));
+  let startedId: string | undefined;
+
+  const m = manager({
+    run: async context => {
+      startedId = context.agentId;
+      await gateFg;
+      return 'foreground done';
+    },
+  });
+
+  const fgPromise = spawn(m, {background: false, prompt: 'foreground job'});
+  for (let n = 0; n < 100 && !startedId; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(startedId).toBeDefined();
+
+  const busy = await m.subagents.message({id: startedId!, message: 'cannot queue on foreground'});
+  expect(busy).toEqual({
+    status: 'error',
+    code: 'AGENT_BUSY',
+    content: 'Foreground subagent cannot queue follow-up messages while busy; wait for it to finish first.',
+  });
+  expect(m.subagents.scheduler.getTask(startedId!)?.inbox).toEqual([]);
+
+  releaseFg();
+  expect((await fgPromise).status).toBe('ok');
+});
+
+test('scheduler.shutdown awaits synchronous worktree/DB cleanup and preserves toolCount, steps and agentId attribution', async () => {
+  const worktrees = fakeWorktrees({changed: true});
+  const attributedUsages: Usage[] = [];
+  const finishedEvents: Array<{toolCount: number; stepsCount: number; status: string}> = [];
+  let childEnteredTool = false;
+
+  const m = manager({
+    worktrees: worktrees.port,
+    onParentUsage: u => attributedUsages.push(u),
+    runEvents: async function* (_ctx, signal) {
+      yield {type: 'started', requestId: crypto.randomUUID()};
+      yield {type: 'usage', usage: usage(30, 10)};
+      yield {type: 'toolCallComplete', call: {id: 'tc-1', name: 'read', input: {path: 'a.ts'}}};
+      yield {
+        type: 'toolResult',
+        result: {callId: 'tc-1', name: 'read', status: 'ok', content: 'file content'},
+      };
+      childEnteredTool = true;
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(new Error('aborted')), {once: true});
+      });
+    },
+  });
+
+  let syncAgentId: string | undefined;
+  const runPromise = m.subagents.run(
+    'call-sync-shutdown',
+    {agent_type: 'worker', description: 'sync isolated worker', prompt: 'work', isolation: 'worktree'},
+    undefined,
+    ev => {
+      if (ev.type === 'subagent.started') syncAgentId = ev.agentId;
+      if (ev.type === 'subagent.finished') {
+        finishedEvents.push({toolCount: ev.toolCount, stepsCount: ev.steps?.length ?? 0, status: ev.status});
+      }
+    },
+  );
+
+  for (let n = 0; n < 100 && !childEnteredTool; n++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(childEnteredTool).toBe(true);
+  expect(syncAgentId).toBeDefined();
+
+  // Shutdown must wait until synchronous subagent finishes worktree cleanup and DB update.
+  await m.subagents.shutdown();
+  expect(worktrees.calls).toEqual([`acquire:${syncAgentId}`, `finish:${syncAgentId}`]);
+  expect(m.store.getSubagentSession(syncAgentId!)?.status).toBe('cancelled');
+  expect(finishedEvents).toEqual([{toolCount: 1, stepsCount: 1, status: 'cancelled'}]);
+  expect(attributedUsages[0]?.breakdown?.[0]?.agentId).toBe(syncAgentId);
+  expect(m.subagents.scheduler.listTasks()).toHaveLength(0);
+
+  const outcome = await runPromise;
+  expect(outcome.status).toBe('error');
+  expect(outcome.code).toBe('CANCELLED');
 });

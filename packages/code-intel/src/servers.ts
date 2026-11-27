@@ -1,4 +1,4 @@
-import {existsSync, readFileSync, statSync} from 'node:fs';
+import {existsSync, readFileSync, realpathSync, statSync} from 'node:fs';
 import {dirname, extname, isAbsolute, join, relative} from 'node:path';
 
 /**
@@ -32,8 +32,26 @@ const nodeBin = (root: string, workspace: string, name: string): string | null =
 export function trustedPathProgram(name: string, workspaceRoot: string): string | null {
   const found = Bun.which(name);
   if (!found || !isAbsolute(found)) return null;
-  const rel = relative(workspaceRoot, found);
-  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? null : found;
+  let canonicalWorkspace = workspaceRoot;
+  let canonicalFound = found;
+  try {
+    canonicalWorkspace = realpathSync.native(workspaceRoot);
+  } catch {
+    /* keep logical root */
+  }
+  try {
+    canonicalFound = realpathSync.native(found);
+  } catch {
+    /* keep raw path */
+  }
+  for (const [root, target] of [
+    [workspaceRoot, found],
+    [canonicalWorkspace, canonicalFound],
+  ] as const) {
+    const rel = relative(root, target);
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) return null;
+  }
+  return found;
 }
 
 function typescriptMajor(root: string, workspace: string): number | null {

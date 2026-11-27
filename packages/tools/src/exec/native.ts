@@ -633,16 +633,22 @@ export class NativeCommandRuntime implements CommandRuntime {
 
   /** Wait up to `yieldMs`, then report the session's state and the output since the previous call. */
   private async collect(session: NativeSession, yieldMs: number, signal?: AbortSignal): Promise<CommandOutcome> {
+    let resolveBackgroundAbort: (() => void) | undefined;
     const abort = () => {
       if (!session.background) void this.stop(session, 'cancelled');
+      else resolveBackgroundAbort?.();
     };
-    if (signal?.aborted && !session.background) await this.stop(session, 'cancelled');
-    else signal?.addEventListener('abort', abort, {once: true});
+    if (signal?.aborted) {
+      if (!session.background) await this.stop(session, 'cancelled');
+      else throw new FutrynError('CANCELLED');
+    } else {
+      signal?.addEventListener('abort', abort, {once: true});
+    }
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!session.ended)
-        await Promise.race([
+      if (!session.ended) {
+        const waiters: Promise<void>[] = [
           session.done,
           new Promise<void>(resolve => {
             session.yieldForeground = resolve;
@@ -650,8 +656,21 @@ export class NativeCommandRuntime implements CommandRuntime {
           new Promise<void>(resolve => {
             timer = setTimeout(resolve, yieldMs);
           }),
-        ]);
-      if (signal?.aborted && !session.background) await this.stop(session, 'cancelled');
+        ];
+        if (session.background && signal) {
+          waiters.push(
+            new Promise<void>(resolve => {
+              resolveBackgroundAbort = resolve;
+              if (signal.aborted) resolve();
+            }),
+          );
+        }
+        await Promise.race(waiters);
+      }
+      if (signal?.aborted) {
+        if (!session.background) await this.stop(session, 'cancelled');
+        else throw new FutrynError('CANCELLED');
+      }
 
       if (!session.ended) this.moveToBackground(session);
       const result = this.outcome(session);
@@ -664,6 +683,7 @@ export class NativeCommandRuntime implements CommandRuntime {
     } finally {
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
+      resolveBackgroundAbort = undefined;
       session.observer = undefined;
       session.yieldForeground = undefined;
     }

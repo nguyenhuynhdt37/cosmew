@@ -149,7 +149,7 @@ export interface ConversationStore {
     patch: {
       status: import('./subagents').SubagentStatus;
       finishedAt?: string | null;
-      errorCode?: string;
+      errorCode?: string | null;
     },
   ): void;
   getSubagentSession?(id: string): import('./subagents').SubagentSessionRecord | undefined;

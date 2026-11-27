@@ -282,6 +282,10 @@ export function startup(
   const userMcp = {
     tools: () => mcpHub.tools(),
     call: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => mcpHub.call(name, args, signal),
+    servers: () => mcpHub.servers(),
+    listResources: (server: string, signal?: AbortSignal) => mcpHub.listResources(server, signal),
+    listResourceTemplates: (server: string, signal?: AbortSignal) => mcpHub.listResourceTemplates(server, signal),
+    readResource: (server: string, uri: string, signal?: AbortSignal) => mcpHub.readResource(server, uri, signal),
   };
   const languageServerManagers = new Set<LspManager>();
   /** Sandbox network proxies, one per client; stopped with the command runtimes. */
