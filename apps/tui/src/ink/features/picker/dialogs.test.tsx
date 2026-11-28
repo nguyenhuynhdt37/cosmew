@@ -379,7 +379,7 @@ test('session deletion failure keeps item and reports honest error', async () =>
   await key(view, enter);
   expect(view.lastFrame()).toContain('not deleted');
 });
-test('theme preview rolls back on close and applies only after confirmation', async () => {
+test('theme preview stays inside the dialog and applies only after confirmation', async () => {
   const engine = new ThemeEngine({env: {NO_COLOR: '1'}, systemDarkPreference: true});
   const original = engine.getCommittedAppearance().theme;
   const target = original === 'light' ? 'dark' : 'light';
@@ -387,12 +387,13 @@ test('theme preview rolls back on close and applies only after confirmation', as
   await settle();
   expect(view.lastFrame()).toContain('Preview · Auto');
   expect(view.lastFrame()).toContain('Terminal colors Off');
-  await key(view, target); // highlighting a theme previews it
-  expect(engine.isPreviewing()).toBe(true);
+  await key(view, target); // highlighting a theme previews it in the dialog only
+  expect(engine.isPreviewing()).toBe(false);
+  expect(engine.getActiveAppearance().theme).toBe(original);
   expect(engine.getCommittedAppearance().theme).toBe(original);
   expect(view.lastFrame()).toContain(`Preview · ${target === 'light' ? 'Light' : 'Dark'}`);
   view.unmount();
-  expect(engine.isPreviewing()).toBe(false);
+  expect(engine.getActiveAppearance().theme).toBe(original);
   const applied = renderInk(<ThemesDialog />, {themeEngine: engine});
   await settle();
   await key(applied, target);

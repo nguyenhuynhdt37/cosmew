@@ -513,6 +513,15 @@ function committedSessionMessages(stored: SessionRecord): Message[] {
     }));
 }
 
+/** Sync-with-system fields present in an appearance patch (contract 1.72, ADR 0127). */
+function pickSync(patch: PartialAppearanceConfig): PartialAppearanceConfig {
+  return {
+    ...(patch.syncWithSystem !== undefined ? {syncWithSystem: patch.syncWithSystem} : {}),
+    ...(patch.lightTheme !== undefined ? {lightTheme: patch.lightTheme} : {}),
+    ...(patch.darkTheme !== undefined ? {darkTheme: patch.darkTheme} : {}),
+  };
+}
+
 export class FutrynClient {
   private imageSequence = 0;
   private imageGeneration = 0;
@@ -3511,6 +3520,7 @@ export class FutrynClient {
         ? {syntaxHighlighting: projectOverride.syntaxHighlighting}
         : {}),
       ...(projectOverride.sidebar !== undefined ? {sidebar: projectOverride.sidebar} : {}),
+      ...pickSync(projectOverride),
       animations: {
         ...base.animations,
         ...(projectOverride.animations ?? {}),
@@ -3543,6 +3553,7 @@ export class FutrynClient {
             ? {syntaxHighlighting: validatedPatch.syntaxHighlighting}
             : {}),
           ...(validatedPatch.sidebar !== undefined ? {sidebar: validatedPatch.sidebar} : {}),
+          ...pickSync(validatedPatch),
           animations: {
             ...currentGlobal.animations,
             ...(validatedPatch.animations ?? {}),

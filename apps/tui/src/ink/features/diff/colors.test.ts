@@ -58,8 +58,8 @@ for (const mode of ['dark', 'light'] as const) {
   });
 }
 
-test('daltonized and ANSI themes preserve distinct change markers', () => {
-  const {tokens, frame} = capture('dark-daltonized');
+test('colorblind and ANSI themes preserve distinct change markers', () => {
+  const {tokens, frame} = capture('github-dark-colorblind');
   expect(frame).toContain(fgHex(tokens.diffAdded) + 'A ');
   expect(frame).toContain(fgHex(tokens.diffRemoved) + 'D ');
   const [selected, added, removed] = capture('dark-ansi', '1').frame.split('\n');

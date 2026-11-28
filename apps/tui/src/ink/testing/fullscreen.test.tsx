@@ -1420,3 +1420,25 @@ test('useTerminalSelectionCopied shows copy confirmation on composer footer and 
     view.unmount();
   }
 });
+
+test('a single-theme start still measures the terminal background so turning sync on picks the right slot', async () => {
+  const terminal = terminalAnswering('\x1b]11;rgb:ffff/ffff/ffff\x07');
+  const fixture = dialogFixture({startSession: () => ({id: 'session-1', selection, messages: []})});
+  // A fixed dark mode, as a single GitHub theme stores: nothing asks for the background but sync later.
+  const engine = new ThemeEngine({env: {NO_COLOR: '1', COSMEW_THEME_MODE: 'dark'}});
+  await engine.setTheme('github-dark');
+  const run = runInkTui({
+    client: fixture.client,
+    stdout: asWrite(terminal.stdout),
+    stdin: asRead(terminal.stdin),
+    themeEngine: engine,
+    slots: {status: <Text>RUNTIME_READY</Text>},
+  });
+  await waitFor(() => terminal.stdout.frames.join(''), 'RUNTIME_READY');
+  expect(engine.getCommittedAppearance().mode).not.toBe('system');
+  expect(terminal.written[0]).toBe('\x1b]11;?\x07');
+  await engine.setSync({enabled: true});
+  expect(engine.getActiveThemeManifest().id).toBe('github-light');
+  process.emit('SIGTERM');
+  await run;
+});

@@ -126,7 +126,7 @@ function createSamplePluginDir(
 
 describe('Phase 2 (Contract 1.70) — 2A: User-scoped Plugin Host & SHA-256 Trust', () => {
   test('installs plugin safely, gates hooks/MCP behind exact SHA-256 trust, and auto-revokes on tamper', async () => {
-    expect(CONTRACT_VERSION).toBe('1.70');
+    expect(CONTRACT_VERSION).toBe('1.72');
     const sourceParent = createTempDir('cosmew-plugin-src-');
     const stateDir = createTempDir('cosmew-plugin-state-');
     const workspace = createTempDir('cosmew-plugin-ws-');

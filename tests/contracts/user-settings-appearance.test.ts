@@ -197,3 +197,59 @@ test('editor mode defaults, cycles live and persists independently of appearance
   expect(restored.readEditorMode()).toBe('normal');
   unsubscribe();
 });
+
+test('settings without sync keys load single-theme defaults', () => {
+  const f = fixture();
+  writeFileSync(f.path, '{"theme":"dark","themeMode":"dark"}');
+  expect(new FileAppearanceStore({stateDirectory: f.directory}).read()).toMatchObject({
+    syncWithSystem: false,
+    lightTheme: 'github-light',
+    darkTheme: 'github-dark',
+  });
+});
+
+test('sync-with-system fields persist under their own keys and keep unknown keys', () => {
+  const f = fixture();
+  writeFileSync(f.path, '{"future":7}');
+  new FileAppearanceStore({stateDirectory: f.directory}).write({syncWithSystem: true, darkTheme: 'github-dark-dimmed'});
+  expect(JSON.parse(readFileSync(f.path, 'utf8'))).toMatchObject({
+    future: 7,
+    syncWithSystem: true,
+    lightTheme: 'github-light',
+    darkTheme: 'github-dark-dimmed',
+  });
+  expect(new FileAppearanceStore({stateDirectory: f.directory}).read()).toMatchObject({
+    syncWithSystem: true,
+    darkTheme: 'github-dark-dimmed',
+  });
+});
+
+test('an invalid lightTheme on disk is ignored while other keys still load', () => {
+  const f = fixture();
+  writeFileSync(f.path, JSON.stringify({lightTheme: 42, darkTheme: 'github-dark-dimmed', syncWithSystem: true}));
+  expect(new FileAppearanceStore({stateDirectory: f.directory}).read()).toMatchObject({
+    lightTheme: 'github-light',
+    darkTheme: 'github-dark-dimmed',
+    syncWithSystem: true,
+  });
+});
+
+test('project appearance carries sync fields over a synced global appearance', () => {
+  const f = fixture();
+  const store = new FileAppearanceStore({stateDirectory: f.directory});
+  const {client} = createClientFixture({workspace: join(f.home, 'project'), appearanceStore: store});
+  client.updateAppearance({syncWithSystem: true, darkTheme: 'github-dark-dimmed', mode: 'system'});
+  client.updateAppearance({theme: 'github-light', mode: 'light', syncWithSystem: false}, 'project');
+  expect(client.getAppearance()).toMatchObject({theme: 'github-light', mode: 'light', syncWithSystem: false});
+  client.updateAppearance({syncWithSystem: true, darkTheme: 'github-dark-high-contrast', mode: 'system'}, 'project');
+  expect(client.getAppearance()).toMatchObject({syncWithSystem: true, darkTheme: 'github-dark-high-contrast'});
+  expect(client.getAppearance(false)).toMatchObject({syncWithSystem: true, darkTheme: 'github-dark-dimmed'});
+});
+
+test('sync fields persist without an appearance store, globally and per project', () => {
+  const {client} = createClientFixture({workspace: '/workspace/sync'});
+  client.updateAppearance({syncWithSystem: true, lightTheme: 'github-light-tritanopia', mode: 'system'});
+  expect(client.getAppearance(false)).toMatchObject({syncWithSystem: true, lightTheme: 'github-light-tritanopia'});
+  client.updateAppearance({darkTheme: 'github-dark-dimmed'}, 'project');
+  expect(client.getAppearance()).toMatchObject({syncWithSystem: true, darkTheme: 'github-dark-dimmed'});
+});

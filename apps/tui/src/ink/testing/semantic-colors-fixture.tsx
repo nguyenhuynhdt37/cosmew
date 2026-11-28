@@ -17,7 +17,7 @@ const engine = new ThemeEngine({
   env: {FORCE_COLOR: '3', NO_COLOR: option === 'no-color' ? '1' : '', COLORFGBG: mode === 'light' ? '0;15' : '15;0'},
 });
 if (option === 'ansi') await engine.setTheme(`${mode}-ansi`);
-if (option === 'custom-palette') await engine.setTheme(mode === 'light' ? 'parchment' : 'midnight');
+if (option === 'custom-palette') await engine.setTheme(mode === 'light' ? 'github-light' : 'github-dark-dimmed');
 if (option === 'plain-code') await engine.updateAppearance({syntaxHighlighting: false});
 
 const {client} = createClientFixture();

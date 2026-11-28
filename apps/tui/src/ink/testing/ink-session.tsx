@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import type {ThemeEngine} from '../../theme/theme';
 import {render, settle, waitForCondition, waitForFrame} from './wait';
 import type {FutrynClient} from '@cosmew/sdk';
 import {InkApp} from '../app';
@@ -18,6 +19,8 @@ export interface InkSessionOptions {
   initialCommand?: string;
   /** Skip the consent dialog: false leaves the startup gate in front of the test. */
   consent?: boolean;
+  /** Theme engine for the app; defaults to InkApp's own. */
+  themeEngine?: ThemeEngine;
 }
 export interface InkSession {
   client: FutrynClient;
@@ -93,6 +96,7 @@ export async function openInk(client: FutrynClient, options: InkSessionOptions =
   const view = render(
     <InkApp
       client={client}
+      themeEngine={options.themeEngine}
       width={options.width ?? 110}
       rows={options.rows}
       initialCommand={options.initialCommand}

@@ -80,7 +80,7 @@ for (const mode of ['dark', 'light'] as const) {
   test(`${mode} palette paints a single canvas behind content and blank rows`, () => {
     const frame = frames(mode, 'custom-palette');
     const background = paint(frame.tokens.background, '').replace('[38;', '[48;');
-    expect(frame.theme).toContain(mode === 'light' ? 'Preview · Parchment' : 'Preview · Midnight');
+    expect(frame.theme).toContain(mode === 'light' ? 'Preview · Light default' : 'Preview · Dark dimmed');
     expect(frame.theme).toContain(background);
     expect(frame.canvas).toContain(background + ' '.repeat(100));
     expect(frame.slashDraft).not.toMatch(ansiBackground);

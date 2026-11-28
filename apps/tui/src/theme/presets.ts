@@ -5,6 +5,7 @@ import {
   type ThemeManifest,
   type ThemeTokens,
 } from '@cosmew/contracts';
+import {GITHUB_PALETTES, GITHUB_THEME_IDS, PRIMER_SOURCE} from './github-palettes';
 
 export function parseHexRgb(hex: string): [number, number, number] {
   const clean = hex.replace(/^#/, '');
@@ -227,9 +228,9 @@ const SYSTEM_THEME: ThemeManifest = makePreset({
 });
 
 /** Intent-based accessible / ANSI approximations; measured Claude colours: Needs verification. */
-const EXTRA_THEMES = ['dark-daltonized', 'light-daltonized', 'dark-ansi', 'light-ansi'].map(id => {
+/** 16-colour themes keep the blue/orange change markers of the former colorblind-friendly variants. */
+const EXTRA_THEMES = ['dark-ansi', 'light-ansi'].map(id => {
   const mode = id.startsWith('light') ? 'light' : 'dark';
-  const ansi = id.endsWith('ansi');
   const tokens = {...SYSTEM_THEME[mode]};
   Object.assign(
     tokens,
@@ -237,7 +238,7 @@ const EXTRA_THEMES = ['dark-daltonized', 'light-daltonized', 'dark-ansi', 'light
       ? {success: '#56b4e9', diffAdded: '#56b4e9', error: '#e69f00', diffRemoved: '#e69f00'}
       : {success: '#0072b2', diffAdded: '#0072b2', error: '#a65f00', diffRemoved: '#a65f00'},
   );
-  if (ansi) {
+  {
     const colors = [
       '#000000',
       '#800000',
@@ -290,14 +291,33 @@ const EXTRA_THEMES = ['dark-daltonized', 'light-daltonized', 'dark-ansi', 'light
   return {
     ...SYSTEM_THEME,
     id,
-    name: `${mode === 'light' ? 'Light' : 'Dark'} (${ansi ? 'ANSI' : 'colorblind-friendly'})`,
-    description: ansi
-      ? 'Standard 16-color ANSI palette approximation'
-      : 'Blue/orange differences for red-green color blindness',
+    name: `${mode === 'light' ? 'Light' : 'Dark'} (ANSI)`,
+    description: 'Standard 16-color ANSI palette approximation',
     defaultMode: mode,
     dark: tokens,
     light: tokens,
   } as ThemeManifest;
+});
+
+const GITHUB_THEMES: readonly ThemeManifest[] = GITHUB_THEME_IDS.map(id => {
+  const palette = GITHUB_PALETTES[id];
+  return themeManifestSchema.parse({
+    schemaVersion: 1,
+    id,
+    name: palette.name,
+    category: 'featured',
+    description: `GitHub ${palette.name.toLowerCase()} palette`,
+    author: 'GitHub Primer',
+    license: 'MIT',
+    attribution: `${PRIMER_SOURCE.package} ${PRIMER_SOURCE.version} (accessed ${PRIMER_SOURCE.accessed})`,
+    sourceFormat: 'futryn',
+    builtIn: true,
+    defaultMode: palette.mode,
+    borderStyle: 'soft',
+    wallpaper: null,
+    dark: palette.tokens,
+    light: palette.tokens,
+  });
 });
 
 export const BUILTIN_COLOR_THEMES: readonly ThemeManifest[] = [
@@ -305,52 +325,7 @@ export const BUILTIN_COLOR_THEMES: readonly ThemeManifest[] = [
   {...SYSTEM_THEME, id: 'dark', name: 'Dark', description: 'Dark background, light text'},
   {...SYSTEM_THEME, id: 'light', name: 'Light', description: 'Light background, dark text', defaultMode: 'light'},
   ...EXTRA_THEMES,
-  {
-    ...SYSTEM_THEME,
-    id: 'midnight',
-    name: 'Midnight',
-    description: 'Deep navy with cyan commands, violet thinking and amber warnings',
-    defaultMode: 'dark',
-    dark: deriveTokensFromTriplet('#101725', '#edf2fa', '#efb96e', {
-      border: '#7896b9',
-      foregroundMuted: '#b0bdd0',
-      foregroundSubtle: '#a3b2c9',
-      syntaxComment: '#98aac1',
-      syntaxFunction: '#77d4e9',
-      syntaxKeyword: '#cfb2ff',
-      syntaxString: '#90dea9',
-      info: '#9abbff',
-      error: '#ff9ca9',
-      warning: '#f6c277',
-      success: '#90dea9',
-      diffAdded: '#82daa8',
-      diffRemoved: '#ff9ca9',
-      markdownCode: '#90dea9',
-    }),
-  },
-  {
-    ...SYSTEM_THEME,
-    id: 'parchment',
-    name: 'Parchment',
-    description: 'Warm paper with cobalt commands, plum thinking and deep green code',
-    defaultMode: 'light',
-    light: deriveTokensFromTriplet('#fff8e9', '#241d29', '#8f4225', {
-      border: '#385170',
-      foregroundMuted: '#625766',
-      foregroundSubtle: '#625766',
-      syntaxComment: '#6c5a52',
-      syntaxFunction: '#194c9c',
-      syntaxKeyword: '#6d328b',
-      syntaxString: '#255c36',
-      info: '#335179',
-      error: '#96243a',
-      warning: '#744a13',
-      success: '#255c36',
-      diffAdded: '#255c36',
-      diffRemoved: '#96243a',
-      markdownCode: '#255c36',
-    }),
-  },
+  ...GITHUB_THEMES,
 ];
 export const BUILTIN_LIVE_THEMES: readonly ThemeManifest[] = [];
 export const ALL_BUILTIN_THEMES: readonly ThemeManifest[] = BUILTIN_COLOR_THEMES;

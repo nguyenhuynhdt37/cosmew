@@ -7,7 +7,7 @@ export function useUiTheme() {
   const tokens = {
     accent: theme.tokens.accent,
     bashMode:
-      theme.engine.colorCapability === '16' || theme.engine.getActiveThemeManifest().id.endsWith('-ansi')
+      theme.engine.colorCapability === '16' || theme.manifest.id.endsWith('-ansi')
         ? theme.tokens.syntaxKeyword
         : light
           ? '#80586b'

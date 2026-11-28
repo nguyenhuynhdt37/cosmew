@@ -28,6 +28,7 @@ import {
   parseHexRgb,
   relativeLuminance,
 } from './presets';
+import {GITHUB_PALETTES, GITHUB_THEME_IDS} from './github-palettes';
 import {importThemeManifest, validateHexColor, type ThemeImportResult} from './compat';
 import {WALLPAPER_SCENES, WallpaperEngine} from './wallpaper';
 import {isDarkBackground, type Rgb} from './terminal-background';
@@ -35,18 +36,30 @@ import {isDarkBackground, type Rgb} from './terminal-background';
 export type TerminalColorCapability = 'truecolor' | '256' | '16' | 'none';
 export type ThemePickerTab = 'featured' | 'colors' | 'live' | 'my-themes' | 'all';
 
-const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light', 'midnight', 'parchment']);
+const FEATURED_THEME_IDS = new Set(['auto', 'dark', 'light', 'github-light', 'github-dark']);
+/** Ids removed in contract 1.72 (ADR 0127) and the GitHub theme that replaces each. */
+const REPLACED_THEME_IDS: Record<string, string> = {
+  midnight: 'github-dark-dimmed',
+  parchment: 'github-light',
+  'dark-daltonized': 'github-dark-colorblind',
+  'light-daltonized': 'github-light-colorblind',
+};
+const GITHUB_IDS = new Set<string>(GITHUB_THEME_IDS);
+/**
+ * GitHub themes paint their own canvas instead of using the terminal background, except where the terminal
+ * would only approximate it (16 colours fall back to ANSI tokens) or has no colour at all.
+ */
+export function paintsCanvas(id: string, capability: TerminalColorCapability): boolean {
+  return GITHUB_IDS.has(id) && capability !== '16' && capability !== 'none';
+}
 const MODE_THEME_IDS: Record<ThemeMode, string> = {system: 'auto', dark: 'dark', light: 'light'};
 const THEME_MODES: Record<string, ThemeMode> = {
   auto: 'system',
   dark: 'dark',
   light: 'light',
-  'dark-daltonized': 'dark',
-  'light-daltonized': 'light',
   'dark-ansi': 'dark',
   'light-ansi': 'light',
-  midnight: 'dark',
-  parchment: 'light',
+  ...Object.fromEntries(GITHUB_THEME_IDS.map(id => [id, GITHUB_PALETTES[id].mode])),
 };
 
 /** Shared selection path for the picker and /config. */
@@ -132,8 +145,27 @@ export function hexToAnsi16Bg(hex: string): number {
   return hexToAnsi16Fg(hex) + 10;
 }
 
+/** Escape sequences are pure functions of (kind, capability, hex); themes reuse a small set of colours. */
+const ansiCache = new Map<string, string>();
+function cachedAnsi(key: string, build: () => string): string {
+  const hit = ansiCache.get(key);
+  if (hit !== undefined) return hit;
+  if (ansiCache.size > 4096) ansiCache.clear();
+  const value = build();
+  ansiCache.set(key, value);
+  return value;
+}
+/** Test hook: number of cached escape sequences. */
+export function ansiCacheSize(): number {
+  return ansiCache.size;
+}
+
 export function fgHex(hex: string, capability: TerminalColorCapability = 'truecolor'): string {
   if (capability === 'none') return '';
+  return cachedAnsi(`f:${capability}:${hex}`, () => buildFg(hex, capability));
+}
+
+function buildFg(hex: string, capability: TerminalColorCapability): string {
   if (capability === '16') return `\x1b[${hexToAnsi16Fg(hex)}m`;
   if (capability === '256') return `\x1b[38;5;${hexToAnsi256(hex)}m`;
   const [r, g, b] = parseHexRgb(hex);
@@ -142,6 +174,10 @@ export function fgHex(hex: string, capability: TerminalColorCapability = 'trueco
 
 export function bgHex(hex: string, capability: TerminalColorCapability = 'truecolor'): string {
   if (capability === 'none') return '';
+  return cachedAnsi(`b:${capability}:${hex}`, () => buildBg(hex, capability));
+}
+
+function buildBg(hex: string, capability: TerminalColorCapability): string {
   if (capability === '16') return `\x1b[${hexToAnsi16Bg(hex)}m`;
   if (capability === '256') return `\x1b[48;5;${hexToAnsi256(hex)}m`;
   const [r, g, b] = parseHexRgb(hex);
@@ -370,7 +406,7 @@ export class ThemeEngine {
     if (clean === 'system' || clean === 'futryn-default') return 'auto';
     if (clean === 'monochrome-dark') return 'dark';
     if (clean === 'monochrome-light') return 'light';
-    return clean;
+    return REPLACED_THEME_IDS[clean] ?? clean;
   }
 
   public hasTheme(id: string): boolean {
@@ -417,17 +453,25 @@ export class ThemeEngine {
 
   public getActiveAppearance(): AppearanceConfig {
     return {
-      theme: this.previewDraft?.id ?? this.previewThemeId ?? this.committedAppearance.theme,
+      theme: this.previewDraft?.id ?? this.previewThemeId ?? this.resolveThemeId(this.committedAppearance),
       mode: this.previewMode ?? this.committedAppearance.mode,
       wallpaper: this.previewWallpaper !== undefined ? this.previewWallpaper : this.committedAppearance.wallpaper,
       animations: this.previewAnimations ?? this.committedAppearance.animations,
       syntaxHighlighting: this.committedAppearance.syntaxHighlighting,
       sidebar: this.committedAppearance.sidebar,
+      syncWithSystem: this.committedAppearance.syncWithSystem,
+      lightTheme: this.committedAppearance.lightTheme,
+      darkTheme: this.committedAppearance.darkTheme,
     };
   }
 
   public getEffectiveMode(): 'dark' | 'light' {
     const app = this.getActiveAppearance();
+    // A synced slot shows its theme in that theme's own mode, even if a hand-edited slot holds the other mode.
+    if (!this.isPreviewing() && app.syncWithSystem) {
+      const own = THEME_MODES[this.resolveThemeId(app)];
+      if (own === 'dark' || own === 'light') return own;
+    }
     if (app.mode === 'dark' || app.mode === 'light') {
       return app.mode;
     }
@@ -451,18 +495,37 @@ export class ThemeEngine {
     this.notify();
   }
 
+  /** The theme an appearance shows now: the single choice, or the light/dark slot when synced. */
+  public resolveThemeId(appearance: AppearanceConfig): string {
+    if (!appearance.syncWithSystem) return this.normalizeThemeId(appearance.theme);
+    return this.normalizeThemeId(this.systemDarkPreference ? appearance.darkTheme : appearance.lightTheme);
+  }
+
   public getActiveThemeManifest(): ThemeManifest {
     if (this.previewDraft) {
       return this.previewDraft;
     }
-    const activeId = this.previewThemeId ?? this.committedAppearance.theme;
+    const activeId = this.previewThemeId ?? this.resolveThemeId(this.committedAppearance);
     return this.getTheme(activeId) ?? this.builtInMap.get('auto') ?? ALL_BUILTIN_THEMES[0]!;
   }
 
   public getActiveTokens(): ThemeTokens {
-    const manifest = this.getActiveThemeManifest();
-    const mode = this.getEffectiveMode();
-    if (this.colorCapability === '16' && ['auto', 'light', 'dark', 'midnight', 'parchment'].includes(manifest.id)) {
+    return this.tokensFor(this.getActiveThemeManifest(), this.getEffectiveMode());
+  }
+
+  /** The mode a theme shows when previewed: its own mode, or the system preference for `auto`. */
+  public previewModeFor(id: string): 'dark' | 'light' {
+    const mode = THEME_MODES[this.normalizeThemeId(id)];
+    if (mode === 'dark' || mode === 'light') return mode;
+    return this.systemDarkPreference ? 'dark' : 'light';
+  }
+
+  /** Tokens a manifest renders with on this terminal (16-colour terminals fall back to ANSI). */
+  public tokensFor(manifest: ThemeManifest, mode: 'dark' | 'light'): ThemeTokens {
+    if (
+      this.colorCapability === '16' &&
+      (['auto', 'light', 'dark'].includes(manifest.id) || GITHUB_IDS.has(manifest.id))
+    ) {
       return this.builtInMap.get(`${mode}-ansi`)?.[mode] ?? manifest[mode];
     }
     return manifest[mode];
@@ -545,7 +608,8 @@ export class ThemeEngine {
   ): Promise<AppearanceConfig> {
     const normalizedPatch: PartialAppearanceConfig = {...patch};
     if (normalizedPatch.wallpaper != null) throw new FutrynError('UNSUPPORTED');
-    if (normalizedPatch.mode && normalizedPatch.theme === undefined)
+    // A bare mode change picks the matching base theme; a sync toggle keeps the stored single theme.
+    if (normalizedPatch.mode && normalizedPatch.theme === undefined && normalizedPatch.syncWithSystem === undefined)
       normalizedPatch.theme = MODE_THEME_IDS[normalizedPatch.mode];
     if (normalizedPatch.theme !== undefined) {
       const normId = this.normalizeThemeId(normalizedPatch.theme);
@@ -555,6 +619,8 @@ export class ThemeEngine {
       }
       if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
       Object.assign(normalizedPatch, themeSelection(manifest.id));
+      // A single theme choice ends sync with system unless the caller says otherwise.
+      if (patch.syncWithSystem === undefined) normalizedPatch.syncWithSystem = false;
       if (manifest.wallpaper && normalizedPatch.wallpaper === undefined) {
         normalizedPatch.wallpaper = manifest.wallpaper;
         normalizedPatch.animations = {
@@ -601,6 +667,28 @@ export class ThemeEngine {
     } else if (this.committedAppearance.wallpaper && this.builtInMap.get(this.committedAppearance.theme)?.wallpaper) {
       patch.wallpaper = null;
     }
+    return this.updateAppearance(patch, scope);
+  }
+
+  /** Turns sync with system on or off and optionally assigns the light/dark slots. */
+  public async setSync(
+    input: {enabled: boolean; lightTheme?: string; darkTheme?: string},
+    scope: 'global' | 'project' = 'global',
+  ): Promise<AppearanceConfig> {
+    this.cancelPreview();
+    const patch: PartialAppearanceConfig = {syncWithSystem: input.enabled};
+    for (const slot of ['lightTheme', 'darkTheme'] as const) {
+      const id = input[slot];
+      if (id === undefined) continue;
+      const manifest = this.getTheme(id);
+      if (!manifest) throw new FutrynError('NOT_FOUND');
+      if (!manifest.builtIn) throw new FutrynError('UNSUPPORTED');
+      patch[slot] = manifest.id;
+    }
+    // Synced appearances follow the system; turning sync off returns to the single theme's own mode.
+    patch.mode = input.enabled
+      ? 'system'
+      : (THEME_MODES[this.normalizeThemeId(this.committedAppearance.theme)] ?? 'system');
     return this.updateAppearance(patch, scope);
   }
 

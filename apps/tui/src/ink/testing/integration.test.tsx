@@ -8,7 +8,7 @@ import {openInk} from './ink-session';
 import {dialogFixture, selection, account} from '../features/picker/test-fixture';
 import {routeCommand, type CommandHost} from '../features/commands';
 import {ListPicker} from '../ui';
-import {render, renderInk, settle, waitForCondition, waitForFrame} from './index';
+import {render, renderInk, settle, waitForFrame} from './index';
 afterEach(cleanup);
 /** Consent and composer setup take a few frames; wait for the ready composer before typing. */
 const untilReady = async (view: {lastFrame(): string | undefined}) => {
@@ -354,7 +354,7 @@ test('permission denial reason reaches SDK steering and permission cleanup does 
   view.unmount();
 });
 
-test('picker remembers selection across overlay mounts and themes preview on highlight with rollback', async () => {
+test('picker remembers selection across overlay mounts and themes preview on highlight inside the dialog', async () => {
   const {useOverlay} = await import('../core');
   const {useKeymap, useTextInput} = await import('../hooks');
   const {PickerDialog} = await import('../features/picker');
@@ -392,9 +392,10 @@ test('picker remembers selection across overlay mounts and themes preview on hig
   await key(view, '\x1b');
   await key(view, 't');
   await key(view, '\x1b[B');
-  expect(engine.isPreviewing()).toBe(true);
+  // The preview is dialog-local (ADR 0127): highlighting never previews through the engine.
+  expect(engine.isPreviewing()).toBe(false);
   view.stdin.write('\x1b');
-  await waitForCondition(() => (!engine.isPreviewing() ? true : undefined), 2000);
+  await settle();
   expect(engine.isPreviewing()).toBe(false);
 });
 

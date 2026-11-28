@@ -31,6 +31,7 @@ import {
   useTextInput,
 } from './hooks';
 import {useTheme} from './theme';
+import {paintsCanvas} from '../theme/theme';
 import {Panel, TextLine, safeText, spinnerTip} from './ui';
 import {copyToClipboard, readClipboardImage} from '../clipboard';
 import {Welcome} from './features/welcome';
@@ -244,7 +245,7 @@ export function IntegratedShell({
   const dialogPress = useRef<{key: string; at: number} | null>(null);
   const {engine, color} = useTheme();
   const theme = engine.getActiveAppearance().theme;
-  const canvasColor = theme === 'midnight' || theme === 'parchment' ? color('background') : undefined;
+  const canvasColor = paintsCanvas(theme, engine.colorCapability) ? color('background') : undefined;
   const {columns} = useTerminalSize();
   const screenRows = useLiveRows(requestedRows);
   const fullscreen = screenRows !== undefined;

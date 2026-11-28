@@ -17,7 +17,18 @@ import {
 } from '@cosmew/sdk';
 import {parseSettings} from '@cosmew/security';
 
-const KEYS = ['theme', 'themeMode', 'reducedMotion', 'syntaxHighlighting', 'animations', 'sidebar', 'wallpaper'];
+const KEYS = [
+  'theme',
+  'themeMode',
+  'reducedMotion',
+  'syntaxHighlighting',
+  'animations',
+  'sidebar',
+  'wallpaper',
+  'syncWithSystem',
+  'lightTheme',
+  'darkTheme',
+];
 const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** Recover only complete top-level JSON members; never evaluate or guess damaged values. */
@@ -216,6 +227,9 @@ export class FileAppearanceStore implements AppearanceStore, UserPreferencesStor
       ['sidebar', 'sidebar'],
       ['wallpaper', 'wallpaper'],
       ['animations', 'animations'],
+      ['syncWithSystem', 'syncWithSystem'],
+      ['lightTheme', 'lightTheme'],
+      ['darkTheme', 'darkTheme'],
     ] as const) {
       if (this.raw[disk] !== undefined) {
         const parsed = partialAppearanceSchema.safeParse({[field]: this.raw[disk]});
@@ -251,6 +265,9 @@ export class FileAppearanceStore implements AppearanceStore, UserPreferencesStor
       animations: this.value.animations,
       sidebar: this.value.sidebar,
       wallpaper: this.value.wallpaper,
+      syncWithSystem: this.value.syncWithSystem,
+      lightTheme: this.value.lightTheme,
+      darkTheme: this.value.darkTheme,
     };
     this.save(raw);
   }

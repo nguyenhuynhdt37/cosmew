@@ -9,12 +9,12 @@ exports[`onboarding resumes at Connect and goes through security before trust at
   ❯ ✔ Auto
       Dark
       Light
-      Dark (colorblind-friendly)
-      Light (colorblind-friendly)
       Dark (ANSI)
       Light (ANSI)
-      Midnight
-      ↓ 1 more
+      Light default
+      Light high contrast
+      Light colorblind
+      ↓ 6 more
 
   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
    1   function greet() {
@@ -77,12 +77,12 @@ exports[`onboarding resumes at Connect and goes through security before trust at
   ❯ ✔ Auto
       Dark
       Light
-      Dark (colorblind-friendly)
-      Light (colorblind-friendly)
       Dark (ANSI)
       Light (ANSI)
-      Midnight
-      ↓ 1 more
+      Light default
+      Light high contrast
+      Light colorblind
+      ↓ 6 more
 
   ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
    1   function greet() {

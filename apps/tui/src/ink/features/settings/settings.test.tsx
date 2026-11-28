@@ -79,3 +79,16 @@ test('user preferences toggle from Config and switch the live transcript view', 
     await reopened.close();
   }
 });
+
+test('appearance rows say when sync with system is on', () => {
+  const synced = {
+    ...defaultAppearance(),
+    syncWithSystem: true,
+    lightTheme: 'github-light',
+    darkTheme: 'github-dark-dimmed',
+  };
+  const [theme, mode] = settingsRows(synced, 'dark');
+  expect(theme!.value).toBe('Sync with system: day github-light / night github-dark-dimmed (Enter to choose)');
+  expect(mode!.value).toBe('SYNC (resolved: dark, Enter to choose themes)');
+  expect(settingsRows(defaultAppearance(), 'dark')[0]!.value).toBe('auto (Enter to choose)');
+});

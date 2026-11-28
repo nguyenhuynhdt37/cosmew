@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {SKILL_VISIBILITIES} from './skills';
 import {attachmentSchema} from './tools';
 
-export const CONTRACT_VERSION = '1.70' as const;
+export const CONTRACT_VERSION = '1.72' as const;
 
 /**
  * Rules saved by the previous permission model (ADR 0028/0055) may still use forms that no longer
@@ -634,6 +634,10 @@ export const appearanceSchema = z.strictObject({
   })),
   syntaxHighlighting: z.boolean().default(true),
   sidebar: z.boolean().default(false),
+  /** Follow the terminal background with a light/dark theme pair (contract 1.72, ADR 0127). */
+  syncWithSystem: z.boolean().default(false),
+  lightTheme: themeIdSchema.default('github-light'),
+  darkTheme: themeIdSchema.default('github-dark'),
 });
 export type AppearanceConfig = z.infer<typeof appearanceSchema>;
 
@@ -644,6 +648,9 @@ export const partialAppearanceSchema = z.strictObject({
   animations: animationConfigSchema.partial().optional(),
   syntaxHighlighting: z.boolean().optional(),
   sidebar: z.boolean().optional(),
+  syncWithSystem: z.boolean().optional(),
+  lightTheme: themeIdSchema.optional(),
+  darkTheme: themeIdSchema.optional(),
 });
 export type PartialAppearanceConfig = z.infer<typeof partialAppearanceSchema>;
 

@@ -199,6 +199,10 @@ export function SettingsDialog({
             break;
           }
           case 1: {
+            if (engine.getCommittedAppearance().syncWithSystem) {
+              router.push('themes', <ThemesDialog {...props} scope={scope} />);
+              break;
+            }
             const values = ['dark', 'light', 'system'] as const;
             await engine.setMode(values[(values.indexOf(app.mode) + 1) % 3]!, scope);
             break;

@@ -15,9 +15,9 @@ test('/config theme normalizes mode, survives restart, and rejects unknown theme
     submit: () => false,
     exit() {},
   };
-  for (const id of ['light', 'auto', 'dark-daltonized', 'light-daltonized', 'dark-ansi', 'light-ansi']) {
+  for (const id of ['light', 'auto', 'github-dark-colorblind', 'github-light-tritanopia', 'dark-ansi', 'light-ansi']) {
     await routeCommand(host, `/config theme=${id}`);
-    expect(client.getAppearance().mode).toBe(id === 'auto' ? 'system' : id.startsWith('light') ? 'light' : 'dark');
+    expect(client.getAppearance().mode).toBe(id === 'auto' ? 'system' : id.includes('light') ? 'light' : 'dark');
     const restarted = new ThemeEngine({client, env: {}});
     await restarted.initialize();
     expect(restarted.getActiveAppearance().theme).toBe(id);

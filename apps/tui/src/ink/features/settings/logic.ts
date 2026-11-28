@@ -10,10 +10,18 @@ export interface SettingRow {
 export function settingsRows(appearance: AppearanceConfig, effectiveMode: 'dark' | 'light'): SettingRow[] {
   const a = appearance.animations;
   return [
-    {label: 'Theme', value: `${appearance.theme} (Enter to choose)`},
+    {
+      label: 'Theme',
+      value: appearance.syncWithSystem
+        ? `Sync with system: day ${appearance.lightTheme} / night ${appearance.darkTheme} (Enter to choose)`
+        : `${appearance.theme} (Enter to choose)`,
+    },
     {
       label: 'Color Mode',
-      value: `${appearance.mode === 'system' ? 'AUTO' : appearance.mode.toUpperCase()} (resolved: ${effectiveMode})`,
+      // While synced the mode is the terminal's; Enter opens the theme slots instead of silently ending sync.
+      value: appearance.syncWithSystem
+        ? `SYNC (resolved: ${effectiveMode}, Enter to choose themes)`
+        : `${appearance.mode === 'system' ? 'AUTO' : appearance.mode.toUpperCase()} (resolved: ${effectiveMode})`,
     },
     {label: 'Wallpaper', value: 'Unavailable for these themes'},
     {label: 'Animations Enabled', value: a.enabled ? 'ENABLED' : 'DISABLED'},

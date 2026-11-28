@@ -27,8 +27,9 @@ export async function runInkTui(options: InkRuntimeOptions): Promise<void> {
   options.client.setToolsEnabled(false);
   options.client.setUserInputAvailable(false);
   await engine.initialize();
-  // Theme `auto` follows the terminal's real background (OSC 11, bounded wait), never the host OS appearance.
-  if (interactive && engine.getActiveAppearance().mode === 'system')
+  // `auto` and Sync with system follow the terminal's real background (OSC 11, bounded wait), never the host OS
+  // appearance. It is measured for every theme so turning sync on later picks the right slot (ADR 0127).
+  if (interactive)
     engine.applyTerminalBackground(
       await queryTerminalBackground({
         stdin: stdin as NodeJS.ReadStream,

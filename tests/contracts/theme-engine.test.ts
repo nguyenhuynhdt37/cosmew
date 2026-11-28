@@ -104,15 +104,20 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
       'auto',
       'dark',
       'light',
-      'dark-daltonized',
-      'light-daltonized',
       'dark-ansi',
       'light-ansi',
-      'midnight',
-      'parchment',
+      'github-light',
+      'github-light-high-contrast',
+      'github-light-colorblind',
+      'github-light-tritanopia',
+      'github-dark',
+      'github-dark-high-contrast',
+      'github-dark-colorblind',
+      'github-dark-tritanopia',
+      'github-dark-dimmed',
     ]);
     expect(BUILTIN_LIVE_THEMES).toHaveLength(0);
-    expect(ALL_BUILTIN_THEMES).toHaveLength(9);
+    expect(ALL_BUILTIN_THEMES).toHaveLength(14);
     for (const manifest of ALL_BUILTIN_THEMES.slice(0, 3)) {
       expect(themeManifestSchema.safeParse(manifest).success).toBe(true);
       for (const tokens of [manifest.dark, manifest.light]) {
@@ -138,28 +143,66 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
     }
   });
 
-  test('Midnight and Parchment provide distinct readable colors on base, panel and prompt surfaces', () => {
-    for (const id of ['midnight', 'parchment']) {
-      const theme = BUILTIN_COLOR_THEMES.find(item => item.id === id)!;
+  test('GitHub themes keep text readable on base, panel and prompt surfaces', () => {
+    for (const theme of BUILTIN_COLOR_THEMES.filter(item => item.id.startsWith('github-'))) {
       const palette = theme[theme.defaultMode];
-      const roles = [
-        palette.foreground,
-        palette.foregroundMuted,
-        palette.syntaxFunction,
-        palette.syntaxKeyword,
-        palette.syntaxString,
-        palette.syntaxComment,
-        palette.markdownHeading,
-        palette.warning,
-        palette.error,
-      ];
-      expect(new Set(roles).size).toBe(roles.length);
-      for (const color of roles) {
-        for (const surface of [palette.background, palette.backgroundPanel, palette.composerBackground]) {
-          expect(contrastRatio(color, surface)).toBeGreaterThanOrEqual(4.5);
-        }
+      for (const surface of [palette.background, palette.backgroundPanel, palette.composerBackground]) {
+        expect(contrastRatio(palette.foreground, surface)).toBeGreaterThanOrEqual(4.5);
+        expect(contrastRatio(palette.foregroundMuted, surface)).toBeGreaterThanOrEqual(3);
       }
     }
+  });
+
+  test('removed theme ids load as their GitHub replacement', async () => {
+    const pairs = {
+      midnight: 'github-dark-dimmed',
+      parchment: 'github-light',
+      'dark-daltonized': 'github-dark-colorblind',
+      'light-daltonized': 'github-light-colorblind',
+    } as const;
+    for (const [old, next] of Object.entries(pairs)) {
+      const engine = new ThemeEngine({systemDarkPreference: true});
+      expect(engine.normalizeThemeId(old)).toBe(next);
+      await engine.setTheme(old);
+      expect(engine.getCommittedAppearance().theme).toBe(next);
+      expect(engine.getActiveThemeManifest().id).toBe(next);
+    }
+  });
+
+  test('sync with system switches between the light and dark theme slots', async () => {
+    const engine = new ThemeEngine({env: {}});
+    await engine.setSync({enabled: true, lightTheme: 'github-light-tritanopia', darkTheme: 'github-dark-dimmed'});
+    expect(engine.getCommittedAppearance()).toMatchObject({syncWithSystem: true, mode: 'system'});
+    engine.setSystemDarkPreference(false);
+    expect(engine.getActiveThemeManifest().id).toBe('github-light-tritanopia');
+    expect(engine.getEffectiveMode()).toBe('light');
+    engine.setSystemDarkPreference(true);
+    expect(engine.getActiveThemeManifest().id).toBe('github-dark-dimmed');
+    expect(engine.getEffectiveMode()).toBe('dark');
+    expect(engine.getActiveTokens().background).toBe(engine.getTheme('github-dark-dimmed')!.dark.background);
+  });
+
+  test('a terminal background answer after startup flips the synced theme', async () => {
+    const engine = new ThemeEngine({env: {COSMEW_THEME_MODE: 'dark'}});
+    await engine.setSync({enabled: true});
+    expect(engine.getActiveThemeManifest().id).toBe('github-dark');
+    engine.applyTerminalBackground([250, 250, 250]);
+    expect(engine.getActiveThemeManifest().id).toBe('github-light');
+  });
+
+  test('choosing a single theme turns sync off', async () => {
+    const engine = new ThemeEngine({systemDarkPreference: true});
+    await engine.setSync({enabled: true});
+    await engine.setTheme('github-dark-high-contrast');
+    expect(engine.getCommittedAppearance().syncWithSystem).toBe(false);
+    expect(engine.getActiveThemeManifest().id).toBe('github-dark-high-contrast');
+  });
+
+  test('16-colour terminals use ANSI tokens for GitHub themes', async () => {
+    const engine = new ThemeEngine({env: {TERM: 'xterm'}, systemDarkPreference: true});
+    expect(engine.colorCapability).toBe('16');
+    await engine.setTheme('github-dark');
+    expect(engine.getActiveTokens()).toEqual(engine.getTheme('dark-ansi')!.dark);
   });
 
   test('preview, cancel and project/global persistence follow dark, light and system', async () => {
@@ -266,12 +309,17 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
         'auto',
         'dark',
         'light',
-        'dark-daltonized',
-        'light-daltonized',
         'dark-ansi',
         'light-ansi',
-        'midnight',
-        'parchment',
+        'github-light',
+        'github-light-high-contrast',
+        'github-light-colorblind',
+        'github-light-tritanopia',
+        'github-dark',
+        'github-dark-high-contrast',
+        'github-dark-colorblind',
+        'github-dark-tritanopia',
+        'github-dark-dimmed',
       ]);
       await expect(engine.setTheme('old-custom')).rejects.toThrow();
       await expect(engine.setWallpaper('neon-rain')).rejects.toThrow();
@@ -393,4 +441,38 @@ describe('FUTRYN Theme Engine & Built-in Theme Catalog', () => {
     expect(fgHex('#ff5500', '16')).toMatch(/^\x1b\[\d+m$/);
     expect(bgHex('#14121b', 'truecolor')).toBe('\x1b[48;2;20;18;27m');
   });
+});
+
+describe('sync keeps the single-theme choice', () => {
+  test('turning sync on keeps the stored single theme and mode system', async () => {
+    const engine = new ThemeEngine({systemDarkPreference: true});
+    await engine.setTheme('github-dark-dimmed');
+    await engine.setSync({enabled: true, lightTheme: 'github-light-tritanopia'});
+    expect(engine.getCommittedAppearance()).toMatchObject({
+      theme: 'github-dark-dimmed',
+      mode: 'system',
+      syncWithSystem: true,
+      lightTheme: 'github-light-tritanopia',
+    });
+  });
+  test('turning sync off restores the single theme with its own mode', async () => {
+    const engine = new ThemeEngine({systemDarkPreference: true});
+    await engine.setTheme('github-light');
+    await engine.setSync({enabled: true});
+    await engine.setSync({enabled: false});
+    expect(engine.getCommittedAppearance()).toMatchObject({
+      theme: 'github-light',
+      mode: 'light',
+      syncWithSystem: false,
+    });
+    expect(engine.getActiveThemeManifest().id).toBe('github-light');
+  });
+});
+
+test('a synced slot holding a theme of the other mode renders in that theme’s own mode', async () => {
+  const engine = new ThemeEngine({env: {TERM: 'xterm'}, systemDarkPreference: true});
+  await engine.setSync({enabled: true, darkTheme: 'github-light'});
+  expect(engine.getActiveThemeManifest().id).toBe('github-light');
+  expect(engine.getEffectiveMode()).toBe('light');
+  expect(engine.getActiveTokens()).toEqual(engine.getTheme('light-ansi')!.light);
 });

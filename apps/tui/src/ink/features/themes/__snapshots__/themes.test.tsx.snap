@@ -1,0 +1,79 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`theme picker frame: wide single 1`] = `
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Theme
+
+  Choose the text style that looks best with your terminal
+
+  ◉ Single theme  ○ Sync with system
+
+      Code colors On              Preview · Auto
+  ❯ ✔ Auto                        ✓ Done · ! Warning · × Error · i Info
+      Dark                        ❯ fix the greeting
+      Light                       ⏺ Update(src/app.ts)
+      Dark (ANSI)                  1   function greet() {
+      Light (ANSI)                 2 -  console.log("Hello, World!");
+      Light default                2 +  console.log("Hello, Cosmew!");
+      Light high contrast          3   }
+      ↓ 7 more                    # Release notes · \`theme\`
+                                  /config · Bash · ✻ Thinking
+                                  echo "$HOME" # shell
+                                  Terminal colors Off
+
+  Tab Single / Day / Night · ↑/↓ preview · Enter select · Esc cancel"
+`;
+
+exports[`theme picker frame: stacked single 1`] = `
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Theme
+
+  Choose the text style that looks best with your terminal
+
+  ◉ Single theme  ○ Sync with system
+
+      Code colors On
+  ❯ ✔ Auto
+      Dark
+      Light
+      Dark (ANSI)
+      ↓ 10 more
+
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Preview · Auto
+  ✓ Done · ! Warning · × Error · i Info
+  ❯ fix the greeting
+  ⏺ Update(src/app.ts)
+   1   function greet() {
+   2 -  console.log("Hello, World!");
+   2 +  console.log("Hello, Cosmew!");
+   3   }
+  # Release notes · \`theme\`
+  /config · Bash · ✻ Thinking
+  echo "$HOME" # shell
+  Terminal colors Off
+
+  Tab Single / Day / Night · ↑/↓ preview · Enter select ·
+  Esc cancel"
+`;
+
+exports[`theme picker frame: narrow sync 1`] = `
+"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  Theme
+  ○ Single theme  ◉ Sync with system
+    Day theme: Light default
+  ❯ Night theme: Dark default (active)
+      ↑ 1 more
+      Dark (ANSI)
+  ❯ ✔ Dark default
+      ↓ 4 more
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  Preview · Dark default
+  ✓ Done · ! Warning · × Error · i In…
+  ❯ fix the greeting
+  ⏺ Update(src/app.ts)
+  # Release notes · \`theme\`
+  /config · Bash · ✻ Thinking
+  echo "$HOME" # shell
+  Tab · ↑/↓ · Enter · Esc"
+`;

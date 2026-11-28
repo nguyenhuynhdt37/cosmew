@@ -160,39 +160,42 @@ describe('FUTRYN Live ASCII Wallpaper Engine', () => {
   });
 });
 
-test.each(['dark', 'light', 'dark-daltonized', 'dark-ansi'])('Spark uses the active %s palette and freezes', theme => {
-  const engine = new ThemeEngine({env: {FORCE_COLOR: '3'}});
-  engine.previewTheme(theme);
-  const palette = engine.getActiveTokens();
-  const options = {
-    cols: 80,
-    rows: 24,
-    timeSeconds: 0,
-    backgroundHex: '#123456',
-    config: {...defaultAnimationConfig(), speed: 1, cellSize: 1, veil: 0},
-  };
-  const render = (timeSeconds: number, reducedMotion: boolean) =>
-    engine.wallpaperEngine.renderFrame('futryn-spark', {
-      ...options,
-      timeSeconds,
-      config: {...options.config, reducedMotion},
-    });
-  const cat = (grid: ReturnType<typeof render>) =>
-    grid.map(row => row.map(cell => (cell && '▀▄█'.includes(cell.ch) ? cell.ch : ' ')).join(''));
-  const frame = render(0, false);
-  const pixels = frame.flat().filter(cell => cell && '▀▄█'.includes(cell.ch));
-  expect(pixels.length).toBeGreaterThan(0);
-  expect(pixels.every(cell => cell!.fg === mixHex(palette.background, palette.accent, 0.95))).toBe(true);
-  const art = (grid: ReturnType<typeof render>, x: number) =>
-    cat(grid)
-      .slice(17, 21)
-      .map(row => row.slice(x, x + 9));
-  expect(art(frame, 12)).toEqual(renderCosmewMascot());
-  expect(art(render(COSMEW_MASCOT_FRAME_MS / 1000, false), 13)).toEqual(renderCosmewMascot({frame: 1}));
-  expect(
-    cat(render(9, true))
-      .map(row => row.trimEnd().trimStart())
-      .filter(Boolean),
-  ).toEqual(renderCosmewMascot().map(row => row.trim()));
-  expect(render(0, true)).toEqual(render(9, true));
-});
+test.each(['dark', 'light', 'github-dark-colorblind', 'dark-ansi'])(
+  'Spark uses the active %s palette and freezes',
+  theme => {
+    const engine = new ThemeEngine({env: {FORCE_COLOR: '3'}});
+    engine.previewTheme(theme);
+    const palette = engine.getActiveTokens();
+    const options = {
+      cols: 80,
+      rows: 24,
+      timeSeconds: 0,
+      backgroundHex: '#123456',
+      config: {...defaultAnimationConfig(), speed: 1, cellSize: 1, veil: 0},
+    };
+    const render = (timeSeconds: number, reducedMotion: boolean) =>
+      engine.wallpaperEngine.renderFrame('futryn-spark', {
+        ...options,
+        timeSeconds,
+        config: {...options.config, reducedMotion},
+      });
+    const cat = (grid: ReturnType<typeof render>) =>
+      grid.map(row => row.map(cell => (cell && '▀▄█'.includes(cell.ch) ? cell.ch : ' ')).join(''));
+    const frame = render(0, false);
+    const pixels = frame.flat().filter(cell => cell && '▀▄█'.includes(cell.ch));
+    expect(pixels.length).toBeGreaterThan(0);
+    expect(pixels.every(cell => cell!.fg === mixHex(palette.background, palette.accent, 0.95))).toBe(true);
+    const art = (grid: ReturnType<typeof render>, x: number) =>
+      cat(grid)
+        .slice(17, 21)
+        .map(row => row.slice(x, x + 9));
+    expect(art(frame, 12)).toEqual(renderCosmewMascot());
+    expect(art(render(COSMEW_MASCOT_FRAME_MS / 1000, false), 13)).toEqual(renderCosmewMascot({frame: 1}));
+    expect(
+      cat(render(9, true))
+        .map(row => row.trimEnd().trimStart())
+        .filter(Boolean),
+    ).toEqual(renderCosmewMascot().map(row => row.trim()));
+    expect(render(0, true)).toEqual(render(9, true));
+  },
+);

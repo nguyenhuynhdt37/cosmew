@@ -232,7 +232,7 @@ test('cosmew exec uses the same memory context and contract 1.68', async () => {
   const body = h.requests.filter(r => r.stream).at(-1);
   expect(userText(body)).toContain('S4_MARKER');
   expect(hostText(body)).not.toContain('S4_MARKER');
-  expect(stdout).toContain('"contractVersion":"1.70"');
+  expect(stdout).toContain('"contractVersion":"1.72"');
 });
 
 test('model memory read tracks usage; final citation renders compactly after transcript replay', async () => {
